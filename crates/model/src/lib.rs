@@ -4,9 +4,9 @@
 //! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
 //!
 //! This module currently defines the document skeleton: ids and revisions, the assembly tree,
-//! minimal panel records, validated rectangular dimensions and rigid placements. The two large
-//! faces, stable edge and vertex ids, and the local numbering of a rectangular outline are here
-//! as well; geometry, materials, edge banding and machining arrive later.
+//! minimal panel records, validated rectangular dimensions, rigid placements and the external
+//! material catalogue. The two large faces, stable edge and vertex ids, and the local numbering of
+//! a rectangular outline are here as well; geometry, edge banding and machining arrive later.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -25,6 +25,10 @@ use furnicraft_geom::{DQuat, DVec3};
 use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
+
+mod catalog;
+
+pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
 
 /// A stable document identifier.
 ///
