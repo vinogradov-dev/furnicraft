@@ -1,0 +1,26 @@
+[package]
+name = "truck-shapeops"
+version = "0.4.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Boolean operations for truck solids, vendored with VTK-free meshalgo features"
+repository = "https://github.com/ricosjp/truck"
+publish = false
+
+[lib]
+name = "truck_shapeops"
+path = "src/lib.rs"
+
+[features]
+default = []
+step-test = []
+
+[dependencies]
+derive_more = "0.99.18"
+itertools = "0.13.0"
+rustc-hash = "2.0.0"
+truck-base = "0.5.0"
+truck-geometry = "0.5.0"
+truck-geotrait = "0.4.0"
+truck-meshalgo = { version = "0.4.0", default-features = false, features = ["analyzers", "tessellation"] }
+truck-topology = "0.6.0"

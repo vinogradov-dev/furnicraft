@@ -51,3 +51,9 @@ opt-level = 2
 
 [profile.dev]
 opt-level = 1
+
+# Upstream `truck-shapeops` enables `truck-meshalgo`'s default features, which
+# pull the VTK I/O stack and its C compression backend. The vendored copy only
+# narrows that dependency to `tessellation`; see vendor/truck-shapeops/PATCH.md.
+[patch.crates-io]
+truck-shapeops = { path = "vendor/truck-shapeops" }
