@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+furnicraft-geom = { workspace = true }
 furnicraft-units = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

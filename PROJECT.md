@@ -34,7 +34,7 @@ A node in the product tree: it groups panels, hardware and nested assemblies, an
 
 ### `Placement`
 
-A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the assembly tree to produce world transforms. The document stores placements; it never stores a camera or a viewport.
+A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the assembly tree to produce world transforms. The document stores placements; it never stores a camera or a viewport. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently.
 
 ### `Panel`
 
@@ -108,7 +108,7 @@ FurniCraft separates the model from the way it is viewed.
 | L0 | `furnicraft-units` | `Length` in micrometres, thickness helpers, parsing and formatting in mm | serde |
 | L0 | `furnicraft-geom` | `glam` re-exports, `Frame`, indexed `MeshData`; bounds and planes as features need them | glam, serde |
 | L1 | `furnicraft-kernel` | Geometry kernel **port**: `Profile`, opaque `BodyId`, extrusion (linear sweep), booleans, tessellation, measures. No third-party kernel types | geom, thiserror |
-| L1 | `furnicraft-model` | Document data: `Project`, `Assembly`, `Placement`, `Panel`, `Material`, `Hardware`, `Dimension`, `Id`, `Revision`; invariants and typed errors | units, serde |
+| L1 | `furnicraft-model` | Document data: `Project`, `Assembly`, `Placement`, `Panel`, `Material`, `Hardware`, `Dimension`, `Id`, `Revision`; invariants and typed errors | units, geom, serde |
 | L2 | `furnicraft-kernel-truck` | Geometry kernel **adapter** implemented with `truck` (Apache-2.0). The only crate allowed to depend on `truck` | kernel, geom, truck-modeling, truck-shapeops, truck-meshalgo |
 | L2 | `furnicraft-param` | Compiles document features into kernel operations: dimensions, placements, panel machining | model, kernel, geom, units |
 | L3 | `furnicraft-mesh` | Evaluation cache: `(Revision, PartId)` to solid and triangle mesh; tessellation policy | model, param, kernel, geom, units |

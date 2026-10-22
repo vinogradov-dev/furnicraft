@@ -3,9 +3,10 @@
 //! Pure serializable data plus its invariants. No geometry, no GPU, no UI, no file I/O. The exact
 //! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
 //!
-//! This module currently defines the vocabulary shared by every panel: validated rectangular
-//! dimensions, the two large faces, stable edge and vertex ids, and the local numbering of a
-//! rectangular outline. Geometry and the full `Panel` record arrive with the panel milestones.
+//! This module currently defines the vocabulary shared by every panel: document ids and
+//! revisions, validated rectangular dimensions, rigid placements, the two large faces, stable
+//! edge and vertex ids, and the local numbering of a rectangular outline. Geometry and the full
+//! `Panel` record arrive with the panel milestones.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -18,6 +19,7 @@
 
 use std::num::NonZeroU64;
 
+use furnicraft_geom::{DQuat, DVec3};
 use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -66,6 +68,115 @@ impl Revision {
     /// The next revision, or `None` if the counter would overflow.
     pub fn checked_next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
+    }
+}
+
+/// A rigid placement relative to a parent frame.
+///
+/// Placement is translation plus rotation, never scale or shear. Rotations are stored as a unit
+/// quaternion; construction and deserialization reject a zero or non-unit quaternion instead of
+/// silently normalising it. The serialized rotation is `[x, y, z, w]`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PlacementWire", into = "PlacementWire")]
+pub struct Placement {
+    translation: DVec3,
+    rotation: DQuat,
+}
+
+impl Placement {
+    /// The identity placement: no translation and no rotation.
+    pub const IDENTITY: Self = Self { translation: DVec3::ZERO, rotation: DQuat::IDENTITY };
+
+    /// Creates a placement after checking that every component is finite and the rotation is unit.
+    pub fn new(translation: DVec3, rotation: DQuat) -> Result<Self, PlacementError> {
+        if !translation.is_finite() {
+            return Err(PlacementError::NonFiniteTranslation);
+        }
+        if !rotation.is_finite() {
+            return Err(PlacementError::NonFiniteRotation);
+        }
+        let length = rotation.length();
+        if !length.is_finite() || (length - 1.0).abs() > ROTATION_TOLERANCE {
+            return Err(PlacementError::NonUnitRotation { length });
+        }
+        Ok(Self { translation, rotation })
+    }
+
+    /// The translation part, in the parent frame.
+    pub const fn translation(self) -> DVec3 {
+        self.translation
+    }
+
+    /// The unit rotation part, in the parent frame.
+    pub const fn rotation(self) -> DQuat {
+        self.rotation
+    }
+
+    /// Composes a child placement into its parent's frame: `parent ∘ child`.
+    ///
+    /// A point expressed in the child frame is first transformed by `child`, then by `parent`.
+    pub fn compose(parent: Self, child: Self) -> Result<Self, PlacementError> {
+        let rotation = (parent.rotation * child.rotation).normalize();
+        let translation = parent.rotation * child.translation + parent.translation;
+        Self::new(translation, rotation)
+    }
+
+    /// Applies the placement to a point.
+    pub fn transform_point(self, point: DVec3) -> DVec3 {
+        self.rotation * point + self.translation
+    }
+
+    /// Applies only the rotation to a direction vector.
+    pub fn transform_vector(self, vector: DVec3) -> DVec3 {
+        self.rotation * vector
+    }
+}
+
+/// Why a placement is not a valid rigid transform.
+#[derive(Clone, Copy, Debug, Error, PartialEq)]
+pub enum PlacementError {
+    /// The translation contains a NaN or an infinity.
+    #[error("placement translation must be finite")]
+    NonFiniteTranslation,
+    /// The rotation contains a NaN or an infinity.
+    #[error("placement rotation must be finite")]
+    NonFiniteRotation,
+    /// The rotation quaternion is not unit length.
+    #[error("placement rotation must be a unit quaternion, got length {length}")]
+    NonUnitRotation {
+        /// The length of the rejected quaternion.
+        length: f64,
+    },
+}
+
+/// Accepted deviation from unit length for a rotation quaternion.
+const ROTATION_TOLERANCE: f64 = 1e-9;
+
+/// Serialized form of [`Placement`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlacementWire {
+    translation: [f64; 3],
+    rotation: [f64; 4],
+}
+
+impl From<Placement> for PlacementWire {
+    fn from(placement: Placement) -> Self {
+        let rotation = placement.rotation;
+        Self {
+            translation: placement.translation.to_array(),
+            rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+        }
+    }
+}
+
+impl TryFrom<PlacementWire> for Placement {
+    type Error = PlacementError;
+
+    fn try_from(wire: PlacementWire) -> Result<Self, Self::Error> {
+        let translation = DVec3::from_array(wire.translation);
+        let rotation = DQuat::from_xyzw(wire.rotation[0], wire.rotation[1], wire.rotation[2], wire.rotation[3]);
+        Self::new(translation, rotation)
     }
 }
 
@@ -425,6 +536,70 @@ mod tests {
 
         assert_eq!(Revision(u64::MAX).checked_next(), None);
         assert_eq!(serde_json::from_str::<Revision>("7").expect("deserialize revision").get(), 7);
+    }
+
+    #[test]
+    fn identity_placement_preserves_points_and_vectors() {
+        let point = DVec3::new(1.0, 2.0, 3.0);
+        assert_eq!(Placement::IDENTITY.transform_point(point), point);
+        assert_eq!(Placement::IDENTITY.transform_vector(DVec3::X), DVec3::X);
+    }
+
+    #[test]
+    fn placements_compose_translation_and_rotation() {
+        let parent = Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("parent placement");
+        let child = Placement::new(DVec3::new(0.0, 5.0, 0.0), DQuat::IDENTITY).expect("child placement");
+        let world = Placement::compose(parent, child).expect("world placement");
+        let point = world.transform_point(DVec3::ZERO);
+        assert!((point - DVec3::new(10.0, 5.0, 0.0)).length() < 1e-12, "point was {point:?}");
+
+        let parent =
+            Placement::new(DVec3::ZERO, DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)).expect("rotated parent");
+        let child = Placement::new(DVec3::new(1.0, 0.0, 0.0), DQuat::IDENTITY).expect("translated child");
+        let world = Placement::compose(parent, child).expect("world placement");
+        let point = world.transform_point(DVec3::ZERO);
+        assert!((point - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-12, "point was {point:?}");
+
+        let parent =
+            Placement::new(DVec3::ZERO, DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)).expect("rotated parent");
+        let child =
+            Placement::new(DVec3::ZERO, DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)).expect("rotated child");
+        let world = Placement::compose(parent, child).expect("world placement");
+        let point = world.transform_point(DVec3::Y);
+        assert!((point - DVec3::Z).length() < 1e-12, "point was {point:?}");
+    }
+
+    #[test]
+    fn placements_reject_non_finite_and_non_unit_input() {
+        assert_eq!(
+            Placement::new(DVec3::new(f64::NAN, 0.0, 0.0), DQuat::IDENTITY),
+            Err(PlacementError::NonFiniteTranslation)
+        );
+        assert_eq!(
+            Placement::new(DVec3::ZERO, DQuat::from_xyzw(f64::NAN, 0.0, 0.0, 1.0)),
+            Err(PlacementError::NonFiniteRotation)
+        );
+        assert!(matches!(
+            Placement::new(DVec3::ZERO, DQuat::from_xyzw(0.0, 0.0, 0.0, 2.0)),
+            Err(PlacementError::NonUnitRotation { length }) if (length - 2.0).abs() < 1e-12
+        ));
+    }
+
+    #[test]
+    fn placements_round_trip_and_validate_on_load() {
+        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        let text = serde_json::to_string(&placement).expect("serialize placement");
+        assert!(text.contains(r#""translation":[1.0,2.0,3.0]"#), "json was {text}");
+        assert_eq!(serde_json::from_str::<Placement>(&text).expect("deserialize placement"), placement);
+        assert!(
+            serde_json::from_str::<Placement>(r#"{"translation":[0.0,0.0,0.0],"rotation":[0.0,0.0,0.0,2.0]}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<Placement>(
+                r#"{"translation":[0.0,0.0,0.0],"rotation":[0.0,0.0,0.0,1.0],"extra":1}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
