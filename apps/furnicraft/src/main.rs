@@ -1,6 +1,9 @@
 //! FurniCraft desktop application shell.
 //!
-//! Placeholder until M1: creates no window and starts no event loop yet.
+//! This is the composition root: it creates the window, injects the truck kernel into the sample
+//! session, evaluates panels into a scene, and wires the offscreen renderer into egui. The viewport
+//! only changes view state here; document edits will be dispatched as engine commands.
+
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -11,4 +14,185 @@
     clippy::unreachable
 )]
 
-fn main() {}
+mod scene_build;
+
+use eframe::egui;
+use eframe::egui_wgpu;
+use eframe::wgpu;
+use furnicraft_engine::Session;
+use furnicraft_kernel_truck::TruckKernel;
+use furnicraft_model::Revision;
+use furnicraft_render::ViewportRenderer;
+use furnicraft_scene::{Camera, SceneFrame};
+
+use crate::scene_build::{evaluate, home_camera, sample_session};
+
+/// Orbit sensitivity in radians per point dragged.
+const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
+
+/// Zoom sensitivity per scroll point.
+const ZOOM_PER_SCROLL_POINT: f64 = 0.004;
+
+struct FurniCraftApp {
+    session: Session,
+    kernel: TruckKernel,
+    scene: SceneFrame,
+    home_camera: Camera,
+    scene_revision: Revision,
+    renderer: ViewportRenderer,
+    render_state: egui_wgpu::RenderState,
+    texture_id: egui::TextureId,
+    last_error: Option<String>,
+}
+
+impl FurniCraftApp {
+    fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
+        let session = sample_session()?;
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, session.project())?;
+        let home_camera = home_camera(evaluated.bounds)?;
+        let mut scene = evaluated.frame;
+        scene.camera = home_camera;
+
+        let render_state =
+            cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
+        let mut renderer = ViewportRenderer::new(&render_state.device, 1280, 800);
+        let texture_id = {
+            let mut egui_renderer = render_state.renderer.write();
+            egui_renderer.register_native_texture(&render_state.device, renderer.color_view(), wgpu::FilterMode::Linear)
+        };
+        renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
+
+        Ok(Self {
+            scene_revision: session.project().revision(),
+            session,
+            kernel,
+            scene,
+            home_camera,
+            renderer,
+            render_state,
+            texture_id,
+            last_error: None,
+        })
+    }
+
+    fn sync_scene(&mut self) -> Result<(), String> {
+        let revision = self.session.project().revision();
+        if revision == self.scene_revision {
+            return Ok(());
+        }
+        let evaluated = evaluate(&mut self.kernel, self.session.project())?;
+        let mut scene = evaluated.frame;
+        scene.camera = self.scene.camera;
+        self.renderer.upload(&self.render_state.device, &scene).map_err(|error| error.to_string())?;
+        self.scene = scene;
+        self.scene_revision = revision;
+        Ok(())
+    }
+
+    fn reset_view(&mut self) {
+        self.scene.camera = self.home_camera;
+    }
+
+    fn viewport(&mut self, ui: &mut egui::Ui) {
+        let available = ui.available_size();
+        if available.x < 1.0 || available.y < 1.0 {
+            return;
+        }
+        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+
+        let points_per_pixel = ui.ctx().pixels_per_point();
+        let width = (rect.width() * points_per_pixel).round().max(1.0) as u32;
+        let height = (rect.height() * points_per_pixel).round().max(1.0) as u32;
+        let device = self.render_state.device.clone();
+        if self.renderer.resize(&device, width, height) {
+            self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
+                &device,
+                self.renderer.color_view(),
+                wgpu::FilterMode::Linear,
+                self.texture_id,
+            );
+        }
+
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                self.scene.camera.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
+            }
+        }
+
+        let drag = response.drag_delta();
+        if response.dragged_by(egui::PointerButton::Primary) {
+            self.scene
+                .camera
+                .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
+        } else if response.dragged_by(egui::PointerButton::Middle)
+            || response.dragged_by(egui::PointerButton::Secondary)
+        {
+            self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
+        }
+
+        if response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+
+        self.renderer.render(&self.render_state.device, &self.render_state.queue, &self.scene);
+        ui.painter().with_clip_rect(rect).image(
+            self.texture_id,
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+impl eframe::App for FurniCraftApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Err(error) = self.sync_scene() {
+            self.last_error = Some(error);
+        }
+
+        let mut reset = false;
+        ui.horizontal(|ui| {
+            ui.heading("FurniCraft");
+            ui.separator();
+            reset = ui.button("Frame all  (F)").clicked();
+            reset |= ui.input(|input| input.key_pressed(egui::Key::F));
+            ui.separator();
+            ui.label("LMB orbit  ·  MMB/RMB pan  ·  wheel zoom");
+            if let Some(error) = &self.last_error {
+                ui.separator();
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+        });
+        if reset {
+            self.reset_view();
+        }
+        ui.separator();
+        self.viewport(ui);
+    }
+}
+
+fn main() -> eframe::Result {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("FurniCraft")
+            .with_inner_size([1280.0, 840.0])
+            .with_min_inner_size([640.0, 480.0]),
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    };
+    eframe::run_native(
+        "FurniCraft",
+        options,
+        Box::new(|cc| {
+            let app = FurniCraftApp::new(cc)?;
+            Ok(Box::new(app))
+        }),
+    )
+}

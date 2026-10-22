@@ -120,7 +120,7 @@ FurniCraft separates the model from the way it is viewed.
 | L5 | `furnicraft-render` | `wgpu` renderer: pipelines, buffers, depth, id-buffer picking, camera. No `egui`, no window creation | scene, geom, wgpu, bytemuck |
 | L6 | `furnicraft-engine` | `Session`: document, selection, view state (viewports/cameras), undo/redo, dirty state; command registry | model, param, mesh, kernel |
 | L7 | `furnicraft-ui` | `egui` panels and viewport widgets: outliner, inspector, input, gizmos; dispatches commands | engine, model, egui |
-| L8 | `apps/furnicraft` | Composition root: `eframe` window, input, `egui` ↔ `wgpu` paint callback, constructs `TruckKernel` | ui, engine, render, scene, model, kernel, kernel-truck, eframe |
+| L8 | `apps/furnicraft` | Composition root: `eframe` window, input, `egui` ↔ `wgpu` paint callback, constructs `TruckKernel` and evaluates the sample document | ui, engine, render, scene, model, param, mesh, kernel, kernel-truck, geom, units, eframe |
 | dev | `furnicraft-testkit` | Fixtures and helpers for tests | model, units |
 | tool | `xtask` | Workspace checks (`cargo xtask layers`) | serde_json |
 
