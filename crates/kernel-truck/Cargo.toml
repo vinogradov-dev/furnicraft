@@ -9,3 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+furnicraft-geom = { workspace = true }
+furnicraft-kernel = { workspace = true }
+truck-meshalgo = { workspace = true }
+truck-modeling = { workspace = true }
+truck-shapeops = { workspace = true }
