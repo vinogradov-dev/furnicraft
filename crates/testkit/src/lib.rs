@@ -11,7 +11,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_model::{Assembly, Id, Panel, PanelSize, Placement, Project};
+use furnicraft_model::{Assembly, Id, Panel, PanelRect, PanelSize, Placement, Project};
 use furnicraft_units::Length;
 
 /// A 700 x 500 x 18 mm panel used by tests that need a valid size.
@@ -34,6 +34,48 @@ pub fn sample_resized_panel_size() -> PanelSize {
         Length::from_millimetres(20).expect("20 mm fits a length"),
     )
     .expect("sample panel size is within limits")
+}
+
+/// A 100 x 50 mm cutout rectangle at `(10, 10)` on the sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_cutout_rect() -> PanelRect {
+    PanelRect::new(
+        Length::from_millimetres(10).expect("10 mm fits a length"),
+        Length::from_millimetres(10).expect("10 mm fits a length"),
+        Length::from_millimetres(100).expect("100 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+    )
+    .expect("sample cutout rectangle is valid")
+}
+
+/// A rectangle that overlaps [`sample_cutout_rect`] on the sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_overlapping_cutout_rect() -> PanelRect {
+    PanelRect::new(
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+        Length::from_millimetres(20).expect("20 mm fits a length"),
+        Length::from_millimetres(100).expect("100 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+    )
+    .expect("overlapping cutout rectangle is valid")
+}
+
+/// A rectangle that runs past the 700 mm sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_outside_cutout_rect() -> PanelRect {
+    PanelRect::new(
+        Length::from_millimetres(650).expect("650 mm fits a length"),
+        Length::from_millimetres(10).expect("10 mm fits a length"),
+        Length::from_millimetres(100).expect("100 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+    )
+    .expect("outside cutout rectangle is valid")
+}
+
+/// An 8 mm blind depth for the 18 mm sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_blind_depth() -> Length {
+    Length::from_millimetres(8).expect("8 mm fits a length")
 }
 
 /// A small valid project: a root, one panel and one nested assembly with a panel.

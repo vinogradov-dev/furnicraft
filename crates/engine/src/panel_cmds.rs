@@ -1,6 +1,6 @@
-//! `panel.*` commands.
+//! Document commands for panels and their cutouts.
 
-use furnicraft_model::{Id, PanelSize, Placement, Project};
+use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, PanelSize, Placement, Project};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -98,4 +98,48 @@ fn resize_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, C
     let params = PanelResize::parse(params)?;
     project.set_panel_size(params.panel, params.size)?;
     Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the cutout creation command.
+pub const CUTOUT_CREATE_ID: &str = "cutout.create";
+
+/// User-facing label of the cutout creation command.
+pub const CUTOUT_CREATE_LABEL: &str = "Create cutout";
+
+/// Parameters for `cutout.create`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CutoutCreate {
+    /// Id of the panel that receives the cutout.
+    pub panel: Id,
+    /// Cutout outline in panel-local coordinates.
+    pub shape: CutoutShape,
+    /// Through or blind depth.
+    pub depth: CutoutDepth,
+    /// Face the cut enters from.
+    pub entry: FaceSide,
+}
+
+impl CutoutCreate {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: CUTOUT_CREATE_ID, message: error.to_string() })
+    }
+}
+
+/// The `cutout.create` command.
+pub(crate) const CUTOUT_CREATE: CommandSpec =
+    CommandSpec::new(CUTOUT_CREATE_ID, CUTOUT_CREATE_LABEL, cutout_create_enabled, cutout_create_run);
+
+fn cutout_create_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = CutoutCreate::parse(params) else {
+        return false;
+    };
+    session.project().validate_cutout(params.panel, params.shape, params.depth).is_ok()
+}
+
+fn cutout_create_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = CutoutCreate::parse(params)?;
+    let id = project.add_cutout(params.panel, params.shape, params.depth, params.entry)?;
+    Ok(CommandOutcome::created(id))
 }

@@ -19,5 +19,5 @@ pub mod panel_cmds;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
-pub use panel_cmds::{PanelCreate, PanelResize};
+pub use panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
 pub use session::Session;

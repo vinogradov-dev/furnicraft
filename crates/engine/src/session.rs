@@ -94,10 +94,13 @@ impl Session {
 mod tests {
     use super::*;
 
-    use furnicraft_model::{Id, Placement, ProjectError, Revision};
-    use furnicraft_testkit::{sample_panel_size, sample_project, sample_resized_panel_size};
+    use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, Machining, Placement, ProjectError, Revision};
+    use furnicraft_testkit::{
+        sample_blind_depth, sample_cutout_rect, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
+        sample_panel_size, sample_project, sample_resized_panel_size,
+    };
 
-    use crate::panel_cmds::{PanelCreate, PanelResize};
+    use crate::panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
 
     fn panel_create(session: &Session, name: &str) -> PanelCreate {
         PanelCreate {
@@ -106,6 +109,10 @@ mod tests {
             size: sample_panel_size(),
             placement: Placement::IDENTITY,
         }
+    }
+
+    fn cutout_request(panel: Id, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> CutoutCreate {
+        CutoutCreate { panel, shape, depth, entry }
     }
 
     fn json_params<T: serde::Serialize>(value: &T) -> Value {
@@ -205,6 +212,159 @@ mod tests {
         let error = session.dispatch("panel.resize", &params).expect_err("invalid size");
         assert!(matches!(error, CommandError::InvalidParams { command: "panel.resize", .. }));
         assert_eq!(session.project().revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn dispatch_cutout_create_changes_the_document_once() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Rectangle(sample_cutout_rect());
+        let params = json_params(&cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A));
+
+        let outcome = session.dispatch("cutout.create", &params).expect("create cutout");
+        let cutout_id = outcome.created_id().expect("cutout id");
+        assert_eq!(cutout_id.get(), 5);
+        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(session.project().next_id().get(), 6);
+        let machining = session.project().panel(panel_id).expect("panel").machining();
+        assert_eq!(machining.len(), 1);
+        let Machining::Cutout(cutout) = &machining[0];
+        assert_eq!(cutout.id(), cutout_id);
+        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.depth(), CutoutDepth::Through);
+        assert_eq!(cutout.entry(), FaceSide::A);
+        assert!(session.is_dirty());
+
+        session.undo().expect("undo");
+        assert_eq!(session.project().revision().get(), 2);
+        assert!(session.project().panel(panel_id).expect("panel").machining().is_empty());
+        assert_eq!(session.project().next_id().get(), 6);
+        assert!(!session.is_dirty());
+
+        session.redo().expect("redo");
+        assert_eq!(session.project().revision().get(), 3);
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
+        assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn dispatch_blind_cutout_records_entry_and_depth() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(4).expect("id");
+        let shape = CutoutShape::Rectangle(sample_cutout_rect());
+        let depth = CutoutDepth::Blind { depth: sample_blind_depth() };
+        let params = json_params(&cutout_request(panel_id, shape, depth, FaceSide::B));
+
+        session.dispatch("cutout.create", &params).expect("create blind cutout");
+        let machining = session.project().panel(panel_id).expect("panel").machining();
+        let Machining::Cutout(cutout) = &machining[0];
+        assert_eq!(cutout.depth(), depth);
+        assert_eq!(cutout.entry(), FaceSide::B);
+    }
+
+    #[test]
+    fn cutout_outside_or_invalid_depth_is_reported_without_mutation() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(2).expect("id");
+
+        let outside = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_outside_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&outside)).expect_err("outside cutout");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
+        ));
+        assert_eq!(session.project().revision(), Revision::ZERO);
+        assert_eq!(session.project().next_id().get(), 5);
+
+        let thickness = sample_panel_size().thickness();
+        let invalid_depth = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Blind { depth: thickness },
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&invalid_depth)).expect_err("invalid depth");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::CutoutDepthInvalid { panel, depth, thickness: rejected })
+                if panel == panel_id && depth == thickness && rejected == thickness
+        ));
+        assert_eq!(session.project().revision(), Revision::ZERO);
+        assert_eq!(session.project().next_id().get(), 5);
+    }
+
+    #[test]
+    fn overlapping_cutout_is_reported_without_consuming_an_id() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(2).expect("id");
+        let first =
+            cutout_request(panel_id, CutoutShape::Rectangle(sample_cutout_rect()), CutoutDepth::Through, FaceSide::A);
+        let first_id = session
+            .dispatch("cutout.create", &json_params(&first))
+            .expect("first cutout")
+            .created_id()
+            .expect("cutout id");
+        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(session.project().next_id().get(), 6);
+
+        let overlapping = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_overlapping_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&overlapping)).expect_err("overlapping cutout");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::CutoutOverlap { panel, other })
+                if panel == panel_id && other == first_id
+        ));
+        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(session.project().next_id().get(), 6);
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
+    }
+
+    #[test]
+    fn cutout_enabled_checks_panel_and_geometry() {
+        let mut session = Session::new(sample_project());
+        let registry = CommandRegistry::new();
+        let spec = registry.get("cutout.create").expect("cutout.create is registered");
+        let panel_id = Id::new(2).expect("id");
+
+        let valid =
+            cutout_request(panel_id, CutoutShape::Rectangle(sample_cutout_rect()), CutoutDepth::Through, FaceSide::A);
+        assert!(spec.enabled(&session, &json_params(&valid)));
+
+        let outside = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_outside_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        assert!(!spec.enabled(&session, &json_params(&outside)));
+
+        let missing = cutout_request(
+            Id::new(999).expect("id"),
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        assert!(!spec.enabled(&session, &json_params(&missing)));
+        assert!(!spec.enabled(&session, &Value::Null));
+
+        session.dispatch("cutout.create", &json_params(&valid)).expect("first cutout");
+        let overlapping = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_overlapping_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        assert!(!spec.enabled(&session, &json_params(&overlapping)));
     }
 
     #[test]

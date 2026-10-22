@@ -75,7 +75,7 @@ impl CommandSpec {
 }
 
 /// The commands compiled into this build.
-static COMMANDS: &[CommandSpec] = &[panel_cmds::CREATE, panel_cmds::RESIZE];
+static COMMANDS: &[CommandSpec] = &[panel_cmds::CREATE, panel_cmds::RESIZE, panel_cmds::CUTOUT_CREATE];
 
 /// A lookup table for the compiled command specs.
 #[derive(Clone, Copy, Debug, Default)]
@@ -139,7 +139,10 @@ mod tests {
         let resize = registry.get("panel.resize").expect("panel.resize is registered");
         assert_eq!(resize.id(), "panel.resize");
         assert_eq!(resize.label(), "Resize panel");
+        let cutout = registry.get("cutout.create").expect("cutout.create is registered");
+        assert_eq!(cutout.id(), "cutout.create");
+        assert_eq!(cutout.label(), "Create cutout");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 2);
+        assert_eq!(registry.specs().len(), 3);
     }
 }
