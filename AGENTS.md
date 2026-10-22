@@ -144,8 +144,19 @@ Then check by hand:
 - [ ] New dependencies are pure Rust: no C/C++ sources, no `cc`/`cmake` build of native code, no C-vendoring `-sys` crate; `cargo xtask layers` passes the C-vendoring check.
 - [ ] Public items have doc comments; a crate's `//!` comment still describes what it does.
 - [ ] Keep the tree building at every step: a half-finished workspace blocks everyone.
+- [ ] The completed operation is committed; that commit is a working checkpoint.
 
 While iterating, run less: `cargo test -p <crate> --lib --tests` and `cargo clippy -p <crate> --all-targets`. The four commands above are the final gate.
+
+### 6.1 Commit each completed operation
+
+Commit after every coherent, fully verified unit of work — not at the end of a session and not only when the owner asks. A commit is the rollback point: checking out any such commit must produce a working result, not a half-finished step.
+
+- A "completed operation" is a change that is self-contained and passes the gates above. If a task has independent steps, commit each step separately.
+- Do not mix unrelated changes in one commit, and do not leave finished work uncommitted while starting the next operation.
+- A scaffold that does not build or pass tests is not a completed operation; keep it with the first working step.
+- Stage explicit paths and review `git diff --cached` before committing. Never use `git add -A` blindly.
+- Commit messages and bodies are in English, in the project's Conventional Commits style.
 
 ## 7. Anti-patterns
 
