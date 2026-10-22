@@ -127,11 +127,12 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 ## 6. Before you finish a task
 
 ```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo xtask layers
+cargo xtask ci
 ```
+
+`cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace` and `cargo xtask layers`, in that order, stopping at the first failure. Run the
+steps individually while iterating (see below); run `cargo fmt --all` to fix formatting, the gate only checks it.
 
 Then check by hand:
 
@@ -146,7 +147,7 @@ Then check by hand:
 - [ ] Keep the tree building at every step: a half-finished workspace blocks everyone.
 - [ ] The completed operation is committed; that commit is a working checkpoint.
 
-While iterating, run less: `cargo test -p <crate> --lib --tests` and `cargo clippy -p <crate> --all-targets`. The four commands above are the final gate.
+While iterating, run less: `cargo test -p <crate> --lib --tests` and `cargo clippy -p <crate> --all-targets`. The gate above is the final check.
 
 ### 6.1 Commit each completed operation
 

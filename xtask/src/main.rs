@@ -1,13 +1,13 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask layers`
+//! Usage: `cargo xtask <layers|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
 //! the same change.
 
 use std::collections::BTreeMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -27,6 +27,14 @@ const COMPOSITION_ONLY: &[&str] = &[TRUCK_ADAPTER];
 /// native code shipped and built with FurniCraft, not about the operating system.
 const C_VENDORING_CRATES: &[&str] =
     &["bindgen", "bzip2-sys", "cmake", "libz-sys", "lzma-sys", "openssl-sys", "vtkio", "xz2", "zstd-sys"];
+
+/// The gate, in order. Each step must pass before the next one starts.
+/// `layers` is not a cargo command and runs in-process after these.
+const CI_STEPS: &[(&str, &[&str])] = &[
+    ("fmt", &["fmt", "--all", "--check"]),
+    ("clippy", &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
+    ("test", &["test", "--workspace"]),
+];
 
 /// One workspace crate: its layer and the dependencies it must never have.
 ///
@@ -73,6 +81,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
         Some("layers") => report(check_layers()),
+        Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
             print_usage();
             0
@@ -87,8 +96,42 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <task>");
+    println!("usage: cargo xtask <layers|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
+    println!("  ci        run the whole gate: fmt, clippy, tests, layers");
+}
+
+/// Runs the gate in order and returns the process exit code.
+fn run_ci() -> i32 {
+    let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+    for (name, args) in CI_STEPS {
+        println!("ci: {name}");
+        let status = Command::new(env!("CARGO"))
+            .args(*args)
+            .current_dir(workspace)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status();
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                eprintln!("ci: FAILED at {name}: cannot run cargo: {error}");
+                return 1;
+            }
+        };
+        if !status.success() {
+            eprintln!("ci: FAILED at {name}");
+            return status.code().unwrap_or(1);
+        }
+    }
+
+    if report(check_layers()) == 0 {
+        println!("ci: ok");
+        0
+    } else {
+        1
+    }
 }
 
 fn report(result: Result<usize, Vec<String>>) -> i32 {
@@ -249,6 +292,18 @@ mod tests {
     fn collect(packages: &[serde_json::Value]) -> Vec<String> {
         let (_, violations) = collect_violations(CRATES, packages).expect("synthetic metadata is valid");
         violations
+    }
+
+    #[test]
+    fn the_gate_keeps_every_step() {
+        let names: Vec<&str> = CI_STEPS.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["fmt", "clippy", "test"]);
+        assert!(CI_STEPS[1].1.ends_with(&["-D", "warnings"]));
+    }
+
+    #[test]
+    fn fmt_is_checked_not_rewritten() {
+        assert!(CI_STEPS[0].1.contains(&"--check"));
     }
 
     #[test]
