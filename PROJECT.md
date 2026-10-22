@@ -22,7 +22,7 @@ The model is intentionally described at the level of vocabulary and responsibili
 
 ### Document (`Project`)
 
-The root of a saved file: the assembly tree, the material catalogue, the dimension set, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision and root assembly; catalogues and settings follow.
+The root of a saved file: the assembly tree, the material catalogue, the dimension set, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision, next id and root assembly; catalogues and settings follow.
 
 ### `Id` and `Revision`
 

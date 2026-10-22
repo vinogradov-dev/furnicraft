@@ -188,7 +188,7 @@ impl TryFrom<PlacementWire> for Placement {
     }
 }
 
-/// The root of a saved document: its schema version, revision and assembly tree.
+/// The root of a saved document: its schema version, revision, id allocation and assembly tree.
 ///
 /// The material catalogue, dimensions and settings arrive with later M1 steps. Loading validates
 /// the schema version and the tree invariants; an unsupported version or a duplicate id is a
@@ -198,6 +198,7 @@ impl TryFrom<PlacementWire> for Placement {
 pub struct Project {
     schema_version: u32,
     revision: Revision,
+    next_id: Id,
     root: Assembly,
 }
 
@@ -210,9 +211,9 @@ impl Project {
 
     /// Creates a project from a root assembly and validates its tree.
     pub fn new(root: Assembly) -> Result<Self, ProjectError> {
-        let project = Self { schema_version: Self::CURRENT_SCHEMA_VERSION, revision: Revision::ZERO, root };
-        project.validate()?;
-        Ok(project)
+        let max_id = scan_tree(&root)?;
+        let next_id = next_id_after(max_id)?;
+        Ok(Self { schema_version: Self::CURRENT_SCHEMA_VERSION, revision: Revision::ZERO, next_id, root })
     }
 
     /// The schema version stored in the document.
@@ -225,12 +226,22 @@ impl Project {
         self.revision
     }
 
+    /// The next id that [`Project::add_panel`] or [`Project::add_assembly`] will allocate.
+    pub const fn next_id(&self) -> Id {
+        self.next_id
+    }
+
     /// The root assembly.
     pub const fn root(&self) -> &Assembly {
         &self.root
     }
 
-    /// Checks the schema version, nesting depth and global id uniqueness.
+    /// Finds an assembly anywhere in the tree.
+    pub fn assembly(&self, id: Id) -> Option<&Assembly> {
+        find_assembly_with_depth(&self.root, id, 1).map(|(_, assembly)| assembly)
+    }
+
+    /// Checks the schema version, nesting depth, global id uniqueness and the id allocator.
     pub fn validate(&self) -> Result<(), ProjectError> {
         if self.schema_version != Self::CURRENT_SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedSchemaVersion {
@@ -239,31 +250,145 @@ impl Project {
             });
         }
 
-        let mut seen = HashSet::new();
-        let mut stack = vec![(&self.root, 1u32)];
-        while let Some((assembly, depth)) = stack.pop() {
-            if depth > Self::MAX_ASSEMBLY_DEPTH {
-                return Err(ProjectError::TooDeep { max: Self::MAX_ASSEMBLY_DEPTH });
-            }
-            if !seen.insert(assembly.id.get()) {
-                return Err(ProjectError::DuplicateId(assembly.id));
-            }
-            for child in &assembly.children {
-                match child {
-                    Node::Assembly(child) => stack.push((child, depth.saturating_add(1))),
-                    Node::Panel(panel) => {
-                        if !seen.insert(panel.id.get()) {
-                            return Err(ProjectError::DuplicateId(panel.id));
-                        }
-                    }
-                }
-            }
+        let max_id = scan_tree(&self.root)?;
+        if self.next_id.get() <= max_id {
+            return Err(ProjectError::NextIdNotAfterMax { next: self.next_id, max: max_id });
         }
         Ok(())
     }
+
+    /// Adds a panel to an existing assembly and bumps the revision once.
+    ///
+    /// The panel id is allocated from the document; callers must not invent one.
+    pub fn add_panel(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        size: PanelSize,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
+        if self.assembly(parent).is_none() {
+            return Err(ProjectError::AssemblyNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let panel = Panel::new(id, name, size, placement);
+        let Some((_depth, assembly)) = find_assembly_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent });
+        };
+        assembly.children.push(Node::Panel(panel));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Adds an empty nested assembly and bumps the revision once.
+    ///
+    /// Adding a child below [`Project::MAX_ASSEMBLY_DEPTH`] is rejected.
+    pub fn add_assembly(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
+        let Some((depth, _)) = find_assembly_with_depth(&self.root, parent, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent });
+        };
+        if depth >= Self::MAX_ASSEMBLY_DEPTH {
+            return Err(ProjectError::TooDeep { max: Self::MAX_ASSEMBLY_DEPTH });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let assembly = Assembly::new(id, name, placement, Vec::new());
+        let Some((_depth, parent_assembly)) = find_assembly_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent });
+        };
+        parent_assembly.children.push(Node::Assembly(assembly));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Advances the revision by one and returns it.
+    pub fn bump_revision(&mut self) -> Result<Revision, ProjectError> {
+        let next = self.next_revision()?;
+        self.revision = next;
+        Ok(next)
+    }
+
+    fn next_revision(&self) -> Result<Revision, ProjectError> {
+        self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)
+    }
+
+    fn allocate_id(&mut self) -> Result<Id, ProjectError> {
+        let id = self.next_id;
+        let next = id.get().checked_add(1).ok_or(ProjectError::IdSpaceExhausted)?;
+        self.next_id = Id::new(next).ok_or(ProjectError::IdSpaceExhausted)?;
+        Ok(id)
+    }
 }
 
-/// Why a project cannot be loaded or constructed.
+/// Validates the tree and returns the largest id it uses.
+fn scan_tree(root: &Assembly) -> Result<u64, ProjectError> {
+    let mut seen = HashSet::new();
+    let mut max_id = 0u64;
+    let mut stack = vec![(root, 1u32)];
+    while let Some((assembly, depth)) = stack.pop() {
+        if depth > Project::MAX_ASSEMBLY_DEPTH {
+            return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
+        }
+        if !seen.insert(assembly.id.get()) {
+            return Err(ProjectError::DuplicateId(assembly.id));
+        }
+        max_id = max_id.max(assembly.id.get());
+        for child in &assembly.children {
+            match child {
+                Node::Assembly(child) => stack.push((child, depth.saturating_add(1))),
+                Node::Panel(panel) => {
+                    if !seen.insert(panel.id.get()) {
+                        return Err(ProjectError::DuplicateId(panel.id));
+                    }
+                    max_id = max_id.max(panel.id.get());
+                }
+            }
+        }
+    }
+    Ok(max_id)
+}
+
+/// The id immediately after the largest used id.
+fn next_id_after(max_id: u64) -> Result<Id, ProjectError> {
+    let next = max_id.checked_add(1).ok_or(ProjectError::IdSpaceExhausted)?;
+    Id::new(next).ok_or(ProjectError::IdSpaceExhausted)
+}
+
+fn find_assembly_with_depth(assembly: &Assembly, id: Id, depth: u32) -> Option<(u32, &Assembly)> {
+    if assembly.id == id {
+        return Some((depth, assembly));
+    }
+    for child in &assembly.children {
+        if let Node::Assembly(child) = child
+            && let Some(found) = find_assembly_with_depth(child, id, depth.saturating_add(1))
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_assembly_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32, &mut Assembly)> {
+    if assembly.id == id {
+        return Some((depth, assembly));
+    }
+    for child in &mut assembly.children {
+        if let Node::Assembly(child) = child
+            && let Some(found) = find_assembly_mut(child, id, depth.saturating_add(1))
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Why a project cannot be loaded, constructed or mutated.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProjectError {
     /// The file was written by a newer or otherwise unsupported schema.
@@ -283,6 +408,26 @@ pub enum ProjectError {
         /// The maximum supported depth.
         max: u32,
     },
+    /// The requested parent assembly is not in the tree.
+    #[error("assembly {id} not found")]
+    AssemblyNotFound {
+        /// The missing assembly id.
+        id: Id,
+    },
+    /// The next id would collide with an id already used by the tree.
+    #[error("next document id {next} must be greater than the largest used id {max}")]
+    NextIdNotAfterMax {
+        /// The allocator position from the document.
+        next: Id,
+        /// The largest id found in the tree.
+        max: u64,
+    },
+    /// Every document id has been used.
+    #[error("document id space exhausted")]
+    IdSpaceExhausted,
+    /// Every document revision has been used.
+    #[error("document revision space exhausted")]
+    RevisionExhausted,
 }
 
 /// Serialized form of [`Project`]; validation happens in its `TryFrom` implementation.
@@ -291,6 +436,8 @@ pub enum ProjectError {
 struct ProjectWire {
     schema_version: u32,
     revision: Revision,
+    #[serde(default)]
+    next_id: Option<Id>,
     root: Assembly,
 }
 
@@ -298,9 +445,21 @@ impl TryFrom<ProjectWire> for Project {
     type Error = ProjectError;
 
     fn try_from(wire: ProjectWire) -> Result<Self, Self::Error> {
-        let project = Self { schema_version: wire.schema_version, revision: wire.revision, root: wire.root };
-        project.validate()?;
-        Ok(project)
+        if wire.schema_version != Project::CURRENT_SCHEMA_VERSION {
+            return Err(ProjectError::UnsupportedSchemaVersion {
+                found: wire.schema_version,
+                supported: Project::CURRENT_SCHEMA_VERSION,
+            });
+        }
+        let max_id = scan_tree(&wire.root)?;
+        let next_id = match wire.next_id {
+            Some(next_id) if next_id.get() <= max_id => {
+                return Err(ProjectError::NextIdNotAfterMax { next: next_id, max: max_id });
+            }
+            Some(next_id) => next_id,
+            None => next_id_after(max_id)?,
+        };
+        Ok(Self { schema_version: wire.schema_version, revision: wire.revision, next_id, root: wire.root })
     }
 }
 
@@ -848,7 +1007,63 @@ mod tests {
         assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
         assert_eq!(project.revision(), Revision::ZERO);
         assert_eq!(project.root().id(), Id::new(1).expect("id"));
+        assert_eq!(project.next_id().get(), 5);
         assert_eq!(project.root().children().len(), 2);
+    }
+
+    #[test]
+    fn projects_add_panels_and_assemblies_with_fresh_ids() {
+        let mut project = sample_project();
+        let root_id = project.root().id();
+
+        let panel_id = project.add_panel(root_id, "Back", sample_size(), Placement::IDENTITY).expect("add panel");
+        assert_eq!(panel_id.get(), 5);
+        assert_eq!(project.revision().get(), 1);
+        assert_eq!(project.root().children().len(), 3);
+
+        let assembly_id = project.add_assembly(root_id, "Carcass", Placement::IDENTITY).expect("add assembly");
+        assert_eq!(assembly_id.get(), 6);
+        assert_eq!(project.revision().get(), 2);
+        assert_eq!(project.assembly(assembly_id).expect("new assembly").name(), "Carcass");
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn failed_mutations_do_not_consume_ids_or_bump_revisions() {
+        let mut project = sample_project();
+        let next_id = project.next_id();
+        let revision = project.revision();
+        let missing = Id::new(999).expect("id");
+
+        assert_eq!(
+            project.add_panel(missing, "Orphan", sample_size(), Placement::IDENTITY),
+            Err(ProjectError::AssemblyNotFound { id: missing })
+        );
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+    }
+
+    #[test]
+    fn projects_reject_assemblies_below_the_depth_limit() {
+        let mut root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let deepest = root.id();
+        for index in 0..(Project::MAX_ASSEMBLY_DEPTH - 1) {
+            let id = Id::new(u64::from(index) + 2).expect("id");
+            root = Assembly::new(id, "Nested", Placement::IDENTITY, vec![root.into()]);
+        }
+        let mut project = Project::new(root).expect("tree at the depth limit");
+        assert_eq!(
+            project.add_assembly(deepest, "Too deep", Placement::IDENTITY),
+            Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH })
+        );
+        assert_eq!(project.revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn projects_bump_revisions_explicitly() {
+        let mut project = sample_project();
+        assert_eq!(project.bump_revision().expect("bump revision").get(), 1);
+        assert_eq!(project.revision().get(), 1);
     }
 
     #[test]
@@ -857,6 +1072,25 @@ mod tests {
         let text = serde_json::to_string(&project).expect("serialize project");
         let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
         assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn projects_load_without_next_id() {
+        let project = sample_project();
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let mut value: serde_json::Value = serde_json::from_str(&text).expect("parse project");
+        value.as_object_mut().expect("project is an object").remove("next_id");
+        let decoded: Project = serde_json::from_value(value).expect("older v1 project");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn projects_reject_next_id_at_or_below_the_largest_id() {
+        let project = sample_project();
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let invalid = text.replacen("\"next_id\":5", "\"next_id\":4", 1);
+        let error = serde_json::from_str::<Project>(&invalid).expect_err("invalid next id");
+        assert!(error.to_string().contains("must be greater"), "error was {error}");
     }
 
     #[test]
