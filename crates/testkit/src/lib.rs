@@ -36,6 +36,17 @@ pub fn sample_resized_panel_size() -> PanelSize {
     .expect("sample panel size is within limits")
 }
 
+/// A 620 x 500 x 18 mm panel, narrow enough to invalidate a cutout near the right edge.
+#[allow(clippy::expect_used)]
+pub fn sample_narrow_panel_size() -> PanelSize {
+    PanelSize::new(
+        Length::from_millimetres(620).expect("620 mm fits a length"),
+        Length::from_millimetres(500).expect("500 mm fits a length"),
+        Length::from_millimetres(18).expect("18 mm fits a length"),
+    )
+    .expect("sample panel size is within limits")
+}
+
 /// A 100 x 50 mm cutout rectangle at `(10, 10)` on the sample panel.
 #[allow(clippy::expect_used)]
 pub fn sample_cutout_rect() -> PanelRect {
@@ -58,6 +69,18 @@ pub fn sample_overlapping_cutout_rect() -> PanelRect {
         Length::from_millimetres(50).expect("50 mm fits a length"),
     )
     .expect("overlapping cutout rectangle is valid")
+}
+
+/// A 50 x 50 mm rectangle near the right edge of the 700 mm sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_edge_cutout_rect() -> PanelRect {
+    PanelRect::new(
+        Length::from_millimetres(600).expect("600 mm fits a length"),
+        Length::from_millimetres(10).expect("10 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+    )
+    .expect("edge cutout rectangle is valid")
 }
 
 /// A rectangle that runs past the 700 mm sample panel.

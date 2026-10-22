@@ -96,8 +96,9 @@ mod tests {
 
     use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, Machining, Placement, ProjectError, Revision};
     use furnicraft_testkit::{
-        sample_blind_depth, sample_cutout_rect, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
-        sample_panel_size, sample_project, sample_resized_panel_size,
+        sample_blind_depth, sample_cutout_rect, sample_edge_cutout_rect, sample_narrow_panel_size,
+        sample_outside_cutout_rect, sample_overlapping_cutout_rect, sample_panel_size, sample_project,
+        sample_resized_panel_size,
     };
 
     use crate::panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
@@ -487,17 +488,28 @@ mod tests {
     }
 
     #[test]
-    fn resize_enabled_checks_the_panel() {
-        let session = Session::new(sample_project());
+    fn resize_enabled_checks_the_panel_and_machining() {
+        let mut session = Session::new(sample_project());
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.resize").expect("panel.resize is registered");
+        let panel_id = Id::new(2).expect("id");
 
-        let valid = PanelResize { panel: Id::new(2).expect("id"), size: sample_resized_panel_size() };
+        let valid = PanelResize { panel: panel_id, size: sample_resized_panel_size() };
         assert!(spec.enabled(&session, &json_params(&valid)));
 
         let missing = PanelResize { panel: Id::new(999).expect("id"), size: sample_resized_panel_size() };
         assert!(!spec.enabled(&session, &json_params(&missing)));
         assert!(!spec.enabled(&session, &Value::Null));
+
+        let cutout = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_edge_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        session.dispatch("cutout.create", &json_params(&cutout)).expect("add edge cutout");
+        let too_narrow = PanelResize { panel: panel_id, size: sample_narrow_panel_size() };
+        assert!(!spec.enabled(&session, &json_params(&too_narrow)));
     }
 
     #[test]

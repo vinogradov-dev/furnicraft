@@ -91,7 +91,7 @@ fn resize_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelResize::parse(params) else {
         return false;
     };
-    session.project().panel(params.panel).is_some()
+    session.project().validate_panel_resize(params.panel, params.size).is_ok()
 }
 
 fn resize_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {

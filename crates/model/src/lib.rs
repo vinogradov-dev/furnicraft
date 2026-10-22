@@ -246,15 +246,18 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
+    /// Checks whether a panel can take new dimensions without invalidating its machining.
+    pub fn validate_panel_resize(&self, id: Id, size: PanelSize) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        validate_panel_machining(panel, size)
+    }
+
     /// Replaces a panel's dimensions and bumps the revision once.
     ///
     /// Existing machining is not moved or scaled. A cutout that would fall outside the new outline
     /// or a blind cutout that would become deeper than the new thickness rejects the resize.
     pub fn set_panel_size(&mut self, id: Id, size: PanelSize) -> Result<Revision, ProjectError> {
-        let Some((_depth, panel)) = find_panel_with_depth(&self.root, id, 1) else {
-            return Err(ProjectError::PanelNotFound { id });
-        };
-        validate_panel_machining(panel, size)?;
+        self.validate_panel_resize(id, size)?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
@@ -1504,6 +1507,10 @@ mod tests {
         project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
 
         let smaller = PanelSize::new(millimetres(620), millimetres(500), millimetres(18)).expect("valid size");
+        assert_eq!(
+            project.validate_panel_resize(panel_id, smaller),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
         assert_eq!(
             project.set_panel_size(panel_id, smaller),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
