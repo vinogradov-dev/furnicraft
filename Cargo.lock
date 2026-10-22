@@ -1338,6 +1338,7 @@ dependencies = [
  "furnicraft-geom",
  "furnicraft-mesh",
  "furnicraft-model",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
