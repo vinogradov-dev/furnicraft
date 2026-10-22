@@ -56,6 +56,8 @@ xtask                  workspace checks; not part of the product
 - `ui` never mutates the document directly: it dispatches commands and renders session state.
 - `scene` is data about a frame (what to draw), `render` is the driver that draws it. The document stores placements; cameras and viewports belong to the session or the shell.
 
+Editing anything under `vendor/` follows `vendor/AGENTS.md`: the upstream source is not ours to change.
+
 ## 4. Golden rules
 
 ### 4.1 Everything is a command
