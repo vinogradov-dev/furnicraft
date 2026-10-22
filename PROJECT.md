@@ -56,7 +56,7 @@ A manufacturing feature on a panel: a drilled hole (diameter, depth, entry face)
 
 ### `EdgeBanding` (inside `Panel`)
 
-The banding applied to one edge: material, thickness, and any overhang/trim allowance. The edge is referenced by its stable id. Corners where two banded edges meet are a modelling question, not a detail of the renderer.
+The banding applied to one edge: material, thickness, and any overhang/trim allowance. The edge is referenced by its stable id. Corners use the v1 butt-joint rule in `docs/decisions/0007-edge-banding-v1.md`; contour radii and edge-banding milling remain later work.
 
 ### `Hardware`
 
@@ -68,7 +68,7 @@ A named, typed value (a `Length`, a count, an angle or an enum choice) that desc
 
 ### `Material`
 
-A catalogue entry: kind (chipboard, MDF, solid wood, plywood, HPL), nominal thickness, sheet size, decor/colour and grain availability. Panels reference materials by `Id`; changing a material's thickness must not silently rewrite already-sized panels.
+A catalogue entry: kind (chipboard, MDF, solid wood, plywood, HPL), nominal thickness, sheet size, decor/colour and grain availability. Panels reference materials by `MaterialId`; changing a material's thickness must not rewrite the panel's nominal size.
 
 ## Domain specifications
 
@@ -173,8 +173,7 @@ These are deliberately unresolved. Do not pick an answer inside an unrelated tas
 - **Hardware anchoring.** Does hardware attach to a panel face and a coordinate, to an existing machined feature (a hole), or to an edge? How are multi-panel fittings (hinges, runners) expressed? Generated holes themselves are always stored in panel-local coordinates.
 - **Derived versus edited.** Which panels are fully derived from dimensions, which are hand-placed, and what happens when a dimension changes under a hand-edited panel?
 - **Reusable assemblies.** v1 uses unique tree nodes. Whether a later version adds shared definitions and instances is still open.
-- **Edge banding.** How are corners between two banded edges represented, and how does banding thickness affect nominal panel size (finished versus cut size)?
 - **Grain.** How is grain direction stored and how does it constrain rotation, cutting and edge banding?
 - **Dimensions.** Literal values only, or expressions depending on other dimensions? If expressions, when are they evaluated and how are cycles reported?
-- **Invariants.** Panel-owned cutouts outside the outline and overlapping cutouts are errors in v1; panel larger than the sheet and overlapping hardware-generated holes remain open.
+- **Invariants.** Panel-owned cutouts outside the outline and overlapping cutouts are command errors in v1; loading a scene keeps machining that no longer fits as a problem panel instead of rejecting the file. Panel larger than the sheet and overlapping hardware-generated holes remain open.
 - **Schema.** Versioning strategy and migrations for the document format.

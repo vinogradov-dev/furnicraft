@@ -7,6 +7,10 @@ Related documents:
 - [Materials and catalogue](materials.md) — material records and the catalogue.
 - [Scene document](document.md) — scene file, loading, storage and diagnostics.
 
+Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
+[0007](../decisions/0007-edge-banding-v1.md) and
+[0008](../decisions/0008-panel-diagnostics.md).
+
 ## 1. Terms
 
 - **Panel** — an atomic document object. It is always a group: the panel body plus edge banding. The group exists even when no banding is applied.
@@ -33,6 +37,8 @@ Panel material and edge-banding material are described in [Materials and catalog
 
 - The world is Z-up. A panel has a local frame rigidly attached to its body.
 - The origin is the minimum corner of the **core**.
+- `Placement` anchors this core zero. Assembly code that needs an overall face accounts for the
+  banding offset; nominal and overall are derived lengths, not a second frame.
 - `+X` is length, `+Y` is width and `+Z` is thickness.
 - The body occupies `x` from `0` to `core_length`, `y` from `0` to `core_width`, and `z` from `0` to the panel thickness.
 - The large faces are `A` at `z = thickness` and `B` at `z = 0`; `+Z` points from `B` to `A`.
@@ -53,6 +59,8 @@ When creating or editing a panel, the user sets:
 - panel material.
 
 Thickness is not editable: it comes from the panel material (see [Materials and catalogue](materials.md)). The card shows it as a read-only property. If the material is not found, the card shows `<no material id %d>` (or a similar marker) and the last known thickness with a warning; the loading behaviour is described in [Scene document](document.md).
+
+The document stores nominal length and width only; core and overall are derived. A panel may have no material (`None`); that is different from a material id that is absent from the catalogue.
 
 ### 4.2. Formulas
 
@@ -127,14 +135,14 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 - Bandings are stored in application order.
 - Re-applying a banding to an edge makes it the last one.
 - Removing a banding preserves the order of the others.
-- Order matters at corners: the last applied banding is trimmed.
+- Order matters at corners: the later band covers the corner and is cut flush with the earlier band.
 
 ### 5.4. Corners
 
-- **Right angle, 90°.** The last applied banding is trimmed so that it butts against the previously applied banding; its end face is visible. There is no miter in the first version.
-- **Chamfer.** The last applied banding is trimmed along the chamfer; its end face is visible.
+- **Right angle, 90°.** The later band covers the corner and is trimmed flush with the earlier band's outer face; its end face is visible. There is no mitre in the first version. At each end that meets an earlier band, the later band is extended along the edge by that band's thickness.
+- **Chamfer.** The later band is trimmed along the chamfer; its end face is visible.
 - **Radius.** Banding is continuous around the radius and the adjacent straight sections. Application order does not affect a radius. This is a later step: it requires a profile sweep along an arc; the port currently supports linear extrusion and booleans.
-- **Single banded edge at a corner.** If the adjacent edge has no banding, the banding ends at the corner and is trimmed flush with the adjacent face. The exact end-face behaviour is to be clarified.
+- **Single banded edge at a corner.** If the adjacent edge has no earlier band, the band ends flush with the adjacent side face of the core. It is not extended into the corner.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
 ### 5.5. Inclusion in size
@@ -157,7 +165,8 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 Panel issues are computed during loading/rebuild and are not stored as data:
 
-- the panel material is missing;
+- no material is assigned to the panel (`None`);
+- a material id is absent from the catalogue;
 - an edge-banding material is missing;
 - the core is not positive;
 - machining no longer fits the new core;
@@ -175,14 +184,14 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.edge_banding.set` — panel, edge, material, included_in_size. If the edge already has banding, it is replaced and becomes the last one.
 - `panel.edge_banding.clear` — panel, edge.
 
-Commands validate the material against the catalogue, the positivity of the core and the validity of machining. A successful command is one undo entry; a failed command leaves the document unchanged.
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, and a resize that would leave a machining feature outside the core. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core or machining outside the core preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A successful command is one undo entry; a failed command leaves the document unchanged.
 
 ## 8. Panel tests
 
 At minimum:
 
 - the 720 × 500 size table for every inclusion combination;
-- banding order and trimming of the last banding at a right angle;
+- banding order and corner coverage by the later band at a right angle;
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;
@@ -192,8 +201,6 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 
 ## 9. Open questions
 
-1. Exact banding trimming at a corner when the adjacent edge has no banding.
-2. Machining policy when the material or banding changes: warning only, or command rejection.
-3. Contour radii and chamfers: when they enter the model and when sweep is implemented.
-4. Edge banding milling: rounding the faces and corner.
-5. Whether the card should show core and overall size separately from the nominal size.
+1. Contour radii and chamfers: when they enter the model and when sweep is implemented.
+2. Edge banding milling: rounding the faces and corner.
+3. Whether the card should show core and overall size separately from the nominal size.

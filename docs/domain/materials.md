@@ -7,13 +7,15 @@ Related documents:
 - [Panels and edge banding](panels.md) — panel, its dimensions, banding and commands.
 - [Scene document](document.md) — scene file, loading, storage and diagnostics.
 
+Related decision: [0005](../decisions/0005-material-catalogue.md).
+
 ## 1. Terms
 
 - **Material** — a catalogue record with a stable `MaterialId` and a set of properties.
 - **Panel material** — the material a panel body is made from. It defines the nominal thickness first of all, as well as colour/decor and other properties.
 - **Edge-banding material** — a ready-made banding material. It defines the banding profile: thickness, width, as well as colour/decor and other properties.
 - **Catalogue** — an external collection of materials. Currently a mock file; later a database.
-- **`MaterialId`** — a stable identifier of a catalogue record. Panels and bandings reference materials by it.
+- **`MaterialId`** — a stable identifier of a catalogue record. Panels and bandings reference materials by it. It is separate from the document `Id` and is not allocated by `Project`.
 
 ## 2. Common material model
 
@@ -29,7 +31,8 @@ The property set is extensible. In the first version these are typed `PanelMater
 
 Common rules:
 
-- `MaterialId` is stable and is never reused;
+- `MaterialId` is stable and is never reused, including after a material is deleted;
+- `MaterialId` is a separate non-zero type, not a document `Id`;
 - an id is unique within the catalogue;
 - physical dimensions are `Length` (micrometres), never bare `f64`/`f32` millimetres;
 - a material does not store references to panels; links go from the panel to the material;
@@ -51,7 +54,7 @@ Possible future properties:
 - machining and edge-banding restrictions;
 - price, stock and similar commercial data.
 
-A panel stores only a `MaterialId` and the last known thickness as a fallback. The user does not edit panel thickness: it comes from the material. When the material is found, the catalogue is the source of truth.
+A panel stores an optional `MaterialId` and the last known thickness as a fallback. `None` means no material was assigned; `Some(id)` that the catalogue cannot resolve is a missing material. The user does not edit panel thickness: it comes from the material. When the material is found, the catalogue is the source of truth.
 
 ## 4. Edge-banding material
 
@@ -74,14 +77,15 @@ Banding thickness is not panel thickness. If `width` is greater than the panel t
 
 ## 5. Catalogue
 
-1. The catalogue is not stored in the scene file.
-2. The application reads the catalogue from a separate mock file at startup and/or when loading a scene.
+1. The catalogue is not stored in the scene file and is not part of `Project`.
+2. The application reads the catalogue from a separate mock file and hands an immutable `Catalog` to the session.
 3. The scene stores only stable `MaterialId` values and fallback values.
 4. The catalogue is read-only for the duration of a session.
-5. If the catalogue is re-read, the scene is rebuilt from scratch.
+5. v1 has no hot reload. If the catalogue is re-read, a new session is built and the scene is rebuilt from scratch; the old undo history is discarded.
 6. Changing a property under the same `MaterialId` intentionally affects panels on the next load: for example, changing `nominal_thickness` changes the thickness of every panel that uses that material.
 7. Removing a `MaterialId` from the catalogue does not delete panels. The panel gets a "material missing" diagnostic and uses the last known thickness; see [Scene document](document.md).
 8. The catalogue does not substitute a missing material with a similar one and does not look up a replacement by name.
+9. Catalogue types and validation live in `furnicraft-model`; file I/O and JSON loading live in the application shell. `param` and `mesh` never read the catalogue.
 
 ### 5.1. Mock file format
 
@@ -129,6 +133,7 @@ If a panel material is missing:
 - the panel is not deleted or reset;
 - the last known thickness is used;
 - the panel is marked as a problem panel and drawn in a neutral colour;
+- a panel with no assigned material (`None`) is reported separately from a panel whose `MaterialId` is absent from the catalogue;
 - the card shows `<no material id %d>` or a similar marker instead of the material;
 - if the material appears again on the next load, the panel recovers.
 
@@ -168,10 +173,9 @@ At minimum:
 1. One material table with common properties, or separate tables for panels and banding.
 2. How to store an extensible property set: typed columns, a JSON field or a property–value table.
 3. Material versioning: edit a record under the same id or create a new version.
-4. Whether `MaterialId` may be reused after deletion. The proposal is no.
-5. Units and dimension precision in the database.
-6. Localisation of names and descriptions.
-7. Textures: file path, atlas, hash, embedded resources.
-8. Sheets, nesting, grain direction and stock accounting.
-9. Catalogue import/export and merging with an existing catalogue.
-10. Who edits the catalogue: a separate database editor only, or also the application.
+4. Units and dimension precision in the database.
+5. Localisation of names and descriptions.
+6. Textures: file path, atlas, hash, embedded resources.
+7. Sheets, nesting, grain direction and stock accounting.
+8. Catalogue import/export and merging with an existing catalogue.
+9. Who edits the catalogue: a separate database editor only, or also the application.

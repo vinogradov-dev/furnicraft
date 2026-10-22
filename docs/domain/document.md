@@ -7,6 +7,11 @@ Related documents:
 - [Panels and edge banding](panels.md) — panel, its dimensions, banding and commands.
 - [Materials and catalogue](materials.md) — material records and the catalogue.
 
+Related decisions: [0005](../decisions/0005-material-catalogue.md),
+[0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
+[0007](../decisions/0007-edge-banding-v1.md) and
+[0008](../decisions/0008-panel-diagnostics.md).
+
 ## 1. Terms
 
 - **Document** (scene) — a saved FurniCraft project: assembly tree, panels, their placements, machining and material references.
@@ -38,7 +43,7 @@ Related documents:
   - `last_known_thickness`;
   - `last_known_width`.
 
-`last_known_*` values are a cache for resilience when the catalogue is missing, not user-editable parameters. When the material is found, the catalogue is the source of truth and the fallback is refreshed on load.
+`material_id` is optional: `None` means no material was assigned, while `Some(id)` that the catalogue cannot resolve is a missing material. `last_known_*` values are always stored as a cache for resilience when the catalogue is missing, not user-editable parameters. When the material is found, the catalogue is the source of truth and the fallback is refreshed on load.
 
 ## 3. What the scene file does not store
 
@@ -53,14 +58,14 @@ Related documents:
 
 1. Read the scene file.
 2. Read the catalogue (see [Materials and catalogue](materials.md)).
-3. For each panel, look up its panel material by `material_id`.
+3. For each panel, read `material_id`. If it is `None`, use the fallback and mark `NoMaterial`; otherwise look it up in the catalogue.
 4. If the material is found: panel thickness = the material's nominal thickness; refresh `last_known_thickness`.
-5. If the material is not found: thickness = `last_known_thickness`; mark the panel as a problem panel.
+5. If a present id is not found: thickness = `last_known_thickness`; mark `MissingMaterial` and the panel as a problem panel.
 6. For each banding, look up its edge-banding material.
 7. If found: profile thickness and width = catalogue values; refresh the fallback.
 8. If not found: use the last known profile; mark the panel as a problem panel.
 9. Recompute the core and overall size using the formulas in [Panels and edge banding](panels.md).
-10. Validate machining against the new core.
+10. Compute machining diagnostics against the new core; do not reject the file for a fit problem.
 11. Rebuild the panel geometry and group.
 12. Build the scene and UI diagnostics.
 
@@ -75,6 +80,7 @@ If the panel material is missing:
 - the panel is not deleted or reset;
 - `last_known_thickness` is used;
 - the panel is drawn in a neutral colour;
+- `NoMaterial` (no id assigned) is reported separately from `MissingMaterial(id)` (an id absent from the catalogue);
 - the card shows `<no material id %d>` or a similar marker instead of the material;
 - the panel status shows a warning;
 - on the next load, if the material is present again, the panel recovers and the warning disappears.
@@ -97,31 +103,38 @@ If an edge-banding material is missing:
 ## 6. Material changes
 
 - Changing a panel material through a command changes `material_id`; thickness, geometry and banding are recomputed.
-- If machining no longer fits the core after the recomputation, data is not deleted: the panel is marked as a problem panel and the user sees a warning.
-- Changing an edge-banding material changes the profile and may change the core/overall size when the banding is included in the size. The nominal panel length and width are preserved.
+- `panel.material.set` rejects an unknown material id or a non-positive resulting core. If the new thickness makes machining invalid, the command is accepted, data is not deleted, and the panel becomes a problem panel with a warning.
+- Changing an edge-banding material changes the profile and may change the core/overall size when the banding is included in the size. The nominal panel length and width are preserved. `panel.edge_banding.set` follows the same rule as a material change: unknown ids and a non-positive core are errors; machining that no longer fits is a diagnostic.
+- `panel.resize` is stricter: it rejects a change that would leave existing machining outside the new core.
 - Changing material properties in the catalogue under the same id is applied on the next scene load.
 
 ## 7. Diagnostics
 
 Diagnostics are computed during loading/rebuild and are not stored as data:
 
-- the panel material is missing;
-- an edge-banding material is missing;
-- the core is not positive;
-- machining no longer fits the new core;
-- the banding profile is unavailable and there is no fallback.
+- `NoMaterial`: no material id is assigned;
+- `MissingMaterial(id)`: the assigned id is absent from the catalogue;
+- `MissingBandingMaterial { edge, material }`;
+- `MissingBandingProfile { edge }`: legacy data has no usable fallback;
+- `NonPositiveCore`;
+- `MachiningOutsideCore`;
+- `BlindDepthNotLessThanThickness`.
 
 A panel with an issue stays in the document, is drawn where possible and shows a warning in the card. A diagnostic does not change the document and does not enter the file.
+
+The document itself validates identity, nominal dimensions, finite values, unique banding edges and fallback dimensions. Core positivity and machining fit are diagnostics, not load errors: a catalogue change must not make a saved scene unreadable.
 
 ## 8. Schema and migrations
 
 - The scene file is versioned.
 - New fields use `#[serde(default)]` so older files keep loading.
 - Unknown required fields or unknown enum variants are a readable error, never a silent interpretation.
-- Legacy files without a panel material load as panels with a missing material:
+- Legacy files without a panel material load as panels with no material assigned:
+  - the old length and width become the nominal size;
   - the old thickness is preserved as `last_known_thickness`;
-  - the panel is marked as a problem panel;
+  - `material = None` and the panel is marked as a problem panel;
   - the user sees a warning and can assign a material.
+- The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo
@@ -129,7 +142,7 @@ A panel with an issue stays in the document, is drawn where possible and shows a
 - Every document change goes through an `engine` command.
 - A successful command is one undo entry; a failed command leaves the document unchanged.
 - The undo snapshot is the document without catalogue, meshes, colours or diagnostics.
-- The catalogue is considered immutable for the duration of a session. If it is re-read, the scene is rebuilt; undo history for that reload has to be decided separately.
+- The catalogue is immutable for the duration of a session. v1 has no hot reload: re-reading it builds a new session and clears the old undo history.
 
 ## 10. Tests
 
@@ -138,20 +151,18 @@ At minimum:
 - the catalogue never appears in a serialised scene;
 - a legacy file without a material loads with a warning instead of failing;
 - missing panel material: old thickness, neutral colour, `<no material id %d>`, panel not lost;
+- `NoMaterial` and `MissingMaterial(id)` are reported separately;
 - restoring the material clears the problem;
 - missing edge-banding material: fallback profile or no banding, panel remains a problem panel;
 - changing material thickness on load changes panel thickness;
 - changing panel or banding material rebuilds geometry;
-- machining that no longer fits the core produces a diagnostic instead of data loss;
+- a material change that invalidates machining keeps the data and reports a diagnostic;
+- a resize that invalidates machining is rejected without changing the document;
 - undo/redo does not depend on the catalogue;
 - loading the scene twice produces the same dimensions and diagnostics.
 
 ## 11. Open questions
 
 1. Scene file format: JSON until a binary format appears?
-2. Whether to store `last_known_*` for banding always or only after a successful catalogue load.
-3. Machining policy when the material or banding changes: warning only, or command rejection.
-4. What to do when a banding has no fallback profile (legacy data): skip the banding or draw a placeholder.
-5. Whether hot catalogue reload without restarting the scene is needed, and what happens to undo.
-6. How to synchronise the scene with a real database when the mock file is replaced by one.
-7. Whether the scene should store a snapshot of the material name for the card when the catalogue is unavailable.
+2. How to synchronise the scene with a real database when the mock file is replaced by one.
+3. Whether the scene should store a snapshot of the material name for the card when the catalogue is unavailable.
