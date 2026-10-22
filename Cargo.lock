@@ -1304,8 +1304,12 @@ dependencies = [
 name = "furnicraft-param"
 version = "0.1.0"
 dependencies = [
+ "furnicraft-geom",
+ "furnicraft-kernel",
+ "furnicraft-kernel-truck",
  "furnicraft-model",
  "furnicraft-units",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

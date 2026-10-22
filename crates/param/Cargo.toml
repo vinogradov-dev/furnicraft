@@ -9,5 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+furnicraft-geom = { workspace = true }
+furnicraft-kernel = { workspace = true }
 furnicraft-model = { workspace = true }
 furnicraft-units = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+furnicraft-kernel-truck = { workspace = true }
