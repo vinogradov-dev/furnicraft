@@ -70,6 +70,14 @@ A named, typed value (a `Length`, a count, an angle or an enum choice) that desc
 
 A catalogue entry: kind (chipboard, MDF, solid wood, plywood, HPL), nominal thickness, sheet size, decor/colour and grain availability. Panels reference materials by `Id`; changing a material's thickness must not silently rewrite already-sized panels.
 
+## Domain specifications
+
+Detailed, normative descriptions live in `docs/domain/`:
+
+- [`panels.md`](docs/domain/panels.md) — the panel as an atomic group, local frame, nominal/core/overall sizes, edge banding, order and corners.
+- [`materials.md`](docs/domain/materials.md) — material records, the external catalogue and its future database structure.
+- [`document.md`](docs/domain/document.md) — the scene file, loading, fallbacks, diagnostics, schema and migrations.
+
 ## Architectural principles
 
 - **Data is separate from rendering.** `model` is serializable data; meshes and scene descriptions are derived in `mesh` and `scene`; only `render` touches `wgpu`. No GPU type ever appears in the document.
