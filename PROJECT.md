@@ -36,6 +36,10 @@ A node in the product tree: it groups panels, hardware and nested assemblies, an
 
 A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the assembly tree to produce world transforms. The document stores placements; it never stores a camera or a viewport. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently.
 
+### Commands
+
+Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. The first registered command is `panel.create`: it takes the parent assembly id, a name, a `PanelSize` and a `Placement`, allocates the panel id, bumps the revision once and returns the created id. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
+
 ### `Panel`
 
 One flat part: length, width and thickness, the material it is cut from, its grain direction, the placement that puts it in its parent assembly, edge banding on each of its edges, and the list of machined features on it. Panels are the atoms of cutting lists, drawings and CNC output, so they carry their own manufacturing data. The first M1 panel record stores its id, name, size and placement; material, grain, edge banding and machining follow.

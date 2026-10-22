@@ -314,6 +314,25 @@ impl Project {
         Ok(next)
     }
 
+    /// Replaces the user-visible content from a snapshot and advances the revision.
+    ///
+    /// Undo and redo use this instead of replacing the whole project: the revision stays
+    /// monotonic for caches, and the id allocator never moves backwards, so allocated ids are
+    /// never reused after an undo.
+    pub fn restore_from(&mut self, snapshot: &Project) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        self.schema_version = snapshot.schema_version;
+        self.next_id = self.next_id.max(snapshot.next_id);
+        self.root = snapshot.root.clone();
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Compares user-visible content, ignoring the revision and the id allocator.
+    pub fn same_content(&self, other: &Project) -> bool {
+        self.schema_version == other.schema_version && self.root == other.root
+    }
+
     fn next_revision(&self) -> Result<Revision, ProjectError> {
         self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)
     }
@@ -1064,6 +1083,27 @@ mod tests {
         let mut project = sample_project();
         assert_eq!(project.bump_revision().expect("bump revision").get(), 1);
         assert_eq!(project.revision().get(), 1);
+    }
+
+    #[test]
+    fn project_restore_keeps_revisions_and_ids_monotonic() {
+        let original = sample_project();
+        let mut project = sample_project();
+        let created =
+            project.add_panel(project.root().id(), "Back", sample_size(), Placement::IDENTITY).expect("add panel");
+        let after = project.clone();
+
+        let revision = project.restore_from(&original).expect("restore original");
+        assert_eq!(revision.get(), 2);
+        assert_eq!(project.root().children().len(), 2);
+        assert!(project.next_id().get() > created.get());
+        assert!(project.same_content(&original));
+        assert!(!project.same_content(&after));
+
+        let revision = project.restore_from(&after).expect("restore edited");
+        assert_eq!(revision.get(), 3);
+        assert_eq!(project.root().children().len(), 3);
+        assert_eq!(project.next_id(), after.next_id());
     }
 
     #[test]
