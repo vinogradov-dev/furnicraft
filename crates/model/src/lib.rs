@@ -3,9 +3,9 @@
 //! Pure serializable data plus its invariants. No geometry, no GPU, no UI, no file I/O. The exact
 //! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
 //!
-//! This module currently defines the vocabulary shared by every panel: the two large faces, stable
-//! edge and vertex ids, and the local numbering of a rectangular outline. Geometry and the full
-//! `Panel` record arrive with the panel milestones.
+//! This module currently defines the vocabulary shared by every panel: validated rectangular
+//! dimensions, the two large faces, stable edge and vertex ids, and the local numbering of a
+//! rectangular outline. Geometry and the full `Panel` record arrive with the panel milestones.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -16,7 +16,9 @@
     clippy::unreachable
 )]
 
+use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
+use thiserror::Error;
 
 /// One of the two large faces of a flat panel.
 ///
@@ -54,6 +56,101 @@ impl FaceSide {
             Self::A => 1,
             Self::B => -1,
         }
+    }
+}
+
+/// The validated dimensions of a rectangular panel.
+///
+/// In the panel-local frame the panel occupies `x` from `0` to the length, `y` from `0` to the
+/// width and `z` from `0` to the thickness. The limits are validation rules, not part of the
+/// stored value: every dimension stays an `i64` micrometre count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "PanelSizeWire")]
+pub struct PanelSize {
+    length: Length,
+    width: Length,
+    thickness: Length,
+}
+
+impl PanelSize {
+    /// Largest accepted panel length or width: ten metres.
+    pub const MAX_LENGTH: Length = Length::from_micrometres(10_000_000);
+    /// Largest accepted panel width: ten metres.
+    pub const MAX_WIDTH: Length = Length::from_micrometres(10_000_000);
+    /// Largest accepted panel thickness: one metre.
+    pub const MAX_THICKNESS: Length = Length::from_micrometres(1_000_000);
+
+    /// Creates dimensions after checking that every side is positive and within its limit.
+    pub fn new(length: Length, width: Length, thickness: Length) -> Result<Self, PanelSizeError> {
+        validate_dimension("length", length, Self::MAX_LENGTH)?;
+        validate_dimension("width", width, Self::MAX_WIDTH)?;
+        validate_dimension("thickness", thickness, Self::MAX_THICKNESS)?;
+        Ok(Self { length, width, thickness })
+    }
+
+    /// The panel length along local X.
+    pub const fn length(self) -> Length {
+        self.length
+    }
+
+    /// The panel width along local Y.
+    pub const fn width(self) -> Length {
+        self.width
+    }
+
+    /// The panel thickness along local Z.
+    pub const fn thickness(self) -> Length {
+        self.thickness
+    }
+}
+
+/// Why a set of panel dimensions is not usable.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum PanelSizeError {
+    /// A dimension is zero or negative.
+    #[error("panel {field} must be positive, got {value}")]
+    NonPositive {
+        /// The rejected dimension.
+        field: &'static str,
+        /// The rejected value.
+        value: Length,
+    },
+    /// A dimension exceeds the supported maximum.
+    #[error("panel {field} must not exceed {max}, got {value}")]
+    TooLarge {
+        /// The rejected dimension.
+        field: &'static str,
+        /// The rejected value.
+        value: Length,
+        /// The largest accepted value for this dimension.
+        max: Length,
+    },
+}
+
+fn validate_dimension(field: &'static str, value: Length, max: Length) -> Result<(), PanelSizeError> {
+    if !value.is_positive() {
+        return Err(PanelSizeError::NonPositive { field, value });
+    }
+    if value > max {
+        return Err(PanelSizeError::TooLarge { field, value, max });
+    }
+    Ok(())
+}
+
+/// Serialized form of [`PanelSize`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelSizeWire {
+    length: Length,
+    width: Length,
+    thickness: Length,
+}
+
+impl TryFrom<PanelSizeWire> for PanelSize {
+    type Error = PanelSizeError;
+
+    fn try_from(wire: PanelSizeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.length, wire.width, wire.thickness)
     }
 }
 
@@ -253,6 +350,72 @@ mod tests {
             assert_eq!(RectEdge::between(edge.start(), edge.end()), Some(edge));
         }
         assert_eq!(RectEdge::between(RectCorner::BottomLeft, RectCorner::TopLeft), None);
+    }
+
+    fn millimetres(value: i64) -> Length {
+        Length::from_millimetres(value).expect("whole millimetres fit a length")
+    }
+
+    #[test]
+    fn panel_size_accepts_positive_dimensions() {
+        let size = PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size");
+        assert_eq!(size.length(), millimetres(700));
+        assert_eq!(size.width(), millimetres(500));
+        assert_eq!(size.thickness(), millimetres(18));
+    }
+
+    #[test]
+    fn panel_size_rejects_non_positive_and_oversized_dimensions() {
+        let zero = Length::ZERO;
+        let negative = millimetres(-1);
+        assert_eq!(
+            PanelSize::new(zero, millimetres(500), millimetres(18)),
+            Err(PanelSizeError::NonPositive { field: "length", value: zero })
+        );
+        assert_eq!(
+            PanelSize::new(millimetres(700), negative, millimetres(18)),
+            Err(PanelSizeError::NonPositive { field: "width", value: negative })
+        );
+        assert_eq!(
+            PanelSize::new(millimetres(700), millimetres(500), negative),
+            Err(PanelSizeError::NonPositive { field: "thickness", value: negative })
+        );
+
+        let too_long = Length::from_micrometres(PanelSize::MAX_LENGTH.micrometres() + 1);
+        assert_eq!(
+            PanelSize::new(too_long, millimetres(500), millimetres(18)),
+            Err(PanelSizeError::TooLarge { field: "length", value: too_long, max: PanelSize::MAX_LENGTH })
+        );
+
+        let too_wide = Length::from_micrometres(PanelSize::MAX_WIDTH.micrometres() + 1);
+        assert_eq!(
+            PanelSize::new(millimetres(700), too_wide, millimetres(18)),
+            Err(PanelSizeError::TooLarge { field: "width", value: too_wide, max: PanelSize::MAX_WIDTH })
+        );
+
+        let too_thick = Length::from_micrometres(PanelSize::MAX_THICKNESS.micrometres() + 1);
+        assert_eq!(
+            PanelSize::new(millimetres(700), millimetres(500), too_thick),
+            Err(PanelSizeError::TooLarge { field: "thickness", value: too_thick, max: PanelSize::MAX_THICKNESS })
+        );
+
+        assert!(PanelSize::new(PanelSize::MAX_LENGTH, PanelSize::MAX_WIDTH, PanelSize::MAX_THICKNESS).is_ok());
+    }
+
+    #[test]
+    fn panel_size_serde_round_trip_and_validation() {
+        let size = PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size");
+        let text = serde_json::to_string(&size).expect("serialize panel size");
+        assert_eq!(text, r#"{"length":700000,"width":500000,"thickness":18000}"#);
+        assert_eq!(serde_json::from_str::<PanelSize>(&text).expect("deserialize panel size"), size);
+
+        assert!(serde_json::from_str::<PanelSize>(r#"{"length":0,"width":500000,"thickness":18000}"#).is_err());
+        assert!(serde_json::from_str::<PanelSize>(r#"{"length":700000,"width":500000,"thickness":-1}"#).is_err());
+        assert!(serde_json::from_str::<PanelSize>(r#"{"length":10000001,"width":500000,"thickness":18000}"#).is_err());
+        assert!(
+            serde_json::from_str::<PanelSize>(r#"{"length":700000,"width":500000,"thickness":18000,"unexpected":1}"#)
+                .is_err()
+        );
     }
 
     #[test]

@@ -42,6 +42,8 @@ One flat part: length, width and thickness, the material it is cut from, its gra
 
 The panel's local frame has its origin at the **minimum corner** (smallest X and Y, `z = 0`), `+X` along the **length**, `+Y` along the **width**, and `+Z` along the **thickness**; the panel occupies `z` from `0` to its thickness. This convention is fixed for the geometry kernel and the panel features.
 
+Panel dimensions are positive. The v1 validator accepts a length and width up to 10,000 mm and a thickness up to 1,000 mm; zero, negative and larger values are errors, not warnings.
+
 The two large faces are **A** (at `z = thickness`) and **B** (at `z = 0`); `+Z` points from B to A. Viewed from A, outline vertices are numbered **1..n counter-clockwise**, starting at the panel zero: for a rectangle, corner 1 is `(0, 0)`, 2 is `(length, 0)`, 3 is `(length, width)`, 4 is `(0, width)`. Edge `i` runs from corner `i` to corner `i+1`, wrapping at `n`; for a rectangle, edge 1 is the bottom, 2 the right, 3 the top, 4 the left. Edge and vertex ids are stable and never reused; their numbers are human labels. The labels are local to the panel and do not depend on world orientation or on how the panel is used.
 
 ### `Machining` (inside `Panel`)
