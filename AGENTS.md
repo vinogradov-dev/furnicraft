@@ -8,9 +8,14 @@ This file is the constitution. Where a task or a habit conflicts with it, this f
 
 ## 1. Orientation
 
+Start every session with `plan/STATUS.md`: where the project stands, what is in flight and what comes
+next. Then read the documents below that the task needs.
+
 | Read | Why |
 |---|---|
 | `PROJECT.md` | Vision, domain vocabulary, crate map, milestones |
+| `plan/STATUS.md` | Current milestone, the task in flight and the next one; rewritten after every task |
+| `docs/decisions/` | Why the kernel, the units, the vendored crate and the panel frame are what they are |
 | `BRIEF.md` | The owner's goals, constraints and preferences (Russian) |
 | `crates/<name>/src/lib.rs` | Each crate's doc comment states its layer and job |
 | `xtask/src/main.rs` | The layer map that `cargo xtask layers` enforces |
@@ -145,6 +150,7 @@ Then check by hand:
 - [ ] New dependencies are pure Rust: no C/C++ sources, no `cc`/`cmake` build of native code, no C-vendoring `-sys` crate; `cargo xtask layers` passes the C-vendoring check.
 - [ ] Public items have doc comments; a crate's `//!` comment still describes what it does.
 - [ ] Keep the tree building at every step: a half-finished workspace blocks everyone.
+- [ ] `plan/STATUS.md` reflects the new state: milestone, what changed, the next task.
 - [ ] The completed operation is committed; that commit is a working checkpoint.
 
 While iterating, run less: `cargo test -p <crate> --lib --tests` and `cargo clippy -p <crate> --all-targets`. The gate above is the final check.
@@ -190,4 +196,5 @@ Commit after every coherent, fully verified unit of work — not at the end of a
 - `AGENTS.md` — this file: the rules.
 - `BRIEF.md` — the owner's original brief; do not edit it to match the code.
 - `ATTRIBUTION.md` — vendored and bundled third-party components, their licenses and modifications.
-- `docs/` — created when the first long-lived document (architecture decisions, file format, UI guidelines) is needed; not before.
+- `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
+- `plan/STATUS.md` — where the project stands and what comes next; rewritten at the end of every task, never appended to.
