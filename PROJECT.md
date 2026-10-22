@@ -26,7 +26,7 @@ The root of a saved file: the assembly tree, the material catalogue, the dimensi
 
 ### `Id` and `Revision`
 
-Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a panel or an assembly without holding a pointer. A monotonically increasing `Revision` marks every document change; caches (meshes, picking structures, derived parts) are keyed by it. Both are technical plumbing, not user-visible entities. Panel vertices and edges use stable ids of the same kind; their visible numbers are labels, not keys.
+Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a panel or an assembly without holding a pointer. A monotonically increasing `Revision` marks every document change; caches (meshes, picking structures, derived parts) are keyed by it. Both are technical plumbing, not user-visible entities. In v1 an `Id` is a non-zero `u64` serialized as a number, and a `Revision` is a `u64` starting at zero. Panel vertices and edges use stable ids of the same kind; their visible numbers are labels, not keys.
 
 ### `Assembly`
 
