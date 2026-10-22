@@ -95,9 +95,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{Id, Placement, ProjectError, Revision};
-    use furnicraft_testkit::{sample_panel_size, sample_project};
+    use furnicraft_testkit::{sample_panel_size, sample_project, sample_resized_panel_size};
 
-    use crate::panel_cmds::PanelCreate;
+    use crate::panel_cmds::{PanelCreate, PanelResize};
 
     fn panel_create(session: &Session, name: &str) -> PanelCreate {
         PanelCreate {
@@ -108,7 +108,7 @@ mod tests {
         }
     }
 
-    fn json_params(value: &PanelCreate) -> Value {
+    fn json_params<T: serde::Serialize>(value: &T) -> Value {
         serde_json::to_value(value).expect("params serialize")
     }
 
@@ -148,6 +148,63 @@ mod tests {
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn dispatch_panel_resize_updates_size_and_history() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").size();
+        let after = sample_resized_panel_size();
+        let params = json_params(&PanelResize { panel: panel_id, size: after });
+
+        let outcome = session.dispatch("panel.resize", &params).expect("resize panel");
+        assert_eq!(outcome.created_id(), None);
+        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(session.project().panel(panel_id).expect("panel").size(), after);
+        assert!(session.is_dirty());
+
+        session.undo().expect("undo");
+        assert_eq!(session.project().revision().get(), 2);
+        assert_eq!(session.project().panel(panel_id).expect("panel").size(), before);
+        assert!(!session.is_dirty());
+
+        session.redo().expect("redo");
+        assert_eq!(session.project().revision().get(), 3);
+        assert_eq!(session.project().panel(panel_id).expect("panel").size(), after);
+        assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn resize_missing_panel_is_reported_without_mutation() {
+        let mut session = Session::new(sample_project());
+        let missing = Id::new(999).expect("id");
+        let params = json_params(&PanelResize { panel: missing, size: sample_resized_panel_size() });
+
+        let error = session.dispatch("panel.resize", &params).expect_err("missing panel");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::PanelNotFound { id }) if id == missing
+        ));
+        assert_eq!(session.project().root().children().len(), 2);
+        assert_eq!(session.project().revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn resize_invalid_size_is_rejected_before_mutation() {
+        let mut session = Session::new(sample_project());
+        let panel_id = Id::new(2).expect("id");
+        let mut params = json_params(&PanelResize { panel: panel_id, size: sample_resized_panel_size() });
+        let size = params
+            .as_object_mut()
+            .and_then(|object| object.get_mut("size"))
+            .and_then(Value::as_object_mut)
+            .expect("size is an object");
+        size.insert("length".to_owned(), Value::from(0));
+
+        let error = session.dispatch("panel.resize", &params).expect_err("invalid size");
+        assert!(matches!(error, CommandError::InvalidParams { command: "panel.resize", .. }));
+        assert_eq!(session.project().revision(), Revision::ZERO);
     }
 
     #[test]
@@ -266,6 +323,20 @@ mod tests {
 
         let empty = panel_create(&session, " ");
         assert!(!spec.enabled(&session, &json_params(&empty)));
+        assert!(!spec.enabled(&session, &Value::Null));
+    }
+
+    #[test]
+    fn resize_enabled_checks_the_panel() {
+        let session = Session::new(sample_project());
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.resize").expect("panel.resize is registered");
+
+        let valid = PanelResize { panel: Id::new(2).expect("id"), size: sample_resized_panel_size() };
+        assert!(spec.enabled(&session, &json_params(&valid)));
+
+        let missing = PanelResize { panel: Id::new(999).expect("id"), size: sample_resized_panel_size() };
+        assert!(!spec.enabled(&session, &json_params(&missing)));
         assert!(!spec.enabled(&session, &Value::Null));
     }
 

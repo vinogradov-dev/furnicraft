@@ -38,7 +38,7 @@ A rigid transform relative to the parent frame: translation and rotation. Scale 
 
 ### Commands
 
-Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. The first registered command is `panel.create`: it takes the parent assembly id, a name, a `PanelSize` and a `Placement`, allocates the panel id, bumps the revision once and returns the created id. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
+Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. `panel.create` takes the parent assembly id, a name, a `PanelSize` and a `Placement`, allocates the panel id, bumps the revision once and returns the created id. `panel.resize` takes a panel id and a new `PanelSize` and bumps the revision once. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
 
 ### `Panel`
 

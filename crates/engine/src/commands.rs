@@ -75,7 +75,7 @@ impl CommandSpec {
 }
 
 /// The commands compiled into this build.
-static COMMANDS: &[CommandSpec] = &[panel_cmds::CREATE];
+static COMMANDS: &[CommandSpec] = &[panel_cmds::CREATE, panel_cmds::RESIZE];
 
 /// A lookup table for the compiled command specs.
 #[derive(Clone, Copy, Debug, Default)]
@@ -131,12 +131,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_exposes_panel_create() {
+    fn registry_exposes_panel_commands() {
         let registry = CommandRegistry::new();
-        let spec = registry.get("panel.create").expect("panel.create is registered");
-        assert_eq!(spec.id(), "panel.create");
-        assert_eq!(spec.label(), "Create panel");
+        let create = registry.get("panel.create").expect("panel.create is registered");
+        assert_eq!(create.id(), "panel.create");
+        assert_eq!(create.label(), "Create panel");
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        assert_eq!(resize.id(), "panel.resize");
+        assert_eq!(resize.label(), "Resize panel");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 1);
+        assert_eq!(registry.specs().len(), 2);
     }
 }

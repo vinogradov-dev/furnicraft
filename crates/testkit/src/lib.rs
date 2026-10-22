@@ -25,6 +25,17 @@ pub fn sample_panel_size() -> PanelSize {
     .expect("sample panel size is within limits")
 }
 
+/// A second valid panel size, used by resize tests.
+#[allow(clippy::expect_used)]
+pub fn sample_resized_panel_size() -> PanelSize {
+    PanelSize::new(
+        Length::from_millimetres(900).expect("900 mm fits a length"),
+        Length::from_millimetres(600).expect("600 mm fits a length"),
+        Length::from_millimetres(20).expect("20 mm fits a length"),
+    )
+    .expect("sample panel size is within limits")
+}
+
 /// A small valid project: a root, one panel and one nested assembly with a panel.
 #[allow(clippy::expect_used)]
 pub fn sample_project() -> Project {

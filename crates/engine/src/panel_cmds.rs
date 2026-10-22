@@ -60,3 +60,42 @@ fn create_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, C
     let id = project.add_panel(params.parent, params.name, params.size, params.placement)?;
     Ok(CommandOutcome::created(id))
 }
+
+/// Stable id of the panel resize command.
+pub const RESIZE_ID: &str = "panel.resize";
+
+/// User-facing label of the panel resize command.
+pub const RESIZE_LABEL: &str = "Resize panel";
+
+/// Parameters for `panel.resize`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelResize {
+    /// Id of the panel to resize.
+    pub panel: Id,
+    /// New panel dimensions.
+    pub size: PanelSize,
+}
+
+impl PanelResize {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: RESIZE_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.resize` command.
+pub(crate) const RESIZE: CommandSpec = CommandSpec::new(RESIZE_ID, RESIZE_LABEL, resize_enabled, resize_run);
+
+fn resize_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelResize::parse(params) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some()
+}
+
+fn resize_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelResize::parse(params)?;
+    project.set_panel_size(params.panel, params.size)?;
+    Ok(CommandOutcome::changed())
+}

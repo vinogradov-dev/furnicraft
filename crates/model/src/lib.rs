@@ -241,6 +241,22 @@ impl Project {
         find_assembly_with_depth(&self.root, id, 1).map(|(_, assembly)| assembly)
     }
 
+    /// Finds a panel anywhere in the tree.
+    pub fn panel(&self, id: Id) -> Option<&Panel> {
+        find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
+    }
+
+    /// Replaces a panel's dimensions and bumps the revision once.
+    pub fn set_panel_size(&mut self, id: Id, size: PanelSize) -> Result<Revision, ProjectError> {
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.size = size;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Checks the schema version, nesting depth, global id uniqueness and the id allocator.
     pub fn validate(&self) -> Result<(), ProjectError> {
         if self.schema_version != Self::CURRENT_SCHEMA_VERSION {
@@ -407,6 +423,36 @@ fn find_assembly_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32
     None
 }
 
+fn find_panel_with_depth(assembly: &Assembly, id: Id, depth: u32) -> Option<(u32, &Panel)> {
+    for child in &assembly.children {
+        match child {
+            Node::Panel(panel) if panel.id == id => return Some((depth, panel)),
+            Node::Assembly(child) => {
+                if let Some(found) = find_panel_with_depth(child, id, depth.saturating_add(1)) {
+                    return Some(found);
+                }
+            }
+            Node::Panel(_) => {}
+        }
+    }
+    None
+}
+
+fn find_panel_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32, &mut Panel)> {
+    for child in &mut assembly.children {
+        match child {
+            Node::Panel(panel) if panel.id == id => return Some((depth, panel)),
+            Node::Assembly(child) => {
+                if let Some(found) = find_panel_mut(child, id, depth.saturating_add(1)) {
+                    return Some(found);
+                }
+            }
+            Node::Panel(_) => {}
+        }
+    }
+    None
+}
+
 /// Why a project cannot be loaded, constructed or mutated.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProjectError {
@@ -431,6 +477,12 @@ pub enum ProjectError {
     #[error("assembly {id} not found")]
     AssemblyNotFound {
         /// The missing assembly id.
+        id: Id,
+    },
+    /// The requested panel is not in the tree.
+    #[error("panel {id} not found")]
+    PanelNotFound {
+        /// The missing panel id.
         id: Id,
     },
     /// The next id would collide with an id already used by the tree.
@@ -1045,6 +1097,22 @@ mod tests {
         assert_eq!(project.revision().get(), 2);
         assert_eq!(project.assembly(assembly_id).expect("new assembly").name(), "Carcass");
         assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn project_resizes_panels_and_reports_missing_ids() {
+        let mut project = sample_project();
+        let panel_id = Id::new(4).expect("id");
+        let size = PanelSize::new(millimetres(900), millimetres(600), millimetres(20)).expect("valid size");
+
+        let revision = project.set_panel_size(panel_id, size).expect("resize panel");
+        assert_eq!(revision.get(), 1);
+        assert_eq!(project.revision(), revision);
+        assert_eq!(project.panel(panel_id).expect("panel exists").size(), size);
+
+        let missing = Id::new(999).expect("id");
+        assert_eq!(project.set_panel_size(missing, size), Err(ProjectError::PanelNotFound { id: missing }));
+        assert_eq!(project.revision(), revision);
     }
 
     #[test]
