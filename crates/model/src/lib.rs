@@ -3,10 +3,10 @@
 //! Pure serializable data plus its invariants. No geometry, no GPU, no UI, no file I/O. The exact
 //! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
 //!
-//! This module currently defines the vocabulary shared by every panel: document ids and
-//! revisions, validated rectangular dimensions, rigid placements, the two large faces, stable
-//! edge and vertex ids, and the local numbering of a rectangular outline. Geometry and the full
-//! `Panel` record arrive with the panel milestones.
+//! This module currently defines the document skeleton: ids and revisions, the assembly tree,
+//! minimal panel records, validated rectangular dimensions and rigid placements. The two large
+//! faces, stable edge and vertex ids, and the local numbering of a rectangular outline are here
+//! as well; geometry, materials, edge banding and machining arrive later.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -17,6 +17,8 @@
     clippy::unreachable
 )]
 
+use std::collections::HashSet;
+use std::fmt;
 use std::num::NonZeroU64;
 
 use furnicraft_geom::{DQuat, DVec3};
@@ -45,6 +47,12 @@ impl Id {
     /// The raw numeric value.
     pub const fn get(self) -> u64 {
         self.0.get()
+    }
+}
+
+impl fmt::Display for Id {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
     }
 }
 
@@ -177,6 +185,224 @@ impl TryFrom<PlacementWire> for Placement {
         let translation = DVec3::from_array(wire.translation);
         let rotation = DQuat::from_xyzw(wire.rotation[0], wire.rotation[1], wire.rotation[2], wire.rotation[3]);
         Self::new(translation, rotation)
+    }
+}
+
+/// The root of a saved document: its schema version, revision and assembly tree.
+///
+/// The material catalogue, dimensions and settings arrive with later M1 steps. Loading validates
+/// the schema version and the tree invariants; an unsupported version or a duplicate id is a
+/// readable error, never a reinterpretation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ProjectWire")]
+pub struct Project {
+    schema_version: u32,
+    revision: Revision,
+    root: Assembly,
+}
+
+impl Project {
+    /// The schema version written by this build.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
+    /// Maximum nesting depth of assemblies, including the root at depth one.
+    pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
+
+    /// Creates a project from a root assembly and validates its tree.
+    pub fn new(root: Assembly) -> Result<Self, ProjectError> {
+        let project = Self { schema_version: Self::CURRENT_SCHEMA_VERSION, revision: Revision::ZERO, root };
+        project.validate()?;
+        Ok(project)
+    }
+
+    /// The schema version stored in the document.
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// The current document revision.
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    /// The root assembly.
+    pub const fn root(&self) -> &Assembly {
+        &self.root
+    }
+
+    /// Checks the schema version, nesting depth and global id uniqueness.
+    pub fn validate(&self) -> Result<(), ProjectError> {
+        if self.schema_version != Self::CURRENT_SCHEMA_VERSION {
+            return Err(ProjectError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+                supported: Self::CURRENT_SCHEMA_VERSION,
+            });
+        }
+
+        let mut seen = HashSet::new();
+        let mut stack = vec![(&self.root, 1u32)];
+        while let Some((assembly, depth)) = stack.pop() {
+            if depth > Self::MAX_ASSEMBLY_DEPTH {
+                return Err(ProjectError::TooDeep { max: Self::MAX_ASSEMBLY_DEPTH });
+            }
+            if !seen.insert(assembly.id.get()) {
+                return Err(ProjectError::DuplicateId(assembly.id));
+            }
+            for child in &assembly.children {
+                match child {
+                    Node::Assembly(child) => stack.push((child, depth.saturating_add(1))),
+                    Node::Panel(panel) => {
+                        if !seen.insert(panel.id.get()) {
+                            return Err(ProjectError::DuplicateId(panel.id));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why a project cannot be loaded or constructed.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ProjectError {
+    /// The file was written by a newer or otherwise unsupported schema.
+    #[error("unsupported schema version {found}; this build supports {supported}")]
+    UnsupportedSchemaVersion {
+        /// The version found in the document.
+        found: u32,
+        /// The version supported by this build.
+        supported: u32,
+    },
+    /// Two nodes in the tree use the same id.
+    #[error("duplicate document id {0}")]
+    DuplicateId(Id),
+    /// The assembly tree is nested more deeply than the supported limit.
+    #[error("assembly nesting exceeds {max} levels")]
+    TooDeep {
+        /// The maximum supported depth.
+        max: u32,
+    },
+}
+
+/// Serialized form of [`Project`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectWire {
+    schema_version: u32,
+    revision: Revision,
+    root: Assembly,
+}
+
+impl TryFrom<ProjectWire> for Project {
+    type Error = ProjectError;
+
+    fn try_from(wire: ProjectWire) -> Result<Self, Self::Error> {
+        let project = Self { schema_version: wire.schema_version, revision: wire.revision, root: wire.root };
+        project.validate()?;
+        Ok(project)
+    }
+}
+
+/// A node in the product tree.
+///
+/// An assembly groups panels and nested assemblies. In v1 every node is unique and owns its
+/// children; shared definitions and instances are deferred.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Assembly {
+    id: Id,
+    name: String,
+    placement: Placement,
+    children: Vec<Node>,
+}
+
+impl Assembly {
+    /// Creates an assembly. Global id uniqueness is checked by [`Project::validate`].
+    pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
+        Self { id, name: name.into(), placement, children }
+    }
+
+    /// The stable assembly id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// The panels and nested assemblies in this assembly.
+    pub fn children(&self) -> &[Node] {
+        &self.children
+    }
+}
+
+/// A flat panel in the product tree.
+///
+/// The first M1 skeleton stores identity, size and placement. Material, edge banding, grain and
+/// machining arrive as separate operations.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Panel {
+    id: Id,
+    name: String,
+    size: PanelSize,
+    placement: Placement,
+}
+
+impl Panel {
+    /// Creates a panel. Global id uniqueness is checked by [`Project::validate`].
+    pub fn new(id: Id, name: impl Into<String>, size: PanelSize, placement: Placement) -> Self {
+        Self { id, name: name.into(), size, placement }
+    }
+
+    /// The stable panel id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The panel dimensions.
+    pub const fn size(&self) -> PanelSize {
+        self.size
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+}
+
+/// A child of an assembly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Node {
+    /// A nested assembly.
+    Assembly(Assembly),
+    /// A panel.
+    Panel(Panel),
+}
+
+impl From<Assembly> for Node {
+    fn from(assembly: Assembly) -> Self {
+        Self::Assembly(assembly)
+    }
+}
+
+impl From<Panel> for Node {
+    fn from(panel: Panel) -> Self {
+        Self::Panel(panel)
     }
 }
 
@@ -600,6 +826,72 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn sample_size() -> PanelSize {
+        PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size")
+    }
+
+    fn sample_project() -> Project {
+        let size = sample_size();
+        let shelf = Panel::new(Id::new(2).expect("id"), "Shelf", size, Placement::IDENTITY);
+        let front = Panel::new(Id::new(4).expect("id"), "Front", size, Placement::IDENTITY);
+        let drawer = Assembly::new(Id::new(3).expect("id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
+        let root =
+            Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
+        Project::new(root).expect("valid project")
+    }
+
+    #[test]
+    fn projects_start_at_the_current_schema_and_revision() {
+        let project = sample_project();
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        assert_eq!(project.revision(), Revision::ZERO);
+        assert_eq!(project.root().id(), Id::new(1).expect("id"));
+        assert_eq!(project.root().children().len(), 2);
+    }
+
+    #[test]
+    fn projects_round_trip_through_json() {
+        let project = sample_project();
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn projects_reject_duplicate_ids() {
+        let duplicate = Id::new(1).expect("id");
+        let panel = Panel::new(duplicate, "Panel", sample_size(), Placement::IDENTITY);
+        let root = Assembly::new(duplicate, "Root", Placement::IDENTITY, vec![panel.into()]);
+        assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(duplicate)));
+    }
+
+    #[test]
+    fn projects_reject_excessive_nesting() {
+        let mut root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        for index in 0..Project::MAX_ASSEMBLY_DEPTH {
+            let id = Id::new(u64::from(index) + 2).expect("id");
+            root = Assembly::new(id, "Nested", Placement::IDENTITY, vec![root.into()]);
+        }
+        assert!(matches!(
+            Project::new(root),
+            Err(ProjectError::TooDeep { max }) if max == Project::MAX_ASSEMBLY_DEPTH
+        ));
+    }
+
+    #[test]
+    fn projects_reject_unsupported_schema_and_unknown_fields() {
+        let project = sample_project();
+        let text = serde_json::to_string(&project).expect("serialize project");
+
+        let newer = text.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
+        let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
+        assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
+
+        let prefix = text.strip_suffix('}').expect("project JSON is an object");
+        let extra = format!("{prefix},\"extra\":1}}");
+        assert!(serde_json::from_str::<Project>(&extra).is_err());
     }
 
     #[test]

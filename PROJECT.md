@@ -22,7 +22,7 @@ The model is intentionally described at the level of vocabulary and responsibili
 
 ### Document (`Project`)
 
-The root of a saved file: the assembly tree, the material catalogue, the dimension set, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading.
+The root of a saved file: the assembly tree, the material catalogue, the dimension set, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision and root assembly; catalogues and settings follow.
 
 ### `Id` and `Revision`
 
@@ -30,7 +30,7 @@ Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a p
 
 ### `Assembly`
 
-A node in the product tree: it groups panels, hardware and nested assemblies, and owns the dimensions that describe it. An assembly is both "the product" and "the sub-assembly" depending on where it sits, so nesting is part of the model rather than a special case.
+A node in the product tree: it groups panels, hardware and nested assemblies, and owns the dimensions that describe it. An assembly is both "the product" and "the sub-assembly" depending on where it sits, so nesting is part of the model rather than a special case. In v1 every tree node is unique and owns its children; shared definitions and instances are deferred.
 
 ### `Placement`
 
@@ -38,7 +38,7 @@ A rigid transform relative to the parent frame: translation and rotation. Scale 
 
 ### `Panel`
 
-One flat part: length, width and thickness, the material it is cut from, its grain direction, the placement that puts it in its parent assembly, edge banding on each of its edges, and the list of machined features on it. Panels are the atoms of cutting lists, drawings and CNC output, so they carry their own manufacturing data.
+One flat part: length, width and thickness, the material it is cut from, its grain direction, the placement that puts it in its parent assembly, edge banding on each of its edges, and the list of machined features on it. Panels are the atoms of cutting lists, drawings and CNC output, so they carry their own manufacturing data. The first M1 panel record stores its id, name, size and placement; material, grain, edge banding and machining follow.
 
 The panel's local frame has its origin at the **minimum corner** (smallest X and Y, `z = 0`), `+X` along the **length**, `+Y` along the **width**, and `+Z` along the **thickness**; the panel occupies `z` from `0` to its thickness. This convention is fixed for the geometry kernel and the panel features.
 
@@ -156,12 +156,11 @@ A crate may depend only on crates in lower layers. `kernel-truck` is the only cr
 
 These are deliberately unresolved. Do not pick an answer inside an unrelated task; design them together.
 
-- **Placement rotation.** Store rotations as a unit quaternion or a matrix? How is normalisation validated on load?
 - **View state.** What, if anything, is persisted in the document (only named views?) and what lives in the session?
 - **Selection.** In v1, can the user select objects and faces only, or edges too? How are faces identified after a rebuild?
 - **Hardware anchoring.** Does hardware attach to a panel face and a coordinate, to an existing machined feature (a hole), or to an edge? How are multi-panel fittings (hinges, runners) expressed? Generated holes themselves are always stored in panel-local coordinates.
 - **Derived versus edited.** Which panels are fully derived from dimensions, which are hand-placed, and what happens when a dimension changes under a hand-edited panel?
-- **Assembly semantics.** Is an assembly a product, a reusable sub-assembly, or both? Are there instances/shared definitions, or is every node unique?
+- **Reusable assemblies.** v1 uses unique tree nodes. Whether a later version adds shared definitions and instances is still open.
 - **Edge banding.** How are corners between two banded edges represented, and how does banding thickness affect nominal panel size (finished versus cut size)?
 - **Grain.** How is grain direction stored and how does it constrain rotation, cutting and edge banding?
 - **Dimensions.** Literal values only, or expressions depending on other dimensions? If expressions, when are they evaluated and how are cycles reported?
