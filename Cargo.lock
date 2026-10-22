@@ -1328,6 +1328,7 @@ dependencies = [
  "bytemuck",
  "furnicraft-geom",
  "furnicraft-scene",
+ "thiserror 2.0.21",
  "wgpu",
 ]
 

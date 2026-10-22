@@ -12,4 +12,5 @@ workspace = true
 bytemuck = { workspace = true }
 furnicraft-geom = { workspace = true }
 furnicraft-scene = { workspace = true }
+thiserror = { workspace = true }
 wgpu = { workspace = true }
