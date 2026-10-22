@@ -247,7 +247,14 @@ impl Project {
     }
 
     /// Replaces a panel's dimensions and bumps the revision once.
+    ///
+    /// Existing machining is not moved or scaled. A cutout that would fall outside the new outline
+    /// or a blind cutout that would become deeper than the new thickness rejects the resize.
     pub fn set_panel_size(&mut self, id: Id, size: PanelSize) -> Result<Revision, ProjectError> {
+        let Some((_depth, panel)) = find_panel_with_depth(&self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        validate_panel_machining(panel, size)?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
@@ -255,6 +262,35 @@ impl Project {
         panel.size = size;
         self.revision = next_revision;
         Ok(next_revision)
+    }
+
+    /// Checks whether a cutout can be added to a panel without changing the document.
+    pub fn validate_cutout(&self, panel: Id, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+        let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
+        validate_new_cutout(panel, shape, depth)
+    }
+
+    /// Adds a cutout to a panel and bumps the revision once.
+    ///
+    /// The cutout id is allocated from the document; callers must not invent one. A cutout outside
+    /// the panel, a blind cutout that is not shallower than the thickness, or an overlap with an
+    /// existing cutout is rejected before any id is consumed.
+    pub fn add_cutout(
+        &mut self,
+        panel: Id,
+        shape: CutoutShape,
+        depth: CutoutDepth,
+        entry: FaceSide,
+    ) -> Result<Id, ProjectError> {
+        self.validate_cutout(panel, shape, depth)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let id = self.allocate_id()?;
+        let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
+            return Err(ProjectError::PanelNotFound { id: panel });
+        };
+        panel_node.machining.push(Machining::Cutout(Cutout::new(id, shape, depth, entry)));
+        self.revision = next_revision;
+        Ok(id)
     }
 
     /// Checks the schema version, nesting depth, global id uniqueness and the id allocator.
@@ -382,6 +418,17 @@ fn scan_tree(root: &Assembly) -> Result<u64, ProjectError> {
                         return Err(ProjectError::DuplicateId(panel.id));
                     }
                     max_id = max_id.max(panel.id.get());
+                    validate_panel_machining(panel, panel.size())?;
+                    for machining in panel.machining() {
+                        match machining {
+                            Machining::Cutout(cutout) => {
+                                if !seen.insert(cutout.id().get()) {
+                                    return Err(ProjectError::DuplicateId(cutout.id()));
+                                }
+                                max_id = max_id.max(cutout.id().get());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -453,6 +500,85 @@ fn find_panel_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32, &
     None
 }
 
+fn validate_panel_machining(panel: &Panel, size: PanelSize) -> Result<(), ProjectError> {
+    let mut validated: Vec<&Cutout> = Vec::new();
+    for machining in panel.machining() {
+        match machining {
+            Machining::Cutout(cutout) => {
+                validate_cutout_geometry(panel.id(), size, cutout.shape(), cutout.depth())?;
+                for other in &validated {
+                    if rects_overlap(cutout_rect(cutout.shape()), cutout_rect(other.shape())) {
+                        return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: other.id() });
+                    }
+                }
+                validated.push(cutout);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+    validate_cutout_geometry(panel.id(), panel.size(), shape, depth)?;
+    for machining in panel.machining() {
+        match machining {
+            Machining::Cutout(existing) => {
+                if rects_overlap(cutout_rect(shape), cutout_rect(existing.shape())) {
+                    return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_cutout_geometry(
+    panel: Id,
+    size: PanelSize,
+    shape: CutoutShape,
+    depth: CutoutDepth,
+) -> Result<(), ProjectError> {
+    let rect = cutout_rect(shape);
+    if !rect_inside(rect, size) {
+        return Err(ProjectError::CutoutOutsidePanel { panel });
+    }
+    if let CutoutDepth::Blind { depth } = depth {
+        let thickness = size.thickness();
+        if !depth.is_positive() || depth >= thickness {
+            return Err(ProjectError::CutoutDepthInvalid { panel, depth, thickness });
+        }
+    }
+    Ok(())
+}
+
+fn cutout_rect(shape: CutoutShape) -> PanelRect {
+    match shape {
+        CutoutShape::Rectangle(rect) => rect,
+    }
+}
+
+fn rect_inside(rect: PanelRect, size: PanelSize) -> bool {
+    let x0 = rect.x().micrometres() as i128;
+    let y0 = rect.y().micrometres() as i128;
+    let x1 = x0 + rect.width().micrometres() as i128;
+    let y1 = y0 + rect.height().micrometres() as i128;
+    let panel_x = size.length().micrometres() as i128;
+    let panel_y = size.width().micrometres() as i128;
+    x0 >= 0 && y0 >= 0 && x1 <= panel_x && y1 <= panel_y
+}
+
+fn rects_overlap(a: PanelRect, b: PanelRect) -> bool {
+    let a_x0 = a.x().micrometres() as i128;
+    let a_y0 = a.y().micrometres() as i128;
+    let a_x1 = a_x0 + a.width().micrometres() as i128;
+    let a_y1 = a_y0 + a.height().micrometres() as i128;
+    let b_x0 = b.x().micrometres() as i128;
+    let b_y0 = b.y().micrometres() as i128;
+    let b_x1 = b_x0 + b.width().micrometres() as i128;
+    let b_y1 = b_y0 + b.height().micrometres() as i128;
+    a_x0 < b_x1 && b_x0 < a_x1 && a_y0 < b_y1 && b_y0 < a_y1
+}
+
 /// Why a project cannot be loaded, constructed or mutated.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum ProjectError {
@@ -484,6 +610,30 @@ pub enum ProjectError {
     PanelNotFound {
         /// The missing panel id.
         id: Id,
+    },
+    /// A cutout is not fully inside the panel outline.
+    #[error("cutout on panel {panel} lies outside the panel")]
+    CutoutOutsidePanel {
+        /// The panel that owns the cutout.
+        panel: Id,
+    },
+    /// A blind cutout depth is zero, negative or not shallower than the panel.
+    #[error("blind cutout depth {depth} on panel {panel} must be positive and less than thickness {thickness}")]
+    CutoutDepthInvalid {
+        /// The panel that owns the cutout.
+        panel: Id,
+        /// The rejected depth.
+        depth: Length,
+        /// The current panel thickness.
+        thickness: Length,
+    },
+    /// Two cutouts on the same panel overlap.
+    #[error("cutout on panel {panel} overlaps cutout {other}")]
+    CutoutOverlap {
+        /// The panel that owns the cutouts.
+        panel: Id,
+        /// The other cutout in the conflicting pair.
+        other: Id,
     },
     /// The next id would collide with an id already used by the tree.
     #[error("next document id {next} must be greater than the largest used id {max}")]
@@ -576,8 +726,9 @@ impl Assembly {
 
 /// A flat panel in the product tree.
 ///
-/// The first M1 skeleton stores identity, size and placement. Material, edge banding, grain and
-/// machining arrive as separate operations.
+/// The first M1 skeleton stores identity, size, placement and panel-owned machining. Material,
+/// edge banding and grain arrive as separate operations; holes generated by hardware will be a
+/// separate machining source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
@@ -585,12 +736,14 @@ pub struct Panel {
     name: String,
     size: PanelSize,
     placement: Placement,
+    #[serde(default)]
+    machining: Vec<Machining>,
 }
 
 impl Panel {
     /// Creates a panel. Global id uniqueness is checked by [`Project::validate`].
     pub fn new(id: Id, name: impl Into<String>, size: PanelSize, placement: Placement) -> Self {
-        Self { id, name: name.into(), size, placement }
+        Self { id, name: name.into(), size, placement, machining: Vec::new() }
     }
 
     /// The stable panel id.
@@ -611,6 +764,160 @@ impl Panel {
     /// The placement relative to the parent frame.
     pub const fn placement(&self) -> Placement {
         self.placement
+    }
+
+    /// Machining owned by this panel, in panel-local coordinates.
+    pub fn machining(&self) -> &[Machining] {
+        &self.machining
+    }
+}
+
+/// A machining feature owned by a panel.
+///
+/// Holes generated by hardware will join this list as a separate variant with a hardware source;
+/// this first variant is a cutout authored directly on the panel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Machining {
+    /// A rectangular volume removed from the panel.
+    Cutout(Cutout),
+}
+
+/// A cutout in a panel.
+///
+/// Coordinates are panel-local: `(0, 0)` is the panel zero, with `+X` along the length and `+Y`
+/// along the width. `entry` names the face the cut enters from; a blind cutout removes material
+/// from that face up to its depth, while a through cutout removes the full thickness.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cutout {
+    id: Id,
+    shape: CutoutShape,
+    depth: CutoutDepth,
+    entry: FaceSide,
+}
+
+impl Cutout {
+    pub(crate) fn new(id: Id, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> Self {
+        Self { id, shape, depth, entry }
+    }
+
+    /// The stable cutout id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The cutout outline in panel-local coordinates.
+    pub const fn shape(&self) -> CutoutShape {
+        self.shape
+    }
+
+    /// How deep the cutout goes.
+    pub const fn depth(&self) -> CutoutDepth {
+        self.depth
+    }
+
+    /// The face the cut enters from.
+    pub const fn entry(&self) -> FaceSide {
+        self.entry
+    }
+}
+
+/// The outline of a cutout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutoutShape {
+    /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the panel zero.
+    Rectangle(PanelRect),
+}
+
+/// How much material a cutout removes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutoutDepth {
+    /// Removes the full panel thickness.
+    Through,
+    /// Removes material from the entry face by `depth`.
+    Blind {
+        /// Depth measured from the entry face.
+        depth: Length,
+    },
+}
+
+/// A rectangle in panel-local XY coordinates.
+///
+/// `x` and `y` are the minimum corner relative to the panel zero; `width` and `height` are
+/// positive. Cutout validation checks that the rectangle stays within the panel outline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "PanelRectWire")]
+pub struct PanelRect {
+    x: Length,
+    y: Length,
+    width: Length,
+    height: Length,
+}
+
+impl PanelRect {
+    /// Creates a rectangle with positive width and height.
+    pub fn new(x: Length, y: Length, width: Length, height: Length) -> Result<Self, PanelRectError> {
+        if !width.is_positive() {
+            return Err(PanelRectError::NonPositive { field: "width", value: width });
+        }
+        if !height.is_positive() {
+            return Err(PanelRectError::NonPositive { field: "height", value: height });
+        }
+        Ok(Self { x, y, width, height })
+    }
+
+    /// The minimum X coordinate.
+    pub const fn x(self) -> Length {
+        self.x
+    }
+
+    /// The minimum Y coordinate.
+    pub const fn y(self) -> Length {
+        self.y
+    }
+
+    /// The extent along X.
+    pub const fn width(self) -> Length {
+        self.width
+    }
+
+    /// The extent along Y.
+    pub const fn height(self) -> Length {
+        self.height
+    }
+}
+
+/// Why a panel rectangle is not usable.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum PanelRectError {
+    /// Width or height is zero or negative.
+    #[error("cutout {field} must be positive, got {value}")]
+    NonPositive {
+        /// The rejected field.
+        field: &'static str,
+        /// The rejected value.
+        value: Length,
+    },
+}
+
+/// Serialized form of [`PanelRect`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelRectWire {
+    x: Length,
+    y: Length,
+    width: Length,
+    height: Length,
+}
+
+impl TryFrom<PanelRectWire> for PanelRect {
+    type Error = PanelRectError;
+
+    fn try_from(wire: PanelRectWire) -> Result<Self, Self::Error> {
+        Self::new(wire.x, wire.y, wire.width, wire.height)
     }
 }
 
@@ -1113,6 +1420,147 @@ mod tests {
         let missing = Id::new(999).expect("id");
         assert_eq!(project.set_panel_size(missing, size), Err(ProjectError::PanelNotFound { id: missing }));
         assert_eq!(project.revision(), revision);
+    }
+
+    fn sample_rect(x: i64, y: i64, width: i64, height: i64) -> PanelRect {
+        PanelRect::new(millimetres(x), millimetres(y), millimetres(width), millimetres(height))
+            .expect("valid cutout rectangle")
+    }
+
+    #[test]
+    fn project_adds_cutouts_and_allocates_ids() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
+
+        let cutout_id = project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        assert_eq!(cutout_id.get(), 5);
+        assert_eq!(project.next_id().get(), 6);
+        assert_eq!(project.revision().get(), 1);
+        let panel = project.panel(panel_id).expect("panel exists");
+        assert_eq!(panel.machining().len(), 1);
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.id(), cutout_id);
+        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.depth(), CutoutDepth::Through);
+        assert_eq!(cutout.entry(), FaceSide::A);
+        assert!(project.validate().is_ok());
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn cutouts_reject_invalid_depth_bounds_and_overlap_without_side_effects() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
+        let next_id = project.next_id();
+        let revision = project.revision();
+
+        assert_eq!(
+            project.add_cutout(panel_id, shape, CutoutDepth::Blind { depth: Length::ZERO }, FaceSide::A),
+            Err(ProjectError::CutoutDepthInvalid { panel: panel_id, depth: Length::ZERO, thickness: millimetres(18) })
+        );
+        assert_eq!(
+            project.add_cutout(panel_id, shape, CutoutDepth::Blind { depth: millimetres(18) }, FaceSide::A),
+            Err(ProjectError::CutoutDepthInvalid {
+                panel: panel_id,
+                depth: millimetres(18),
+                thickness: millimetres(18)
+            })
+        );
+        let outside = CutoutShape::Rectangle(sample_rect(650, 10, 100, 50));
+        assert_eq!(
+            project.add_cutout(panel_id, outside, CutoutDepth::Through, FaceSide::A),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+
+        let first = project
+            .add_cutout(panel_id, shape, CutoutDepth::Blind { depth: millimetres(8) }, FaceSide::B)
+            .expect("first cutout");
+        assert_eq!(first.get(), 5);
+        assert_eq!(project.next_id().get(), 6);
+        assert_eq!(project.revision().get(), 1);
+
+        let overlapping = CutoutShape::Rectangle(sample_rect(50, 20, 100, 50));
+        assert_eq!(
+            project.add_cutout(panel_id, overlapping, CutoutDepth::Through, FaceSide::A),
+            Err(ProjectError::CutoutOverlap { panel: panel_id, other: first })
+        );
+        assert_eq!(project.next_id().get(), 6);
+        assert_eq!(project.revision().get(), 1);
+        assert_eq!(project.panel(panel_id).expect("panel exists").machining().len(), 1);
+    }
+
+    #[test]
+    fn panel_resize_validates_existing_cutouts() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Rectangle(sample_rect(600, 10, 50, 50));
+        project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+
+        let smaller = PanelSize::new(millimetres(620), millimetres(500), millimetres(18)).expect("valid size");
+        assert_eq!(
+            project.set_panel_size(panel_id, smaller),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
+        assert_eq!(project.panel(panel_id).expect("panel exists").size(), sample_size());
+        assert_eq!(project.revision().get(), 1);
+
+        let thinner = PanelSize::new(millimetres(700), millimetres(500), millimetres(5)).expect("valid size");
+        let blind_rect = CutoutShape::Rectangle(sample_rect(10, 10, 50, 50));
+        let other_panel = Id::new(4).expect("id");
+        project
+            .add_cutout(other_panel, blind_rect, CutoutDepth::Blind { depth: millimetres(8) }, FaceSide::A)
+            .expect("blind cutout");
+        assert_eq!(
+            project.set_panel_size(other_panel, thinner),
+            Err(ProjectError::CutoutDepthInvalid {
+                panel: other_panel,
+                depth: millimetres(8),
+                thickness: millimetres(5)
+            })
+        );
+        assert_eq!(project.panel(other_panel).expect("panel exists").size(), sample_size());
+    }
+
+    #[test]
+    fn panels_load_without_machining() {
+        let panel = Panel::new(Id::new(2).expect("id"), "Shelf", sample_size(), Placement::IDENTITY);
+        let mut value = serde_json::to_value(&panel).expect("serialize panel");
+        value.as_object_mut().expect("panel is an object").remove("machining");
+        let decoded: Panel = serde_json::from_value(value).expect("older panel without machining");
+        assert_eq!(decoded, panel);
+        assert!(decoded.machining().is_empty());
+    }
+
+    #[test]
+    fn panel_rects_reject_non_positive_dimensions() {
+        assert_eq!(
+            PanelRect::new(Length::ZERO, Length::ZERO, Length::ZERO, millimetres(10)),
+            Err(PanelRectError::NonPositive { field: "width", value: Length::ZERO })
+        );
+        assert_eq!(
+            PanelRect::new(Length::ZERO, Length::ZERO, millimetres(10), Length::ZERO),
+            Err(PanelRectError::NonPositive { field: "height", value: Length::ZERO })
+        );
+        assert!(serde_json::from_str::<PanelRect>(r#"{"x":0,"y":0,"width":0,"height":10000}"#).is_err());
+    }
+
+    #[test]
+    fn cutout_ids_participate_in_next_id_validation() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
+        let cutout_id = project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let invalid = text.replacen("\"next_id\":6", &format!("\"next_id\":{}", cutout_id.get()), 1);
+        let error = serde_json::from_str::<Project>(&invalid).expect_err("next id must exceed cutout id");
+        assert!(error.to_string().contains("must be greater"), "error was {error}");
     }
 
     #[test]
