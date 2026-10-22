@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+default-members = ["crates/*", "apps/furnicraft"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+# internal
+furnicraft-units = { path = "crates/units" }
+furnicraft-geom = { path = "crates/geom" }
+furnicraft-kernel = { path = "crates/kernel" }
+furnicraft-model = { path = "crates/model" }
+furnicraft-kernel-truck = { path = "crates/kernel-truck" }
+furnicraft-param = { path = "crates/param" }
+furnicraft-mesh = { path = "crates/mesh" }
+furnicraft-scene = { path = "crates/scene" }
+furnicraft-render = { path = "crates/render" }
+furnicraft-engine = { path = "crates/engine" }
+furnicraft-ui = { path = "crates/ui" }
+furnicraft-testkit = { path = "crates/testkit" }
+
+# external
+bytemuck = { version = "1.25", features = ["derive"] }
+eframe = "0.37"
+egui = "0.37"
+egui-wgpu = "0.37"
+glam = { version = "0.34", features = ["serde"] }
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
+truck-modeling = "0.6"
+truck-shapeops = { version = "0.4", default-features = false }
+wgpu = "30.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1

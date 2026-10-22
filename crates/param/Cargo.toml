@@ -1,0 +1,13 @@
+[package]
+name = "furnicraft-param"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+furnicraft-model = { workspace = true }
+furnicraft-units = { workspace = true }

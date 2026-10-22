@@ -1,0 +1,19 @@
+[package]
+name = "furnicraft"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "FurniCraft desktop application"
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe = { workspace = true }
+furnicraft-engine = { workspace = true }
+furnicraft-model = { workspace = true }
+furnicraft-render = { workspace = true }
+furnicraft-scene = { workspace = true }
+furnicraft-ui = { workspace = true }
+log = { workspace = true }

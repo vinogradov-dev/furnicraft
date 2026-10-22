@@ -1,0 +1,15 @@
+[package]
+name = "furnicraft-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+furnicraft-geom = { workspace = true }
+furnicraft-scene = { workspace = true }
+wgpu = { workspace = true }
