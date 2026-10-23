@@ -266,7 +266,7 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 ## 9. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the 2D union/boolean layer for through cutouts is not chosen; ADR 0010 defers it. The current document still rejects cutouts outside the core and overlapping cutouts.
+2. Stage 3: the 2D union/boolean layer is chosen — the in-house `geom::region` module, ADR 0012. It is not implemented yet; the current document still rejects cutouts outside the core and overlapping cutouts.
 3. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
 4. Edge banding milling: rounding the faces and corner.
 5. Whether the card should show core and overall size separately from the nominal size.

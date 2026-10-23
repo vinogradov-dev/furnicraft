@@ -48,6 +48,7 @@ curved profiles. The document keeps the arc parameters; the sampled points are d
   bounded by the sampling tolerance.
 - Sharp joints are not offset yet. The rectangle pipeline keeps its explicit corner construction, and
   a mixed core contour with sharp joints needs a join step when stage 2 is wired in.
-- Stage 3 still needs a 2D union for through cutouts; this record does not choose that implementation.
+- Stage 3 needs a 2D union for through cutouts; ADR 0012 chooses an in-house `geom::region` module for
+  it, adding no dependency and no kernel-port change.
 - The tangent and connection tolerances are defaults in `furnicraft-geom`; if the domain spec changes
   them, they change in one place.
