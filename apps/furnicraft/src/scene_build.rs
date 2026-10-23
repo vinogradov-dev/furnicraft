@@ -275,7 +275,9 @@ mod tests {
             *groups.entry(drawable.id).or_insert(0) += 1;
         }
         assert_eq!(groups.len(), 2, "two panels");
-        assert_eq!(groups.values().copied().collect::<Vec<_>>(), vec![3, 2], "body plus bands per panel");
+        let mut counts: Vec<_> = groups.values().copied().collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![2, 3], "body plus bands per panel");
         assert!(evaluated.bounds.center().is_some());
         assert!(home_camera(evaluated.bounds).is_ok());
         assert_eq!(kernel.body_count(), 0, "evaluation releases every kernel body");

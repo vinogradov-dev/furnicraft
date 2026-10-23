@@ -179,6 +179,7 @@ A panel with an issue stays in the document, is drawn where possible and shows a
 All changes are `engine` commands with stable ids and typed parameters. The UI never writes to the document directly.
 
 - `panel.create` — parent, name, nominal length, nominal width, material, placement. Thickness is not passed.
+- `panel.rename` — panel, a non-blank name.
 - `panel.resize` — panel, nominal length, nominal width.
 - `panel.material.set` — panel, material.
 - `panel.edge_banding.set` — panel, edge, material, included_in_size. If the edge already has banding, it is replaced and becomes the last one.

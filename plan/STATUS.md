@@ -4,12 +4,13 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M4 — Panel geometry
-- Working on: the panel card and presenting derived panel diagnostics
+- Milestone: M5 — Editing
+- Working on: the outliner, panel card and derived diagnostics in the UI
 - Gate: `cargo xtask ci` — green
 
 ## Done
 
+- `feat(engine): rename panels`
 - `feat(param): build edge bands and expose panel diagnostics`
 - `feat(engine): add catalogue-aware panel material commands`
 - `feat(model): store panel nominal geometry and materials`
@@ -22,9 +23,9 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Build the panel card on the existing panel commands: name, nominal size, material and per-edge banding.
-2. Show `Session::panel_diagnostics` as warnings in the panel card and mark problem panels in the outliner.
-3. Add catalogue refresh for stored material and banding fallbacks before a session is opened.
+1. Resolve panel and banding geometry from the session catalogue before scene evaluation.
+2. Add the sample material catalogue to the application and assign materials to the sample panels.
+3. Build the outliner and panel card on the existing commands, with diagnostics and undo/redo.
 
 ## Open questions
 
@@ -33,7 +34,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Known debt
 
-- Existing panels and banding still use stored fallbacks; loading does not refresh them from the catalogue yet.
+- Existing panels and banding still use stored fallbacks during scene evaluation; catalogue resolution is the next task.
 - `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not implemented.
 - The app always loads `sample_session()`; there is no scene load/save path.
 - `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

@@ -77,6 +77,56 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
     Ok(CommandOutcome::created(id))
 }
 
+/// Stable id of the panel rename command.
+pub const RENAME_ID: &str = "panel.rename";
+
+/// User-facing label of the panel rename command.
+pub const RENAME_LABEL: &str = "Rename panel";
+
+/// Parameters for `panel.rename`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelRename {
+    /// Id of the panel to rename.
+    pub panel: Id,
+    /// New user-visible panel name; it must contain a non-whitespace character.
+    pub name: String,
+}
+
+impl PanelRename {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: RENAME_ID, message: error.to_string() })
+    }
+
+    fn validate_name(&self) -> Result<(), CommandError> {
+        if self.name.trim().is_empty() {
+            return Err(CommandError::InvalidParams {
+                command: RENAME_ID,
+                message: "panel name must not be empty".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The `panel.rename` command.
+pub(crate) const RENAME: CommandSpec = CommandSpec::new(RENAME_ID, RENAME_LABEL, rename_enabled, rename_run);
+
+fn rename_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelRename::parse(params) else {
+        return false;
+    };
+    params.validate_name().is_ok() && session.project().panel(params.panel).is_some()
+}
+
+fn rename_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelRename::parse(params)?;
+    params.validate_name()?;
+    project.rename_panel(params.panel, params.name)?;
+    Ok(CommandOutcome::changed())
+}
+
 /// Stable id of the panel resize command.
 pub const RESIZE_ID: &str = "panel.resize";
 

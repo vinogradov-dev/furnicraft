@@ -82,6 +82,7 @@ impl CommandSpec {
 /// The commands compiled into this build.
 static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CREATE,
+    panel_cmds::RENAME,
     panel_cmds::RESIZE,
     panel_cmds::MATERIAL_SET,
     panel_cmds::EDGE_BANDING_SET,
@@ -154,6 +155,9 @@ mod tests {
         let create = registry.get("panel.create").expect("panel.create is registered");
         assert_eq!(create.id(), "panel.create");
         assert_eq!(create.label(), "Create panel");
+        let rename = registry.get("panel.rename").expect("panel.rename is registered");
+        assert_eq!(rename.id(), "panel.rename");
+        assert_eq!(rename.label(), "Rename panel");
         let resize = registry.get("panel.resize").expect("panel.resize is registered");
         assert_eq!(resize.id(), "panel.resize");
         assert_eq!(resize.label(), "Resize panel");
@@ -170,6 +174,6 @@ mod tests {
         assert_eq!(cutout.id(), "cutout.create");
         assert_eq!(cutout.label(), "Create cutout");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 6);
+        assert_eq!(registry.specs().len(), 7);
     }
 }

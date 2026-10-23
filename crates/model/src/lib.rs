@@ -273,6 +273,23 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Renames a panel and bumps the revision once.
+    ///
+    /// The name is user-visible text; callers validate that it is not blank before calling this
+    /// method. The panel id and every other property stay unchanged.
+    pub fn rename_panel(&mut self, id: Id, name: impl Into<String>) -> Result<Revision, ProjectError> {
+        if self.panel(id).is_none() {
+            return Err(ProjectError::PanelNotFound { id });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.name = name.into();
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Sets the panel material and refreshes its fallback thickness.
     ///
     /// A material or catalogue change may invalidate machining; that is a diagnostic, not a

@@ -125,7 +125,8 @@ mod tests {
     };
 
     use crate::panel_cmds::{
-        CutoutCreate, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelResize,
+        CutoutCreate, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
+        PanelResize,
     };
 
     fn sample_session() -> Session {
@@ -163,6 +164,59 @@ mod tests {
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn dispatch_panel_rename_changes_the_name_and_history() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").name().to_owned();
+        let params = json_params(&PanelRename { panel: panel_id, name: "Left side".to_owned() });
+
+        let outcome = session.dispatch("panel.rename", &params).expect("rename panel");
+        assert_eq!(outcome.created_id(), None);
+        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(session.project().panel(panel_id).expect("panel").name(), "Left side");
+        assert!(session.is_dirty());
+
+        session.undo().expect("undo");
+        assert_eq!(session.project().panel(panel_id).expect("panel").name(), before);
+
+        session.redo().expect("redo");
+        assert_eq!(session.project().panel(panel_id).expect("panel").name(), "Left side");
+    }
+
+    #[test]
+    fn rename_rejects_blank_names_and_missing_panels_without_mutation() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").name().to_owned();
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.rename").expect("registered");
+
+        let blank = PanelRename { panel: panel_id, name: "   ".to_owned() };
+        assert!(!spec.enabled(&session, &json_params(&blank)));
+        let error = session.dispatch("panel.rename", &json_params(&blank)).expect_err("blank name");
+        assert!(matches!(error, CommandError::InvalidParams { command: "panel.rename", .. }));
+        assert_eq!(session.project().panel(panel_id).expect("panel").name(), before);
+
+        let missing = PanelRename { panel: Id::new(999).expect("id"), name: "Missing".to_owned() };
+        assert!(!spec.enabled(&session, &json_params(&missing)));
+        let error = session.dispatch("panel.rename", &json_params(&missing)).expect_err("missing panel");
+        assert!(matches!(error, CommandError::Model(ProjectError::PanelNotFound { .. })));
+        assert_eq!(session.project().revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn panel_rename_params_round_trip_and_reject_unknown_fields() {
+        let params = PanelRename { panel: Id::new(2).expect("id"), name: "Top".to_owned() };
+        let value = json_params(&params);
+        let decoded: PanelRename = serde_json::from_value(value.clone()).expect("round trip");
+        assert_eq!(decoded, params);
+
+        let mut object = value.as_object().cloned().expect("object");
+        object.insert("extra".to_owned(), Value::Bool(true));
+        assert!(serde_json::from_value::<PanelRename>(Value::Object(object)).is_err());
     }
 
     #[test]
