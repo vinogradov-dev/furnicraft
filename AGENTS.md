@@ -167,6 +167,14 @@ Commit after every coherent, fully verified unit of work — not at the end of a
 - Stage explicit paths and review `git diff --cached` before committing. Never use `git add -A` blindly.
 - Commit messages and bodies are in English, in the project's Conventional Commits style.
 
+### 6.2 Branch workflow
+
+New tasks are developed on the `dev` branch; `main` holds only verified, merge-ready work. Work directly on `dev` and commit each completed operation there (section 6.1).
+
+- When a task is finished and `cargo xtask ci` is green on `dev`, merge `dev` into `main` with `--no-ff`, so the merge point is explicit and the history shows when work landed.
+- Do not commit directly to `main`; it moves forward only through these merges.
+- A hot-fix follows the same path: fix on `dev`, run the gate, merge.
+
 ## 7. Anti-patterns
 
 - Business logic inside an egui event handler; writing to the document without a command.
