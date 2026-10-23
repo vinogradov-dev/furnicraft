@@ -8,6 +8,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 - Working on: stage 3 — panel machining now lives in the nominal panel frame (ADR 0011, schema v3);
   the through-cutout union layer is next
 - Gate: `cargo xtask ci` — green
+- Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
