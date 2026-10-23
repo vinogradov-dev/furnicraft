@@ -5,11 +5,12 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: contour-first panels, stage 2b — corner features, bows, commands and the shaped body are green; tangent banding paths are next
+- Working on: contour-first panels, stage 2b — tangent paths, chamfer corner banding and shaped band strips are green; stage 3 is next
 - Gate: `cargo xtask ci` — green
 
 ## Done
 
+- `feat: add tangent-path banding and shaped panel strips`
 - `feat(model): add contour corner features and bowed edges`
 - `feat(geom): add line and arc contour offsets`
 - `fix(param): place included banding inside the nominal frame`
@@ -31,31 +32,30 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Add a separate `CornerBanding` record (`panel.corner_banding.set/clear`) for chamfer corners and resolve tangent banding paths.
-2. Map edges to paths, enforce one compatible banding per path, and make edge-banding commands update or clear the whole path.
-3. Implement mixed per-segment offsets and sharp-joint joins in `geom`; build `C`/`O` and one band strip per path with butt joints on chamfers and the v1 extension at 90° corners.
-4. Wire shaped-panel banding into `param` and the card, then remove the stage-2a rejection.
-5. Stage 3: union all through cutouts, support boundary notches and enforce the connected-core invariant.
-6. Stage 4: banding on cutout edges and openings.
-7. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Stage 3: union all through cutouts into one region, support boundary notches and enforce the connected-core invariant.
+2. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
+3. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
 
 ## Open questions
 
-- Confirm that banding one edge of a tangent path applies to the whole path and that an incompatible parameter on another edge rejects the command.
-- Corner banding schema and its order relative to edge banding for a chamfer corner.
-- Bow-to-radius tangency: a non-zero bow meets a tangent radius at an angle, so the joint is sharp by geometry; confirm this is intended.
+- At a sharp joint between two included paths with different thicknesses, the model uses butt connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
 - The 2D union/boolean layer for through cutouts is not chosen yet; ADR 0010 defers it to stage 3.
+- The path representation for inner cutout loops is not designed yet; stage 4 needs it.
 - Tangent tolerance remains `1e-6` radians and a `1e-6` mm connection gap.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
-- Shaped panels currently reject banding and machining; the body and panel-card controls exist.
-- Banding is still a rectangle strip per source edge; there are no derived tangent paths and no banding on cutout edges.
+- Shaped panels support edge and chamfer-corner banding but still reject machining until stage 3.
+- Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error. Stage 3's union layer should own the stronger check.
+- At a sharp joint where an included path meets an unbanded or non-included path, the butt connector keeps the adjacent nominal endpoint. The core bounds then include that corner and the core contour can contain a zero-width slit even though the body and band volumes are correct; stage 3 should replace the connector with the offset intersection.
+- `PanelGeometry` reports shaped core extents with a zero core origin; the body is built directly from the core contour, while machining still needs a core-local frame.
+- Path-wide banding uses the first edge id as the band part identity; a closed rounded path reports its first edge, not a path id.
+- The panel card locks outline edits while any banding or machining exists; the model is path-aware, the UI is still coarse.
 - Cutouts outside the core and overlapping cutouts are still rejected; stage 3 replaces those v1 rules.
-- The panel card does not edit cutouts yet, and shaped-panel geometry is reported from contour bounds rather than a core origin.
+- The panel card does not edit cutouts yet.
 - The outliner is the only way to select a panel; the viewport has no picking or selection highlight.
-- Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks; rendering and diagnostics use the catalogue.
+- Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks for some checks; rendering and diagnostics use the catalogue.
 - `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not implemented.
 - The app always loads `sample_session()`; there is no scene load/save path.
 - `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

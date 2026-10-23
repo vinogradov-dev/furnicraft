@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU64;
 
-use furnicraft_geom::{DQuat, DVec3};
+use furnicraft_geom::{DQuat, DVec2, DVec3};
 use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -31,7 +31,7 @@ mod panel_contour;
 mod panel_features;
 
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
-pub use panel_contour::PanelContourError;
+pub use panel_contour::{ContourPath, PanelContourError, SegmentSource};
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 
 /// A stable document identifier.
@@ -320,34 +320,86 @@ impl Project {
     pub fn validate_edge_banding(&self, id: Id, band: EdgeBanding) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let mut candidate = panel.clone();
-        candidate.upsert_edge_banding(band);
+        candidate.apply_edge_banding(band)?;
         candidate.geometry_with_fallbacks()?;
+        if candidate.has_path_banding_conflict()? {
+            return Err(ProjectError::IncompatiblePathBanding { panel: id });
+        }
         Ok(())
     }
 
-    /// Adds or replaces banding on an edge and moves it to the end of the application order.
+    /// Adds or replaces banding on a tangent path and moves the path to the end of the order.
     pub fn set_edge_banding(&mut self, id: Id, band: EdgeBanding) -> Result<Revision, ProjectError> {
         self.validate_edge_banding(id, band.clone())?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
-        panel.upsert_edge_banding(band);
+        panel.apply_edge_banding(band)?;
         self.revision = next_revision;
         Ok(next_revision)
     }
 
-    /// Removes banding from an edge and bumps the revision once.
+    /// Removes banding from the tangent path that contains `edge` and bumps the revision once.
     pub fn clear_edge_banding(&mut self, id: Id, edge: EdgeId) -> Result<Revision, ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
-        if !panel.edge_banding().iter().any(|band| band.edge() == edge) {
+        let path = panel.path_containing_edge(edge)?.ok_or(ProjectError::EdgeBandingNotFound { panel: id, edge })?;
+        let has_band =
+            path.edge_ids().any(|path_edge| panel.edge_banding().iter().any(|band| band.edge() == path_edge));
+        if !has_band {
             return Err(ProjectError::EdgeBandingNotFound { panel: id, edge });
         }
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
-        panel.remove_edge_banding(edge);
+        panel.clear_edge_banding_path(edge)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Validates a corner-banding record without changing the document.
+    pub fn validate_corner_banding(&self, id: Id, band: CornerBanding) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let corner = band.corner();
+        let Some(feature) = panel.corner_feature(corner) else {
+            return Err(ProjectError::CornerFeatureNotFound { panel: id, corner });
+        };
+        if !matches!(feature.feature(), CornerFeatureKind::Chamfer { .. }) {
+            return Err(ProjectError::CornerBandingRequiresChamfer { panel: id, corner });
+        }
+        let mut candidate = panel.clone();
+        candidate.upsert_corner_banding(band);
+        candidate.geometry_with_fallbacks()?;
+        if candidate.has_path_banding_conflict()? {
+            return Err(ProjectError::IncompatiblePathBanding { panel: id });
+        }
+        Ok(())
+    }
+
+    /// Adds or replaces banding on a chamfer corner and moves it to the end of the order.
+    pub fn set_corner_banding(&mut self, id: Id, band: CornerBanding) -> Result<Revision, ProjectError> {
+        self.validate_corner_banding(id, band.clone())?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.upsert_corner_banding(band);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes banding from a chamfer corner and bumps the revision once.
+    pub fn clear_corner_banding(&mut self, id: Id, corner: VertexId) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if panel.corner_banding_at(corner).is_none() {
+            return Err(ProjectError::CornerBandingNotFound { panel: id, corner });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_corner_banding(corner);
         self.revision = next_revision;
         Ok(next_revision)
     }
@@ -357,7 +409,15 @@ impl Project {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let mut candidate = panel.clone();
         candidate.upsert_corner_feature(feature);
+        if !matches!(feature.feature(), CornerFeatureKind::Chamfer { .. })
+            && candidate.corner_banding_at(feature.corner()).is_some()
+        {
+            return Err(ProjectError::CornerBandingRequiresChamfer { panel: id, corner: feature.corner() });
+        }
         candidate.geometry_with_fallbacks()?;
+        if candidate.has_path_banding_conflict()? {
+            return Err(ProjectError::IncompatiblePathBanding { panel: id });
+        }
         Ok(())
     }
 
@@ -379,6 +439,9 @@ impl Project {
         if panel.corner_feature(corner).is_none() {
             return Err(ProjectError::CornerFeatureNotFound { panel: id, corner });
         }
+        if panel.corner_banding_at(corner).is_some() {
+            return Err(ProjectError::CornerFeatureHasBanding { panel: id, corner });
+        }
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
@@ -394,6 +457,9 @@ impl Project {
         let mut candidate = panel.clone();
         candidate.upsert_edge_bow(bow);
         candidate.geometry_with_fallbacks()?;
+        if candidate.has_path_banding_conflict()? {
+            return Err(ProjectError::IncompatiblePathBanding { panel: id });
+        }
         Ok(())
     }
 
@@ -799,6 +865,9 @@ pub enum ProjectError {
     /// The panel cannot be resolved into core, overall and thickness.
     #[error(transparent)]
     PanelGeometry(#[from] PanelGeometryError),
+    /// The panel's nominal contour cannot be built or grouped.
+    #[error(transparent)]
+    PanelContour(#[from] PanelContourError),
     /// Edge banding refers to an edge outside the rectangular v1 outline.
     #[error("edge banding on panel {panel} uses unsupported edge {edge}")]
     UnsupportedEdgeBanding {
@@ -806,6 +875,12 @@ pub enum ProjectError {
         panel: Id,
         /// The rejected edge.
         edge: EdgeId,
+    },
+    /// A tangent path ended up partially banded or with differing specs.
+    #[error("panel {panel} has incompatible banding along one tangent path")]
+    IncompatiblePathBanding {
+        /// The panel whose path is inconsistent.
+        panel: Id,
     },
     /// Two banding records cover the same edge.
     #[error("panel {panel} has duplicate edge banding on edge {edge}")]
@@ -829,6 +904,30 @@ pub enum ProjectError {
         /// The panel that owns the feature.
         panel: Id,
         /// The corner that was requested.
+        corner: VertexId,
+    },
+    /// The requested corner has no banding to clear.
+    #[error("panel {panel} has no corner banding on corner {corner}")]
+    CornerBandingNotFound {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The corner that was requested.
+        corner: VertexId,
+    },
+    /// Corner banding is only valid on a chamfer.
+    #[error("panel {panel} cannot band corner {corner}: it is not a chamfer")]
+    CornerBandingRequiresChamfer {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The corner without a chamfer.
+        corner: VertexId,
+    },
+    /// A chamfer with banding cannot be removed without clearing the band first.
+    #[error("panel {panel} cannot remove the chamfer on corner {corner}: it still has banding")]
+    CornerFeatureHasBanding {
+        /// The panel that owns the feature.
+        panel: Id,
+        /// The chamfer that still has banding.
         corner: VertexId,
     },
     /// The requested edge has no bow to clear.
@@ -977,6 +1076,7 @@ pub struct Panel {
     placement: Placement,
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
+    corner_banding: Vec<CornerBanding>,
     corner_features: Vec<CornerFeature>,
     edge_bows: Vec<EdgeBow>,
 }
@@ -1011,6 +1111,7 @@ impl Panel {
             placement,
             machining: Vec::new(),
             edge_banding: Vec::new(),
+            corner_banding: Vec::new(),
             corner_features: Vec::new(),
             edge_bows: Vec::new(),
         })
@@ -1056,6 +1157,21 @@ impl Panel {
         &self.edge_banding
     }
 
+    /// Corner banding in application order.
+    pub fn corner_banding(&self) -> &[CornerBanding] {
+        &self.corner_banding
+    }
+
+    /// The corner banding record on a chamfer corner, if present.
+    pub fn corner_banding_at(&self, corner: VertexId) -> Option<CornerBanding> {
+        self.corner_banding.iter().find(|band| band.corner() == corner).cloned()
+    }
+
+    /// Whether any edge or corner is banded.
+    pub fn has_banding(&self) -> bool {
+        !self.edge_banding.is_empty() || !self.corner_banding.is_empty()
+    }
+
     /// Corner treatments in application order.
     pub fn corner_features(&self) -> &[CornerFeature] {
         &self.corner_features
@@ -1089,14 +1205,15 @@ impl Panel {
     /// Resolves the geometry with a caller-provided banding thickness.
     ///
     /// The engine uses this to pass catalogue-resolved profiles without making the model read the
-    /// catalogue. `band_thickness` is called once per band in application order.
+    /// catalogue. `band_thickness` is called once per banding path; a rectangular panel has one band
+    /// per edge, while a tangent path counts once.
     pub fn geometry_with_banding<F>(
         &self,
         thickness: Length,
         band_thickness: F,
     ) -> Result<PanelGeometry, PanelGeometryError>
     where
-        F: Fn(&EdgeBanding) -> Length,
+        F: Fn(&BandingSpec) -> Length,
     {
         self.geometry_for_with(self.nominal_size, thickness, band_thickness)
     }
@@ -1109,7 +1226,7 @@ impl Panel {
         nominal_size: PanelNominalSize,
         thickness: Length,
     ) -> Result<PanelGeometry, PanelGeometryError> {
-        self.geometry_for_with(nominal_size, thickness, EdgeBanding::last_known_thickness)
+        self.geometry_for_with(nominal_size, thickness, |spec| spec.last_known_thickness())
     }
 
     /// Resolves geometry for a nominal size with a caller-provided banding thickness.
@@ -1120,29 +1237,54 @@ impl Panel {
         band_thickness: F,
     ) -> Result<PanelGeometry, PanelGeometryError>
     where
-        F: Fn(&EdgeBanding) -> Length,
+        F: Fn(&BandingSpec) -> Length,
     {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
 
         if self.has_contour_features() {
-            if !self.edge_banding.is_empty() {
-                return Err(PanelGeometryError::UnsupportedContourBanding);
-            }
             if !self.machining.is_empty() {
                 return Err(PanelGeometryError::UnsupportedContourMachining);
             }
-            let contour = self.nominal_contour_for(nominal_size).map_err(|_| PanelGeometryError::Contour)?;
-            let (min, max) = contour.bounds().ok_or(PanelGeometryError::Contour)?;
-            let core_length = length_from_millimetres(max.x - min.x)?;
-            let core_width = length_from_millimetres(max.y - min.y)?;
+            let paths = self.contour_paths_for(nominal_size).map_err(|_| PanelGeometryError::Contour)?;
+            let mut core_min = DVec2::splat(f64::INFINITY);
+            let mut core_max = DVec2::splat(f64::NEG_INFINITY);
+            let mut overall_min = DVec2::splat(f64::INFINITY);
+            let mut overall_max = DVec2::splat(f64::NEG_INFINITY);
+            for path in &paths {
+                let (nominal_min, nominal_max) = path.contour().bounds().ok_or(PanelGeometryError::Contour)?;
+                let (core_bounds, overall_bounds) = match self.path_banding(path) {
+                    Some(spec) => {
+                        let distance = band_thickness(&spec).millimetres_f64();
+                        if spec.included_in_size() {
+                            let inner = path.contour().offset(distance).map_err(|_| PanelGeometryError::Contour)?;
+                            (inner.bounds().ok_or(PanelGeometryError::Contour)?, (nominal_min, nominal_max))
+                        } else {
+                            let outer = path.contour().offset(-distance).map_err(|_| PanelGeometryError::Contour)?;
+                            ((nominal_min, nominal_max), outer.bounds().ok_or(PanelGeometryError::Contour)?)
+                        }
+                    }
+                    None => ((nominal_min, nominal_max), (nominal_min, nominal_max)),
+                };
+                core_min = core_min.min(core_bounds.0);
+                core_max = core_max.max(core_bounds.1);
+                overall_min = overall_min.min(overall_bounds.0);
+                overall_max = overall_max.max(overall_bounds.1);
+            }
+            if !core_min.is_finite() || !core_max.is_finite() || !overall_min.is_finite() || !overall_max.is_finite() {
+                return Err(PanelGeometryError::Contour);
+            }
+            let core_length = length_from_millimetres(core_max.x - core_min.x)?;
+            let core_width = length_from_millimetres(core_max.y - core_min.y)?;
+            let overall_length = length_from_millimetres(overall_max.x - overall_min.x)?;
+            let overall_width = length_from_millimetres(overall_max.y - overall_min.y)?;
             return PanelGeometry::new(
                 Length::ZERO,
                 Length::ZERO,
                 core_length,
                 core_width,
                 thickness,
-                core_length,
-                core_width,
+                overall_length,
+                overall_width,
             );
         }
 
@@ -1156,7 +1298,7 @@ impl Panel {
         let mut total_left = Length::ZERO;
 
         for band in &self.edge_banding {
-            let thickness = band_thickness(band);
+            let thickness = band_thickness(&band.spec());
             match band.edge().get() {
                 1 => {
                     total_bottom = checked_add("bottom_banding", total_bottom, thickness)?;
@@ -1209,18 +1351,6 @@ impl Panel {
         self.geometry(self.last_known_thickness)
     }
 
-    fn upsert_edge_banding(&mut self, band: EdgeBanding) {
-        let edge = band.edge();
-        self.edge_banding.retain(|existing| existing.edge() != edge);
-        self.edge_banding.push(band);
-    }
-
-    fn remove_edge_banding(&mut self, edge: EdgeId) -> bool {
-        let before = self.edge_banding.len();
-        self.edge_banding.retain(|existing| existing.edge() != edge);
-        self.edge_banding.len() != before
-    }
-
     fn upsert_corner_feature(&mut self, feature: CornerFeature) {
         let corner = feature.corner();
         self.corner_features.retain(|existing| existing.corner() != corner);
@@ -1243,6 +1373,18 @@ impl Panel {
         let before = self.edge_bows.len();
         self.edge_bows.retain(|existing| existing.edge() != edge);
         self.edge_bows.len() != before
+    }
+
+    fn upsert_corner_banding(&mut self, band: CornerBanding) {
+        let corner = band.corner();
+        self.corner_banding.retain(|existing| existing.corner() != corner);
+        self.corner_banding.push(band);
+    }
+
+    fn remove_corner_banding(&mut self, corner: VertexId) -> bool {
+        let before = self.corner_banding.len();
+        self.corner_banding.retain(|existing| existing.corner() != corner);
+        self.corner_banding.len() != before
     }
 }
 
@@ -1285,6 +1427,24 @@ pub enum PanelError {
         /// The rejected edge.
         edge: EdgeId,
     },
+    /// Corner banding was stored twice for the same corner.
+    #[error("panel has duplicate corner banding on corner {corner}")]
+    DuplicateCornerBanding {
+        /// The duplicated corner.
+        corner: VertexId,
+    },
+    /// Corner banding uses a corner outside the rectangular outline.
+    #[error("panel corner banding uses unsupported corner {corner}")]
+    UnsupportedCornerBanding {
+        /// The rejected corner.
+        corner: VertexId,
+    },
+    /// Corner banding is only valid on a chamfer, not on a tangent radius.
+    #[error("panel corner banding on corner {corner} requires a chamfer")]
+    CornerBandingRequiresChamfer {
+        /// The corner without a chamfer.
+        corner: VertexId,
+    },
 }
 
 /// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
@@ -1304,6 +1464,8 @@ struct PanelWire {
     machining: Vec<Machining>,
     #[serde(default)]
     edge_banding: Vec<EdgeBanding>,
+    #[serde(default)]
+    corner_banding: Vec<CornerBanding>,
     #[serde(default)]
     corner_features: Vec<CornerFeature>,
     #[serde(default)]
@@ -1330,6 +1492,7 @@ impl TryFrom<PanelWire> for Panel {
                     || wire.material.is_some()
                     || wire.last_known_thickness.is_some()
                     || !wire.edge_banding.is_empty()
+                    || !wire.corner_banding.is_empty()
                     || !wire.corner_features.is_empty()
                     || !wire.edge_bows.is_empty()
                 {
@@ -1346,13 +1509,36 @@ impl TryFrom<PanelWire> for Panel {
         };
 
         validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
+        validate_corner_banding(&wire.corner_banding, &wire.corner_features)?;
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
+        panel.corner_banding = wire.corner_banding;
         panel.corner_features = wire.corner_features;
         panel.edge_bows = wire.edge_bows;
         Ok(panel)
     }
+}
+
+fn validate_corner_banding(bands: &[CornerBanding], features: &[CornerFeature]) -> Result<(), PanelError> {
+    let mut corners = HashSet::new();
+    for band in bands {
+        let corner = band.corner();
+        if !(1..=4).contains(&corner.get()) {
+            return Err(PanelError::UnsupportedCornerBanding { corner });
+        }
+        if !corners.insert(corner.get()) {
+            return Err(PanelError::DuplicateCornerBanding { corner });
+        }
+        let is_chamfer = features
+            .iter()
+            .find(|feature| feature.corner() == corner)
+            .is_some_and(|feature| matches!(feature.feature(), CornerFeatureKind::Chamfer { .. }));
+        if !is_chamfer {
+            return Err(PanelError::CornerBandingRequiresChamfer { corner });
+        }
+    }
+    Ok(())
 }
 
 fn validate_contour_features(features: &[CornerFeature], bows: &[EdgeBow]) -> Result<(), PanelError> {
@@ -1629,6 +1815,8 @@ impl PanelNominalSize {
 /// included banding thicknesses on the left and bottom edges; they are zero when those edges are
 /// unbanded or not included in the size. Overall dimensions are the extents of the finished panel
 /// including all banding; when a band is not included they may extend outside the nominal rectangle.
+/// A shaped panel builds its core contour directly: its reported `core_x` and `core_y` are zero and
+/// the core extents come from the bounds of the offset path assembly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PanelGeometry {
     core_x: Length,
@@ -1779,12 +1967,56 @@ pub enum PanelGeometryError {
     /// The nominal contour of a shaped panel is not valid.
     #[error("the panel contour is invalid")]
     Contour,
-    /// Contour panels do not support edge banding yet.
-    #[error("shaped panels do not support edge banding yet")]
-    UnsupportedContourBanding,
     /// Contour panels do not support machining yet.
     #[error("shaped panels do not support machining yet")]
     UnsupportedContourMachining,
+}
+
+/// The catalogued and fallback values that describe one band.
+///
+/// Edge and corner banding share these values but keep separate stable owners. The catalogued
+/// material is resolved by the engine; the fallback dimensions keep the panel readable when the
+/// material is missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BandingSpec {
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl BandingSpec {
+    /// Creates a spec with validated fallback dimensions.
+    pub fn new(
+        material: MaterialId,
+        included_in_size: bool,
+        thickness: Length,
+        width: Length,
+    ) -> Result<Self, PanelDimensionError> {
+        validate_dimension("thickness", thickness, Panel::MAX_LENGTH)?;
+        validate_dimension("width", width, Panel::MAX_THICKNESS)?;
+        Ok(Self { material, included_in_size, last_known_thickness: thickness, last_known_width: width })
+    }
+
+    /// The banding material id.
+    pub const fn material(self) -> MaterialId {
+        self.material
+    }
+
+    /// Whether this band is included in the panel's nominal size.
+    pub const fn included_in_size(self) -> bool {
+        self.included_in_size
+    }
+
+    /// The fallback band thickness.
+    pub const fn last_known_thickness(self) -> Length {
+        self.last_known_thickness
+    }
+
+    /// The fallback band width.
+    pub const fn last_known_width(self) -> Length {
+        self.last_known_width
+    }
 }
 
 /// One edge-banding strip in application order.
@@ -1835,6 +2067,84 @@ impl EdgeBanding {
     /// The fallback banding width.
     pub const fn last_known_width(&self) -> Length {
         self.last_known_width
+    }
+
+    /// The shared banding values without the edge owner.
+    pub const fn spec(&self) -> BandingSpec {
+        BandingSpec {
+            material: self.material,
+            included_in_size: self.included_in_size,
+            last_known_thickness: self.last_known_thickness,
+            last_known_width: self.last_known_width,
+        }
+    }
+
+    pub(crate) fn with_edge(self, edge: EdgeId) -> Self {
+        Self { edge, ..self }
+    }
+}
+
+/// One corner-banding strip on a chamfer corner.
+///
+/// A radius is tangent to its adjacent edges and is banded by the edge path that contains it. A
+/// chamfer is a sharp separate path, so it needs its own record keyed by the corner vertex.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "CornerBandingWire")]
+pub struct CornerBanding {
+    corner: VertexId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl CornerBanding {
+    /// Creates a corner banding record with validated fallback dimensions.
+    pub fn new(
+        corner: VertexId,
+        material: MaterialId,
+        included_in_size: bool,
+        thickness: Length,
+        width: Length,
+    ) -> Result<Self, PanelDimensionError> {
+        validate_dimension("thickness", thickness, Panel::MAX_LENGTH)?;
+        validate_dimension("width", width, Panel::MAX_THICKNESS)?;
+        Ok(Self { corner, material, included_in_size, last_known_thickness: thickness, last_known_width: width })
+    }
+
+    /// The chamfer corner this strip covers.
+    pub const fn corner(&self) -> VertexId {
+        self.corner
+    }
+
+    /// The banding material id.
+    pub const fn material(&self) -> MaterialId {
+        self.material
+    }
+
+    /// Whether this strip is included in the panel's nominal size.
+    pub const fn included_in_size(&self) -> bool {
+        self.included_in_size
+    }
+
+    /// The fallback band thickness.
+    pub const fn last_known_thickness(&self) -> Length {
+        self.last_known_thickness
+    }
+
+    /// The fallback band width.
+    pub const fn last_known_width(&self) -> Length {
+        self.last_known_width
+    }
+
+    /// The shared banding values without the corner owner.
+    pub const fn spec(&self) -> BandingSpec {
+        BandingSpec {
+            material: self.material,
+            included_in_size: self.included_in_size,
+            last_known_thickness: self.last_known_thickness,
+            last_known_width: self.last_known_width,
+        }
     }
 }
 
@@ -1930,6 +2240,24 @@ impl TryFrom<EdgeBandingWire> for EdgeBanding {
 
     fn try_from(wire: EdgeBandingWire) -> Result<Self, Self::Error> {
         Self::new(wire.edge, wire.material, wire.included_in_size, wire.last_known_thickness, wire.last_known_width)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CornerBandingWire {
+    corner: VertexId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl TryFrom<CornerBandingWire> for CornerBanding {
+    type Error = PanelDimensionError;
+
+    fn try_from(wire: CornerBandingWire) -> Result<Self, Self::Error> {
+        Self::new(wire.corner, wire.material, wire.included_in_size, wire.last_known_thickness, wire.last_known_width)
     }
 }
 
@@ -2281,7 +2609,7 @@ mod tests {
     }
 
     #[test]
-    fn shaping_rejects_banding_and_machining_until_contour_offsets_land() {
+    fn shaped_panels_accept_banding_but_not_machining() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         let corner = CornerFeature::new(
@@ -2297,15 +2625,22 @@ mod tests {
                     .expect("banding"),
             )
             .expect("set banding");
-        assert!(matches!(
-            project.set_corner_feature(panel_id, corner),
-            Err(ProjectError::PanelGeometry(PanelGeometryError::UnsupportedContourBanding))
-        ));
+        project.set_corner_feature(panel_id, corner).expect("shape a banded panel");
+        let panel = project.panel(panel_id).expect("panel");
+        assert!(panel.has_contour_features());
+        assert!(panel.edge_banding().iter().any(|band| band.edge() == RectEdge::Bottom.id()));
+        panel.geometry_with_fallbacks().expect("shaped banded geometry");
 
-        let mut shaped = sample_project();
-        shaped.set_corner_feature(panel_id, corner).expect("set corner");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Top.id(), sample_material(), false, millimetres(2), millimetres(20))
+                    .expect("banding"),
+            )
+            .expect("band a shaped panel");
+
         assert!(matches!(
-            shaped.add_cutout(
+            project.add_cutout(
                 panel_id,
                 CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)),
                 CutoutDepth::Through,
@@ -2313,14 +2648,150 @@ mod tests {
             ),
             Err(ProjectError::ContourMachiningUnsupported { panel }) if panel == panel_id
         ));
-        assert!(matches!(
-            shaped.set_edge_banding(
+    }
+
+    #[test]
+    fn merging_paths_with_incompatible_banding_is_rejected() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        project
+            .set_edge_banding(
                 panel_id,
-                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(20))
-                    .expect("banding")
-            ),
-            Err(ProjectError::PanelGeometry(PanelGeometryError::UnsupportedContourBanding))
-        ));
+                EdgeBanding::new(RectEdge::Right.id(), sample_material(), false, millimetres(2), millimetres(20))
+                    .expect("banding"),
+            )
+            .expect("band the right edge");
+        let radius =
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(20) })
+                .expect("radius");
+        assert_eq!(
+            project.set_corner_feature(panel_id, radius),
+            Err(ProjectError::IncompatiblePathBanding { panel: panel_id })
+        );
+    }
+
+    #[test]
+    fn included_banding_on_a_closed_rounded_path_insets_the_core_extents() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        for corner in RectCorner::ALL {
+            project
+                .set_corner_feature(
+                    panel_id,
+                    CornerFeature::new(corner.id(), CornerFeatureKind::Radius { radius: millimetres(20) })
+                        .expect("radius"),
+                )
+                .expect("set radius");
+        }
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("band the closed path");
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.edge_banding().len(), 4);
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(geometry.core_length(), millimetres(696));
+        assert_eq!(geometry.core_width(), millimetres(496));
+        assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), false, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("non-included band");
+        let panel = project.panel(panel_id).expect("panel");
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.core_width(), millimetres(500));
+        assert_eq!(geometry.overall_length(), millimetres(704));
+        assert_eq!(geometry.overall_width(), millimetres(504));
+    }
+
+    #[test]
+    fn a_partially_banded_path_is_reported() {
+        let mut panel = sample_panel(Id::new(2).expect("id"), "Shaped");
+        panel.corner_features.push(
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(20) })
+                .expect("radius"),
+        );
+        panel.edge_banding.push(
+            EdgeBanding::new(RectEdge::Right.id(), sample_material(), false, millimetres(2), millimetres(22))
+                .expect("band"),
+        );
+        assert!(panel.has_path_banding_conflict().expect("paths"));
+        panel.edge_banding.push(
+            EdgeBanding::new(RectEdge::Top.id(), sample_material(), false, millimetres(2), millimetres(22))
+                .expect("band"),
+        );
+        assert!(!panel.has_path_banding_conflict().expect("paths"));
+    }
+
+    #[test]
+    fn clearing_an_unbanded_edge_clears_its_partially_banded_path() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let Some((_depth, panel)) = find_panel_mut(&mut project.root, panel_id, 1) else {
+            return;
+        };
+        panel.corner_features.push(
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(20) })
+                .expect("radius"),
+        );
+        panel.edge_banding.push(
+            EdgeBanding::new(RectEdge::Right.id(), sample_material(), false, millimetres(2), millimetres(22))
+                .expect("band"),
+        );
+        project.clear_edge_banding(panel_id, RectEdge::Top.id()).expect("clear the path from the unbanded edge");
+        assert!(project.panel(panel_id).expect("panel").edge_banding().is_empty());
+    }
+
+    #[test]
+    fn corner_banding_load_validation_rejects_inconsistent_records() {
+        let base = |corner_features: serde_json::Value, corner_banding: serde_json::Value| {
+            serde_json::json!({
+                "id": 2,
+                "name": "Panel",
+                "nominal_size": {"length": 700000, "width": 500000},
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "last_known_thickness": 18000,
+                "corner_features": corner_features,
+                "corner_banding": corner_banding,
+            })
+        };
+        let chamfer =
+            serde_json::json!([{"corner": 2, "feature": {"kind": "chamfer", "incoming": 10000, "outgoing": 20000}}]);
+        let band = serde_json::json!([{
+            "corner": 2,
+            "material": 1,
+            "included_in_size": true,
+            "last_known_thickness": 2000,
+            "last_known_width": 22000
+        }]);
+        let panel: Panel = serde_json::from_value(base(chamfer.clone(), band.clone())).expect("valid panel");
+        let corner = RectCorner::BottomRight.id();
+        assert!(panel.corner_banding_at(corner).is_some());
+
+        let duplicate = serde_json::json!([band[0].clone(), band[0].clone(),]);
+        let duplicate: PanelWire = serde_json::from_value(base(chamfer.clone(), duplicate)).expect("panel wire");
+        assert_eq!(Panel::try_from(duplicate), Err(PanelError::DuplicateCornerBanding { corner }));
+
+        let radius = serde_json::json!([{"corner": 2, "feature": {"kind": "radius", "radius": 10000}}]);
+        let radius: PanelWire = serde_json::from_value(base(radius, band.clone())).expect("panel wire");
+        assert_eq!(Panel::try_from(radius), Err(PanelError::CornerBandingRequiresChamfer { corner }));
+
+        let outside = serde_json::json!({"corner": 5, "material": 1, "included_in_size": true, "last_known_thickness": 2000, "last_known_width": 22000});
+        let outside: PanelWire =
+            serde_json::from_value(base(serde_json::json!([]), serde_json::json!([outside]))).expect("panel wire");
+        assert_eq!(
+            Panel::try_from(outside),
+            Err(PanelError::UnsupportedCornerBanding { corner: VertexId::new(5).expect("corner") })
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 use furnicraft_model::{
     Catalog, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometryError, PanelRect, Project,
-    ProjectError,
+    ProjectError, VertexId,
 };
 use furnicraft_units::Length;
 
@@ -24,6 +24,13 @@ pub enum PanelDiagnostic {
     MissingBandingMaterial {
         /// The edge whose banding is unresolved.
         edge: EdgeId,
+        /// The missing material id.
+        material: MaterialId,
+    },
+    /// Corner banding refers to a material that is absent from the catalogue.
+    MissingCornerBandingMaterial {
+        /// The corner whose banding is unresolved.
+        corner: VertexId,
         /// The missing material id.
         material: MaterialId,
     },
@@ -67,6 +74,14 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
     for band in panel.edge_banding() {
         if catalog.edge_material(band.material()).is_none() {
             diagnostics.push(PanelDiagnostic::MissingBandingMaterial { edge: band.edge(), material: band.material() });
+        }
+    }
+    for band in panel.corner_banding() {
+        if catalog.edge_material(band.material()).is_none() {
+            diagnostics.push(PanelDiagnostic::MissingCornerBandingMaterial {
+                corner: band.corner(),
+                material: band.material(),
+            });
         }
     }
 
@@ -120,7 +135,10 @@ mod tests {
 
     use super::*;
 
-    use furnicraft_model::{Catalog, EdgeBanding, EdgeId, FaceSide, MaterialId, PanelMaterial};
+    use furnicraft_model::{
+        Catalog, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, FaceSide, MaterialId,
+        PanelMaterial, RectCorner,
+    };
     use furnicraft_testkit::{
         sample_blind_depth, sample_catalog, sample_material_id, sample_panel_thickness, sample_project,
         sample_thin_panel_thickness,
@@ -150,6 +168,41 @@ mod tests {
             edge: EdgeId::new(1).expect("edge"),
             material: missing,
         }));
+    }
+
+    #[test]
+    fn missing_corner_banding_material_is_a_diagnostic() {
+        let mut project = sample_project();
+        let corner = RectCorner::BottomRight.id();
+        project
+            .set_corner_feature(
+                panel_id(),
+                CornerFeature::new(
+                    corner,
+                    CornerFeatureKind::Chamfer {
+                        incoming: Length::from_millimetres(12).expect("incoming"),
+                        outgoing: Length::from_millimetres(8).expect("outgoing"),
+                    },
+                )
+                .expect("chamfer"),
+            )
+            .expect("set chamfer");
+        let missing = MaterialId::new(999).expect("material id");
+        project
+            .set_corner_banding(
+                panel_id(),
+                CornerBanding::new(
+                    corner,
+                    missing,
+                    false,
+                    Length::from_micrometres(2_000),
+                    Length::from_micrometres(22_000),
+                )
+                .expect("corner band"),
+            )
+            .expect("set corner banding");
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
+        assert!(diagnostics.contains(&PanelDiagnostic::MissingCornerBandingMaterial { corner, material: missing }));
     }
 
     #[test]

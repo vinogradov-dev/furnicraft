@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use furnicraft_model::{Catalog, EdgeBanding, Id, PanelGeometry, Project, ProjectError};
+use furnicraft_model::{BandingSpec, Catalog, EdgeBanding, Id, PanelGeometry, Project, ProjectError};
 use furnicraft_param::EdgeBandProfile;
 use serde_json::Value;
 
@@ -57,7 +57,12 @@ impl Session {
     /// The catalogue supplies both the thickness that widens the core and the visible band width;
     /// stored fallbacks cover a material that is missing from the catalogue.
     pub fn band_profile(&self, band: &EdgeBanding) -> EdgeBandProfile {
-        EdgeBandProfile::new(resolve::band_thickness(band, &self.catalog), resolve::band_width(band, &self.catalog))
+        self.band_spec_profile(&band.spec())
+    }
+
+    /// Resolves a banding profile for either an edge or a corner owner.
+    pub fn band_spec_profile(&self, spec: &BandingSpec) -> EdgeBandProfile {
+        EdgeBandProfile::new(resolve::spec_thickness(spec, &self.catalog), resolve::spec_width(spec, &self.catalog))
     }
 
     /// Resolves the derived issues of one panel against the session catalogue.
@@ -145,8 +150,9 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::panel_cmds::{
-        CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear,
-        PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize,
+        CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
+        PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
+        PanelResize,
     };
 
     fn sample_session() -> Session {
@@ -669,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn shaped_panels_and_banded_panels_cannot_be_combined_yet() {
+    fn shaped_panels_accept_edge_banding() {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let corner = RectCorner::BottomLeft.id();
@@ -691,15 +697,126 @@ mod tests {
         };
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.edge_banding.set").expect("registered");
-        assert!(!spec.enabled(&session, &json_params(&band)));
-        assert!(matches!(
-            session.dispatch("panel.edge_banding.set", &json_params(&band)),
-            Err(CommandError::Model(ProjectError::PanelGeometry(_)))
-        ));
+        assert!(spec.enabled(&session, &json_params(&band)));
+        session.dispatch("panel.edge_banding.set", &json_params(&band)).expect("band shaped panel");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.edge_banding().iter().any(|band| band.edge() == EdgeId::new(1).expect("edge")));
+        assert_eq!(panel.corner_banding().len(), 0);
+    }
 
-        let mut banded = sample_session();
-        banded.dispatch("panel.edge_banding.set", &json_params(&band)).expect("set banding");
-        assert!(!registry.get("panel.corner.set").expect("registered").enabled(&banded, &json_params(&set_corner)));
+    #[test]
+    fn shaping_that_merges_incompatible_banding_is_rejected() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let band = PanelEdgeBandingSet {
+            panel: panel_id,
+            edge: EdgeId::new(2).expect("edge"),
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        session.dispatch("panel.edge_banding.set", &json_params(&band)).expect("band right edge");
+
+        let set_corner = PanelCornerSet {
+            panel: panel_id,
+            corner: RectCorner::TopRight.id(),
+            feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(20).expect("radius") },
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.corner.set").expect("registered");
+        assert!(!spec.enabled(&session, &json_params(&set_corner)));
+        assert_eq!(
+            session.dispatch("panel.corner.set", &json_params(&set_corner)),
+            Err(CommandError::Model(ProjectError::IncompatiblePathBanding { panel: panel_id }))
+        );
+    }
+
+    #[test]
+    fn corner_banding_set_and_clear_change_history() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::BottomRight.id();
+        let set_corner = PanelCornerSet {
+            panel: panel_id,
+            corner,
+            feature: CornerFeatureKind::Chamfer {
+                incoming: Length::from_millimetres(15).expect("incoming"),
+                outgoing: Length::from_millimetres(10).expect("outgoing"),
+            },
+        };
+        session.dispatch("panel.corner.set", &json_params(&set_corner)).expect("set corner");
+
+        let set = PanelCornerBandingSet {
+            panel: panel_id,
+            corner,
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.corner_banding.set").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&set)));
+        session.dispatch("panel.corner_banding.set", &json_params(&set)).expect("set corner banding");
+        let panel = session.project().panel(panel_id).expect("panel");
+        let band = panel.corner_banding_at(corner).expect("corner band");
+        assert_eq!(band.material(), sample_edge_material_id());
+        assert!(panel.has_banding());
+        assert_eq!(session.project().revision().get(), 2);
+
+        session.undo().expect("undo corner banding");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_none());
+        session.redo().expect("redo corner banding");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some());
+
+        let clear = PanelCornerBandingClear { panel: panel_id, corner };
+        session.dispatch("panel.corner_banding.clear", &json_params(&clear)).expect("clear corner banding");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_none());
+    }
+
+    #[test]
+    fn corner_banding_requires_a_chamfer_and_blocks_removal() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::TopRight.id();
+        let set_radius = PanelCornerSet {
+            panel: panel_id,
+            corner,
+            feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(20).expect("radius") },
+        };
+        session.dispatch("panel.corner.set", &json_params(&set_radius)).expect("set radius");
+        let set_band = PanelCornerBandingSet {
+            panel: panel_id,
+            corner,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        assert_eq!(
+            session.dispatch("panel.corner_banding.set", &json_params(&set_band)),
+            Err(CommandError::Model(ProjectError::CornerBandingRequiresChamfer { panel: panel_id, corner }))
+        );
+
+        let set_chamfer = PanelCornerSet {
+            panel: panel_id,
+            corner,
+            feature: CornerFeatureKind::Chamfer {
+                incoming: Length::from_millimetres(10).expect("incoming"),
+                outgoing: Length::from_millimetres(15).expect("outgoing"),
+            },
+        };
+        session.dispatch("panel.corner.set", &json_params(&set_chamfer)).expect("set chamfer");
+        session.dispatch("panel.corner_banding.set", &json_params(&set_band)).expect("band chamfer");
+        let clear_corner = PanelCornerClear { panel: panel_id, corner };
+        assert_eq!(
+            session.dispatch("panel.corner.clear", &json_params(&clear_corner)),
+            Err(CommandError::Model(ProjectError::CornerFeatureHasBanding { panel: panel_id, corner }))
+        );
+        let change_to_radius = PanelCornerSet {
+            panel: panel_id,
+            corner,
+            feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(20).expect("radius") },
+        };
+        assert_eq!(
+            session.dispatch("panel.corner.set", &json_params(&change_to_radius)),
+            Err(CommandError::Model(ProjectError::CornerBandingRequiresChamfer { panel: panel_id, corner }))
+        );
     }
 
     #[test]

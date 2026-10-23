@@ -23,7 +23,8 @@ mod session;
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
 pub use panel_cmds::{
-    CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear,
-    PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize,
+    CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
+    PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
+    PanelResize,
 };
 pub use session::Session;

@@ -16,7 +16,7 @@ use furnicraft_model::{
     Assembly, Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
     Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
 };
-use furnicraft_param::{build_edge_bands_with, build_panel};
+use furnicraft_param::build_panel_parts_with;
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
 use furnicraft_units::Length;
 
@@ -207,12 +207,11 @@ impl<'a> Evaluation<'a> {
         let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
         let session = self.session;
         let geometry = session.panel_geometry(panel.id()).map_err(describe)?;
-        let body = build_panel(&mut *self.kernel, panel, geometry).map_err(describe)?;
-        let body_mesh = tessellate_panel(&*self.kernel, body, &self.options).map_err(describe)?;
-        let band_parts = build_edge_bands_with(&mut *self.kernel, panel, geometry, |band| session.band_profile(band))
+        let parts = build_panel_parts_with(&mut *self.kernel, panel, geometry, |spec| session.band_spec_profile(spec))
             .map_err(describe)?;
-        let mut band_meshes = Vec::with_capacity(band_parts.len());
-        for part in band_parts {
+        let body_mesh = tessellate_panel(&*self.kernel, parts.body(), &self.options).map_err(describe)?;
+        let mut band_meshes = Vec::with_capacity(parts.bands().len());
+        for part in parts.bands() {
             band_meshes.push(tessellate_panel(&*self.kernel, part.body(), &self.options).map_err(describe)?);
         }
         self.kernel.clear();

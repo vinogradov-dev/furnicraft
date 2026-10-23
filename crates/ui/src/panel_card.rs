@@ -5,12 +5,12 @@
 
 use egui::{Color32, ComboBox, RichText, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
-    BOW_CLEAR_ID, BOW_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID, EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID,
-    MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
+    BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
+    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
 };
 use furnicraft_engine::{
-    PanelBowClear, PanelBowSet, PanelCornerClear, PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear,
-    PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize, Session,
+    PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
+    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize, Session,
 };
 use furnicraft_model::{
     CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel, PanelNominalSize, RectCorner,
@@ -55,6 +55,8 @@ enum Action {
     SetMaterial { panel: Id, material: MaterialId },
     SetBand { panel: Id, edge: EdgeId, material: MaterialId, included_in_size: bool },
     ClearBand { panel: Id, edge: EdgeId },
+    SetCornerBand { panel: Id, corner: VertexId, material: MaterialId, included_in_size: bool },
+    ClearCornerBand { panel: Id, corner: VertexId },
     SetCorner { panel: Id, corner: VertexId, feature: CornerFeatureKind },
     ClearCorner { panel: Id, corner: VertexId },
     SetBow { panel: Id, edge: EdgeId, sagitta: Length },
@@ -246,9 +248,9 @@ impl PanelCard {
     fn show_shape(&self, ui: &mut Ui, _session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
         ui.separator();
         ui.label(RichText::new("Outline").strong());
-        let locked = !panel.edge_banding().is_empty() || !panel.machining().is_empty();
+        let locked = panel.has_banding() || !panel.machining().is_empty();
         if locked {
-            ui.colored_label(Color32::LIGHT_RED, "Clear edge banding and machining before shaping the outline.");
+            ui.colored_label(Color32::LIGHT_RED, "Clear banding and machining before shaping the outline.");
         }
         ui.add_enabled_ui(!locked, |ui| {
             for corner in RectCorner::ALL {
@@ -363,13 +365,6 @@ impl PanelCard {
     fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
         ui.separator();
         ui.label(RichText::new("Edge banding").strong());
-        let shaped = panel.has_contour_features();
-        if shaped {
-            ui.colored_label(
-                Color32::LIGHT_RED,
-                "New banding on shaped panels is not available yet; existing bands can be cleared.",
-            );
-        }
         let bands = panel.edge_banding();
         for edge in 1..=4 {
             let Some(edge_id) = EdgeId::new(edge) else {
@@ -387,33 +382,29 @@ impl PanelCard {
                         )
                     },
                 );
-                ui.add_enabled_ui(!shaped, |ui| {
-                    ComboBox::from_id_salt(("edge_material", panel_id.get(), edge))
-                        .selected_text(selected_text)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_label(band.is_none(), "None").clicked() && band.is_some() {
-                                actions.push(Action::ClearBand { panel: panel_id, edge: edge_id });
+                ComboBox::from_id_salt(("edge_material", panel_id.get(), edge)).selected_text(selected_text).show_ui(
+                    ui,
+                    |ui| {
+                        if ui.selectable_label(band.is_none(), "None").clicked() && band.is_some() {
+                            actions.push(Action::ClearBand { panel: panel_id, edge: edge_id });
+                        }
+                        for material in session.catalog().edge_materials() {
+                            let selected = band.is_some_and(|band| band.material() == material.id());
+                            if ui.selectable_label(selected, material.name()).clicked() && !selected {
+                                actions.push(Action::SetBand {
+                                    panel: panel_id,
+                                    edge: edge_id,
+                                    material: material.id(),
+                                    included_in_size: band.is_some_and(EdgeBanding::included_in_size),
+                                });
                             }
-                            for material in session.catalog().edge_materials() {
-                                let selected = band.is_some_and(|band| band.material() == material.id());
-                                if ui.selectable_label(selected, material.name()).clicked() && !selected {
-                                    actions.push(Action::SetBand {
-                                        panel: panel_id,
-                                        edge: edge_id,
-                                        material: material.id(),
-                                        included_in_size: band.is_some_and(EdgeBanding::included_in_size),
-                                    });
-                                }
-                            }
-                        });
-                });
+                        }
+                    },
+                );
                 if let Some(band) = band {
                     let mut included = band.included_in_size();
                     let material_known = session.catalog().edge_material(band.material()).is_some();
-                    if ui
-                        .add_enabled(!shaped && material_known, egui::Checkbox::new(&mut included, "Included"))
-                        .changed()
-                    {
+                    if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
                         actions.push(Action::SetBand {
                             panel: panel_id,
                             edge: edge_id,
@@ -426,6 +417,69 @@ impl PanelCard {
                     }
                 }
             });
+        }
+
+        ui.add_space(4.0);
+        ui.label(RichText::new("Corner banding").strong());
+        let mut has_chamfer = false;
+        for corner in RectCorner::ALL {
+            let corner_id = corner.id();
+            let Some(feature) = panel.corner_feature(corner_id) else {
+                continue;
+            };
+            if !matches!(feature.feature(), CornerFeatureKind::Chamfer { .. }) {
+                continue;
+            }
+            has_chamfer = true;
+            let band = panel.corner_banding_at(corner_id);
+            ui.horizontal(|ui| {
+                ui.label(format!("Corner {}", corner.label()));
+                let selected_text = band.as_ref().map_or_else(
+                    || "None".to_owned(),
+                    |band| {
+                        session.catalog().edge_material(band.material()).map_or_else(
+                            || format!("Missing material {}", band.material()),
+                            |material| material.name().to_owned(),
+                        )
+                    },
+                );
+                ComboBox::from_id_salt(("corner_material", panel_id.get(), corner_id.get()))
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(band.is_none(), "None").clicked() && band.is_some() {
+                            actions.push(Action::ClearCornerBand { panel: panel_id, corner: corner_id });
+                        }
+                        for material in session.catalog().edge_materials() {
+                            let selected = band.as_ref().is_some_and(|band| band.material() == material.id());
+                            if ui.selectable_label(selected, material.name()).clicked() && !selected {
+                                actions.push(Action::SetCornerBand {
+                                    panel: panel_id,
+                                    corner: corner_id,
+                                    material: material.id(),
+                                    included_in_size: band.as_ref().is_some_and(|band| band.included_in_size()),
+                                });
+                            }
+                        }
+                    });
+                if let Some(band) = band {
+                    let mut included = band.included_in_size();
+                    let material_known = session.catalog().edge_material(band.material()).is_some();
+                    if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+                        actions.push(Action::SetCornerBand {
+                            panel: panel_id,
+                            corner: corner_id,
+                            material: band.material(),
+                            included_in_size: included,
+                        });
+                    }
+                    if ui.button("Clear").clicked() {
+                        actions.push(Action::ClearCornerBand { panel: panel_id, corner: corner_id });
+                    }
+                }
+            });
+        }
+        if !has_chamfer {
+            ui.label("Add a chamfer to band a corner.");
         }
     }
 
@@ -469,6 +523,19 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
         Action::ClearBand { panel, edge } => {
             let params = json(&PanelEdgeBandingClear { panel: *panel, edge: *edge })?;
             dispatch(session, EDGE_BANDING_CLEAR_ID, &params)
+        }
+        Action::SetCornerBand { panel, corner, material, included_in_size } => {
+            let params = json(&PanelCornerBandingSet {
+                panel: *panel,
+                corner: *corner,
+                material: *material,
+                included_in_size: *included_in_size,
+            })?;
+            dispatch(session, CORNER_BANDING_SET_ID, &params)
+        }
+        Action::ClearCornerBand { panel, corner } => {
+            let params = json(&PanelCornerBandingClear { panel: *panel, corner: *corner })?;
+            dispatch(session, CORNER_BANDING_CLEAR_ID, &params)
         }
         Action::SetCorner { panel, corner, feature } => {
             let params = json(&PanelCornerSet { panel: *panel, corner: *corner, feature: *feature })?;
@@ -563,6 +630,9 @@ pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
         PanelDiagnostic::MissingBandingMaterial { edge, material } => {
             format!("Edge {edge} uses missing edge material {material}.")
         }
+        PanelDiagnostic::MissingCornerBandingMaterial { corner, material } => {
+            format!("Corner {corner} uses missing edge material {material}.")
+        }
         PanelDiagnostic::NonPositiveCore => "The panel core is not positive.".to_owned(),
         PanelDiagnostic::MachiningOutsideCore { cutout } => {
             format!("Cutout {cutout} does not fit inside the core.")
@@ -596,6 +666,13 @@ mod tests {
                 material: material(101),
             }),
             "Edge 2 uses missing edge material 101."
+        );
+        assert_eq!(
+            diagnostic_message(&PanelDiagnostic::MissingCornerBandingMaterial {
+                corner: RectCorner::BottomRight.id(),
+                material: material(101),
+            }),
+            "Corner 2 uses missing edge material 101."
         );
         assert_eq!(diagnostic_message(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
         assert_eq!(
@@ -680,6 +757,80 @@ mod tests {
 
         run_action(&mut session, &Action::ClearCorner { panel: panel_id, corner }).expect("clear corner");
         assert!(session.project().panel(panel_id).expect("panel").corner_feature(corner).is_none());
+    }
+
+    #[test]
+    fn corner_band_actions_dispatch_through_the_engine() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let corner = RectCorner::BottomRight.id();
+
+        run_action(
+            &mut session,
+            &Action::SetCorner {
+                panel: panel_id,
+                corner,
+                feature: CornerFeatureKind::Chamfer {
+                    incoming: Length::from_millimetres(12).expect("incoming"),
+                    outgoing: Length::from_millimetres(8).expect("outgoing"),
+                },
+            },
+        )
+        .expect("set chamfer");
+        run_action(
+            &mut session,
+            &Action::SetCornerBand {
+                panel: panel_id,
+                corner,
+                material: furnicraft_testkit::sample_edge_material_id(),
+                included_in_size: true,
+            },
+        )
+        .expect("set corner band");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some());
+
+        run_action(&mut session, &Action::ClearCornerBand { panel: panel_id, corner }).expect("clear corner band");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_none());
+    }
+
+    #[test]
+    fn band_actions_accept_a_shaped_panel() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let corner = RectCorner::BottomLeft.id();
+        run_action(
+            &mut session,
+            &Action::SetCorner {
+                panel: panel_id,
+                corner,
+                feature: CornerFeatureKind::Chamfer {
+                    incoming: Length::from_millimetres(10).expect("incoming"),
+                    outgoing: Length::from_millimetres(15).expect("outgoing"),
+                },
+            },
+        )
+        .expect("set chamfer");
+        run_action(
+            &mut session,
+            &Action::SetBand {
+                panel: panel_id,
+                edge: RectEdge::Bottom.id(),
+                material: furnicraft_testkit::sample_edge_material_id(),
+                included_in_size: true,
+            },
+        )
+        .expect("band shaped panel");
+        assert!(
+            session
+                .project()
+                .panel(panel_id)
+                .expect("panel")
+                .edge_banding()
+                .iter()
+                .any(|band| band.edge() == RectEdge::Bottom.id())
+        );
     }
 
     #[test]

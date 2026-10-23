@@ -6,13 +6,16 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use furnicraft_geom::{Arc, Contour, ContourError, DVec2, Line, Segment};
+use furnicraft_geom::{Arc, Contour, ContourError, DEFAULT_TANGENT_TOLERANCE, DVec2, Line, Segment};
 use thiserror::Error;
 
-use crate::{CornerFeature, CornerFeatureKind, EdgeId, Panel, PanelNominalSize, RectCorner, RectEdge};
+use crate::{
+    BandingSpec, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Panel, PanelNominalSize, RectCorner, RectEdge,
+    VertexId,
+};
 
 /// Why a panel's nominal contour cannot be built.
-#[derive(Clone, Debug, Error, PartialEq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum PanelContourError {
     /// A line, arc or closed contour is not geometrically valid.
     #[error(transparent)]
@@ -35,6 +38,68 @@ pub enum PanelContourError {
     /// The contour has no finite bounds.
     #[error("panel contour bounds are not finite")]
     InvalidBounds,
+    /// The requested edge is not part of the nominal outline.
+    #[error("edge {edge} is not part of the panel outline")]
+    UnsupportedEdge {
+        /// The rejected edge.
+        edge: EdgeId,
+    },
+}
+
+/// Where one nominal contour segment comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentSource {
+    /// A straight or bowed edge.
+    Edge(EdgeId),
+    /// A corner radius or chamfer.
+    Corner(VertexId),
+}
+
+/// A maximal tangent-continuous chain of nominal contour segments.
+///
+/// The chain ends at sharp joints. An unbanded rectangular panel therefore has four paths, one per
+/// edge; a rounded corner joins its two adjacent edges into one path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContourPath {
+    contour: Contour,
+    sources: Vec<SegmentSource>,
+}
+
+impl ContourPath {
+    /// The path geometry.
+    pub const fn contour(&self) -> &Contour {
+        &self.contour
+    }
+
+    /// The source of each path segment, in order.
+    pub fn sources(&self) -> &[SegmentSource] {
+        &self.sources
+    }
+
+    /// Whether the path closes on itself.
+    pub const fn is_closed(&self) -> bool {
+        self.contour.is_closed()
+    }
+
+    /// The distinct edges touched by this path, in path order.
+    pub fn edge_ids(&self) -> impl Iterator<Item = EdgeId> + '_ {
+        let mut seen = Vec::new();
+        self.sources.iter().filter_map(move |source| match source {
+            SegmentSource::Edge(edge) if !seen.contains(edge) => {
+                seen.push(*edge);
+                Some(*edge)
+            }
+            _ => None,
+        })
+    }
+
+    /// The corner source when the path is a lone chamfer or radius segment.
+    pub fn lone_corner(&self) -> Option<VertexId> {
+        match self.sources.as_slice() {
+            [SegmentSource::Corner(corner)] => Some(*corner),
+            _ => None,
+        }
+    }
 }
 
 impl Panel {
@@ -49,6 +114,130 @@ impl Panel {
 
     /// Builds the nominal outline for a candidate size, used by resize validation.
     pub fn nominal_contour_for(&self, nominal_size: PanelNominalSize) -> Result<Contour, PanelContourError> {
+        self.contour_with_sources_for(nominal_size).map(|(contour, _)| contour)
+    }
+
+    /// Groups the nominal outline into maximal tangent-continuous paths.
+    pub fn contour_paths(&self) -> Result<Vec<ContourPath>, PanelContourError> {
+        self.contour_paths_for(self.nominal_size())
+    }
+
+    /// Groups a candidate nominal outline, used by resize validation.
+    pub fn contour_paths_for(&self, nominal_size: PanelNominalSize) -> Result<Vec<ContourPath>, PanelContourError> {
+        let (contour, sources) = self.contour_with_sources_for(nominal_size)?;
+        let segments = contour.segments();
+        let segment_count = segments.len();
+        let mut starts = Vec::new();
+        for index in 0..segment_count {
+            if contour.joint_is_smooth(index, DEFAULT_TANGENT_TOLERANCE) == Some(false) {
+                starts.push((index + 1) % segment_count);
+            }
+        }
+        if starts.is_empty() {
+            return Ok(vec![ContourPath { contour, sources }]);
+        }
+
+        let mut paths = Vec::with_capacity(starts.len());
+        for start in starts {
+            let mut path_segments = Vec::new();
+            let mut path_sources = Vec::new();
+            let mut index = start;
+            loop {
+                path_segments.push(*segments.get(index).ok_or(PanelContourError::FeatureGeometry)?);
+                path_sources.push(*sources.get(index).ok_or(PanelContourError::FeatureGeometry)?);
+                let smooth = contour
+                    .joint_is_smooth(index, DEFAULT_TANGENT_TOLERANCE)
+                    .ok_or(PanelContourError::FeatureGeometry)?;
+                if !smooth {
+                    break;
+                }
+                index = (index + 1) % segment_count;
+                if index == start {
+                    // A closed path with no sharp joint is handled above; guard the walk anyway.
+                    break;
+                }
+            }
+            paths.push(ContourPath { contour: Contour::new(path_segments, false)?, sources: path_sources });
+        }
+        Ok(paths)
+    }
+
+    /// Finds the tangent-continuous path that contains an edge.
+    pub fn path_containing_edge(&self, edge: EdgeId) -> Result<Option<ContourPath>, PanelContourError> {
+        Ok(self.contour_paths()?.into_iter().find(|path| path.edge_ids().any(|candidate| candidate == edge)))
+    }
+
+    /// Replaces banding on every edge of the path that contains `band.edge()`.
+    ///
+    /// The path keeps one material, thickness, width and inclusion flag. The path is moved to the
+    /// end of the application order as a unit.
+    pub fn apply_edge_banding(&mut self, band: EdgeBanding) -> Result<(), PanelContourError> {
+        let edge = band.edge();
+        let path = self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
+        let edge_ids = path.edge_ids().collect::<Vec<_>>();
+        self.edge_banding.retain(|existing| !edge_ids.contains(&existing.edge()));
+        for edge_id in edge_ids {
+            self.edge_banding.push(band.clone().with_edge(edge_id));
+        }
+        Ok(())
+    }
+
+    /// Removes banding from every edge of the path that contains `edge`.
+    pub fn clear_edge_banding_path(&mut self, edge: EdgeId) -> Result<bool, PanelContourError> {
+        let path = self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
+        let edge_ids = path.edge_ids().collect::<Vec<_>>();
+        let before = self.edge_banding.len();
+        self.edge_banding.retain(|existing| !edge_ids.contains(&existing.edge()));
+        Ok(self.edge_banding.len() != before)
+    }
+
+    /// The banding that currently covers a path, if any.
+    ///
+    /// A lone chamfer uses its corner record; every other path uses the records on its edges. If a
+    /// loaded file left a path partially banded or with differing specs, the first record wins here;
+    /// [`Self::path_banding_conflict`] reports the inconsistency for command validation.
+    pub fn path_banding(&self, path: &ContourPath) -> Option<BandingSpec> {
+        if let Some(corner) = path.lone_corner() {
+            return self.corner_banding_at(corner).map(|band| band.spec());
+        }
+        path.edge_ids()
+            .find_map(|edge| self.edge_banding.iter().find(|band| band.edge() == edge).map(EdgeBanding::spec))
+    }
+
+    /// Whether any path is partially banded or carries conflicting banding specs.
+    pub fn has_path_banding_conflict(&self) -> Result<bool, PanelContourError> {
+        for path in self.contour_paths()? {
+            if self.path_banding_conflict(&path) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether a path has banding on some but not all of its edges, or conflicting specs.
+    pub fn path_banding_conflict(&self, path: &ContourPath) -> bool {
+        if path.lone_corner().is_some() {
+            return false;
+        }
+        let mut seen = None;
+        for edge in path.edge_ids() {
+            let Some(band) = self.edge_banding.iter().find(|band| band.edge() == edge) else {
+                return seen.is_some();
+            };
+            let spec = band.spec();
+            match seen {
+                Some(existing) if existing != spec => return true,
+                Some(_) => {}
+                None => seen = Some(spec),
+            }
+        }
+        false
+    }
+
+    fn contour_with_sources_for(
+        &self,
+        nominal_size: PanelNominalSize,
+    ) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
         let length = nominal_size.length().millimetres_f64();
         let width = nominal_size.width().millimetres_f64();
         let corners =
@@ -57,6 +246,7 @@ impl Panel {
         let edge_lengths = [length, width, length, width];
 
         let mut segments = Vec::with_capacity(8);
+        let mut sources = Vec::with_capacity(8);
         for index in 0..4 {
             let edge = RectEdge::ALL[index];
             let edge_id = edge.id();
@@ -92,6 +282,7 @@ impl Panel {
                 None => Segment::Line(Line::new(start, end)?),
             };
             segments.push(edge_segment);
+            sources.push(SegmentSource::Edge(edge_id));
 
             if let Some(feature) = self.corner_feature(end_corner.id()) {
                 segments.push(corner_segment(
@@ -101,6 +292,7 @@ impl Panel {
                     directions[index],
                     directions[(index + 1) % 4],
                 )?);
+                sources.push(SegmentSource::Corner(end_corner.id()));
             }
         }
 
@@ -108,7 +300,7 @@ impl Panel {
         if contour.is_counter_clockwise() != Some(true) {
             return Err(PanelContourError::FeatureGeometry);
         }
-        Ok(contour)
+        Ok((contour, sources))
     }
 }
 
@@ -161,7 +353,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::{EdgeBow, Id, PanelNominalSize, Placement, RectCorner, RectEdge};
+    use crate::{EdgeBow, Id, MaterialId, PanelNominalSize, Placement, RectCorner, RectEdge};
     use furnicraft_units::Length;
 
     fn millimetres(value: i64) -> Length {
@@ -261,5 +453,114 @@ mod tests {
             panel.nominal_contour(),
             Err(PanelContourError::BowTooDeep { edge }) if edge == RectEdge::Bottom.id()
         ));
+    }
+
+    #[test]
+    fn a_rectangle_has_one_path_per_edge() {
+        let panel = panel(100, 60);
+        let paths = panel.contour_paths().expect("paths");
+        assert_eq!(paths.len(), 4);
+        let mut edges = Vec::new();
+        for path in &paths {
+            assert!(!path.is_closed());
+            assert_eq!(path.sources().len(), 1);
+            assert_eq!(path.lone_corner(), None);
+            edges.extend(path.edge_ids());
+        }
+        edges.sort_by_key(|edge| edge.get());
+        assert_eq!(edges, RectEdge::ALL.map(RectEdge::id).to_vec());
+    }
+
+    #[test]
+    fn a_radius_joins_its_two_edges_into_one_path() {
+        let mut panel = panel(100, 60);
+        panel.corner_features.push(
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
+                .expect("radius"),
+        );
+        let paths = panel.contour_paths().expect("paths");
+        assert_eq!(paths.len(), 3);
+        let joined = paths.iter().find(|path| path.sources().len() == 3).expect("path through the radius");
+        assert_eq!(
+            joined.sources(),
+            &[
+                SegmentSource::Edge(RectEdge::Right.id()),
+                SegmentSource::Corner(RectCorner::TopRight.id()),
+                SegmentSource::Edge(RectEdge::Top.id()),
+            ]
+        );
+        assert_eq!(joined.edge_ids().collect::<Vec<_>>(), vec![RectEdge::Right.id(), RectEdge::Top.id()]);
+    }
+
+    #[test]
+    fn banding_a_rounded_path_updates_every_edge_in_it() {
+        let mut panel = panel(100, 60);
+        panel.corner_features.push(
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
+                .expect("radius"),
+        );
+        let material = MaterialId::new(1).expect("material");
+        let band =
+            EdgeBanding::new(RectEdge::Right.id(), material, false, millimetres(2), millimetres(20)).expect("band");
+        panel.apply_edge_banding(band).expect("apply band");
+        let covered = panel.edge_banding().iter().map(EdgeBanding::edge).collect::<Vec<_>>();
+        assert_eq!(covered, vec![RectEdge::Right.id(), RectEdge::Top.id()]);
+        assert!(panel.edge_banding().iter().all(|band| band.material() == material));
+
+        panel.clear_edge_banding_path(RectEdge::Top.id()).expect("clear path");
+        assert!(panel.edge_banding().is_empty());
+    }
+
+    #[test]
+    fn banding_outside_the_outline_is_rejected() {
+        let mut panel = panel(100, 60);
+        let edge = EdgeId::new(9).expect("edge id");
+        let material = MaterialId::new(1).expect("material");
+        let band = EdgeBanding::new(edge, material, false, millimetres(2), millimetres(20)).expect("band");
+        assert_eq!(panel.apply_edge_banding(band), Err(PanelContourError::UnsupportedEdge { edge }));
+    }
+
+    #[test]
+    fn a_chamfer_is_a_separate_path_with_a_butt_joint() {
+        let mut panel = panel(100, 60);
+        panel.corner_features.push(
+            CornerFeature::new(
+                RectCorner::TopRight.id(),
+                CornerFeatureKind::Chamfer { incoming: millimetres(10), outgoing: millimetres(14) },
+            )
+            .expect("chamfer"),
+        );
+        let paths = panel.contour_paths().expect("paths");
+        assert_eq!(paths.len(), 5);
+        let chamfer =
+            paths.iter().find(|path| path.lone_corner() == Some(RectCorner::TopRight.id())).expect("chamfer path");
+        assert_eq!(chamfer.sources(), &[SegmentSource::Corner(RectCorner::TopRight.id())]);
+        assert_eq!(chamfer.edge_ids().count(), 0);
+    }
+
+    #[test]
+    fn a_fully_rounded_panel_is_one_closed_path() {
+        let mut panel = panel(100, 60);
+        for corner in RectCorner::ALL {
+            panel.corner_features.push(
+                CornerFeature::new(corner.id(), CornerFeatureKind::Radius { radius: millimetres(8) }).expect("radius"),
+            );
+        }
+        let paths = panel.contour_paths().expect("paths");
+        assert_eq!(paths.len(), 1);
+        let path = paths.first().expect("path");
+        assert!(path.is_closed());
+        assert_eq!(path.sources().len(), 8);
+        assert_eq!(path.edge_ids().count(), 4);
+    }
+
+    #[test]
+    fn a_bowed_edge_stays_one_path() {
+        let mut panel = panel(100, 60);
+        panel.edge_bows.push(EdgeBow::new(RectEdge::Bottom.id(), millimetres(5)).expect("bow"));
+        let paths = panel.contour_paths().expect("paths");
+        assert_eq!(paths.len(), 4);
+        let bottom = paths.iter().find(|path| path.edge_ids().eq([RectEdge::Bottom.id()])).expect("bottom path");
+        assert_eq!(bottom.sources(), &[SegmentSource::Edge(RectEdge::Bottom.id())]);
     }
 }

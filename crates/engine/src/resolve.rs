@@ -3,7 +3,7 @@
 //! The model stores fallback thicknesses so a missing material never makes a scene unreadable. The
 //! session resolves the catalogue first and uses those fallbacks only when a material is absent.
 
-use furnicraft_model::{Catalog, EdgeBanding, Id, Panel, PanelGeometry, Project, ProjectError};
+use furnicraft_model::{BandingSpec, Catalog, Id, Panel, PanelGeometry, Project, ProjectError};
 use furnicraft_units::Length;
 
 /// The resolved panel thickness: catalogue material first, stored fallback otherwise.
@@ -14,14 +14,14 @@ pub(crate) fn panel_thickness(panel: &Panel, catalog: &Catalog) -> Length {
         .map_or(panel.last_known_thickness(), |material| material.nominal_thickness())
 }
 
-/// The resolved banding thickness: catalogue material first, stored fallback otherwise.
-pub(crate) fn band_thickness(band: &EdgeBanding, catalog: &Catalog) -> Length {
-    catalog.edge_material(band.material()).map_or(band.last_known_thickness(), |material| material.thickness())
+/// The resolved thickness for any banding owner.
+pub(crate) fn spec_thickness(spec: &BandingSpec, catalog: &Catalog) -> Length {
+    catalog.edge_material(spec.material()).map_or(spec.last_known_thickness(), |material| material.thickness())
 }
 
-/// The resolved banding width: catalogue material first, stored fallback otherwise.
-pub(crate) fn band_width(band: &EdgeBanding, catalog: &Catalog) -> Length {
-    catalog.edge_material(band.material()).map_or(band.last_known_width(), |material| material.width())
+/// The resolved width for any banding owner.
+pub(crate) fn spec_width(spec: &BandingSpec, catalog: &Catalog) -> Length {
+    catalog.edge_material(spec.material()).map_or(spec.last_known_width(), |material| material.width())
 }
 
 /// Resolves one panel's core, overall and effective thickness.
@@ -32,7 +32,7 @@ pub(crate) fn panel_geometry(
 ) -> Result<PanelGeometry, ProjectError> {
     let panel = project.panel(panel_id).ok_or(ProjectError::PanelNotFound { id: panel_id })?;
     let thickness = panel_thickness(panel, catalog);
-    Ok(panel.geometry_with_banding(thickness, |band| band_thickness(band, catalog))?)
+    Ok(panel.geometry_with_banding(thickness, |spec| spec_thickness(spec, catalog))?)
 }
 
 #[cfg(test)]
@@ -41,7 +41,7 @@ mod tests {
 
     use super::*;
 
-    use furnicraft_model::{EdgeBandingMaterial, PanelMaterial};
+    use furnicraft_model::{EdgeBanding, EdgeBandingMaterial, PanelMaterial};
     use furnicraft_testkit::{sample_edge_material_id, sample_material_id, sample_panel_thickness, sample_project};
     use furnicraft_units::Length;
 
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(geometry.overall_width(), millimetres(500));
 
         let panel = project.panel(panel_id).expect("panel");
-        assert_eq!(band_width(&panel.edge_banding()[0], &catalog), millimetres(30));
+        assert_eq!(spec_width(&panel.edge_banding()[0].spec(), &catalog), millimetres(30));
     }
 
     #[test]
