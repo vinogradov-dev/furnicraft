@@ -13,7 +13,7 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Assembly, CutoutDepth, CutoutShape, FaceSide, Id, Node, PanelRect, PanelSize, Placement, Project,
+    Assembly, CutoutDepth, CutoutShape, FaceSide, Id, Node, PanelNominalSize, PanelRect, Placement, Project,
 };
 use furnicraft_param::build_panel;
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
@@ -80,14 +80,19 @@ pub fn sample_session() -> Result<Session, String> {
     let mut project = Project::new(root).map_err(describe)?;
 
     let standing = Placement::new(DVec3::ZERO, DQuat::from_rotation_x(FRAC_PI_2)).map_err(describe)?;
-    let back = project.add_panel(root_id, "Back panel", panel_size(900, 600, 18)?, standing).map_err(describe)?;
+    let thickness = millimetres(18)?;
+    let back = project
+        .add_panel(root_id, "Back panel", panel_nominal_size(900, 600)?, None, thickness, standing)
+        .map_err(describe)?;
     project.add_cutout(back, cutout(60, 70, 180, 140)?, CutoutDepth::Through, FaceSide::A).map_err(describe)?;
     project
         .add_cutout(back, cutout(330, 70, 180, 140)?, CutoutDepth::Blind { depth: millimetres(12)? }, FaceSide::A)
         .map_err(describe)?;
 
     let floor = Placement::new(DVec3::new(150.0, -500.0, 0.0), DQuat::IDENTITY).map_err(describe)?;
-    let shelf = project.add_panel(root_id, "Loose shelf", panel_size(600, 400, 18)?, floor).map_err(describe)?;
+    let shelf = project
+        .add_panel(root_id, "Loose shelf", panel_nominal_size(600, 400)?, None, thickness, floor)
+        .map_err(describe)?;
     project.add_cutout(shelf, cutout(80, 60, 150, 100)?, CutoutDepth::Through, FaceSide::B).map_err(describe)?;
 
     project.validate().map_err(describe)?;
@@ -137,7 +142,8 @@ fn collect_children(
             }
             Node::Panel(panel) => {
                 let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
-                let body = build_panel(kernel, panel).map_err(describe)?;
+                let geometry = panel.geometry_with_fallbacks().map_err(describe)?;
+                let body = build_panel(kernel, panel, geometry).map_err(describe)?;
                 let mesh = tessellate_panel(kernel, body, options).map_err(describe)?;
                 kernel.clear();
                 let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
@@ -170,8 +176,8 @@ fn millimetres(value: i64) -> Result<Length, String> {
     Length::from_millimetres(value).ok_or_else(|| format!("{value} mm does not fit a length"))
 }
 
-fn panel_size(length: i64, width: i64, thickness: i64) -> Result<PanelSize, String> {
-    PanelSize::new(millimetres(length)?, millimetres(width)?, millimetres(thickness)?).map_err(describe)
+fn panel_nominal_size(length: i64, width: i64) -> Result<PanelNominalSize, String> {
+    PanelNominalSize::new(millimetres(length)?, millimetres(width)?).map_err(describe)
 }
 
 fn rectangle(x: i64, y: i64, width: i64, height: i64) -> Result<PanelRect, String> {

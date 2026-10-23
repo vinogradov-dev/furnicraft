@@ -11,40 +11,74 @@
     clippy::unreachable
 )]
 
-use furnicraft_model::{Assembly, Id, Panel, PanelRect, PanelSize, Placement, Project};
+use furnicraft_model::{
+    Assembly, Catalog, EdgeBandingMaterial, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
+    Placement, Project,
+};
 use furnicraft_units::Length;
 
-/// A 700 x 500 x 18 mm panel used by tests that need a valid size.
+/// The stable id of the sample panel material.
 #[allow(clippy::expect_used)]
-pub fn sample_panel_size() -> PanelSize {
-    PanelSize::new(
+pub fn sample_material_id() -> MaterialId {
+    MaterialId::new(1).expect("non-zero material id")
+}
+
+/// The stable id of the sample edge-banding material.
+#[allow(clippy::expect_used)]
+pub fn sample_edge_material_id() -> MaterialId {
+    MaterialId::new(101).expect("non-zero material id")
+}
+
+/// The fallback thickness of a sample panel.
+pub const fn sample_panel_thickness() -> Length {
+    Length::from_micrometres(18_000)
+}
+
+/// A 700 x 500 mm nominal panel used by tests that need a valid size.
+#[allow(clippy::expect_used)]
+pub fn sample_panel_nominal_size() -> PanelNominalSize {
+    PanelNominalSize::new(
         Length::from_millimetres(700).expect("700 mm fits a length"),
         Length::from_millimetres(500).expect("500 mm fits a length"),
-        Length::from_millimetres(18).expect("18 mm fits a length"),
     )
     .expect("sample panel size is within limits")
 }
 
-/// A second valid panel size, used by resize tests.
+/// A second valid nominal panel size, used by resize tests.
 #[allow(clippy::expect_used)]
-pub fn sample_resized_panel_size() -> PanelSize {
-    PanelSize::new(
+pub fn sample_resized_panel_nominal_size() -> PanelNominalSize {
+    PanelNominalSize::new(
         Length::from_millimetres(900).expect("900 mm fits a length"),
         Length::from_millimetres(600).expect("600 mm fits a length"),
-        Length::from_millimetres(20).expect("20 mm fits a length"),
     )
     .expect("sample panel size is within limits")
 }
 
-/// A 620 x 500 x 18 mm panel, narrow enough to invalidate a cutout near the right edge.
+/// A 620 x 500 mm nominal panel, narrow enough to invalidate a cutout near the right edge.
 #[allow(clippy::expect_used)]
-pub fn sample_narrow_panel_size() -> PanelSize {
-    PanelSize::new(
+pub fn sample_narrow_panel_nominal_size() -> PanelNominalSize {
+    PanelNominalSize::new(
         Length::from_millimetres(620).expect("620 mm fits a length"),
         Length::from_millimetres(500).expect("500 mm fits a length"),
-        Length::from_millimetres(18).expect("18 mm fits a length"),
     )
     .expect("sample panel size is within limits")
+}
+
+/// A catalogue with an 18 mm chipboard and a 2 x 22 mm PVC edge.
+#[allow(clippy::expect_used)]
+pub fn sample_catalog() -> Catalog {
+    let panel = PanelMaterial::new(sample_material_id(), "Chipboard", "chipboard", sample_panel_thickness(), "white")
+        .expect("sample panel material is valid");
+    let edge = EdgeBandingMaterial::new(
+        sample_edge_material_id(),
+        "PVC edge",
+        "pvc",
+        Length::from_millimetres(2).expect("2 mm fits a length"),
+        Length::from_millimetres(22).expect("22 mm fits a length"),
+        "white",
+    )
+    .expect("sample edge material is valid");
+    Catalog::new(vec![panel], vec![edge]).expect("sample catalogue ids are unique")
 }
 
 /// A 100 x 50 mm cutout rectangle at `(10, 10)` on the sample panel.
@@ -104,9 +138,25 @@ pub fn sample_blind_depth() -> Length {
 /// A small valid project: a root, one panel and one nested assembly with a panel.
 #[allow(clippy::expect_used)]
 pub fn sample_project() -> Project {
-    let size = sample_panel_size();
-    let shelf = Panel::new(Id::new(2).expect("non-zero id"), "Shelf", size, Placement::IDENTITY);
-    let front = Panel::new(Id::new(4).expect("non-zero id"), "Front", size, Placement::IDENTITY);
+    let size = sample_panel_nominal_size();
+    let shelf = Panel::new(
+        Id::new(2).expect("non-zero id"),
+        "Shelf",
+        size,
+        None,
+        sample_panel_thickness(),
+        Placement::IDENTITY,
+    )
+    .expect("sample shelf is valid");
+    let front = Panel::new(
+        Id::new(4).expect("non-zero id"),
+        "Front",
+        size,
+        None,
+        sample_panel_thickness(),
+        Placement::IDENTITY,
+    )
+    .expect("sample front is valid");
     let drawer = Assembly::new(Id::new(3).expect("non-zero id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
     let root =
         Assembly::new(Id::new(1).expect("non-zero id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);

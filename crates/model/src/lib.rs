@@ -208,7 +208,7 @@ pub struct Project {
 
 impl Project {
     /// The schema version written by this build.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
     /// Maximum nesting depth of assemblies, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -250,23 +250,83 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
-    /// Checks whether a panel can take new dimensions without invalidating its machining.
-    pub fn validate_panel_resize(&self, id: Id, size: PanelSize) -> Result<(), ProjectError> {
+    /// Checks whether a panel can take a new nominal size without invalidating its machining.
+    pub fn validate_panel_resize(&self, id: Id, nominal_size: PanelNominalSize) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
-        validate_panel_machining(panel, size)
+        let geometry = panel.geometry_for(nominal_size, panel.last_known_thickness())?;
+        validate_panel_machining(panel, geometry)
     }
 
-    /// Replaces a panel's dimensions and bumps the revision once.
+    /// Replaces a panel's nominal size and bumps the revision once.
     ///
-    /// Existing machining is not moved or scaled. A cutout that would fall outside the new outline
-    /// or a blind cutout that would become deeper than the new thickness rejects the resize.
-    pub fn set_panel_size(&mut self, id: Id, size: PanelSize) -> Result<Revision, ProjectError> {
-        self.validate_panel_resize(id, size)?;
+    /// Existing machining is not moved or scaled. A cutout that would fall outside the new core or
+    /// a blind cutout that would become deeper than the new thickness rejects the resize. The
+    /// material, fallback thickness and edge banding are preserved.
+    pub fn set_panel_nominal_size(&mut self, id: Id, nominal_size: PanelNominalSize) -> Result<Revision, ProjectError> {
+        self.validate_panel_resize(id, nominal_size)?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
-        panel.size = size;
+        panel.nominal_size = nominal_size;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Sets the panel material and refreshes its fallback thickness.
+    ///
+    /// A material or catalogue change may invalidate machining; that is a diagnostic, not a
+    /// command error. Only a non-positive resulting core rejects the change.
+    pub fn set_panel_material(
+        &mut self,
+        id: Id,
+        material: MaterialId,
+        thickness: Length,
+    ) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        panel.geometry_for(panel.nominal_size(), thickness)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.material = Some(material);
+        panel.last_known_thickness = thickness;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Checks whether a banding can be placed without making the core non-positive.
+    pub fn validate_edge_banding(&self, id: Id, band: EdgeBanding) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let mut candidate = panel.clone();
+        candidate.upsert_edge_banding(band);
+        candidate.geometry_with_fallbacks()?;
+        Ok(())
+    }
+
+    /// Adds or replaces banding on an edge and moves it to the end of the application order.
+    pub fn set_edge_banding(&mut self, id: Id, band: EdgeBanding) -> Result<Revision, ProjectError> {
+        self.validate_edge_banding(id, band.clone())?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.upsert_edge_banding(band);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes banding from an edge and bumps the revision once.
+    pub fn clear_edge_banding(&mut self, id: Id, edge: EdgeId) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if !panel.edge_banding().iter().any(|band| band.edge() == edge) {
+            return Err(ProjectError::EdgeBandingNotFound { panel: id, edge });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_edge_banding(edge);
         self.revision = next_revision;
         Ok(next_revision)
     }
@@ -323,7 +383,9 @@ impl Project {
         &mut self,
         parent: Id,
         name: impl Into<String>,
-        size: PanelSize,
+        nominal_size: PanelNominalSize,
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
         placement: Placement,
     ) -> Result<Id, ProjectError> {
         if self.assembly(parent).is_none() {
@@ -331,7 +393,7 @@ impl Project {
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let panel = Panel::new(id, name, size, placement);
+        let panel = Panel::new(id, name, nominal_size, material, last_known_thickness, placement)?;
         let Some((_depth, assembly)) = find_assembly_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::AssemblyNotFound { id: parent });
         };
@@ -425,7 +487,7 @@ fn scan_tree(root: &Assembly) -> Result<u64, ProjectError> {
                         return Err(ProjectError::DuplicateId(panel.id));
                     }
                     max_id = max_id.max(panel.id.get());
-                    validate_panel_machining(panel, panel.size())?;
+                    validate_panel_banding(panel)?;
                     for machining in panel.machining() {
                         match machining {
                             Machining::Cutout(cutout) => {
@@ -507,12 +569,25 @@ fn find_panel_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32, &
     None
 }
 
-fn validate_panel_machining(panel: &Panel, size: PanelSize) -> Result<(), ProjectError> {
+fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> {
+    let mut seen = HashSet::new();
+    for band in panel.edge_banding() {
+        if !matches!(band.edge().get(), 1..=4) {
+            return Err(ProjectError::UnsupportedEdgeBanding { panel: panel.id(), edge: band.edge() });
+        }
+        if !seen.insert(band.edge().get()) {
+            return Err(ProjectError::DuplicateEdgeBanding { panel: panel.id(), edge: band.edge() });
+        }
+    }
+    Ok(())
+}
+
+fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<(), ProjectError> {
     let mut validated: Vec<&Cutout> = Vec::new();
     for machining in panel.machining() {
         match machining {
             Machining::Cutout(cutout) => {
-                validate_cutout_geometry(panel.id(), size, cutout.shape(), cutout.depth())?;
+                validate_cutout_geometry(panel.id(), geometry, cutout.shape(), cutout.depth())?;
                 for other in &validated {
                     if rects_overlap(cutout_rect(cutout.shape()), cutout_rect(other.shape())) {
                         return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: other.id() });
@@ -526,7 +601,8 @@ fn validate_panel_machining(panel: &Panel, size: PanelSize) -> Result<(), Projec
 }
 
 fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
-    validate_cutout_geometry(panel.id(), panel.size(), shape, depth)?;
+    let geometry = panel.geometry_with_fallbacks()?;
+    validate_cutout_geometry(panel.id(), geometry, shape, depth)?;
     for machining in panel.machining() {
         match machining {
             Machining::Cutout(existing) => {
@@ -541,16 +617,16 @@ fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) ->
 
 fn validate_cutout_geometry(
     panel: Id,
-    size: PanelSize,
+    geometry: PanelGeometry,
     shape: CutoutShape,
     depth: CutoutDepth,
 ) -> Result<(), ProjectError> {
     let rect = cutout_rect(shape);
-    if !rect_inside(rect, size) {
+    if !rect_inside(rect, geometry) {
         return Err(ProjectError::CutoutOutsidePanel { panel });
     }
     if let CutoutDepth::Blind { depth } = depth {
-        let thickness = size.thickness();
+        let thickness = geometry.thickness();
         if !depth.is_positive() || depth >= thickness {
             return Err(ProjectError::CutoutDepthInvalid { panel, depth, thickness });
         }
@@ -564,13 +640,13 @@ fn cutout_rect(shape: CutoutShape) -> PanelRect {
     }
 }
 
-fn rect_inside(rect: PanelRect, size: PanelSize) -> bool {
+fn rect_inside(rect: PanelRect, geometry: PanelGeometry) -> bool {
     let x0 = rect.x().micrometres() as i128;
     let y0 = rect.y().micrometres() as i128;
     let x1 = x0 + rect.width().micrometres() as i128;
     let y1 = y0 + rect.height().micrometres() as i128;
-    let panel_x = size.length().micrometres() as i128;
-    let panel_y = size.width().micrometres() as i128;
+    let panel_x = geometry.core_length().micrometres() as i128;
+    let panel_y = geometry.core_width().micrometres() as i128;
     x0 >= 0 && y0 >= 0 && x1 <= panel_x && y1 <= panel_y
 }
 
@@ -617,6 +693,36 @@ pub enum ProjectError {
     PanelNotFound {
         /// The missing panel id.
         id: Id,
+    },
+    /// A stored panel dimension is not usable.
+    #[error(transparent)]
+    PanelDimension(#[from] PanelDimensionError),
+    /// The panel cannot be resolved into core, overall and thickness.
+    #[error(transparent)]
+    PanelGeometry(#[from] PanelGeometryError),
+    /// Edge banding refers to an edge outside the rectangular v1 outline.
+    #[error("edge banding on panel {panel} uses unsupported edge {edge}")]
+    UnsupportedEdgeBanding {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The rejected edge.
+        edge: EdgeId,
+    },
+    /// Two banding records cover the same edge.
+    #[error("panel {panel} has duplicate edge banding on edge {edge}")]
+    DuplicateEdgeBanding {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The duplicated edge.
+        edge: EdgeId,
+    },
+    /// The requested edge has no banding to clear.
+    #[error("panel {panel} has no edge banding on edge {edge}")]
+    EdgeBandingNotFound {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The edge that was requested.
+        edge: EdgeId,
     },
     /// A cutout is not fully inside the panel outline.
     #[error("cutout on panel {panel} lies outside the panel")]
@@ -673,7 +779,9 @@ impl TryFrom<ProjectWire> for Project {
     type Error = ProjectError;
 
     fn try_from(wire: ProjectWire) -> Result<Self, Self::Error> {
-        if wire.schema_version != Project::CURRENT_SCHEMA_VERSION {
+        // Version 1 stored a `size` on every panel; `PanelWire` migrates it to nominal size plus a
+        // fallback. Both versions are normalized to the current one on load.
+        if wire.schema_version != 1 && wire.schema_version != Project::CURRENT_SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedSchemaVersion {
                 found: wire.schema_version,
                 supported: Project::CURRENT_SCHEMA_VERSION,
@@ -687,7 +795,7 @@ impl TryFrom<ProjectWire> for Project {
             Some(next_id) => next_id,
             None => next_id_after(max_id)?,
         };
-        Ok(Self { schema_version: wire.schema_version, revision: wire.revision, next_id, root: wire.root })
+        Ok(Self { schema_version: Project::CURRENT_SCHEMA_VERSION, revision: wire.revision, next_id, root: wire.root })
     }
 }
 
@@ -733,24 +841,53 @@ impl Assembly {
 
 /// A flat panel in the product tree.
 ///
-/// The first M1 skeleton stores identity, size, placement and panel-owned machining. Material,
-/// edge banding and grain arrive as separate operations; holes generated by hardware will be a
-/// separate machining source.
+/// The document stores the nominal outline, the selected material and fallbacks, not the resolved
+/// core. Core, overall and effective thickness are derived by [`Panel::geometry`] from the panel,
+/// its edge banding and the catalogue value supplied by the caller.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "PanelWire")]
 pub struct Panel {
     id: Id,
     name: String,
-    size: PanelSize,
+    nominal_size: PanelNominalSize,
+    material: Option<MaterialId>,
+    last_known_thickness: Length,
     placement: Placement,
-    #[serde(default)]
     machining: Vec<Machining>,
+    edge_banding: Vec<EdgeBanding>,
 }
 
 impl Panel {
-    /// Creates a panel. Global id uniqueness is checked by [`Project::validate`].
-    pub fn new(id: Id, name: impl Into<String>, size: PanelSize, placement: Placement) -> Self {
-        Self { id, name: name.into(), size, placement, machining: Vec::new() }
+    /// Largest accepted nominal panel length or width: ten metres.
+    pub const MAX_LENGTH: Length = Length::from_micrometres(10_000_000);
+    /// Largest accepted nominal panel width: ten metres.
+    pub const MAX_WIDTH: Length = Length::from_micrometres(10_000_000);
+    /// Largest accepted panel thickness: one metre.
+    pub const MAX_THICKNESS: Length = Length::from_micrometres(1_000_000);
+
+    /// Creates a panel with a validated fallback thickness.
+    ///
+    /// Global id uniqueness and the catalogue lookup are checked later. A material id may be
+    /// missing from the catalogue; the fallback thickness keeps the panel drawable.
+    pub fn new(
+        id: Id,
+        name: impl Into<String>,
+        nominal_size: PanelNominalSize,
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Self, PanelDimensionError> {
+        validate_dimension("thickness", last_known_thickness, Self::MAX_THICKNESS)?;
+        Ok(Self {
+            id,
+            name: name.into(),
+            nominal_size,
+            material,
+            last_known_thickness,
+            placement,
+            machining: Vec::new(),
+            edge_banding: Vec::new(),
+        })
     }
 
     /// The stable panel id.
@@ -763,12 +900,22 @@ impl Panel {
         &self.name
     }
 
-    /// The panel dimensions.
-    pub const fn size(&self) -> PanelSize {
-        self.size
+    /// The nominal panel length and width.
+    pub const fn nominal_size(&self) -> PanelNominalSize {
+        self.nominal_size
     }
 
-    /// The placement relative to the parent frame.
+    /// The selected panel material, if any.
+    pub const fn material(&self) -> Option<MaterialId> {
+        self.material
+    }
+
+    /// The fallback thickness used when the material is absent.
+    pub const fn last_known_thickness(&self) -> Length {
+        self.last_known_thickness
+    }
+
+    /// The placement relative to the parent frame, anchored at the core zero.
     pub const fn placement(&self) -> Placement {
         self.placement
     }
@@ -776,6 +923,168 @@ impl Panel {
     /// Machining owned by this panel, in panel-local coordinates.
     pub fn machining(&self) -> &[Machining] {
         &self.machining
+    }
+
+    /// Edge banding in application order.
+    pub fn edge_banding(&self) -> &[EdgeBanding] {
+        &self.edge_banding
+    }
+
+    /// Resolves the geometry with the supplied panel thickness.
+    ///
+    /// Banding thickness comes from the stored fallbacks. The engine refreshes those fallbacks
+    /// from the catalogue before a command; the model never reads the catalogue.
+    pub fn geometry(&self, thickness: Length) -> Result<PanelGeometry, PanelGeometryError> {
+        self.geometry_for(self.nominal_size, thickness)
+    }
+
+    /// Resolves the geometry for a different nominal size, used by a resize before mutation.
+    pub fn geometry_for(
+        &self,
+        nominal_size: PanelNominalSize,
+        thickness: Length,
+    ) -> Result<PanelGeometry, PanelGeometryError> {
+        validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
+
+        let mut included_bottom = Length::ZERO;
+        let mut included_right = Length::ZERO;
+        let mut included_top = Length::ZERO;
+        let mut included_left = Length::ZERO;
+        let mut total_bottom = Length::ZERO;
+        let mut total_right = Length::ZERO;
+        let mut total_top = Length::ZERO;
+        let mut total_left = Length::ZERO;
+
+        for band in &self.edge_banding {
+            let thickness = band.last_known_thickness();
+            match band.edge().get() {
+                1 => {
+                    total_bottom = checked_add("bottom_banding", total_bottom, thickness)?;
+                    if band.included_in_size() {
+                        included_bottom = checked_add("included_bottom", included_bottom, thickness)?;
+                    }
+                }
+                2 => {
+                    total_right = checked_add("right_banding", total_right, thickness)?;
+                    if band.included_in_size() {
+                        included_right = checked_add("included_right", included_right, thickness)?;
+                    }
+                }
+                3 => {
+                    total_top = checked_add("top_banding", total_top, thickness)?;
+                    if band.included_in_size() {
+                        included_top = checked_add("included_top", included_top, thickness)?;
+                    }
+                }
+                4 => {
+                    total_left = checked_add("left_banding", total_left, thickness)?;
+                    if band.included_in_size() {
+                        included_left = checked_add("included_left", included_left, thickness)?;
+                    }
+                }
+                _ => return Err(PanelGeometryError::UnsupportedEdge { edge: band.edge() }),
+            }
+        }
+
+        let core_length = checked_sub_many("core_length", nominal_size.length(), [included_left, included_right])?;
+        let core_width = checked_sub_many("core_width", nominal_size.width(), [included_bottom, included_top])?;
+        let overall_length = checked_add_many("overall_length", core_length, [total_left, total_right])?;
+        let overall_width = checked_add_many("overall_width", core_width, [total_bottom, total_top])?;
+
+        PanelGeometry::new(core_length, core_width, thickness, overall_length, overall_width)
+    }
+
+    /// Resolves geometry using the stored fallback thickness.
+    pub fn geometry_with_fallbacks(&self) -> Result<PanelGeometry, PanelGeometryError> {
+        self.geometry(self.last_known_thickness)
+    }
+
+    fn upsert_edge_banding(&mut self, band: EdgeBanding) {
+        let edge = band.edge();
+        self.edge_banding.retain(|existing| existing.edge() != edge);
+        self.edge_banding.push(band);
+    }
+
+    fn remove_edge_banding(&mut self, edge: EdgeId) -> bool {
+        let before = self.edge_banding.len();
+        self.edge_banding.retain(|existing| existing.edge() != edge);
+        self.edge_banding.len() != before
+    }
+}
+
+/// Why a serialized panel cannot be read as the current schema.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum PanelError {
+    /// A current panel is missing its nominal size.
+    #[error("panel has no nominal size")]
+    MissingNominalSize,
+    /// A current panel is missing its fallback thickness.
+    #[error("panel has no last_known_thickness")]
+    MissingThickness,
+    /// A panel mixes the legacy `size` field with current fields.
+    #[error("panel mixes the legacy size field with the current schema")]
+    AmbiguousSize,
+    /// A stored dimension is not usable.
+    #[error(transparent)]
+    Dimension(#[from] PanelDimensionError),
+}
+
+/// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelWire {
+    id: Id,
+    name: String,
+    #[serde(default)]
+    nominal_size: Option<PanelNominalSize>,
+    #[serde(default)]
+    material: Option<MaterialId>,
+    #[serde(default)]
+    last_known_thickness: Option<Length>,
+    placement: Placement,
+    #[serde(default)]
+    machining: Vec<Machining>,
+    #[serde(default)]
+    edge_banding: Vec<EdgeBanding>,
+    #[serde(default)]
+    size: Option<LegacyPanelSize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPanelSize {
+    length: Length,
+    width: Length,
+    thickness: Length,
+}
+
+impl TryFrom<PanelWire> for Panel {
+    type Error = PanelError;
+
+    fn try_from(wire: PanelWire) -> Result<Self, Self::Error> {
+        let (nominal_size, material, thickness, edge_banding) = match wire.size {
+            Some(size) => {
+                if wire.nominal_size.is_some()
+                    || wire.material.is_some()
+                    || wire.last_known_thickness.is_some()
+                    || !wire.edge_banding.is_empty()
+                {
+                    return Err(PanelError::AmbiguousSize);
+                }
+                let nominal_size = PanelNominalSize::new(size.length, size.width)?;
+                (nominal_size, None, size.thickness, Vec::new())
+            }
+            None => {
+                let nominal_size = wire.nominal_size.ok_or(PanelError::MissingNominalSize)?;
+                let thickness = wire.last_known_thickness.ok_or(PanelError::MissingThickness)?;
+                (nominal_size, wire.material, thickness, wire.edge_banding)
+            }
+        };
+
+        let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
+        panel.machining = wire.machining;
+        panel.edge_banding = edge_banding;
+        Ok(panel)
     }
 }
 
@@ -989,54 +1298,107 @@ impl FaceSide {
     }
 }
 
-/// The validated dimensions of a rectangular panel.
+/// The nominal length and width stored on a panel.
 ///
-/// In the panel-local frame the panel occupies `x` from `0` to the length, `y` from `0` to the
-/// width and `z` from `0` to the thickness. The limits are validation rules, not part of the
-/// stored value: every dimension stays an `i64` micrometre count.
+/// Thickness is not part of the nominal size: it comes from the material, or from the panel's
+/// fallback when the material is missing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "PanelSizeWire")]
-pub struct PanelSize {
+#[serde(try_from = "PanelNominalSizeWire")]
+pub struct PanelNominalSize {
     length: Length,
     width: Length,
-    thickness: Length,
 }
 
-impl PanelSize {
-    /// Largest accepted panel length or width: ten metres.
-    pub const MAX_LENGTH: Length = Length::from_micrometres(10_000_000);
-    /// Largest accepted panel width: ten metres.
-    pub const MAX_WIDTH: Length = Length::from_micrometres(10_000_000);
-    /// Largest accepted panel thickness: one metre.
-    pub const MAX_THICKNESS: Length = Length::from_micrometres(1_000_000);
-
-    /// Creates dimensions after checking that every side is positive and within its limit.
-    pub fn new(length: Length, width: Length, thickness: Length) -> Result<Self, PanelSizeError> {
-        validate_dimension("length", length, Self::MAX_LENGTH)?;
-        validate_dimension("width", width, Self::MAX_WIDTH)?;
-        validate_dimension("thickness", thickness, Self::MAX_THICKNESS)?;
-        Ok(Self { length, width, thickness })
+impl PanelNominalSize {
+    /// Creates a nominal size after checking that both sides are positive and within limits.
+    pub fn new(length: Length, width: Length) -> Result<Self, PanelDimensionError> {
+        validate_dimension("length", length, Panel::MAX_LENGTH)?;
+        validate_dimension("width", width, Panel::MAX_WIDTH)?;
+        Ok(Self { length, width })
     }
 
-    /// The panel length along local X.
+    /// The nominal length along local X.
     pub const fn length(self) -> Length {
         self.length
     }
 
-    /// The panel width along local Y.
+    /// The nominal width along local Y.
     pub const fn width(self) -> Length {
         self.width
     }
+}
 
-    /// The panel thickness along local Z.
+/// The resolved dimensions of a panel.
+///
+/// In the panel-local frame the core occupies `x` from `0` to `core_length`, `y` from `0` to
+/// `core_width` and `z` from `0` to `thickness`. Overall dimensions include all edge banding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PanelGeometry {
+    core_length: Length,
+    core_width: Length,
+    thickness: Length,
+    overall_length: Length,
+    overall_width: Length,
+}
+
+impl PanelGeometry {
+    /// Creates resolved geometry after checking that the core and thickness are positive.
+    pub fn new(
+        core_length: Length,
+        core_width: Length,
+        thickness: Length,
+        overall_length: Length,
+        overall_width: Length,
+    ) -> Result<Self, PanelGeometryError> {
+        require_positive("core_length", core_length)?;
+        require_positive("core_width", core_width)?;
+        validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
+        if overall_length < core_length {
+            return Err(PanelGeometryError::OverallTooSmall {
+                field: "overall_length",
+                value: overall_length,
+                core: core_length,
+            });
+        }
+        if overall_width < core_width {
+            return Err(PanelGeometryError::OverallTooSmall {
+                field: "overall_width",
+                value: overall_width,
+                core: core_width,
+            });
+        }
+        Ok(Self { core_length, core_width, thickness, overall_length, overall_width })
+    }
+
+    /// The core length along local X.
+    pub const fn core_length(self) -> Length {
+        self.core_length
+    }
+
+    /// The core width along local Y.
+    pub const fn core_width(self) -> Length {
+        self.core_width
+    }
+
+    /// The effective panel thickness along local Z.
     pub const fn thickness(self) -> Length {
         self.thickness
     }
+
+    /// The overall length including edge banding.
+    pub const fn overall_length(self) -> Length {
+        self.overall_length
+    }
+
+    /// The overall width including edge banding.
+    pub const fn overall_width(self) -> Length {
+        self.overall_width
+    }
 }
 
-/// Why a set of panel dimensions is not usable.
+/// Why a nominal panel size or a banding profile is not usable.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
-pub enum PanelSizeError {
+pub enum PanelDimensionError {
     /// A dimension is zero or negative.
     #[error("panel {field} must be positive, got {value}")]
     NonPositive {
@@ -1057,30 +1419,172 @@ pub enum PanelSizeError {
     },
 }
 
-fn validate_dimension(field: &'static str, value: Length, max: Length) -> Result<(), PanelSizeError> {
+/// Why a panel cannot be resolved into core, overall and thickness.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum PanelGeometryError {
+    /// A stored dimension is not usable.
+    #[error(transparent)]
+    Dimension(#[from] PanelDimensionError),
+    /// The resulting core is zero or negative.
+    #[error("panel {field} must be positive, got {value}")]
+    NonPositive {
+        /// The rejected field.
+        field: &'static str,
+        /// The rejected value.
+        value: Length,
+    },
+    /// An overall dimension is smaller than its core.
+    #[error("panel {field} {value} is smaller than the core {core}")]
+    OverallTooSmall {
+        /// The rejected field.
+        field: &'static str,
+        /// The rejected overall value.
+        value: Length,
+        /// The core value.
+        core: Length,
+    },
+    /// A sum or difference overflowed.
+    #[error("panel {field} overflows")]
+    Overflow {
+        /// The overflowing field.
+        field: &'static str,
+    },
+    /// Edge banding refers to an edge outside the rectangular v1 outline.
+    #[error("edge banding on unsupported edge {edge}")]
+    UnsupportedEdge {
+        /// The rejected edge.
+        edge: EdgeId,
+    },
+}
+
+/// One edge-banding strip in application order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "EdgeBandingWire")]
+pub struct EdgeBanding {
+    edge: EdgeId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl EdgeBanding {
+    /// Creates a banding record with validated fallback dimensions.
+    pub fn new(
+        edge: EdgeId,
+        material: MaterialId,
+        included_in_size: bool,
+        thickness: Length,
+        width: Length,
+    ) -> Result<Self, PanelDimensionError> {
+        validate_dimension("thickness", thickness, Panel::MAX_LENGTH)?;
+        validate_dimension("width", width, Panel::MAX_THICKNESS)?;
+        Ok(Self { edge, material, included_in_size, last_known_thickness: thickness, last_known_width: width })
+    }
+
+    /// The edge this strip covers.
+    pub const fn edge(&self) -> EdgeId {
+        self.edge
+    }
+
+    /// The banding material id.
+    pub const fn material(&self) -> MaterialId {
+        self.material
+    }
+
+    /// Whether this strip is included in the panel's nominal size.
+    pub const fn included_in_size(&self) -> bool {
+        self.included_in_size
+    }
+
+    /// The fallback banding thickness.
+    pub const fn last_known_thickness(&self) -> Length {
+        self.last_known_thickness
+    }
+
+    /// The fallback banding width.
+    pub const fn last_known_width(&self) -> Length {
+        self.last_known_width
+    }
+}
+
+fn validate_dimension(field: &'static str, value: Length, max: Length) -> Result<(), PanelDimensionError> {
     if !value.is_positive() {
-        return Err(PanelSizeError::NonPositive { field, value });
+        return Err(PanelDimensionError::NonPositive { field, value });
     }
     if value > max {
-        return Err(PanelSizeError::TooLarge { field, value, max });
+        return Err(PanelDimensionError::TooLarge { field, value, max });
     }
     Ok(())
 }
 
-/// Serialized form of [`PanelSize`]; validation happens in its `TryFrom` implementation.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PanelSizeWire {
-    length: Length,
-    width: Length,
-    thickness: Length,
+fn require_positive(field: &'static str, value: Length) -> Result<(), PanelGeometryError> {
+    if !value.is_positive() {
+        return Err(PanelGeometryError::NonPositive { field, value });
+    }
+    Ok(())
 }
 
-impl TryFrom<PanelSizeWire> for PanelSize {
-    type Error = PanelSizeError;
+fn checked_add(field: &'static str, left: Length, right: Length) -> Result<Length, PanelGeometryError> {
+    left.checked_add(right).ok_or(PanelGeometryError::Overflow { field })
+}
 
-    fn try_from(wire: PanelSizeWire) -> Result<Self, Self::Error> {
-        Self::new(wire.length, wire.width, wire.thickness)
+fn checked_add_many(
+    field: &'static str,
+    base: Length,
+    values: impl IntoIterator<Item = Length>,
+) -> Result<Length, PanelGeometryError> {
+    let mut total = base;
+    for value in values {
+        total = checked_add(field, total, value)?;
+    }
+    Ok(total)
+}
+
+fn checked_sub_many(
+    field: &'static str,
+    base: Length,
+    values: impl IntoIterator<Item = Length>,
+) -> Result<Length, PanelGeometryError> {
+    let mut total = base;
+    for value in values {
+        total = total.checked_sub(value).ok_or(PanelGeometryError::Overflow { field })?;
+    }
+    Ok(total)
+}
+
+/// Serialized form of [`PanelNominalSize`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanelNominalSizeWire {
+    length: Length,
+    width: Length,
+}
+
+impl TryFrom<PanelNominalSizeWire> for PanelNominalSize {
+    type Error = PanelDimensionError;
+
+    fn try_from(wire: PanelNominalSizeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.length, wire.width)
+    }
+}
+
+/// Serialized form of [`EdgeBanding`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EdgeBandingWire {
+    edge: EdgeId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl TryFrom<EdgeBandingWire> for EdgeBanding {
+    type Error = PanelDimensionError;
+
+    fn try_from(wire: EdgeBandingWire) -> Result<Self, Self::Error> {
+        Self::new(wire.edge, wire.material, wire.included_in_size, wire.last_known_thickness, wire.last_known_width)
     }
 }
 
@@ -1115,6 +1619,12 @@ macro_rules! panel_id {
                 let value = u32::deserialize(deserializer)?;
                 Self::new(value)
                     .ok_or_else(|| <D::Error as serde::de::Error>::custom(concat!($description, " must be non-zero")))
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "{}", self.0)
             }
         }
     };
@@ -1372,14 +1882,21 @@ mod tests {
         );
     }
 
-    fn sample_size() -> PanelSize {
-        PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size")
+    fn sample_nominal() -> PanelNominalSize {
+        PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid nominal size")
+    }
+
+    fn sample_thickness() -> Length {
+        millimetres(18)
+    }
+
+    fn sample_panel(id: Id, name: &str) -> Panel {
+        Panel::new(id, name, sample_nominal(), None, sample_thickness(), Placement::IDENTITY).expect("valid panel")
     }
 
     fn sample_project() -> Project {
-        let size = sample_size();
-        let shelf = Panel::new(Id::new(2).expect("id"), "Shelf", size, Placement::IDENTITY);
-        let front = Panel::new(Id::new(4).expect("id"), "Front", size, Placement::IDENTITY);
+        let shelf = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let front = sample_panel(Id::new(4).expect("id"), "Front");
         let drawer = Assembly::new(Id::new(3).expect("id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
         let root =
             Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
@@ -1401,7 +1918,9 @@ mod tests {
         let mut project = sample_project();
         let root_id = project.root().id();
 
-        let panel_id = project.add_panel(root_id, "Back", sample_size(), Placement::IDENTITY).expect("add panel");
+        let panel_id = project
+            .add_panel(root_id, "Back", sample_nominal(), None, sample_thickness(), Placement::IDENTITY)
+            .expect("add panel");
         assert_eq!(panel_id.get(), 5);
         assert_eq!(project.revision().get(), 1);
         assert_eq!(project.root().children().len(), 3);
@@ -1417,15 +1936,15 @@ mod tests {
     fn project_resizes_panels_and_reports_missing_ids() {
         let mut project = sample_project();
         let panel_id = Id::new(4).expect("id");
-        let size = PanelSize::new(millimetres(900), millimetres(600), millimetres(20)).expect("valid size");
+        let nominal = PanelNominalSize::new(millimetres(900), millimetres(600)).expect("valid size");
 
-        let revision = project.set_panel_size(panel_id, size).expect("resize panel");
+        let revision = project.set_panel_nominal_size(panel_id, nominal).expect("resize panel");
         assert_eq!(revision.get(), 1);
         assert_eq!(project.revision(), revision);
-        assert_eq!(project.panel(panel_id).expect("panel exists").size(), size);
+        assert_eq!(project.panel(panel_id).expect("panel exists").nominal_size(), nominal);
 
         let missing = Id::new(999).expect("id");
-        assert_eq!(project.set_panel_size(missing, size), Err(ProjectError::PanelNotFound { id: missing }));
+        assert_eq!(project.set_panel_nominal_size(missing, nominal), Err(ProjectError::PanelNotFound { id: missing }));
         assert_eq!(project.revision(), revision);
     }
 
@@ -1510,38 +2029,35 @@ mod tests {
         let shape = CutoutShape::Rectangle(sample_rect(600, 10, 50, 50));
         project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
 
-        let smaller = PanelSize::new(millimetres(620), millimetres(500), millimetres(18)).expect("valid size");
+        let smaller = PanelNominalSize::new(millimetres(620), millimetres(500)).expect("valid size");
         assert_eq!(
             project.validate_panel_resize(panel_id, smaller),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
         );
         assert_eq!(
-            project.set_panel_size(panel_id, smaller),
+            project.set_panel_nominal_size(panel_id, smaller),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
         );
-        assert_eq!(project.panel(panel_id).expect("panel exists").size(), sample_size());
+        assert_eq!(project.panel(panel_id).expect("panel exists").nominal_size(), sample_nominal());
         assert_eq!(project.revision().get(), 1);
 
-        let thinner = PanelSize::new(millimetres(700), millimetres(500), millimetres(5)).expect("valid size");
         let blind_rect = CutoutShape::Rectangle(sample_rect(10, 10, 50, 50));
         let other_panel = Id::new(4).expect("id");
         project
             .add_cutout(other_panel, blind_rect, CutoutDepth::Blind { depth: millimetres(8) }, FaceSide::A)
             .expect("blind cutout");
-        assert_eq!(
-            project.set_panel_size(other_panel, thinner),
-            Err(ProjectError::CutoutDepthInvalid {
-                panel: other_panel,
-                depth: millimetres(8),
-                thickness: millimetres(5)
-            })
-        );
-        assert_eq!(project.panel(other_panel).expect("panel exists").size(), sample_size());
+        let material = MaterialId::new(1).expect("material id");
+        let revision = project.set_panel_material(other_panel, material, millimetres(5)).expect("material change");
+        assert_eq!(revision.get(), 3);
+        let panel = project.panel(other_panel).expect("panel exists");
+        assert_eq!(panel.material(), Some(material));
+        assert_eq!(panel.last_known_thickness(), millimetres(5));
+        assert_eq!(panel.geometry(millimetres(5)).expect("resolved geometry").thickness(), millimetres(5));
     }
 
     #[test]
     fn panels_load_without_machining() {
-        let panel = Panel::new(Id::new(2).expect("id"), "Shelf", sample_size(), Placement::IDENTITY);
+        let panel = sample_panel(Id::new(2).expect("id"), "Shelf");
         let mut value = serde_json::to_value(&panel).expect("serialize panel");
         value.as_object_mut().expect("panel is an object").remove("machining");
         let decoded: Panel = serde_json::from_value(value).expect("older panel without machining");
@@ -1582,7 +2098,7 @@ mod tests {
         let missing = Id::new(999).expect("id");
 
         assert_eq!(
-            project.add_panel(missing, "Orphan", sample_size(), Placement::IDENTITY),
+            project.add_panel(missing, "Orphan", sample_nominal(), None, sample_thickness(), Placement::IDENTITY),
             Err(ProjectError::AssemblyNotFound { id: missing })
         );
         assert_eq!(project.next_id(), next_id);
@@ -1616,8 +2132,9 @@ mod tests {
     fn project_restore_keeps_revisions_and_ids_monotonic() {
         let original = sample_project();
         let mut project = sample_project();
-        let created =
-            project.add_panel(project.root().id(), "Back", sample_size(), Placement::IDENTITY).expect("add panel");
+        let created = project
+            .add_panel(project.root().id(), "Back", sample_nominal(), None, sample_thickness(), Placement::IDENTITY)
+            .expect("add panel");
         let after = project.clone();
 
         let revision = project.restore_from(&original).expect("restore original");
@@ -1663,7 +2180,7 @@ mod tests {
     #[test]
     fn projects_reject_duplicate_ids() {
         let duplicate = Id::new(1).expect("id");
-        let panel = Panel::new(duplicate, "Panel", sample_size(), Placement::IDENTITY);
+        let panel = sample_panel(duplicate, "Panel");
         let root = Assembly::new(duplicate, "Root", Placement::IDENTITY, vec![panel.into()]);
         assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(duplicate)));
     }
@@ -1686,7 +2203,7 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
+        let newer = text.replacen("\"schema_version\":2", "\"schema_version\":3", 1);
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 
@@ -1696,64 +2213,156 @@ mod tests {
     }
 
     #[test]
-    fn panel_size_accepts_positive_dimensions() {
-        let size = PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size");
-        assert_eq!(size.length(), millimetres(700));
-        assert_eq!(size.width(), millimetres(500));
-        assert_eq!(size.thickness(), millimetres(18));
+    fn version_one_panels_migrate_to_nominal_geometry() {
+        let legacy = r#"{
+            "schema_version": 1,
+            "revision": 0,
+            "next_id": 3,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Shelf",
+                    "size": {"length": 700000, "width": 500000, "thickness": 18000},
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]}
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version one");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
+        assert_eq!(panel.nominal_size(), sample_nominal());
+        assert_eq!(panel.material(), None);
+        assert_eq!(panel.last_known_thickness(), millimetres(18));
+        assert!(panel.edge_banding().is_empty());
+        assert!(project.validate().is_ok());
     }
 
     #[test]
-    fn panel_size_rejects_non_positive_and_oversized_dimensions() {
+    fn panel_nominal_size_accepts_positive_dimensions() {
+        let size = PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid panel size");
+        assert_eq!(size.length(), millimetres(700));
+        assert_eq!(size.width(), millimetres(500));
+    }
+
+    #[test]
+    fn panel_nominal_size_rejects_non_positive_and_oversized_dimensions() {
         let zero = Length::ZERO;
         let negative = millimetres(-1);
         assert_eq!(
-            PanelSize::new(zero, millimetres(500), millimetres(18)),
-            Err(PanelSizeError::NonPositive { field: "length", value: zero })
+            PanelNominalSize::new(zero, millimetres(500)),
+            Err(PanelDimensionError::NonPositive { field: "length", value: zero })
         );
         assert_eq!(
-            PanelSize::new(millimetres(700), negative, millimetres(18)),
-            Err(PanelSizeError::NonPositive { field: "width", value: negative })
-        );
-        assert_eq!(
-            PanelSize::new(millimetres(700), millimetres(500), negative),
-            Err(PanelSizeError::NonPositive { field: "thickness", value: negative })
+            PanelNominalSize::new(millimetres(700), negative),
+            Err(PanelDimensionError::NonPositive { field: "width", value: negative })
         );
 
-        let too_long = Length::from_micrometres(PanelSize::MAX_LENGTH.micrometres() + 1);
+        let too_long = Length::from_micrometres(Panel::MAX_LENGTH.micrometres() + 1);
         assert_eq!(
-            PanelSize::new(too_long, millimetres(500), millimetres(18)),
-            Err(PanelSizeError::TooLarge { field: "length", value: too_long, max: PanelSize::MAX_LENGTH })
+            PanelNominalSize::new(too_long, millimetres(500)),
+            Err(PanelDimensionError::TooLarge { field: "length", value: too_long, max: Panel::MAX_LENGTH })
         );
 
-        let too_wide = Length::from_micrometres(PanelSize::MAX_WIDTH.micrometres() + 1);
+        let too_wide = Length::from_micrometres(Panel::MAX_WIDTH.micrometres() + 1);
         assert_eq!(
-            PanelSize::new(millimetres(700), too_wide, millimetres(18)),
-            Err(PanelSizeError::TooLarge { field: "width", value: too_wide, max: PanelSize::MAX_WIDTH })
+            PanelNominalSize::new(millimetres(700), too_wide),
+            Err(PanelDimensionError::TooLarge { field: "width", value: too_wide, max: Panel::MAX_WIDTH })
         );
 
-        let too_thick = Length::from_micrometres(PanelSize::MAX_THICKNESS.micrometres() + 1);
-        assert_eq!(
-            PanelSize::new(millimetres(700), millimetres(500), too_thick),
-            Err(PanelSizeError::TooLarge { field: "thickness", value: too_thick, max: PanelSize::MAX_THICKNESS })
-        );
-
-        assert!(PanelSize::new(PanelSize::MAX_LENGTH, PanelSize::MAX_WIDTH, PanelSize::MAX_THICKNESS).is_ok());
+        assert!(PanelNominalSize::new(Panel::MAX_LENGTH, Panel::MAX_WIDTH).is_ok());
     }
 
     #[test]
-    fn panel_size_serde_round_trip_and_validation() {
-        let size = PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size");
+    fn panel_nominal_size_serde_round_trip_and_validation() {
+        let size = PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid panel size");
         let text = serde_json::to_string(&size).expect("serialize panel size");
-        assert_eq!(text, r#"{"length":700000,"width":500000,"thickness":18000}"#);
-        assert_eq!(serde_json::from_str::<PanelSize>(&text).expect("deserialize panel size"), size);
+        assert_eq!(text, r#"{"length":700000,"width":500000}"#);
+        assert_eq!(serde_json::from_str::<PanelNominalSize>(&text).expect("deserialize panel size"), size);
 
-        assert!(serde_json::from_str::<PanelSize>(r#"{"length":0,"width":500000,"thickness":18000}"#).is_err());
-        assert!(serde_json::from_str::<PanelSize>(r#"{"length":700000,"width":500000,"thickness":-1}"#).is_err());
-        assert!(serde_json::from_str::<PanelSize>(r#"{"length":10000001,"width":500000,"thickness":18000}"#).is_err());
+        assert!(serde_json::from_str::<PanelNominalSize>(r#"{"length":0,"width":500000}"#).is_err());
+        assert!(serde_json::from_str::<PanelNominalSize>(r#"{"length":10000001,"width":500000}"#).is_err());
         assert!(
-            serde_json::from_str::<PanelSize>(r#"{"length":700000,"width":500000,"thickness":18000,"unexpected":1}"#)
-                .is_err()
+            serde_json::from_str::<PanelNominalSize>(r#"{"length":700000,"width":500000,"unexpected":1}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn panel_geometry_uses_nominal_size_and_thickness() {
+        let panel = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let geometry = panel.geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.core_width(), millimetres(500));
+        assert_eq!(geometry.thickness(), millimetres(18));
+        assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+    }
+
+    #[test]
+    fn panel_geometry_respects_included_banding_and_application_order() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let material = MaterialId::new(99).expect("material id");
+
+        let bottom =
+            EdgeBanding::new(EdgeId::new(1).expect("edge id"), material, true, millimetres(2), millimetres(22))
+                .expect("valid bottom banding");
+        project.set_edge_banding(panel_id, bottom).expect("set bottom banding");
+        let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.core_width(), millimetres(498));
+        assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        let left = EdgeBanding::new(EdgeId::new(4).expect("edge id"), material, false, millimetres(1), millimetres(22))
+            .expect("valid left banding");
+        project.set_edge_banding(panel_id, left).expect("set left banding");
+        let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.core_width(), millimetres(498));
+        assert_eq!(geometry.overall_length(), millimetres(701));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        let bands = project.panel(panel_id).expect("panel").edge_banding();
+        assert_eq!(bands.len(), 2);
+        assert_eq!(bands[0].edge().get(), 1);
+        assert_eq!(bands[1].edge().get(), 4);
+    }
+
+    #[test]
+    fn panel_banding_cannot_make_the_core_non_positive() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let material = MaterialId::new(99).expect("material id");
+        let too_wide =
+            EdgeBanding::new(EdgeId::new(1).expect("edge id"), material, true, millimetres(500), millimetres(22))
+                .expect("valid banding dimensions");
+        assert!(matches!(
+            project.set_edge_banding(panel_id, too_wide),
+            Err(ProjectError::PanelGeometry(PanelGeometryError::NonPositive { field: "core_width", .. }))
+        ));
+        assert!(project.panel(panel_id).expect("panel").edge_banding().is_empty());
+    }
+
+    #[test]
+    fn panel_banding_serde_round_trip_and_validation() {
+        let band = EdgeBanding::new(
+            EdgeId::new(1).expect("edge id"),
+            MaterialId::new(99).expect("material id"),
+            true,
+            millimetres(2),
+            millimetres(22),
+        )
+        .expect("valid banding");
+        let text = serde_json::to_string(&band).expect("serialize banding");
+        assert_eq!(serde_json::from_str::<EdgeBanding>(&text).expect("deserialize banding"), band);
+        assert!(
+            serde_json::from_str::<EdgeBanding>(
+                r#"{"edge":1,"material":99,"included_in_size":true,"last_known_thickness":0,"last_known_width":22000}"#
+            )
+            .is_err()
         );
     }
 

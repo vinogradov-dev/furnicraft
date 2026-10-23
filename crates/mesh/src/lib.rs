@@ -75,7 +75,7 @@ mod tests {
 
     use furnicraft_kernel::{BooleanOp, Measure, Profile};
     use furnicraft_kernel_truck::TruckKernel;
-    use furnicraft_model::{Id, Panel, PanelSize, Placement};
+    use furnicraft_model::{Id, Panel, PanelNominalSize, Placement};
     use furnicraft_param::build_panel;
     use furnicraft_units::Length;
 
@@ -173,9 +173,11 @@ mod tests {
     #[test]
     fn truck_kernel_tessellates_a_panel_in_local_coordinates() {
         let mut kernel = TruckKernel::new();
-        let size = PanelSize::new(millimetres(700), millimetres(500), millimetres(18)).expect("valid panel size");
-        let panel = Panel::new(Id::new(1).expect("id"), "Panel", size, Placement::IDENTITY);
-        let body = build_panel(&mut kernel, &panel).expect("panel body");
+        let size = PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid panel size");
+        let panel = Panel::new(Id::new(1).expect("id"), "Panel", size, None, millimetres(18), Placement::IDENTITY)
+            .expect("valid panel");
+        let geometry = panel.geometry_with_fallbacks().expect("resolved geometry");
+        let body = build_panel(&mut kernel, &panel, geometry).expect("panel body");
         let mesh = tessellate_panel(&kernel, body, &TessOptions::default()).expect("panel mesh");
 
         assert!(mesh.triangle_count() >= 12, "triangles: {}", mesh.triangle_count());

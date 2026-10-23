@@ -1,6 +1,8 @@
 //! The editing session: document, command dispatch and undo/redo.
 
-use furnicraft_model::Project;
+use std::sync::Arc;
+
+use furnicraft_model::{Catalog, Project};
 use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandRegistry};
@@ -13,18 +15,29 @@ pub struct Session {
     undo: Vec<Project>,
     redo: Vec<Project>,
     dirty: bool,
+    catalog: Arc<Catalog>,
 }
 
 impl Session {
-    /// Creates a clean session around a document.
+    /// Creates a clean session around a document with an empty catalogue.
     pub fn new(project: Project) -> Self {
+        Self::with_catalog(project, Catalog::default())
+    }
+
+    /// Creates a clean session around a document and its read-only material catalogue.
+    pub fn with_catalog(project: Project, catalog: Catalog) -> Self {
         let saved_project = project.clone();
-        Self { project, saved_project, undo: Vec::new(), redo: Vec::new(), dirty: false }
+        Self { project, saved_project, undo: Vec::new(), redo: Vec::new(), dirty: false, catalog: Arc::new(catalog) }
     }
 
     /// The current document. Commands are the only way to mutate it.
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    /// The session-scoped, read-only material catalogue.
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
     }
 
     /// Whether an earlier document state can be restored.
@@ -55,7 +68,7 @@ impl Session {
     pub fn dispatch(&mut self, id: &str, params: &Value) -> Result<CommandOutcome, CommandError> {
         let spec = CommandRegistry::new().get(id).ok_or_else(|| CommandError::UnknownCommand { id: id.to_owned() })?;
         let mut working = self.project.clone();
-        let outcome = spec.run(&mut working, params)?;
+        let outcome = spec.run(&mut working, &self.catalog, params)?;
         let previous = std::mem::replace(&mut self.project, working);
         self.undo.push(previous);
         self.redo.clear();
@@ -96,18 +109,23 @@ mod tests {
 
     use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, Machining, Placement, ProjectError, Revision};
     use furnicraft_testkit::{
-        sample_blind_depth, sample_cutout_rect, sample_edge_cutout_rect, sample_narrow_panel_size,
-        sample_outside_cutout_rect, sample_overlapping_cutout_rect, sample_panel_size, sample_project,
-        sample_resized_panel_size,
+        sample_blind_depth, sample_catalog, sample_cutout_rect, sample_edge_cutout_rect, sample_material_id,
+        sample_narrow_panel_nominal_size, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
+        sample_panel_nominal_size, sample_panel_thickness, sample_project, sample_resized_panel_nominal_size,
     };
 
     use crate::panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
+
+    fn sample_session() -> Session {
+        Session::with_catalog(sample_project(), sample_catalog())
+    }
 
     fn panel_create(session: &Session, name: &str) -> PanelCreate {
         PanelCreate {
             parent: session.project().root().id(),
             name: name.to_owned(),
-            size: sample_panel_size(),
+            nominal_size: sample_panel_nominal_size(),
+            material: sample_material_id(),
             placement: Placement::IDENTITY,
         }
     }
@@ -122,7 +140,7 @@ mod tests {
 
     #[test]
     fn dispatch_panel_create_changes_the_document_once() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let params = json_params(&panel_create(&session, "Back"));
 
         let outcome = session.dispatch("panel.create", &params).expect("create panel");
@@ -137,7 +155,7 @@ mod tests {
 
     #[test]
     fn undo_and_redo_restore_the_document_and_ids() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let params = json_params(&panel_create(&session, "Back"));
         session.dispatch("panel.create", &params).expect("create panel");
 
@@ -160,34 +178,34 @@ mod tests {
 
     #[test]
     fn dispatch_panel_resize_updates_size_and_history() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
-        let before = session.project().panel(panel_id).expect("panel").size();
-        let after = sample_resized_panel_size();
-        let params = json_params(&PanelResize { panel: panel_id, size: after });
+        let before = session.project().panel(panel_id).expect("panel").nominal_size();
+        let after = sample_resized_panel_nominal_size();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: after });
 
         let outcome = session.dispatch("panel.resize", &params).expect("resize panel");
         assert_eq!(outcome.created_id(), None);
         assert_eq!(session.project().revision().get(), 1);
-        assert_eq!(session.project().panel(panel_id).expect("panel").size(), after);
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), after);
         assert!(session.is_dirty());
 
         session.undo().expect("undo");
         assert_eq!(session.project().revision().get(), 2);
-        assert_eq!(session.project().panel(panel_id).expect("panel").size(), before);
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
         assert!(!session.is_dirty());
 
         session.redo().expect("redo");
         assert_eq!(session.project().revision().get(), 3);
-        assert_eq!(session.project().panel(panel_id).expect("panel").size(), after);
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), after);
         assert!(session.is_dirty());
     }
 
     #[test]
     fn resize_missing_panel_is_reported_without_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let missing = Id::new(999).expect("id");
-        let params = json_params(&PanelResize { panel: missing, size: sample_resized_panel_size() });
+        let params = json_params(&PanelResize { panel: missing, nominal_size: sample_resized_panel_nominal_size() });
 
         let error = session.dispatch("panel.resize", &params).expect_err("missing panel");
         assert!(matches!(
@@ -200,14 +218,15 @@ mod tests {
 
     #[test]
     fn resize_invalid_size_is_rejected_before_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
-        let mut params = json_params(&PanelResize { panel: panel_id, size: sample_resized_panel_size() });
+        let mut params =
+            json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
         let size = params
             .as_object_mut()
-            .and_then(|object| object.get_mut("size"))
+            .and_then(|object| object.get_mut("nominal_size"))
             .and_then(Value::as_object_mut)
-            .expect("size is an object");
+            .expect("nominal_size is an object");
         size.insert("length".to_owned(), Value::from(0));
 
         let error = session.dispatch("panel.resize", &params).expect_err("invalid size");
@@ -217,7 +236,7 @@ mod tests {
 
     #[test]
     fn dispatch_cutout_create_changes_the_document_once() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_cutout_rect());
         let params = json_params(&cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A));
@@ -250,7 +269,7 @@ mod tests {
 
     #[test]
     fn dispatch_blind_cutout_records_entry_and_depth() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(4).expect("id");
         let shape = CutoutShape::Rectangle(sample_cutout_rect());
         let depth = CutoutDepth::Blind { depth: sample_blind_depth() };
@@ -265,7 +284,7 @@ mod tests {
 
     #[test]
     fn cutout_outside_or_invalid_depth_is_reported_without_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
 
         let outside = cutout_request(
@@ -282,7 +301,7 @@ mod tests {
         assert_eq!(session.project().revision(), Revision::ZERO);
         assert_eq!(session.project().next_id().get(), 5);
 
-        let thickness = sample_panel_size().thickness();
+        let thickness = sample_panel_thickness();
         let invalid_depth = cutout_request(
             panel_id,
             CutoutShape::Rectangle(sample_cutout_rect()),
@@ -301,7 +320,7 @@ mod tests {
 
     #[test]
     fn overlapping_cutout_is_reported_without_consuming_an_id() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let first =
             cutout_request(panel_id, CutoutShape::Rectangle(sample_cutout_rect()), CutoutDepth::Through, FaceSide::A);
@@ -332,7 +351,7 @@ mod tests {
 
     #[test]
     fn cutout_enabled_checks_panel_and_geometry() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let registry = CommandRegistry::new();
         let spec = registry.get("cutout.create").expect("cutout.create is registered");
         let panel_id = Id::new(2).expect("id");
@@ -370,7 +389,7 @@ mod tests {
 
     #[test]
     fn mark_saved_tracks_content() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         assert!(!session.is_dirty());
 
         let params = json_params(&panel_create(&session, "Back"));
@@ -386,7 +405,7 @@ mod tests {
 
     #[test]
     fn new_command_clears_redo() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let params = json_params(&panel_create(&session, "Back"));
         session.dispatch("panel.create", &params).expect("create panel");
         session.undo().expect("undo");
@@ -399,14 +418,14 @@ mod tests {
 
     #[test]
     fn empty_history_reports_readable_errors() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         assert_eq!(session.undo(), Err(CommandError::NothingToUndo));
         assert_eq!(session.redo(), Err(CommandError::NothingToRedo));
     }
 
     #[test]
     fn unknown_command_does_not_change_the_document() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let error = session.dispatch("missing.command", &Value::Null).expect_err("unknown command");
         assert!(matches!(error, CommandError::UnknownCommand { ref id } if id == "missing.command"));
         assert_eq!(session.project().revision(), Revision::ZERO);
@@ -415,7 +434,7 @@ mod tests {
 
     #[test]
     fn invalid_params_do_not_change_the_document() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let error = session.dispatch("panel.create", &Value::Null).expect_err("invalid params");
         assert!(matches!(error, CommandError::InvalidParams { command: "panel.create", .. }));
         assert_eq!(session.project().root().children().len(), 2);
@@ -424,13 +443,13 @@ mod tests {
 
     #[test]
     fn out_of_range_panel_size_is_rejected_before_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let mut params = json_params(&panel_create(&session, "Back"));
         let size = params
             .as_object_mut()
-            .and_then(|object| object.get_mut("size"))
+            .and_then(|object| object.get_mut("nominal_size"))
             .and_then(Value::as_object_mut)
-            .expect("size is an object");
+            .expect("nominal_size is an object");
         size.insert("length".to_owned(), Value::from(0));
 
         let error = session.dispatch("panel.create", &params).expect_err("invalid size");
@@ -441,7 +460,7 @@ mod tests {
 
     #[test]
     fn empty_panel_name_is_rejected_before_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let params = json_params(&panel_create(&session, "   "));
         let error = session.dispatch("panel.create", &params).expect_err("empty name");
         assert!(matches!(
@@ -454,7 +473,7 @@ mod tests {
 
     #[test]
     fn missing_parent_is_reported_without_mutation() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let mut request = panel_create(&session, "Orphan");
         let missing = Id::new(999).expect("id");
         request.parent = missing;
@@ -471,7 +490,7 @@ mod tests {
 
     #[test]
     fn enabled_rejects_wrong_state_and_params() {
-        let session = Session::new(sample_project());
+        let session = sample_session();
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.create").expect("panel.create is registered");
 
@@ -489,15 +508,16 @@ mod tests {
 
     #[test]
     fn resize_enabled_checks_the_panel_and_machining() {
-        let mut session = Session::new(sample_project());
+        let mut session = sample_session();
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.resize").expect("panel.resize is registered");
         let panel_id = Id::new(2).expect("id");
 
-        let valid = PanelResize { panel: panel_id, size: sample_resized_panel_size() };
+        let valid = PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() };
         assert!(spec.enabled(&session, &json_params(&valid)));
 
-        let missing = PanelResize { panel: Id::new(999).expect("id"), size: sample_resized_panel_size() };
+        let missing =
+            PanelResize { panel: Id::new(999).expect("id"), nominal_size: sample_resized_panel_nominal_size() };
         assert!(!spec.enabled(&session, &json_params(&missing)));
         assert!(!spec.enabled(&session, &Value::Null));
 
@@ -508,13 +528,13 @@ mod tests {
             FaceSide::A,
         );
         session.dispatch("cutout.create", &json_params(&cutout)).expect("add edge cutout");
-        let too_narrow = PanelResize { panel: panel_id, size: sample_narrow_panel_size() };
+        let too_narrow = PanelResize { panel: panel_id, nominal_size: sample_narrow_panel_nominal_size() };
         assert!(!spec.enabled(&session, &json_params(&too_narrow)));
     }
 
     #[test]
     fn panel_create_params_round_trip_and_reject_unknown_fields() {
-        let session = Session::new(sample_project());
+        let session = sample_session();
         let request = panel_create(&session, "Back");
         let value = serde_json::to_value(&request).expect("serialize params");
         let decoded: PanelCreate = serde_json::from_value(value.clone()).expect("deserialize params");

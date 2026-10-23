@@ -1,6 +1,8 @@
 //! Document commands for panels and their cutouts.
 
-use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, PanelSize, Placement, Project};
+use furnicraft_model::{
+    Catalog, CutoutDepth, CutoutShape, FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -21,8 +23,10 @@ pub struct PanelCreate {
     pub parent: Id,
     /// User-visible panel name; it must contain a non-whitespace character.
     pub name: String,
-    /// Panel dimensions.
-    pub size: PanelSize,
+    /// Panel nominal length and width.
+    pub nominal_size: PanelNominalSize,
+    /// Panel-body material from the session catalogue.
+    pub material: MaterialId,
     /// Placement relative to the parent assembly.
     pub placement: Placement,
 }
@@ -51,13 +55,24 @@ fn create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelCreate::parse(params) else {
         return false;
     };
-    params.validate_name().is_ok() && session.project().assembly(params.parent).is_some()
+    params.validate_name().is_ok()
+        && session.project().assembly(params.parent).is_some()
+        && session.catalog().panel_material(params.material).is_some()
 }
 
-fn create_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
+fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelCreate::parse(params)?;
     params.validate_name()?;
-    let id = project.add_panel(params.parent, params.name, params.size, params.placement)?;
+    let material =
+        catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
+    let id = project.add_panel(
+        params.parent,
+        params.name,
+        params.nominal_size,
+        Some(params.material),
+        material.nominal_thickness(),
+        params.placement,
+    )?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -73,8 +88,8 @@ pub const RESIZE_LABEL: &str = "Resize panel";
 pub struct PanelResize {
     /// Id of the panel to resize.
     pub panel: Id,
-    /// New panel dimensions.
-    pub size: PanelSize,
+    /// New nominal panel length and width.
+    pub nominal_size: PanelNominalSize,
 }
 
 impl PanelResize {
@@ -91,12 +106,12 @@ fn resize_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelResize::parse(params) else {
         return false;
     };
-    session.project().validate_panel_resize(params.panel, params.size).is_ok()
+    session.project().validate_panel_resize(params.panel, params.nominal_size).is_ok()
 }
 
-fn resize_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
+fn resize_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelResize::parse(params)?;
-    project.set_panel_size(params.panel, params.size)?;
+    project.set_panel_nominal_size(params.panel, params.nominal_size)?;
     Ok(CommandOutcome::changed())
 }
 
@@ -138,7 +153,11 @@ fn cutout_create_enabled(session: &Session, params: &Value) -> bool {
     session.project().validate_cutout(params.panel, params.shape, params.depth).is_ok()
 }
 
-fn cutout_create_run(project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
+fn cutout_create_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
     let params = CutoutCreate::parse(params)?;
     let id = project.add_cutout(params.panel, params.shape, params.depth, params.entry)?;
     Ok(CommandOutcome::created(id))

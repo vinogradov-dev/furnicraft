@@ -12,7 +12,7 @@ use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::PanelSize;
+use crate::Panel;
 
 /// A stable catalogue identifier.
 ///
@@ -68,7 +68,7 @@ impl PanelMaterial {
         let kind = kind.into();
         validate_text(id, "name", &name)?;
         validate_text(id, "kind", &kind)?;
-        validate_dimension(id, "nominal_thickness", nominal_thickness, PanelSize::MAX_THICKNESS)?;
+        validate_dimension(id, "nominal_thickness", nominal_thickness, Panel::MAX_THICKNESS)?;
         Ok(Self { id, name, kind, nominal_thickness, color: color.into() })
     }
 
@@ -124,8 +124,8 @@ impl EdgeBandingMaterial {
         let kind = kind.into();
         validate_text(id, "name", &name)?;
         validate_text(id, "kind", &kind)?;
-        validate_dimension(id, "thickness", thickness, PanelSize::MAX_LENGTH)?;
-        validate_dimension(id, "width", width, PanelSize::MAX_THICKNESS)?;
+        validate_dimension(id, "thickness", thickness, Panel::MAX_LENGTH)?;
+        validate_dimension(id, "width", width, Panel::MAX_THICKNESS)?;
         Ok(Self { id, name, kind, thickness, width, color: color.into() })
     }
 
@@ -381,14 +381,14 @@ mod tests {
             EdgeBandingMaterial::new(id(101), "Edge", "abs", Length::ZERO, millimetres(22), "#fff"),
             Err(CatalogError::NonPositive { material: id(101), field: "thickness", value: Length::ZERO })
         );
-        let too_wide = Length::from_micrometres(PanelSize::MAX_THICKNESS.micrometres() + 1);
+        let too_wide = Length::from_micrometres(Panel::MAX_THICKNESS.micrometres() + 1);
         assert_eq!(
             EdgeBandingMaterial::new(id(101), "Edge", "abs", millimetres(2), too_wide, "#fff"),
             Err(CatalogError::TooLarge {
                 material: id(101),
                 field: "width",
                 value: too_wide,
-                max: PanelSize::MAX_THICKNESS,
+                max: Panel::MAX_THICKNESS,
             })
         );
     }

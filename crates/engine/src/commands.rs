@@ -1,6 +1,6 @@
 //! Command metadata, the static registry and dispatch errors.
 
-use furnicraft_model::{Id, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, MaterialId, Project, ProjectError};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -38,7 +38,7 @@ pub struct CommandSpec {
     id: &'static str,
     label: &'static str,
     enabled_fn: fn(&Session, &Value) -> bool,
-    run_fn: fn(&mut Project, &Value) -> Result<CommandOutcome, CommandError>,
+    run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
 }
 
 impl CommandSpec {
@@ -47,7 +47,7 @@ impl CommandSpec {
         id: &'static str,
         label: &'static str,
         enabled_fn: fn(&Session, &Value) -> bool,
-        run_fn: fn(&mut Project, &Value) -> Result<CommandOutcome, CommandError>,
+        run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
     ) -> Self {
         Self { id, label, enabled_fn, run_fn }
     }
@@ -69,8 +69,13 @@ impl CommandSpec {
         (self.enabled_fn)(session, params)
     }
 
-    pub(crate) fn run(self, project: &mut Project, params: &Value) -> Result<CommandOutcome, CommandError> {
-        (self.run_fn)(project, params)
+    pub(crate) fn run(
+        self,
+        project: &mut Project,
+        catalog: &Catalog,
+        params: &Value,
+    ) -> Result<CommandOutcome, CommandError> {
+        (self.run_fn)(project, catalog, params)
     }
 }
 
@@ -118,6 +123,12 @@ pub enum CommandError {
     /// The document rejected the change.
     #[error(transparent)]
     Model(#[from] ProjectError),
+    /// The catalogue does not contain the requested material.
+    #[error("unknown material {material}")]
+    UnknownMaterial {
+        /// The missing material id.
+        material: MaterialId,
+    },
     /// There is no earlier document state to restore.
     #[error("nothing to undo")]
     NothingToUndo,
