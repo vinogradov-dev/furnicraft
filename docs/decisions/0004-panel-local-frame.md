@@ -1,6 +1,6 @@
 # 0004. Panel-local frame, faces and topology ids
 
-- Status: Accepted
+- Status: Accepted; frame origin and machining frame superseded by 0009
 - Date: 2026-10-22
 
 ## Context

@@ -8,8 +8,9 @@ Related documents:
 - [Scene document](document.md) — scene file, loading, storage and diagnostics.
 
 Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
-[0007](../decisions/0007-edge-banding-v1.md) and
-[0008](../decisions/0008-panel-diagnostics.md).
+[0007](../decisions/0007-edge-banding-v1.md),
+[0008](../decisions/0008-panel-diagnostics.md) and
+[0009](../decisions/0009-contour-first-panel-model.md).
 
 ## 1. Terms
 
@@ -35,16 +36,24 @@ Panel material and edge-banding material are described in [Materials and catalog
 
 ## 3. Local coordinate system
 
-- The world is Z-up. A panel has a local frame rigidly attached to its body.
-- The origin is the minimum corner of the **core**.
-- `Placement` anchors this core zero. Assembly code that needs an overall face accounts for the
-  banding offset; nominal and overall are derived lengths, not a second frame.
+- The world is Z-up. A panel has a local frame rigidly attached to its nominal outline.
+- The origin is the minimum corner of the **nominal** rectangle.
+- `Placement` anchors this nominal zero. Included bottom and left banding move the core inward, not
+  the whole panel outward; non-included banding may extend outside the nominal rectangle, and bounds
+  are computed from every part of the group.
 - `+X` is length, `+Y` is width and `+Z` is thickness.
-- The body occupies `x` from `0` to `core_length`, `y` from `0` to `core_width`, and `z` from `0` to the panel thickness.
+- The core occupies `x` from `core_x` to `core_x + core_length`, `y` from `core_y` to
+  `core_y + core_width`, and `z` from `0` to the panel thickness. `core_x` and `core_y` are the
+  included left and bottom banding thicknesses; they are zero when those edges are unbanded or not
+  included.
 - The large faces are `A` at `z = thickness` and `B` at `z = 0`; `+Z` points from `B` to `A`.
-- Rectangle vertices are numbered 1–4 counter-clockwise when viewed from face `A`, starting at zero: 1 is `(0, 0)`, 2 is `(core_length, 0)`, 3 is `(core_length, core_width)`, 4 is `(0, core_width)`.
+- Rectangle vertices are numbered 1–4 counter-clockwise when viewed from face `A`, starting at the
+  nominal zero: 1 is `(0, 0)`, 2 is `(nominal_length, 0)`, 3 is `(nominal_length, nominal_width)`,
+  4 is `(0, nominal_width)`. The core is inset from these edges when banding is included.
 - Edge `i` runs from vertex `i` to vertex `i + 1`, wrapping at 4. For a rectangle: 1 is the bottom (`-Y`), 2 the right (`+X`), 3 the top (`+Y`), 4 the left (`-X`).
-- Banding on the bottom and left sides may have negative coordinates. This is normal: the panel group is wider than the core, and bounds are computed from every part of the group.
+- In core-local coordinates, banding on the bottom and left sides has negative coordinates. In the
+  nominal frame an included band lies inside the nominal edge, for example `y` from `0` to `t` on the
+  bottom; a non-included band lies outside it, for example `y` from `-t` to `0`.
 - Machining is stored in core coordinates. The machine works on the board, so this is the primary system for holes and cutouts.
 - Nominal size and overall size are derived values for the card, reports and UI. They do not have to coincide with `0..core`.
 
@@ -101,18 +110,20 @@ Panel 720 × 500, banding 2 mm:
 
 If banding is present on only one side, the formulas still work: the other side contributes zero.
 
-### 4.4. Banding position relative to the core
+### 4.4. Banding position relative to the core and the nominal frame
 
-Banding is always outside the core:
+Banding is always outside the core. In core-local coordinates:
 
 - on the bottom or left side, in negative coordinates, for example `y` from `-t` to `0`;
 - on the top or right side, beyond the core, for example `y` from `core_width` to `core_width + t`.
 
-The `included_in_size` flag does not change the position of the banding relative to the core. It only changes the core size: included banding makes the core smaller, non-included banding does not. Therefore:
+The `included_in_size` flag does not change the position of the banding relative to the core. It only changes the core origin and size:
 
-- included left banding: the core starts `t` to the right of the nominal left boundary;
-- non-included left banding: the core starts at the nominal left boundary;
+- included left banding: `core_x = t`, so the core starts `t` to the right of the nominal left boundary and the band occupies `x` from `0` to `t` in the nominal frame;
+- non-included left banding: `core_x = 0`, so the core starts at the nominal left boundary and the band occupies `x` from `-t` to `0`;
 - in both cases the physical banding lies to the left of the core.
+
+The same rule applies on the bottom: included gives `core_y = t` and the band occupies `y` from `0` to `t`; non-included gives `core_y = 0` and the band occupies `y` from `-t` to `0`. Top and right banding do not move the core origin; included banding occupies the last `t` of the nominal side, non-included banding extends beyond it.
 
 ## 5. Edge banding
 
@@ -147,9 +158,10 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 ### 5.5. Inclusion in size
 
-- `included_in_size = true`: the core is reduced by `thickness` on that edge; the banding fills the freed space; the overall size does not grow.
+- `included_in_size = true`: the core is reduced by `thickness` on that edge; a bottom or left band also moves the core origin inward by `thickness`; the banding fills the freed space; the overall size does not grow.
 - `included_in_size = false`: the core is unchanged; the banding is added outside; the overall size grows by `thickness`.
 - The flag belongs to the panel and the specific edge, not to the banding material.
+- Machining coordinates do not change when the flag changes: the machine works on the core, and the parametric layer applies the core origin when building the body and tools.
 
 ## 6. Display and diagnostics
 
@@ -192,16 +204,22 @@ Commands reject unknown ids, unknown catalogue materials, a non-positive resulti
 At minimum:
 
 - the 720 × 500 size table for every inclusion combination;
+- an included bottom or left band moves the core inward and leaves the nominal envelope unchanged;
 - banding order and corner coverage by the later band at a right angle;
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;
-- machining that no longer fits the core marks the panel as a problem panel without losing data.
+- machining that no longer fits the core marks the panel as a problem panel without losing data;
+- machining keeps its core-local position when an included band moves the core origin.
 
 Catalogue and scene-loading tests live in [Materials and catalogue](materials.md) and [Scene document](document.md).
 
 ## 9. Open questions
 
-1. Contour radii and chamfers: when they enter the model and when sweep is implemented.
+1. Contour implementation: the model and rules are in [ADR 0009](../decisions/0009-contour-first-panel-model.md); the 2D line/arc offset and boolean layer still needs a spike.
 2. Edge banding milling: rounding the faces and corner.
 3. Whether the card should show core and overall size separately from the nominal size.
+
+The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
+no-division invariant — are recorded in ADR 0009. They are staged after the rectangle implementation;
+the current document still rejects cutouts outside the core and overlapping cutouts.

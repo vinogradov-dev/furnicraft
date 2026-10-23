@@ -553,6 +553,7 @@ mod tests {
         session.dispatch("panel.edge_banding.set", &json_params(&first)).expect("first banding");
         assert_eq!(session.project().revision().get(), 1);
         let geometry = session.project().panel(panel_id).expect("panel").geometry_with_fallbacks().expect("geometry");
+        assert_eq!(geometry.core_y(), sample_band_thickness());
         assert_eq!(
             geometry.core_width(),
             sample_panel_nominal_size().width().checked_sub(sample_band_thickness()).expect("sample core fits")

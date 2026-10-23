@@ -1,7 +1,9 @@
 //! Parametric evaluation: document features become concrete kernel operations.
 //!
 //! Panels are built in their local frame: the profile lies in the XY plane and the extrusion runs
-//! along `+Z`, so the panel occupies `z` from `0` (face `B`) to its thickness (face `A`).
+//! along `+Z`, so the panel occupies `z` from `0` (face `B`) to its thickness (face `A`). The frame
+//! is anchored at the nominal minimum corner; the core, its machining and the bands are translated
+//! by the resolved core origin so included banding fills the nominal edge.
 //! Panel-owned cutouts are subtracted as rectangular tool bodies, with blind cuts starting at the
 //! named entry face. Placement into an assembly is a later concern and never happens here.
 //!
@@ -43,17 +45,21 @@ pub enum ParamError {
 
 /// Builds the solid body of a rectangular panel in its local frame.
 ///
-/// The body starts at the panel zero, has its length along `+X`, its width along `+Y` and its
-/// thickness along `+Z`. Panel-owned cutouts are removed with boolean subtraction: a through
-/// cutout removes the full thickness, while a blind cutout removes material from its entry face.
-/// The caller owns the returned handle and must eventually release it through
+/// The panel frame is anchored at the nominal minimum corner. The core starts at
+/// `(core_x, core_y)` and has its length along `+X`, its width along `+Y` and its thickness along
+/// `+Z`. Panel-owned cutouts are core-local, so their tool bodies are translated by the same core
+/// origin. A through cutout removes the full thickness, while a blind cutout removes material
+/// from its entry face. The caller owns the returned handle and must eventually release it through
 /// [`SolidKernel::clear`].
 pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
+    let core_x = geometry.core_x().millimetres_f64();
+    let core_y = geometry.core_y().millimetres_f64();
     let length = geometry.core_length().millimetres_f64();
     let width = geometry.core_width().millimetres_f64();
     let thickness = geometry.thickness().millimetres_f64();
     let profile = Profile::rectangle(length, width)?;
-    let mut body = kernel.extrude(&profile, &Frame::WORLD, thickness)?;
+    let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
+    let mut body = kernel.extrude(&profile, &frame, thickness)?;
     for machining in panel.machining() {
         match machining {
             Machining::Cutout(cutout) => {
@@ -159,7 +165,10 @@ where
         let visible_width = band_profile(band).width().min(geometry.thickness());
         let panel_thickness = geometry.thickness().millimetres_f64();
         let visible_width = visible_width.millimetres_f64();
-        let frame = Frame { origin: DVec3::new(0.0, 0.0, (panel_thickness - visible_width) * 0.5), ..Frame::WORLD };
+        let core_x = geometry.core_x().millimetres_f64();
+        let core_y = geometry.core_y().millimetres_f64();
+        let frame =
+            Frame { origin: DVec3::new(core_x, core_y, (panel_thickness - visible_width) * 0.5), ..Frame::WORLD };
         let body = kernel.extrude(&profile, &frame, visible_width)?;
         parts.push(EdgeBandPart { edge: band.edge(), body });
     }
@@ -235,7 +244,12 @@ fn build_cutout_tool(
         }
     };
     let profile = Profile::rectangle(rect.width().millimetres_f64(), rect.height().millimetres_f64())?;
-    let frame = Frame { origin: DVec3::new(rect.x().millimetres_f64(), rect.y().millimetres_f64(), z), ..Frame::WORLD };
+    let origin = DVec3::new(
+        geometry.core_x().millimetres_f64() + rect.x().millimetres_f64(),
+        geometry.core_y().millimetres_f64() + rect.y().millimetres_f64(),
+        z,
+    );
+    let frame = Frame { origin, ..Frame::WORLD };
     Ok(kernel.extrude(&profile, &frame, height)?)
 }
 
@@ -381,6 +395,78 @@ mod tests {
         assert!(profile.holes.is_empty());
         assert_eq!(kernel.frame, Some(Frame::WORLD));
         assert_eq!(kernel.height, Some(18.0));
+    }
+
+    #[test]
+    fn build_panel_places_an_included_bottom_core_inside_the_nominal_frame() {
+        let mut kernel = RecordingKernel::default();
+        let panel = panel_with_bands(&[(1, true)], millimetres(22));
+        let geometry = geometry(&panel);
+        assert_eq!(geometry.core_y(), millimetres(2));
+
+        build_panel(&mut kernel, &panel, geometry).expect("panel body");
+
+        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 2.0, 0.0), ..Frame::WORLD }));
+        let profile = kernel.profile.as_ref().expect("recorded profile");
+        assert_eq!(
+            profile.outer,
+            vec![DVec2::new(0.0, 0.0), DVec2::new(700.0, 0.0), DVec2::new(700.0, 498.0), DVec2::new(0.0, 498.0),]
+        );
+    }
+
+    #[test]
+    fn included_bands_are_translated_with_the_core_origin() {
+        let mut kernel = RecordingKernel::default();
+        let bottom = panel_with_bands(&[(1, true)], millimetres(22));
+        build_edge_bands_with(&mut kernel, &bottom, geometry(&bottom), EdgeBandProfile::from_band).expect("band");
+        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 2.0, 0.0), ..Frame::WORLD }));
+        let profile = kernel.profile.as_ref().expect("recorded band profile");
+        assert_eq!(
+            profile.outer,
+            vec![DVec2::new(0.0, -2.0), DVec2::new(700.0, -2.0), DVec2::new(700.0, 0.0), DVec2::new(0.0, 0.0),]
+        );
+
+        let mut kernel = RecordingKernel::default();
+        let left = panel_with_bands(&[(4, true)], millimetres(22));
+        build_edge_bands_with(&mut kernel, &left, geometry(&left), EdgeBandProfile::from_band).expect("band");
+        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(2.0, 0.0, 0.0), ..Frame::WORLD }));
+        let profile = kernel.profile.as_ref().expect("recorded band profile");
+        assert_eq!(
+            profile.outer,
+            vec![DVec2::new(-2.0, 0.0), DVec2::new(0.0, 0.0), DVec2::new(0.0, 500.0), DVec2::new(-2.0, 500.0),]
+        );
+    }
+
+    #[test]
+    fn through_cutout_is_translated_with_the_included_core_origin() {
+        let mut kernel = TruckKernel::new();
+        let shape = CutoutShape::Rectangle(cutout_rect(1, 1, 10, 10));
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        for edge in [1, 4] {
+            let band = EdgeBanding::new(
+                EdgeId::new(edge).expect("edge id"),
+                edge_material(),
+                true,
+                millimetres(2),
+                millimetres(22),
+            )
+            .expect("banding");
+            project.set_edge_banding(panel_id, band).expect("set banding");
+        }
+        project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        let panel = project.panel(panel_id).expect("panel").clone();
+        let geometry = geometry(&panel);
+        assert_eq!(geometry.core_x(), millimetres(2));
+        assert_eq!(geometry.core_y(), millimetres(2));
+
+        let body = build_panel(&mut kernel, &panel, geometry).expect("panel body");
+        let measure = kernel.measure(body).expect("panel measure");
+        let expected = 698.0 * 498.0 * 18.0 - 10.0 * 10.0 * 18.0;
+        assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
     }
 
     #[test]

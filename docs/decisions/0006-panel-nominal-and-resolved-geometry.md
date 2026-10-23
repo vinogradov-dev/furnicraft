@@ -1,6 +1,6 @@
 # 0006. Panels store nominal size; geometry is resolved
 
-- Status: Accepted
+- Status: Accepted; core-origin placement superseded by 0009
 - Date: 2026-10-23
 
 ## Context

@@ -74,6 +74,7 @@ mod tests {
 
         let geometry = panel_geometry(&project, &catalog, panel_id).expect("resolved geometry");
         assert_eq!(geometry.thickness(), millimetres(25));
+        assert_eq!(geometry.core_y(), millimetres(4));
         assert_eq!(geometry.core_width(), millimetres(496));
         assert_eq!(geometry.overall_width(), millimetres(500));
 

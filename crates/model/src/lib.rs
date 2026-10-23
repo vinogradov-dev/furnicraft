@@ -859,8 +859,9 @@ impl Assembly {
 /// A flat panel in the product tree.
 ///
 /// The document stores the nominal outline, the selected material and fallbacks, not the resolved
-/// core. Core, overall and effective thickness are derived by [`Panel::geometry`] from the panel,
-/// its edge banding and the catalogue value supplied by the caller.
+/// core. The core origin, core size, overall size and effective thickness are derived by
+/// [`Panel::geometry`] from the panel, its edge banding and the catalogue value supplied by the
+/// caller. The panel-local frame stays anchored at the nominal minimum corner.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "PanelWire")]
 pub struct Panel {
@@ -932,12 +933,12 @@ impl Panel {
         self.last_known_thickness
     }
 
-    /// The placement relative to the parent frame, anchored at the core zero.
+    /// The placement relative to the parent frame, anchored at the nominal minimum corner.
     pub const fn placement(&self) -> Placement {
         self.placement
     }
 
-    /// Machining owned by this panel, in panel-local coordinates.
+    /// Machining owned by this panel, in core-local coordinates.
     pub fn machining(&self) -> &[Machining] {
         &self.machining
     }
@@ -1035,7 +1036,17 @@ impl Panel {
         let overall_length = checked_add_many("overall_length", core_length, [total_left, total_right])?;
         let overall_width = checked_add_many("overall_width", core_width, [total_bottom, total_top])?;
 
-        PanelGeometry::new(core_length, core_width, thickness, overall_length, overall_width)
+        // The panel frame is anchored at the nominal minimum corner. An included band takes its
+        // thickness out of the low side of the core, so the core origin moves inward by that amount.
+        PanelGeometry::new(
+            included_left,
+            included_bottom,
+            core_length,
+            core_width,
+            thickness,
+            overall_length,
+            overall_width,
+        )
     }
 
     /// Resolves geometry using the stored fallback thickness.
@@ -1145,9 +1156,11 @@ pub enum Machining {
 
 /// A cutout in a panel.
 ///
-/// Coordinates are panel-local: `(0, 0)` is the panel zero, with `+X` along the length and `+Y`
-/// along the width. `entry` names the face the cut enters from; a blind cutout removes material
-/// from that face up to its depth, while a through cutout removes the full thickness.
+/// Coordinates are core-local: `(0, 0)` is the core zero, not the nominal minimum corner, with
+/// `+X` along the length and `+Y` along the width. Machining therefore stays on the board when an
+/// included edge band moves the core origin. `entry` names the face the cut enters from; a blind
+/// cutout removes material from that face up to its depth, while a through cutout removes the full
+/// thickness.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cutout {
@@ -1167,7 +1180,7 @@ impl Cutout {
         self.id
     }
 
-    /// The cutout outline in panel-local coordinates.
+    /// The cutout outline in core-local coordinates.
     pub const fn shape(&self) -> CutoutShape {
         self.shape
     }
@@ -1187,7 +1200,7 @@ impl Cutout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CutoutShape {
-    /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the panel zero.
+    /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the core zero.
     Rectangle(PanelRect),
 }
 
@@ -1204,10 +1217,10 @@ pub enum CutoutDepth {
     },
 }
 
-/// A rectangle in panel-local XY coordinates.
+/// A rectangle in core-local XY coordinates.
 ///
-/// `x` and `y` are the minimum corner relative to the panel zero; `width` and `height` are
-/// positive. Cutout validation checks that the rectangle stays within the panel outline.
+/// `x` and `y` are the minimum corner relative to the core zero; `width` and `height` are
+/// positive. Cutout validation checks that the rectangle stays within the core outline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "PanelRectWire")]
 pub struct PanelRect {
@@ -1374,10 +1387,16 @@ impl PanelNominalSize {
 
 /// The resolved dimensions of a panel.
 ///
-/// In the panel-local frame the core occupies `x` from `0` to `core_length`, `y` from `0` to
-/// `core_width` and `z` from `0` to `thickness`. Overall dimensions include all edge banding.
+/// The panel-local frame is anchored at the minimum corner of the **nominal** rectangle. The core
+/// occupies `x` from `core_x` to `core_x + core_length`, `y` from `core_y` to
+/// `core_y + core_width`, and `z` from `0` to `thickness`. `core_x` and `core_y` are the
+/// included banding thicknesses on the left and bottom edges; they are zero when those edges are
+/// unbanded or not included in the size. Overall dimensions are the extents of the finished panel
+/// including all banding; when a band is not included they may extend outside the nominal rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PanelGeometry {
+    core_x: Length,
+    core_y: Length,
     core_length: Length,
     core_width: Length,
     thickness: Length,
@@ -1386,14 +1405,18 @@ pub struct PanelGeometry {
 }
 
 impl PanelGeometry {
-    /// Creates resolved geometry after checking that the core and thickness are positive.
+    /// Creates resolved geometry after checking the core, its nominal origin and the thickness.
     pub fn new(
+        core_x: Length,
+        core_y: Length,
         core_length: Length,
         core_width: Length,
         thickness: Length,
         overall_length: Length,
         overall_width: Length,
     ) -> Result<Self, PanelGeometryError> {
+        require_non_negative("core_x", core_x)?;
+        require_non_negative("core_y", core_y)?;
         require_positive("core_length", core_length)?;
         require_positive("core_width", core_width)?;
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
@@ -1411,7 +1434,17 @@ impl PanelGeometry {
                 core: core_width,
             });
         }
-        Ok(Self { core_length, core_width, thickness, overall_length, overall_width })
+        Ok(Self { core_x, core_y, core_length, core_width, thickness, overall_length, overall_width })
+    }
+
+    /// The core origin along local X, relative to the nominal minimum corner.
+    pub const fn core_x(self) -> Length {
+        self.core_x
+    }
+
+    /// The core origin along local Y, relative to the nominal minimum corner.
+    pub const fn core_y(self) -> Length {
+        self.core_y
     }
 
     /// The core length along local X.
@@ -1472,6 +1505,14 @@ pub enum PanelGeometryError {
     /// The resulting core is zero or negative.
     #[error("panel {field} must be positive, got {value}")]
     NonPositive {
+        /// The rejected field.
+        field: &'static str,
+        /// The rejected value.
+        value: Length,
+    },
+    /// The core origin is negative relative to the nominal minimum corner.
+    #[error("panel {field} must not be negative, got {value}")]
+    NegativeOrigin {
         /// The rejected field.
         field: &'static str,
         /// The rejected value.
@@ -1565,6 +1606,13 @@ fn validate_dimension(field: &'static str, value: Length, max: Length) -> Result
 fn require_positive(field: &'static str, value: Length) -> Result<(), PanelGeometryError> {
     if !value.is_positive() {
         return Err(PanelGeometryError::NonPositive { field, value });
+    }
+    Ok(())
+}
+
+fn require_non_negative(field: &'static str, value: Length) -> Result<(), PanelGeometryError> {
+    if value.is_negative() {
+        return Err(PanelGeometryError::NegativeOrigin { field, value });
     }
     Ok(())
 }
@@ -1679,19 +1727,20 @@ panel_id!(EdgeId, "edge id");
 
 /// A corner of a rectangular panel, numbered counter-clockwise when viewed from face `A`.
 ///
-/// Corner 1 is the panel zero at `(0, 0)`. The enum is a convenience for rectangular panels;
-/// contour panels use [`VertexId`] directly.
+/// Corner 1 is the nominal minimum corner at `(0, 0)`. The core may start at a positive
+/// `(core_x, core_y)` when the bottom or left banding is included in the size. The enum is a
+/// convenience for rectangular panels; contour panels use [`VertexId`] directly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum RectCorner {
-    /// `(0, 0)`, the panel zero.
+    /// `(0, 0)`, the nominal zero.
     BottomLeft = 1,
-    /// `(length, 0)`.
+    /// `(nominal length, 0)`.
     BottomRight = 2,
-    /// `(length, width)`.
+    /// `(nominal length, nominal width)`.
     TopRight = 3,
-    /// `(0, width)`.
+    /// `(0, nominal width)`.
     TopLeft = 4,
 }
 
@@ -2345,6 +2394,42 @@ mod tests {
     }
 
     #[test]
+    fn all_included_edges_inset_the_core_inside_the_nominal_envelope() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let material = MaterialId::new(99).expect("material id");
+        for edge in 1..=4 {
+            let band =
+                EdgeBanding::new(EdgeId::new(edge).expect("edge id"), material, true, millimetres(2), millimetres(22))
+                    .expect("valid banding");
+            project.set_edge_banding(panel_id, band).expect("set banding");
+        }
+
+        let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_x(), millimetres(2));
+        assert_eq!(geometry.core_y(), millimetres(2));
+        assert_eq!(geometry.core_length(), millimetres(696));
+        assert_eq!(geometry.core_width(), millimetres(496));
+        assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+    }
+
+    #[test]
+    fn panel_geometry_rejects_a_negative_core_origin() {
+        let error = PanelGeometry::new(
+            millimetres(-1),
+            Length::ZERO,
+            millimetres(700),
+            millimetres(500),
+            sample_thickness(),
+            millimetres(700),
+            millimetres(500),
+        )
+        .expect_err("negative core origin");
+        assert!(matches!(error, PanelGeometryError::NegativeOrigin { field: "core_x", .. }));
+    }
+
+    #[test]
     fn panel_geometry_accepts_catalogue_resolved_banding_thickness() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
@@ -2356,6 +2441,7 @@ mod tests {
         let panel = project.panel(panel_id).expect("panel");
 
         let geometry = panel.geometry_with_banding(sample_thickness(), |_| millimetres(4)).expect("resolved geometry");
+        assert_eq!(geometry.core_y(), millimetres(4));
         assert_eq!(geometry.core_width(), millimetres(496));
         assert_eq!(geometry.overall_width(), millimetres(500));
     }
@@ -2371,6 +2457,8 @@ mod tests {
                 .expect("valid bottom banding");
         project.set_edge_banding(panel_id, bottom).expect("set bottom banding");
         let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_x(), Length::ZERO);
+        assert_eq!(geometry.core_y(), millimetres(2));
         assert_eq!(geometry.core_length(), millimetres(700));
         assert_eq!(geometry.core_width(), millimetres(498));
         assert_eq!(geometry.overall_length(), millimetres(700));
@@ -2380,9 +2468,23 @@ mod tests {
             .expect("valid left banding");
         project.set_edge_banding(panel_id, left).expect("set left banding");
         let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_x(), Length::ZERO);
+        assert_eq!(geometry.core_y(), millimetres(2));
         assert_eq!(geometry.core_length(), millimetres(700));
         assert_eq!(geometry.core_width(), millimetres(498));
         assert_eq!(geometry.overall_length(), millimetres(701));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        let left_included =
+            EdgeBanding::new(EdgeId::new(4).expect("edge id"), material, true, millimetres(1), millimetres(22))
+                .expect("valid left banding");
+        project.set_edge_banding(panel_id, left_included).expect("set left banding");
+        let geometry = project.panel(panel_id).expect("panel").geometry(sample_thickness()).expect("resolved geometry");
+        assert_eq!(geometry.core_x(), millimetres(1));
+        assert_eq!(geometry.core_y(), millimetres(2));
+        assert_eq!(geometry.core_length(), millimetres(699));
+        assert_eq!(geometry.core_width(), millimetres(498));
+        assert_eq!(geometry.overall_length(), millimetres(700));
         assert_eq!(geometry.overall_width(), millimetres(500));
 
         let bands = project.panel(panel_id).expect("panel").edge_banding();
