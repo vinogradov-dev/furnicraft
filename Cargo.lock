@@ -1259,6 +1259,7 @@ dependencies = [
  "furnicraft-model",
  "furnicraft-param",
  "furnicraft-testkit",
+ "furnicraft-units",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

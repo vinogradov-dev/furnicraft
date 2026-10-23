@@ -16,9 +16,12 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{DVec3, Frame};
+use furnicraft_geom::{DVec2, DVec3, Frame};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
-use furnicraft_model::{Cutout, CutoutDepth, CutoutShape, FaceSide, Machining, Panel, PanelGeometry};
+use furnicraft_model::{
+    Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelGeometry,
+};
+use furnicraft_units::Length;
 use thiserror::Error;
 
 /// Extra millimetres added to a cutting tool so booleans do not depend on coincident faces.
@@ -30,6 +33,12 @@ pub enum ParamError {
     /// The geometry kernel rejected or failed the operation.
     #[error(transparent)]
     Kernel(#[from] KernelError),
+    /// Banding refers to an edge outside the rectangular panel outline.
+    #[error("edge banding on unsupported edge {edge}")]
+    UnsupportedEdge {
+        /// The rejected edge.
+        edge: EdgeId,
+    },
 }
 
 /// Builds the solid body of a rectangular panel in its local frame.
@@ -54,6 +63,103 @@ pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelG
         }
     }
     Ok(body)
+}
+
+/// One evaluated edge-banding body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EdgeBandPart {
+    edge: EdgeId,
+    body: BodyId,
+}
+
+impl EdgeBandPart {
+    /// The covered edge.
+    pub const fn edge(self) -> EdgeId {
+        self.edge
+    }
+
+    /// The kernel body for this band.
+    pub const fn body(self) -> BodyId {
+        self.body
+    }
+}
+
+/// Builds one extruded body per banding in application order.
+///
+/// Each band is a rectangle in the panel plane, extruded across the panel thickness. A band is
+/// trimmed across the thickness when its profile is wider than the panel. At a right-angle corner,
+/// a band extends by the thickness of an earlier band on the adjacent edge and covers the corner;
+/// a band with no earlier neighbour ends flush with the core.
+pub fn build_edge_bands(
+    kernel: &mut dyn SolidKernel,
+    panel: &Panel,
+    geometry: PanelGeometry,
+) -> Result<Vec<EdgeBandPart>, ParamError> {
+    let bands = panel.edge_banding();
+    let mut parts = Vec::with_capacity(bands.len());
+    for (index, band) in bands.iter().enumerate() {
+        let rect = band_rect(geometry, bands, index, band)?;
+        let profile = Profile::new(
+            vec![
+                DVec2::new(rect.x0, rect.y0),
+                DVec2::new(rect.x1, rect.y0),
+                DVec2::new(rect.x1, rect.y1),
+                DVec2::new(rect.x0, rect.y1),
+            ],
+            Vec::new(),
+        )?;
+        let visible_width = band.last_known_width().min(geometry.thickness());
+        let panel_thickness = geometry.thickness().millimetres_f64();
+        let visible_width = visible_width.millimetres_f64();
+        let frame = Frame { origin: DVec3::new(0.0, 0.0, (panel_thickness - visible_width) * 0.5), ..Frame::WORLD };
+        let body = kernel.extrude(&profile, &frame, visible_width)?;
+        parts.push(EdgeBandPart { edge: band.edge(), body });
+    }
+    Ok(parts)
+}
+
+struct BandRect {
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+fn band_rect(
+    geometry: PanelGeometry,
+    bands: &[EdgeBanding],
+    index: usize,
+    band: &EdgeBanding,
+) -> Result<BandRect, ParamError> {
+    let length = geometry.core_length().millimetres_f64();
+    let width = geometry.core_width().millimetres_f64();
+    let thickness = band.last_known_thickness().millimetres_f64();
+    let (start_edge, end_edge) = match band.edge().get() {
+        1 => (4, 2),
+        2 => (1, 3),
+        3 => (2, 4),
+        4 => (3, 1),
+        _ => return Err(ParamError::UnsupportedEdge { edge: band.edge() }),
+    };
+    let start = earlier_thickness(bands, index, start_edge);
+    let end = earlier_thickness(bands, index, end_edge);
+    let start = start.millimetres_f64();
+    let end = end.millimetres_f64();
+    let rect = match band.edge().get() {
+        1 => BandRect { x0: -start, y0: -thickness, x1: length + end, y1: 0.0 },
+        2 => BandRect { x0: length, y0: -start, x1: length + thickness, y1: width + end },
+        3 => BandRect { x0: -end, y0: width, x1: length + start, y1: width + thickness },
+        4 => BandRect { x0: -thickness, y0: -end, x1: 0.0, y1: width + start },
+        _ => return Err(ParamError::UnsupportedEdge { edge: band.edge() }),
+    };
+    Ok(rect)
+}
+
+fn earlier_thickness(bands: &[EdgeBanding], index: usize, edge: u32) -> Length {
+    bands
+        .get(..index)
+        .and_then(|earlier| earlier.iter().find(|band| band.edge().get() == edge))
+        .map_or(Length::ZERO, EdgeBanding::last_known_thickness)
 }
 
 fn build_cutout_tool(
@@ -85,7 +191,9 @@ mod tests {
     use furnicraft_geom::DVec2;
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
-    use furnicraft_model::{Assembly, Id, PanelNominalSize, PanelRect, Placement, Project};
+    use furnicraft_model::{
+        Assembly, EdgeBanding, EdgeId, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project,
+    };
     use furnicraft_units::Length;
 
     use super::*;
@@ -164,6 +272,38 @@ mod tests {
         project.panel(panel_id).expect("panel exists").clone()
     }
 
+    fn edge_material() -> MaterialId {
+        MaterialId::new(101).expect("material id")
+    }
+
+    fn panel_with_bands(bands: &[(u32, bool)], band_width: Length) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        for (edge, included) in bands {
+            let band = EdgeBanding::new(
+                EdgeId::new(*edge).expect("edge id"),
+                edge_material(),
+                *included,
+                millimetres(2),
+                band_width,
+            )
+            .expect("banding");
+            project.set_edge_banding(panel_id, band).expect("set banding");
+        }
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn band_volumes(panel: &Panel) -> Vec<f64> {
+        let mut kernel = TruckKernel::new();
+        let parts = build_edge_bands(&mut kernel, panel, geometry(panel)).expect("edge bands");
+        let volumes = parts.iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).collect();
+        kernel.clear();
+        volumes
+    }
+
     #[test]
     fn build_panel_maps_dimensions_to_a_world_frame_extrusion() {
         let mut kernel = RecordingKernel::default();
@@ -232,5 +372,48 @@ mod tests {
                 measure.volume
             );
         }
+    }
+    #[test]
+    fn edge_bands_are_trimmed_across_the_panel_thickness() {
+        let wide = panel_with_bands(&[(1, false)], millimetres(22));
+        let volumes = band_volumes(&wide);
+        assert_eq!(volumes.len(), 1);
+        assert!((volumes[0] - 700.0 * 2.0 * 18.0).abs() < 1.0, "wide band volume {}", volumes[0]);
+
+        let narrow = panel_with_bands(&[(1, false)], millimetres(10));
+        let volumes = band_volumes(&narrow);
+        assert!((volumes[0] - 700.0 * 2.0 * 10.0).abs() < 1.0, "narrow band volume {}", volumes[0]);
+    }
+
+    #[test]
+    fn edge_bands_extend_into_corners_in_application_order() {
+        let panel = panel_with_bands(&[(1, false), (2, false), (3, false), (4, false)], millimetres(22));
+        let volumes = band_volumes(&panel);
+        assert_eq!(volumes.len(), 4);
+        let expected = [
+            700.0 * 2.0 * 18.0,
+            (500.0 + 2.0) * 2.0 * 18.0,
+            (700.0 + 2.0) * 2.0 * 18.0,
+            (500.0 + 2.0 + 2.0) * 2.0 * 18.0,
+        ];
+        for (index, (volume, expected)) in volumes.iter().zip(expected).enumerate() {
+            assert!((volume - expected).abs() < 1.0, "band {index} volume {volume}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn a_single_edge_band_does_not_extend_into_an_unbanded_corner() {
+        let panel = panel_with_bands(&[(4, false)], millimetres(22));
+        let volumes = band_volumes(&panel);
+        assert!((volumes[0] - 500.0 * 2.0 * 18.0).abs() < 1.0, "left band volume {}", volumes[0]);
+    }
+
+    #[test]
+    fn build_edge_bands_returns_nothing_without_banding() {
+        let panel = sample_panel();
+        let mut kernel = TruckKernel::new();
+        let parts = build_edge_bands(&mut kernel, &panel, geometry(&panel)).expect("edge bands");
+        assert!(parts.is_empty());
+        assert_eq!(kernel.body_count(), 0);
     }
 }

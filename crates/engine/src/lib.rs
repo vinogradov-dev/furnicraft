@@ -15,9 +15,13 @@
 )]
 
 mod commands;
+mod diagnostics;
 pub mod panel_cmds;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
-pub use panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
+pub use diagnostics::{PanelDiagnostic, diagnose_panel};
+pub use panel_cmds::{
+    CutoutCreate, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelResize,
+};
 pub use session::Session;

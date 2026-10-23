@@ -12,6 +12,7 @@ workspace = true
 furnicraft-mesh = { workspace = true }
 furnicraft-model = { workspace = true }
 furnicraft-param = { workspace = true }
+furnicraft-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -13,14 +13,21 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Assembly, CutoutDepth, CutoutShape, FaceSide, Id, Node, PanelNominalSize, PanelRect, Placement, Project,
+    Assembly, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, Node, PanelNominalSize,
+    PanelRect, Placement, Project,
 };
-use furnicraft_param::build_panel;
+use furnicraft_param::{build_edge_bands, build_panel};
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
 use furnicraft_units::Length;
 
 /// Colours for the sample panels, in linear RGB.
 const PANEL_COLORS: [[f32; 4]; 3] = [[0.62, 0.42, 0.22, 1.0], [0.50, 0.34, 0.20, 1.0], [0.45, 0.47, 0.50, 1.0]];
+
+/// A common debug colour for every band on a panel.
+const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
+
+/// The sample banding material id, absent from the sample catalogue by design.
+const SAMPLE_EDGE_MATERIAL: u64 = 101;
 
 /// A world-space axis-aligned bounds box built from evaluated meshes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,12 +95,15 @@ pub fn sample_session() -> Result<Session, String> {
     project
         .add_cutout(back, cutout(330, 70, 180, 140)?, CutoutDepth::Blind { depth: millimetres(12)? }, FaceSide::A)
         .map_err(describe)?;
+    add_band(&mut project, back, 1, true)?;
+    add_band(&mut project, back, 2, false)?;
 
     let floor = Placement::new(DVec3::new(150.0, -500.0, 0.0), DQuat::IDENTITY).map_err(describe)?;
     let shelf = project
         .add_panel(root_id, "Loose shelf", panel_nominal_size(600, 400)?, None, thickness, floor)
         .map_err(describe)?;
     project.add_cutout(shelf, cutout(80, 60, 150, 100)?, CutoutDepth::Through, FaceSide::B).map_err(describe)?;
+    add_band(&mut project, shelf, 4, true)?;
 
     project.validate().map_err(describe)?;
     Ok(Session::new(project))
@@ -144,13 +154,22 @@ fn collect_children(
                 let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
                 let geometry = panel.geometry_with_fallbacks().map_err(describe)?;
                 let body = build_panel(kernel, panel, geometry).map_err(describe)?;
-                let mesh = tessellate_panel(kernel, body, options).map_err(describe)?;
+                let body_mesh = tessellate_panel(kernel, body, options).map_err(describe)?;
+                let band_parts = build_edge_bands(kernel, panel, geometry).map_err(describe)?;
+                let mut band_meshes = Vec::with_capacity(band_parts.len());
+                for part in band_parts {
+                    band_meshes.push(tessellate_panel(kernel, part.body(), options).map_err(describe)?);
+                }
                 kernel.clear();
                 let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
-                bounds.include_mesh(&mesh, transform);
+                bounds.include_mesh(&body_mesh, transform);
                 let color = PANEL_COLORS[*palette_index % PANEL_COLORS.len()];
                 *palette_index = palette_index.saturating_add(1);
-                frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, color));
+                frame.push(Drawable::new(panel.id(), Arc::new(body_mesh), transform, color));
+                for mesh in band_meshes {
+                    bounds.include_mesh(&mesh, transform);
+                    frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, EDGE_BAND_COLOR));
+                }
             }
         }
     }
@@ -174,6 +193,15 @@ fn id(value: u64) -> Result<Id, String> {
 
 fn millimetres(value: i64) -> Result<Length, String> {
     Length::from_millimetres(value).ok_or_else(|| format!("{value} mm does not fit a length"))
+}
+
+fn add_band(project: &mut Project, panel: Id, edge: u32, included_in_size: bool) -> Result<(), String> {
+    let edge = EdgeId::new(edge).ok_or_else(|| "edge ids start at one".to_owned())?;
+    let material = MaterialId::new(SAMPLE_EDGE_MATERIAL).ok_or_else(|| "sample material id is zero".to_owned())?;
+    let band =
+        EdgeBanding::new(edge, material, included_in_size, millimetres(2)?, millimetres(22)?).map_err(describe)?;
+    project.set_edge_banding(panel, band).map_err(describe)?;
+    Ok(())
 }
 
 fn panel_nominal_size(length: i64, width: i64) -> Result<PanelNominalSize, String> {
@@ -207,15 +235,18 @@ mod tests {
 
         let mut panels = 0;
         let mut cutouts = 0;
+        let mut bands = 0;
         for child in project.root().children() {
             if let Node::Panel(panel) = child {
                 panels += 1;
                 cutouts +=
                     panel.machining().iter().filter(|machining| matches!(machining, Machining::Cutout(_))).count();
+                bands += panel.edge_banding().len();
             }
         }
         assert_eq!(panels, 2);
         assert_eq!(cutouts, 3);
+        assert_eq!(bands, 3);
     }
 
     #[test]
@@ -232,13 +263,19 @@ mod tests {
     }
 
     #[test]
-    fn sample_scene_evaluates_into_two_drawables() {
+    fn sample_scene_evaluates_panels_and_banding() {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
         let evaluated = evaluate(&mut kernel, session.project()).expect("evaluated scene");
 
-        assert_eq!(evaluated.frame.drawables().len(), 2);
-        assert!(evaluated.frame.drawables().iter().all(|drawable| !drawable.mesh.positions.is_empty()));
+        assert_eq!(evaluated.frame.drawables().len(), 5);
+        let mut groups = std::collections::HashMap::new();
+        for drawable in evaluated.frame.drawables() {
+            assert!(!drawable.mesh.positions.is_empty());
+            *groups.entry(drawable.id).or_insert(0) += 1;
+        }
+        assert_eq!(groups.len(), 2, "two panels");
+        assert_eq!(groups.values().copied().collect::<Vec<_>>(), vec![3, 2], "body plus bands per panel");
         assert!(evaluated.bounds.center().is_some());
         assert!(home_camera(evaluated.bounds).is_ok());
         assert_eq!(kernel.body_count(), 0, "evaluation releases every kernel body");

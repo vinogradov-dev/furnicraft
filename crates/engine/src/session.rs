@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
-use furnicraft_model::{Catalog, Project};
+use furnicraft_model::{Catalog, Id, Project};
 use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandRegistry};
+use crate::diagnostics::{PanelDiagnostic, diagnose_panel};
 
 /// A document plus its undo/redo history and saved-content marker.
 #[derive(Debug)]
@@ -38,6 +39,11 @@ impl Session {
     /// The session-scoped, read-only material catalogue.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// Resolves the derived issues of one panel against the session catalogue.
+    pub fn panel_diagnostics(&self, panel_id: Id) -> Vec<PanelDiagnostic> {
+        diagnose_panel(&self.project, &self.catalog, panel_id)
     }
 
     /// Whether an earlier document state can be restored.
