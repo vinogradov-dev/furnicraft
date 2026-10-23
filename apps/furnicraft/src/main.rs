@@ -49,7 +49,7 @@ impl FurniCraftApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
         let session = sample_session()?;
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, session.project())?;
+        let evaluated = evaluate(&mut kernel, &session)?;
         let home_camera = home_camera(evaluated.bounds)?;
         let mut scene = evaluated.frame;
         scene.camera = home_camera;
@@ -81,7 +81,7 @@ impl FurniCraftApp {
         if revision == self.scene_revision {
             return Ok(());
         }
-        let evaluated = evaluate(&mut self.kernel, self.session.project())?;
+        let evaluated = evaluate(&mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         scene.camera = self.scene.camera;
         self.renderer.upload(&self.render_state.device, &scene).map_err(|error| error.to_string())?;

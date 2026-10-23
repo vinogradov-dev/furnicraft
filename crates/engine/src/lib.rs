@@ -17,6 +17,7 @@
 mod commands;
 mod diagnostics;
 pub mod panel_cmds;
+mod resolve;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};

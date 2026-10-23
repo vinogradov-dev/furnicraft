@@ -6,6 +6,7 @@
 
 use furnicraft_model::{
     Catalog, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometryError, PanelRect, Project,
+    ProjectError,
 };
 use furnicraft_units::Length;
 
@@ -54,19 +55,14 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
     };
 
     let mut diagnostics = Vec::new();
-    let thickness = match panel.material() {
-        None => {
-            diagnostics.push(PanelDiagnostic::NoMaterial);
-            panel.last_known_thickness()
-        }
-        Some(material_id) => match catalog.panel_material(material_id) {
-            Some(material) => material.nominal_thickness(),
-            None => {
+    match panel.material() {
+        None => diagnostics.push(PanelDiagnostic::NoMaterial),
+        Some(material_id) => {
+            if catalog.panel_material(material_id).is_none() {
                 diagnostics.push(PanelDiagnostic::MissingMaterial { material: material_id });
-                panel.last_known_thickness()
             }
-        },
-    };
+        }
+    }
 
     for band in panel.edge_banding() {
         if catalog.edge_material(band.material()).is_none() {
@@ -74,9 +70,9 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
         }
     }
 
-    let geometry = match panel.geometry(thickness) {
+    let geometry = match crate::resolve::panel_geometry(project, catalog, panel_id) {
         Ok(geometry) => geometry,
-        Err(PanelGeometryError::NonPositive { .. }) => {
+        Err(ProjectError::PanelGeometry(PanelGeometryError::NonPositive { .. })) => {
             diagnostics.push(PanelDiagnostic::NonPositiveCore);
             return diagnostics;
         }
@@ -207,7 +203,7 @@ mod tests {
                     "machining": [],
                     "edge_banding": [{
                         "edge": 1,
-                        "material": 101,
+                        "material": 999,
                         "included_in_size": true,
                         "last_known_thickness": 500000,
                         "last_known_width": 22000

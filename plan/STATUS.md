@@ -10,6 +10,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `fix(engine): resolve panel geometry from the catalogue`
 - `feat(engine): rename panels`
 - `feat(param): build edge bands and expose panel diagnostics`
 - `feat(engine): add catalogue-aware panel material commands`
@@ -23,9 +24,8 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Resolve panel and banding geometry from the session catalogue before scene evaluation.
-2. Add the sample material catalogue to the application and assign materials to the sample panels.
-3. Build the outliner and panel card on the existing commands, with diagnostics and undo/redo.
+1. Add the sample material catalogue to the application and assign materials to the sample panels.
+2. Build the outliner and panel card on the existing commands, with diagnostics and undo/redo.
 
 ## Open questions
 
@@ -34,7 +34,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Known debt
 
-- Existing panels and banding still use stored fallbacks during scene evaluation; catalogue resolution is the next task.
+- Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks; rendering and diagnostics use the catalogue.
 - `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not implemented.
 - The app always loads `sample_session()`; there is no scene load/save path.
 - `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

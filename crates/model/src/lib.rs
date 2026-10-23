@@ -947,20 +947,47 @@ impl Panel {
         &self.edge_banding
     }
 
-    /// Resolves the geometry with the supplied panel thickness.
-    ///
-    /// Banding thickness comes from the stored fallbacks. The engine refreshes those fallbacks
-    /// from the catalogue before a command; the model never reads the catalogue.
+    /// Resolves the geometry with the supplied panel thickness and fallback banding thicknesses.
     pub fn geometry(&self, thickness: Length) -> Result<PanelGeometry, PanelGeometryError> {
         self.geometry_for(self.nominal_size, thickness)
     }
 
+    /// Resolves the geometry with a caller-provided banding thickness.
+    ///
+    /// The engine uses this to pass catalogue-resolved profiles without making the model read the
+    /// catalogue. `band_thickness` is called once per band in application order.
+    pub fn geometry_with_banding<F>(
+        &self,
+        thickness: Length,
+        band_thickness: F,
+    ) -> Result<PanelGeometry, PanelGeometryError>
+    where
+        F: Fn(&EdgeBanding) -> Length,
+    {
+        self.geometry_for_with(self.nominal_size, thickness, band_thickness)
+    }
+
     /// Resolves the geometry for a different nominal size, used by a resize before mutation.
+    ///
+    /// Banding thickness comes from the stored fallbacks.
     pub fn geometry_for(
         &self,
         nominal_size: PanelNominalSize,
         thickness: Length,
     ) -> Result<PanelGeometry, PanelGeometryError> {
+        self.geometry_for_with(nominal_size, thickness, EdgeBanding::last_known_thickness)
+    }
+
+    /// Resolves geometry for a nominal size with a caller-provided banding thickness.
+    pub fn geometry_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        thickness: Length,
+        band_thickness: F,
+    ) -> Result<PanelGeometry, PanelGeometryError>
+    where
+        F: Fn(&EdgeBanding) -> Length,
+    {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
 
         let mut included_bottom = Length::ZERO;
@@ -973,7 +1000,7 @@ impl Panel {
         let mut total_left = Length::ZERO;
 
         for band in &self.edge_banding {
-            let thickness = band.last_known_thickness();
+            let thickness = band_thickness(band);
             match band.edge().get() {
                 1 => {
                     total_bottom = checked_add("bottom_banding", total_bottom, thickness)?;
@@ -2314,6 +2341,22 @@ mod tests {
         assert_eq!(geometry.core_width(), millimetres(500));
         assert_eq!(geometry.thickness(), millimetres(18));
         assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+    }
+
+    #[test]
+    fn panel_geometry_accepts_catalogue_resolved_banding_thickness() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let material = MaterialId::new(99).expect("material id");
+        let bottom =
+            EdgeBanding::new(EdgeId::new(1).expect("edge id"), material, true, millimetres(2), millimetres(22))
+                .expect("valid bottom banding");
+        project.set_edge_banding(panel_id, bottom).expect("set bottom banding");
+        let panel = project.panel(panel_id).expect("panel");
+
+        let geometry = panel.geometry_with_banding(sample_thickness(), |_| millimetres(4)).expect("resolved geometry");
+        assert_eq!(geometry.core_width(), millimetres(496));
         assert_eq!(geometry.overall_width(), millimetres(500));
     }
 

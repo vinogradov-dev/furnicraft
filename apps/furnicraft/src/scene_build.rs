@@ -13,10 +13,10 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Assembly, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, Node, PanelNominalSize,
+    Assembly, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, Node, Panel, PanelNominalSize,
     PanelRect, Placement, Project,
 };
-use furnicraft_param::{build_edge_bands, build_panel};
+use furnicraft_param::{build_edge_bands_with, build_panel};
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
 use furnicraft_units::Length;
 
@@ -109,71 +109,80 @@ pub fn sample_session() -> Result<Session, String> {
     Ok(Session::new(project))
 }
 
-/// Evaluates every panel in the project into world-space drawables.
+/// Evaluates every panel in the session into world-space drawables.
 ///
-/// The kernel is cleared on error so a failed evaluation cannot leak bodies into the next rebuild.
-pub fn evaluate(kernel: &mut TruckKernel, project: &Project) -> Result<EvaluatedScene, String> {
-    let options = TessOptions::default();
-    let mut frame = SceneFrame::default();
-    let mut bounds = Bounds::empty();
+/// Catalogue values decide panel and banding geometry; the kernel is cleared on error so a failed
+/// evaluation cannot leak bodies into the next rebuild.
+pub fn evaluate(kernel: &mut TruckKernel, session: &Session) -> Result<EvaluatedScene, String> {
+    let project = session.project();
     let root_world = Placement::compose(Placement::IDENTITY, project.root().placement()).map_err(describe)?;
-    let mut palette_index = 0;
-
-    let result = collect_children(
-        kernel,
-        project.root().children(),
-        root_world,
-        &options,
-        &mut frame,
-        &mut bounds,
-        &mut palette_index,
-    );
-    if let Err(error) = result {
-        kernel.clear();
+    let mut evaluation = Evaluation::new(kernel, session);
+    if let Err(error) = evaluation.collect(project.root().children(), root_world) {
+        evaluation.kernel.clear();
         return Err(error);
     }
-    Ok(EvaluatedScene { frame, bounds })
+    Ok(EvaluatedScene { frame: evaluation.frame, bounds: evaluation.bounds })
 }
 
-fn collect_children(
-    kernel: &mut TruckKernel,
-    children: &[Node],
-    parent: Placement,
-    options: &TessOptions,
-    frame: &mut SceneFrame,
-    bounds: &mut Bounds,
-    palette_index: &mut usize,
-) -> Result<(), String> {
-    for child in children {
-        match child {
-            Node::Assembly(assembly) => {
-                let world = Placement::compose(parent, assembly.placement()).map_err(describe)?;
-                collect_children(kernel, assembly.children(), world, options, frame, bounds, palette_index)?;
-            }
-            Node::Panel(panel) => {
-                let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
-                let geometry = panel.geometry_with_fallbacks().map_err(describe)?;
-                let body = build_panel(kernel, panel, geometry).map_err(describe)?;
-                let body_mesh = tessellate_panel(kernel, body, options).map_err(describe)?;
-                let band_parts = build_edge_bands(kernel, panel, geometry).map_err(describe)?;
-                let mut band_meshes = Vec::with_capacity(band_parts.len());
-                for part in band_parts {
-                    band_meshes.push(tessellate_panel(kernel, part.body(), options).map_err(describe)?);
-                }
-                kernel.clear();
-                let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
-                bounds.include_mesh(&body_mesh, transform);
-                let color = PANEL_COLORS[*palette_index % PANEL_COLORS.len()];
-                *palette_index = palette_index.saturating_add(1);
-                frame.push(Drawable::new(panel.id(), Arc::new(body_mesh), transform, color));
-                for mesh in band_meshes {
-                    bounds.include_mesh(&mesh, transform);
-                    frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, EDGE_BAND_COLOR));
-                }
-            }
+/// Mutable state shared by one scene evaluation.
+struct Evaluation<'a> {
+    kernel: &'a mut TruckKernel,
+    session: &'a Session,
+    options: TessOptions,
+    frame: SceneFrame,
+    bounds: Bounds,
+    palette_index: usize,
+}
+
+impl<'a> Evaluation<'a> {
+    fn new(kernel: &'a mut TruckKernel, session: &'a Session) -> Self {
+        Self {
+            kernel,
+            session,
+            options: TessOptions::default(),
+            frame: SceneFrame::default(),
+            bounds: Bounds::empty(),
+            palette_index: 0,
         }
     }
-    Ok(())
+
+    fn collect(&mut self, children: &[Node], parent: Placement) -> Result<(), String> {
+        for child in children {
+            match child {
+                Node::Assembly(assembly) => {
+                    let world = Placement::compose(parent, assembly.placement()).map_err(describe)?;
+                    self.collect(assembly.children(), world)?;
+                }
+                Node::Panel(panel) => self.collect_panel(panel, parent)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_panel(&mut self, panel: &Panel, parent: Placement) -> Result<(), String> {
+        let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
+        let session = self.session;
+        let geometry = session.panel_geometry(panel.id()).map_err(describe)?;
+        let body = build_panel(&mut *self.kernel, panel, geometry).map_err(describe)?;
+        let body_mesh = tessellate_panel(&*self.kernel, body, &self.options).map_err(describe)?;
+        let band_parts = build_edge_bands_with(&mut *self.kernel, panel, geometry, |band| session.band_profile(band))
+            .map_err(describe)?;
+        let mut band_meshes = Vec::with_capacity(band_parts.len());
+        for part in band_parts {
+            band_meshes.push(tessellate_panel(&*self.kernel, part.body(), &self.options).map_err(describe)?);
+        }
+        self.kernel.clear();
+        let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+        self.bounds.include_mesh(&body_mesh, transform);
+        let color = PANEL_COLORS[self.palette_index % PANEL_COLORS.len()];
+        self.palette_index = self.palette_index.saturating_add(1);
+        self.frame.push(Drawable::new(panel.id(), Arc::new(body_mesh), transform, color));
+        for mesh in band_meshes {
+            self.bounds.include_mesh(&mesh, transform);
+            self.frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, EDGE_BAND_COLOR));
+        }
+        Ok(())
+    }
 }
 
 /// Places the initial camera so the whole sample fits in the viewport.
@@ -266,7 +275,7 @@ mod tests {
     fn sample_scene_evaluates_panels_and_banding() {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, session.project()).expect("evaluated scene");
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.drawables().len(), 5);
         let mut groups = std::collections::HashMap::new();

@@ -84,7 +84,39 @@ impl EdgeBandPart {
     }
 }
 
-/// Builds one extruded body per banding in application order.
+/// The resolved cross-section of an edge band.
+///
+/// The engine resolves this from the session catalogue before evaluation; [`build_edge_bands`]
+/// falls back to the profile stored with the banding when no catalogue is available.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EdgeBandProfile {
+    thickness: Length,
+    width: Length,
+}
+
+impl EdgeBandProfile {
+    /// Creates a profile from a band thickness and a band width.
+    pub const fn new(thickness: Length, width: Length) -> Self {
+        Self { thickness, width }
+    }
+
+    /// The profile stored with a banding record.
+    pub fn from_band(band: &EdgeBanding) -> Self {
+        Self { thickness: band.last_known_thickness(), width: band.last_known_width() }
+    }
+
+    /// The thickness across the panel edge.
+    pub const fn thickness(self) -> Length {
+        self.thickness
+    }
+
+    /// The width of the band face.
+    pub const fn width(self) -> Length {
+        self.width
+    }
+}
+
+/// Builds one extruded body per banding in application order using the stored profiles.
 ///
 /// Each band is a rectangle in the panel plane, extruded across the panel thickness. A band is
 /// trimmed across the thickness when its profile is wider than the panel. At a right-angle corner,
@@ -95,10 +127,26 @@ pub fn build_edge_bands(
     panel: &Panel,
     geometry: PanelGeometry,
 ) -> Result<Vec<EdgeBandPart>, ParamError> {
+    build_edge_bands_with(kernel, panel, geometry, EdgeBandProfile::from_band)
+}
+
+/// Builds edge bands with profiles resolved by the caller.
+///
+/// The engine passes catalogue-resolved profiles here; the parametric layer itself never reads a
+/// catalogue. `profile` is called once per band, in application order.
+pub fn build_edge_bands_with<F>(
+    kernel: &mut dyn SolidKernel,
+    panel: &Panel,
+    geometry: PanelGeometry,
+    band_profile: F,
+) -> Result<Vec<EdgeBandPart>, ParamError>
+where
+    F: Fn(&EdgeBanding) -> EdgeBandProfile,
+{
     let bands = panel.edge_banding();
     let mut parts = Vec::with_capacity(bands.len());
     for (index, band) in bands.iter().enumerate() {
-        let rect = band_rect(geometry, bands, index, band)?;
+        let rect = band_rect(geometry, bands, index, band, &band_profile)?;
         let profile = Profile::new(
             vec![
                 DVec2::new(rect.x0, rect.y0),
@@ -108,7 +156,7 @@ pub fn build_edge_bands(
             ],
             Vec::new(),
         )?;
-        let visible_width = band.last_known_width().min(geometry.thickness());
+        let visible_width = band_profile(band).width().min(geometry.thickness());
         let panel_thickness = geometry.thickness().millimetres_f64();
         let visible_width = visible_width.millimetres_f64();
         let frame = Frame { origin: DVec3::new(0.0, 0.0, (panel_thickness - visible_width) * 0.5), ..Frame::WORLD };
@@ -125,15 +173,19 @@ struct BandRect {
     y1: f64,
 }
 
-fn band_rect(
+fn band_rect<F>(
     geometry: PanelGeometry,
     bands: &[EdgeBanding],
     index: usize,
     band: &EdgeBanding,
-) -> Result<BandRect, ParamError> {
+    band_profile: &F,
+) -> Result<BandRect, ParamError>
+where
+    F: Fn(&EdgeBanding) -> EdgeBandProfile,
+{
     let length = geometry.core_length().millimetres_f64();
     let width = geometry.core_width().millimetres_f64();
-    let thickness = band.last_known_thickness().millimetres_f64();
+    let thickness = band_profile(band).thickness().millimetres_f64();
     let (start_edge, end_edge) = match band.edge().get() {
         1 => (4, 2),
         2 => (1, 3),
@@ -141,8 +193,8 @@ fn band_rect(
         4 => (3, 1),
         _ => return Err(ParamError::UnsupportedEdge { edge: band.edge() }),
     };
-    let start = earlier_thickness(bands, index, start_edge);
-    let end = earlier_thickness(bands, index, end_edge);
+    let start = earlier_thickness(bands, index, start_edge, band_profile);
+    let end = earlier_thickness(bands, index, end_edge, band_profile);
     let start = start.millimetres_f64();
     let end = end.millimetres_f64();
     let rect = match band.edge().get() {
@@ -155,11 +207,14 @@ fn band_rect(
     Ok(rect)
 }
 
-fn earlier_thickness(bands: &[EdgeBanding], index: usize, edge: u32) -> Length {
+fn earlier_thickness<F>(bands: &[EdgeBanding], index: usize, edge: u32, band_profile: &F) -> Length
+where
+    F: Fn(&EdgeBanding) -> EdgeBandProfile,
+{
     bands
         .get(..index)
         .and_then(|earlier| earlier.iter().find(|band| band.edge().get() == edge))
-        .map_or(Length::ZERO, EdgeBanding::last_known_thickness)
+        .map_or(Length::ZERO, |band| band_profile(band).thickness())
 }
 
 fn build_cutout_tool(
@@ -297,8 +352,15 @@ mod tests {
     }
 
     fn band_volumes(panel: &Panel) -> Vec<f64> {
+        band_volumes_with(panel, EdgeBandProfile::from_band)
+    }
+
+    fn band_volumes_with<F>(panel: &Panel, band_profile: F) -> Vec<f64>
+    where
+        F: Fn(&EdgeBanding) -> EdgeBandProfile,
+    {
         let mut kernel = TruckKernel::new();
-        let parts = build_edge_bands(&mut kernel, panel, geometry(panel)).expect("edge bands");
+        let parts = build_edge_bands_with(&mut kernel, panel, geometry(panel), band_profile).expect("edge bands");
         let volumes = parts.iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).collect();
         kernel.clear();
         volumes
@@ -383,6 +445,17 @@ mod tests {
         let narrow = panel_with_bands(&[(1, false)], millimetres(10));
         let volumes = band_volumes(&narrow);
         assert!((volumes[0] - 700.0 * 2.0 * 10.0).abs() < 1.0, "narrow band volume {}", volumes[0]);
+    }
+
+    #[test]
+    fn edge_bands_use_caller_resolved_profiles() {
+        let panel = panel_with_bands(&[(1, false), (2, false)], millimetres(22));
+        let volumes = band_volumes_with(&panel, |_| EdgeBandProfile::new(millimetres(4), millimetres(10)));
+        let expected = [700.0 * 4.0 * 10.0, (500.0 + 4.0) * 4.0 * 10.0];
+        assert_eq!(volumes.len(), expected.len());
+        for (index, (volume, expected)) in volumes.iter().zip(expected).enumerate() {
+            assert!((volume - expected).abs() < 1.0, "band {index} volume {volume}, expected {expected}");
+        }
     }
 
     #[test]

@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
-use furnicraft_model::{Catalog, Id, Project};
+use furnicraft_model::{Catalog, EdgeBanding, Id, PanelGeometry, Project, ProjectError};
+use furnicraft_param::EdgeBandProfile;
 use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandRegistry};
 use crate::diagnostics::{PanelDiagnostic, diagnose_panel};
+use crate::resolve;
 
 /// A document plus its undo/redo history and saved-content marker.
 #[derive(Debug)]
@@ -39,6 +41,23 @@ impl Session {
     /// The session-scoped, read-only material catalogue.
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// Resolves one panel's geometry against the session catalogue.
+    ///
+    /// Catalogue material dimensions take precedence; the stored fallbacks are used only when a
+    /// material is missing. This keeps rendering, diagnostics and the panel card on one source of
+    /// truth.
+    pub fn panel_geometry(&self, panel_id: Id) -> Result<PanelGeometry, ProjectError> {
+        resolve::panel_geometry(&self.project, &self.catalog, panel_id)
+    }
+
+    /// Resolves a banding profile against the session catalogue.
+    ///
+    /// The catalogue supplies both the thickness that widens the core and the visible band width;
+    /// stored fallbacks cover a material that is missing from the catalogue.
+    pub fn band_profile(&self, band: &EdgeBanding) -> EdgeBandProfile {
+        EdgeBandProfile::new(resolve::band_thickness(band, &self.catalog), resolve::band_width(band, &self.catalog))
     }
 
     /// Resolves the derived issues of one panel against the session catalogue.
