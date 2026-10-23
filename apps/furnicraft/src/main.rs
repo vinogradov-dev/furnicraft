@@ -24,6 +24,7 @@ use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_model::Revision;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
+use furnicraft_ui::Editor;
 
 use crate::scene_build::{evaluate, home_camera, sample_session};
 
@@ -35,6 +36,7 @@ const ZOOM_PER_SCROLL_POINT: f64 = 0.004;
 
 struct FurniCraftApp {
     session: Session,
+    editor: Editor,
     kernel: TruckKernel,
     scene: SceneFrame,
     home_camera: Camera,
@@ -66,6 +68,7 @@ impl FurniCraftApp {
         Ok(Self {
             scene_revision: session.project().revision(),
             session,
+            editor: Editor::new(),
             kernel,
             scene,
             home_camera,
@@ -149,6 +152,49 @@ impl FurniCraftApp {
             egui::Color32::WHITE,
         );
     }
+
+    fn outliner(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("outliner").resizable(true).default_size(220.0).min_size(160.0).show(ui, |ui| {
+            ui.heading("Outliner");
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                self.editor.show_outliner(ui, &self.session);
+            });
+        });
+    }
+
+    fn panel_card(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::right("panel_card").resizable(true).default_size(300.0).min_size(260.0).show(ui, |ui| {
+            ui.heading("Panel");
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                self.editor.show_card(ui, &mut self.session);
+            });
+        });
+    }
+
+    fn workspace(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let mut reset = false;
+            ui.horizontal(|ui| {
+                ui.heading("FurniCraft");
+                ui.separator();
+                reset = ui.button("Frame all  (F)").clicked();
+                reset |= ui.input(|input| input.key_pressed(egui::Key::F));
+                ui.separator();
+                ui.label("LMB orbit  ·  MMB/RMB pan  ·  wheel zoom");
+                if let Some(error) = &self.last_error {
+                    ui.separator();
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+            });
+            if reset {
+                self.reset_view();
+            }
+            ui.separator();
+            self.viewport(ui);
+        });
+    }
 }
 
 impl eframe::App for FurniCraftApp {
@@ -156,25 +202,9 @@ impl eframe::App for FurniCraftApp {
         if let Err(error) = self.sync_scene() {
             self.last_error = Some(error);
         }
-
-        let mut reset = false;
-        ui.horizontal(|ui| {
-            ui.heading("FurniCraft");
-            ui.separator();
-            reset = ui.button("Frame all  (F)").clicked();
-            reset |= ui.input(|input| input.key_pressed(egui::Key::F));
-            ui.separator();
-            ui.label("LMB orbit  ·  MMB/RMB pan  ·  wheel zoom");
-            if let Some(error) = &self.last_error {
-                ui.separator();
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
-        });
-        if reset {
-            self.reset_view();
-        }
-        ui.separator();
-        self.viewport(ui);
+        self.outliner(ui);
+        self.panel_card(ui);
+        self.workspace(ui);
     }
 }
 

@@ -1364,6 +1364,10 @@ dependencies = [
  "egui",
  "furnicraft-engine",
  "furnicraft-model",
+ "furnicraft-testkit",
+ "furnicraft-units",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
