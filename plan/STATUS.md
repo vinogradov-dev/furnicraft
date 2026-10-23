@@ -10,6 +10,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(units): parse millimetre text`
 - `feat(app): add the sample material catalogue`
 - `fix(engine): resolve panel geometry from the catalogue`
 - `feat(engine): rename panels`
