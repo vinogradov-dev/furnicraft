@@ -216,7 +216,7 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 
 ## 9. Open questions
 
-1. Contour implementation: the model and rules are in [ADR 0009](../decisions/0009-contour-first-panel-model.md); the 2D line/arc offset and boolean layer still needs a spike.
+1. Contour implementation: the model and rules are in [ADR 0009](../decisions/0009-contour-first-panel-model.md); the line/arc offset layer is decided in [ADR 0010](../decisions/0010-analytic-line-arc-contours.md). The document schema for corner features and bows, and the 2D boolean layer for through cutouts, are still open.
 2. Edge banding milling: rounding the faces and corner.
 3. Whether the card should show core and overall size separately from the nominal size.
 

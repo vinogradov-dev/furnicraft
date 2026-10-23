@@ -14,6 +14,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0007](0007-edge-banding-v1.md) | Edge banding v1: ordered bands and butt joints | Accepted |
 | [0008](0008-panel-diagnostics.md) | Panel diagnostics and command invalidation | Accepted |
 | [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted |
+| [0010](0010-analytic-line-arc-contours.md) | Analytic line and arc contours for panel offsets | Accepted |
 
 ## Format
 
