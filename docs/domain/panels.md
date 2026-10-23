@@ -60,7 +60,9 @@ Panel material and edge-banding material are described in [Materials and catalog
 - In core-local coordinates, banding on the bottom and left sides has negative coordinates. In the
   nominal frame an included band lies inside the nominal edge, for example `y` from `0` to `t` on the
   bottom; a non-included band lies outside it, for example `y` from `-t` to `0`.
-- Machining is stored in core coordinates. The machine works on the board, so this is the primary system for holes and cutouts.
+- Machining is stored in nominal panel-local coordinates: the panel's first corner is the zero, and
+  an included band or a trimmed end changes the core without moving the local frame. The machine
+  works on the board, but its coordinates are derived from this fixed frame at the CAM boundary.
 - Nominal size and overall size are derived values for the card, reports and UI. They do not have to coincide with `0..core`.
 
 ## 4. Panel dimensions

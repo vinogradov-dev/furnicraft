@@ -5,11 +5,13 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: contour-first panels, stage 2b — tangent paths, chamfer corner banding and shaped band strips are green; stage 3 is next
+- Working on: stage 3 — panel machining now lives in the nominal panel frame (ADR 0011, schema v3);
+  the through-cutout union layer is next
 - Gate: `cargo xtask ci` — green
 
 ## Done
 
+- `feat(model): move panel machining to the nominal panel frame`
 - `feat: add tangent-path banding and shaped panel strips`
 - `feat(model): add contour corner features and bowed edges`
 - `feat(geom): add line and arc contour offsets`

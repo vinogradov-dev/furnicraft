@@ -135,6 +135,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
   - `material = None` and the panel is marked as a problem panel;
   - the user sees a warning and can assign a material.
 - The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
+- Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo

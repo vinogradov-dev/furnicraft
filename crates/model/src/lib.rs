@@ -212,7 +212,9 @@ pub struct Project {
 
 impl Project {
     /// The schema version written by this build.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+    ///
+    /// Version 3 moved panel-owned machining from core-local to nominal panel-local coordinates.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
     /// Maximum nesting depth of assemblies, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -810,9 +812,11 @@ fn rect_inside(rect: PanelRect, geometry: PanelGeometry) -> bool {
     let y0 = rect.y().micrometres() as i128;
     let x1 = x0 + rect.width().micrometres() as i128;
     let y1 = y0 + rect.height().micrometres() as i128;
-    let panel_x = geometry.core_length().micrometres() as i128;
-    let panel_y = geometry.core_width().micrometres() as i128;
-    x0 >= 0 && y0 >= 0 && x1 <= panel_x && y1 <= panel_y
+    let core_x0 = geometry.core_x().micrometres() as i128;
+    let core_y0 = geometry.core_y().micrometres() as i128;
+    let core_x1 = core_x0 + geometry.core_length().micrometres() as i128;
+    let core_y1 = core_y0 + geometry.core_width().micrometres() as i128;
+    x0 >= core_x0 && y0 >= core_y0 && x1 <= core_x1 && y1 <= core_y1
 }
 
 fn rects_overlap(a: PanelRect, b: PanelRect) -> bool {
@@ -962,6 +966,12 @@ pub enum ProjectError {
         /// The other cutout in the conflicting pair.
         other: Id,
     },
+    /// A machining coordinate overflows while a legacy document is migrated.
+    #[error("machining on panel {panel} overflows while migrating to the nominal frame")]
+    MachiningCoordinateOverflow {
+        /// The panel whose machining could not be translated.
+        panel: Id,
+    },
     /// A shaped panel cannot take machining until the contour boolean layer lands.
     #[error("shaped panel {panel} does not support machining yet")]
     ContourMachiningUnsupported {
@@ -1000,14 +1010,20 @@ impl TryFrom<ProjectWire> for Project {
 
     fn try_from(wire: ProjectWire) -> Result<Self, Self::Error> {
         // Version 1 stored a `size` on every panel; `PanelWire` migrates it to nominal size plus a
-        // fallback. Both versions are normalized to the current one on load.
-        if wire.schema_version != 1 && wire.schema_version != Project::CURRENT_SCHEMA_VERSION {
+        // fallback. Version 2 stored machining in core-local coordinates; the migration below
+        // translates it to the nominal panel frame. All versions are normalized to the current one
+        // on load.
+        if !(1..=Project::CURRENT_SCHEMA_VERSION).contains(&wire.schema_version) {
             return Err(ProjectError::UnsupportedSchemaVersion {
                 found: wire.schema_version,
                 supported: Project::CURRENT_SCHEMA_VERSION,
             });
         }
-        let max_id = scan_tree(&wire.root)?;
+        let mut root = wire.root;
+        if wire.schema_version <= 2 {
+            migrate_machining_to_nominal(&mut root, 1)?;
+        }
+        let max_id = scan_tree(&root)?;
         let next_id = match wire.next_id {
             Some(next_id) if next_id.get() <= max_id => {
                 return Err(ProjectError::NextIdNotAfterMax { next: next_id, max: max_id });
@@ -1015,8 +1031,26 @@ impl TryFrom<ProjectWire> for Project {
             Some(next_id) => next_id,
             None => next_id_after(max_id)?,
         };
-        Ok(Self { schema_version: Project::CURRENT_SCHEMA_VERSION, revision: wire.revision, next_id, root: wire.root })
+        Ok(Self { schema_version: Project::CURRENT_SCHEMA_VERSION, revision: wire.revision, next_id, root })
     }
+}
+
+/// Translates version-2 core-local machining into the nominal panel frame.
+///
+/// The conversion adds the stored fallback core origin to every cutout, so a loaded file keeps the
+/// hole at the same physical position. The migration is bounded by the same depth limit as the
+/// document tree.
+fn migrate_machining_to_nominal(assembly: &mut Assembly, depth: u32) -> Result<(), ProjectError> {
+    if depth > Project::MAX_ASSEMBLY_DEPTH {
+        return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
+    }
+    for child in &mut assembly.children {
+        match child {
+            Node::Assembly(child) => migrate_machining_to_nominal(child, depth.saturating_add(1))?,
+            Node::Panel(panel) => panel.migrate_machining_from_core()?,
+        }
+    }
+    Ok(())
 }
 
 /// A node in the product tree.
@@ -1147,7 +1181,7 @@ impl Panel {
         self.placement
     }
 
-    /// Machining owned by this panel, in core-local coordinates.
+    /// Machining owned by this panel, in nominal panel-local coordinates.
     pub fn machining(&self) -> &[Machining] {
         &self.machining
     }
@@ -1349,6 +1383,49 @@ impl Panel {
     /// Resolves geometry using the stored fallback thickness.
     pub fn geometry_with_fallbacks(&self) -> Result<PanelGeometry, PanelGeometryError> {
         self.geometry(self.last_known_thickness)
+    }
+
+    /// Translates version-2 core-local cutouts into the nominal panel frame.
+    ///
+    /// The legacy core origin is derived from the included bottom and left banding fallbacks. A
+    /// panel with a shaped contour has no stored core origin, so its machining is left unchanged.
+    fn migrate_machining_from_core(&mut self) -> Result<(), ProjectError> {
+        if self.machining.is_empty() || self.has_contour_features() {
+            return Ok(());
+        }
+        let mut core_x = Length::ZERO;
+        let mut core_y = Length::ZERO;
+        for band in &self.edge_banding {
+            if !band.included_in_size() {
+                continue;
+            }
+            match band.edge().get() {
+                1 => {
+                    core_y = core_y
+                        .checked_add(band.last_known_thickness())
+                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+                }
+                4 => {
+                    core_x = core_x
+                        .checked_add(band.last_known_thickness())
+                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+                }
+                _ => {}
+            }
+        }
+        if core_x == Length::ZERO && core_y == Length::ZERO {
+            return Ok(());
+        }
+        for machining in &mut self.machining {
+            let Machining::Cutout(cutout) = machining;
+            let CutoutShape::Rectangle(rect) = cutout.shape;
+            let x = rect.x().checked_add(core_x).ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+            let y = rect.y().checked_add(core_y).ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+            let shape = PanelRect::new(x, y, rect.width(), rect.height())
+                .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+            cutout.shape = CutoutShape::Rectangle(shape);
+        }
+        Ok(())
     }
 
     fn upsert_corner_feature(&mut self, feature: CornerFeature) {
@@ -1578,11 +1655,10 @@ pub enum Machining {
 
 /// A cutout in a panel.
 ///
-/// Coordinates are core-local: `(0, 0)` is the core zero, not the nominal minimum corner, with
-/// `+X` along the length and `+Y` along the width. Machining therefore stays on the board when an
-/// included edge band moves the core origin. `entry` names the face the cut enters from; a blind
-/// cutout removes material from that face up to its depth, while a through cutout removes the full
-/// thickness.
+/// Coordinates are nominal panel-local: `(0, 0)` is the minimum corner of the nominal rectangle,
+/// with `+X` along the length and `+Y` along the width. The core origin and included edge banding
+/// never move the panel frame. `entry` names the face the cut enters from; a blind cutout removes
+/// material from that face up to its depth, while a through cutout removes the full thickness.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cutout {
@@ -1602,7 +1678,7 @@ impl Cutout {
         self.id
     }
 
-    /// The cutout outline in core-local coordinates.
+    /// The cutout outline in nominal panel-local coordinates.
     pub const fn shape(&self) -> CutoutShape {
         self.shape
     }
@@ -1622,7 +1698,7 @@ impl Cutout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CutoutShape {
-    /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the core zero.
+    /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the nominal panel zero.
     Rectangle(PanelRect),
 }
 
@@ -1639,10 +1715,11 @@ pub enum CutoutDepth {
     },
 }
 
-/// A rectangle in core-local XY coordinates.
+/// A rectangle in nominal panel-local XY coordinates.
 ///
-/// `x` and `y` are the minimum corner relative to the core zero; `width` and `height` are
-/// positive. Cutout validation checks that the rectangle stays within the core outline.
+/// `x` and `y` are the minimum corner relative to the nominal panel zero; `width` and `height`
+/// are positive. Cutout validation checks that the rectangle stays within the core outline, which
+/// may start at a positive `(core_x, core_y)` when an included band trims the low edges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "PanelRectWire")]
 pub struct PanelRect {
@@ -3155,7 +3232,7 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":2", "\"schema_version\":3", 1);
+        let newer = text.replacen("\"schema_version\":3", "\"schema_version\":4", 1);
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 
@@ -3190,6 +3267,88 @@ mod tests {
         assert_eq!(panel.last_known_thickness(), millimetres(18));
         assert!(panel.edge_banding().is_empty());
         assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn version_two_machining_migrates_from_core_to_nominal_coordinates() {
+        let legacy = r#"{
+            "schema_version": 2,
+            "revision": 4,
+            "next_id": 6,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Panel",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "last_known_thickness": 18000,
+                    "machining": [{"cutout": {
+                        "id": 5,
+                        "shape": {"rectangle": {"x": 1000, "y": 1000, "width": 10000, "height": 10000}},
+                        "depth": "through",
+                        "entry": "A"
+                    }}],
+                    "edge_banding": [
+                        {
+                            "edge": 1,
+                            "material": 1,
+                            "included_in_size": true,
+                            "last_known_thickness": 2000,
+                            "last_known_width": 22000
+                        },
+                        {
+                            "edge": 4,
+                            "material": 1,
+                            "included_in_size": true,
+                            "last_known_thickness": 2000,
+                            "last_known_width": 22000
+                        }
+                    ]
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version two");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+
+        let text = serde_json::to_string(&project).expect("serialize migrated project");
+        let decoded: Project = serde_json::from_str(&text).expect("reload migrated project");
+        let panel = decoded.panel(Id::new(2).expect("id")).expect("reloaded panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+    }
+
+    #[test]
+    fn cutout_coordinates_are_nominal_and_do_not_move_with_the_core() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let material = MaterialId::new(99).expect("material id");
+        for edge in [1, 4] {
+            let band =
+                EdgeBanding::new(EdgeId::new(edge).expect("edge id"), material, true, millimetres(2), millimetres(22))
+                    .expect("valid banding");
+            project.set_edge_banding(panel_id, band).expect("set banding");
+        }
+        let geometry = project.panel(panel_id).expect("panel").geometry_with_fallbacks().expect("geometry");
+        assert_eq!(geometry.core_x(), millimetres(2));
+        assert_eq!(geometry.core_y(), millimetres(2));
+
+        let shape = CutoutShape::Rectangle(sample_rect(10, 10, 20, 20));
+        project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        let panel = project.panel(panel_id).expect("panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), shape);
+
+        let under_the_band = CutoutShape::Rectangle(sample_rect(1, 1, 10, 10));
+        assert_eq!(
+            project.add_cutout(panel_id, under_the_band, CutoutDepth::Through, FaceSide::A),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
     }
 
     #[test]

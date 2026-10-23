@@ -179,7 +179,7 @@ pub const CUTOUT_CREATE_LABEL: &str = "Create cutout";
 pub struct CutoutCreate {
     /// Id of the panel that receives the cutout.
     pub panel: Id,
-    /// Cutout outline in core-local coordinates.
+    /// Cutout outline in nominal panel-local coordinates.
     pub shape: CutoutShape,
     /// Through or blind depth.
     pub depth: CutoutDepth,

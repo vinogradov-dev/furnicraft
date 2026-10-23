@@ -13,8 +13,9 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0006](0006-panel-nominal-and-resolved-geometry.md) | Panels store nominal size; geometry is resolved | Accepted; core-origin placement superseded by 0009 |
 | [0007](0007-edge-banding-v1.md) | Edge banding v1: ordered bands and butt joints | Accepted |
 | [0008](0008-panel-diagnostics.md) | Panel diagnostics and command invalidation | Accepted |
-| [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted |
+| [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted; core-local machining superseded by 0011 |
 | [0010](0010-analytic-line-arc-contours.md) | Analytic line and arc contours for panel offsets | Accepted |
+| [0011](0011-panel-local-machining.md) | Machining uses the nominal panel frame | Accepted |
 
 ## Format
 

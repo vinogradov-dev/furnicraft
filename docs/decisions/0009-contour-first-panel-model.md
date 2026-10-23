@@ -1,6 +1,6 @@
 # 0009. Contour-first panel geometry
 
-- Status: Accepted
+- Status: Accepted; core-local machining superseded by 0011
 - Date: 2026-10-23
 
 ## Context

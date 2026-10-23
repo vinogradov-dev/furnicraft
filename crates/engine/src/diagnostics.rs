@@ -5,8 +5,8 @@
 //! the document and never make a scene unreadable.
 
 use furnicraft_model::{
-    Catalog, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometryError, PanelRect, Project,
-    ProjectError, VertexId,
+    Catalog, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometry, PanelGeometryError, PanelRect,
+    Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
 
@@ -96,7 +96,7 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
 
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
-        if !rect_inside(cutout_rect(cutout.shape()), geometry.core_length(), geometry.core_width()) {
+        if !rect_inside(cutout_rect(cutout.shape()), geometry) {
             diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
         }
         if let CutoutDepth::Blind { depth } = cutout.depth()
@@ -119,14 +119,16 @@ fn cutout_rect(shape: CutoutShape) -> PanelRect {
     }
 }
 
-fn rect_inside(rect: PanelRect, core_length: Length, core_width: Length) -> bool {
+fn rect_inside(rect: PanelRect, geometry: PanelGeometry) -> bool {
     let x0 = rect.x().micrometres() as i128;
     let y0 = rect.y().micrometres() as i128;
     let x1 = x0 + rect.width().micrometres() as i128;
     let y1 = y0 + rect.height().micrometres() as i128;
-    let panel_x = core_length.micrometres() as i128;
-    let panel_y = core_width.micrometres() as i128;
-    x0 >= 0 && y0 >= 0 && x1 <= panel_x && y1 <= panel_y
+    let core_x0 = geometry.core_x().micrometres() as i128;
+    let core_y0 = geometry.core_y().micrometres() as i128;
+    let core_x1 = core_x0 + geometry.core_length().micrometres() as i128;
+    let core_y1 = core_y0 + geometry.core_width().micrometres() as i128;
+    x0 >= core_x0 && y0 >= core_y0 && x1 <= core_x1 && y1 <= core_y1
 }
 
 #[cfg(test)]
