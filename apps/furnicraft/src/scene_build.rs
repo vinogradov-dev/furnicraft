@@ -13,8 +13,8 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Assembly, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, Node, Panel, PanelNominalSize,
-    PanelRect, Placement, Project,
+    Assembly, Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
+    Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
 };
 use furnicraft_param::{build_edge_bands_with, build_panel};
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
@@ -26,8 +26,11 @@ const PANEL_COLORS: [[f32; 4]; 3] = [[0.62, 0.42, 0.22, 1.0], [0.50, 0.34, 0.20,
 /// A common debug colour for every band on a panel.
 const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
 
-/// The sample banding material id, absent from the sample catalogue by design.
-const SAMPLE_EDGE_MATERIAL: u64 = 101;
+/// Sample catalogue ids. They are stable only for this demonstration document.
+const SAMPLE_OAK_MATERIAL: u64 = 1;
+const SAMPLE_WHITE_MATERIAL: u64 = 2;
+const SAMPLE_OAK_EDGE: u64 = 101;
+const SAMPLE_WHITE_EDGE: u64 = 102;
 
 /// A world-space axis-aligned bounds box built from evaluated meshes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,28 +88,69 @@ pub fn sample_session() -> Result<Session, String> {
     let root_id = id(1)?;
     let root = Assembly::new(root_id, "FurniCraft sample", Placement::IDENTITY, Vec::new());
     let mut project = Project::new(root).map_err(describe)?;
+    let oak = material_id(SAMPLE_OAK_MATERIAL)?;
+    let white = material_id(SAMPLE_WHITE_MATERIAL)?;
+    let oak_edge = material_id(SAMPLE_OAK_EDGE)?;
+    let white_edge = material_id(SAMPLE_WHITE_EDGE)?;
 
     let standing = Placement::new(DVec3::ZERO, DQuat::from_rotation_x(FRAC_PI_2)).map_err(describe)?;
     let thickness = millimetres(18)?;
     let back = project
-        .add_panel(root_id, "Back panel", panel_nominal_size(900, 600)?, None, thickness, standing)
+        .add_panel(root_id, "Back panel", panel_nominal_size(900, 600)?, Some(oak), thickness, standing)
         .map_err(describe)?;
     project.add_cutout(back, cutout(60, 70, 180, 140)?, CutoutDepth::Through, FaceSide::A).map_err(describe)?;
     project
         .add_cutout(back, cutout(330, 70, 180, 140)?, CutoutDepth::Blind { depth: millimetres(12)? }, FaceSide::A)
         .map_err(describe)?;
-    add_band(&mut project, back, 1, true)?;
-    add_band(&mut project, back, 2, false)?;
+    add_band(&mut project, back, 1, true, oak_edge)?;
+    add_band(&mut project, back, 2, false, oak_edge)?;
 
     let floor = Placement::new(DVec3::new(150.0, -500.0, 0.0), DQuat::IDENTITY).map_err(describe)?;
     let shelf = project
-        .add_panel(root_id, "Loose shelf", panel_nominal_size(600, 400)?, None, thickness, floor)
+        .add_panel(root_id, "Loose shelf", panel_nominal_size(600, 400)?, Some(white), thickness, floor)
         .map_err(describe)?;
     project.add_cutout(shelf, cutout(80, 60, 150, 100)?, CutoutDepth::Through, FaceSide::B).map_err(describe)?;
-    add_band(&mut project, shelf, 4, true)?;
+    add_band(&mut project, shelf, 4, true, white_edge)?;
 
     project.validate().map_err(describe)?;
-    Ok(Session::new(project))
+    Ok(Session::with_catalog(project, sample_catalog()?))
+}
+
+/// Builds the demonstration catalogue handed to the sample session.
+pub fn sample_catalog() -> Result<Catalog, String> {
+    let thickness = millimetres(18)?;
+    let oak =
+        PanelMaterial::new(material_id(SAMPLE_OAK_MATERIAL)?, "Oak veneered chipboard", "chipboard", thickness, "oak")
+            .map_err(describe)?;
+    let white = PanelMaterial::new(
+        material_id(SAMPLE_WHITE_MATERIAL)?,
+        "White melamine chipboard",
+        "chipboard",
+        thickness,
+        "white",
+    )
+    .map_err(describe)?;
+    let edge_thickness = millimetres(2)?;
+    let edge_width = millimetres(22)?;
+    let oak_edge = EdgeBandingMaterial::new(
+        material_id(SAMPLE_OAK_EDGE)?,
+        "Oak ABS edge",
+        "abs",
+        edge_thickness,
+        edge_width,
+        "oak",
+    )
+    .map_err(describe)?;
+    let white_edge = EdgeBandingMaterial::new(
+        material_id(SAMPLE_WHITE_EDGE)?,
+        "White ABS edge",
+        "abs",
+        edge_thickness,
+        edge_width,
+        "white",
+    )
+    .map_err(describe)?;
+    Catalog::new(vec![oak, white], vec![oak_edge, white_edge]).map_err(describe)
 }
 
 /// Evaluates every panel in the session into world-space drawables.
@@ -200,13 +244,22 @@ fn id(value: u64) -> Result<Id, String> {
     Id::new(value).ok_or_else(|| "ids start at one".to_owned())
 }
 
+fn material_id(value: u64) -> Result<MaterialId, String> {
+    MaterialId::new(value).ok_or_else(|| "material ids start at one".to_owned())
+}
+
 fn millimetres(value: i64) -> Result<Length, String> {
     Length::from_millimetres(value).ok_or_else(|| format!("{value} mm does not fit a length"))
 }
 
-fn add_band(project: &mut Project, panel: Id, edge: u32, included_in_size: bool) -> Result<(), String> {
+fn add_band(
+    project: &mut Project,
+    panel: Id,
+    edge: u32,
+    included_in_size: bool,
+    material: MaterialId,
+) -> Result<(), String> {
     let edge = EdgeId::new(edge).ok_or_else(|| "edge ids start at one".to_owned())?;
-    let material = MaterialId::new(SAMPLE_EDGE_MATERIAL).ok_or_else(|| "sample material id is zero".to_owned())?;
     let band =
         EdgeBanding::new(edge, material, included_in_size, millimetres(2)?, millimetres(22)?).map_err(describe)?;
     project.set_edge_banding(panel, band).map_err(describe)?;
@@ -256,6 +309,27 @@ mod tests {
         assert_eq!(panels, 2);
         assert_eq!(cutouts, 3);
         assert_eq!(bands, 3);
+    }
+
+    #[test]
+    fn sample_materials_resolve_from_the_catalogue() {
+        let session = sample_session().expect("sample session");
+        let catalog = session.catalog();
+        let mut panel_materials = Vec::new();
+        for child in session.project().root().children() {
+            if let Node::Panel(panel) = child {
+                let material = panel.material().expect("sample panel has a material");
+                let resolved = catalog.panel_material(material).expect("sample panel material resolves");
+                assert!(!resolved.name().is_empty());
+                panel_materials.push(material);
+                for band in panel.edge_banding() {
+                    let resolved = catalog.edge_material(band.material()).expect("sample edge material resolves");
+                    assert!(!resolved.name().is_empty());
+                }
+            }
+        }
+        assert_eq!(panel_materials.len(), 2);
+        assert_ne!(panel_materials[0], panel_materials[1], "the two panels demonstrate different materials");
     }
 
     #[test]

@@ -10,6 +10,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(app): add the sample material catalogue`
 - `fix(engine): resolve panel geometry from the catalogue`
 - `feat(engine): rename panels`
 - `feat(param): build edge bands and expose panel diagnostics`
@@ -24,8 +25,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Add the sample material catalogue to the application and assign materials to the sample panels.
-2. Build the outliner and panel card on the existing commands, with diagnostics and undo/redo.
+1. Build the outliner and panel card on the existing commands, with diagnostics and undo/redo.
 
 ## Open questions
 
