@@ -5,12 +5,13 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M4 — Panel geometry
-- Working on: catalogue-aware material and banding commands
+- Working on: edge-banding geometry and derived panel diagnostics
 - Gate: `cargo xtask ci` — green
 
 ## Done
 
-- `feat(model): store panel nominal geometry and materials` (uncommitted until the checkpoint)
+- `feat(engine): add catalogue-aware panel commands` (uncommitted until the checkpoint)
+- `feat(model): store panel nominal geometry and materials`
 - `feat(model): add the material catalogue`
 - `docs(decisions): define panel, material and banding model`
 - `docs(decisions): add architecture decision records`
@@ -20,9 +21,9 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Add `panel.material.set`, `panel.edge_banding.set` and `panel.edge_banding.clear` with catalogue resolution and tests.
-2. Build separate core and edge-band bodies in `param`, and render banding in the sample scene.
-3. Add derived panel diagnostics: missing materials, non-positive core and machining that no longer fits.
+1. Build separate core and edge-band bodies in `param`, and render banding in the sample scene with the panel id on every group part.
+2. Add derived panel diagnostics: missing materials, non-positive core and machining that no longer fits.
+3. Show panel issues in the UI when the panel card lands.
 
 ## Open questions
 
@@ -31,7 +32,7 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Known debt
 
-- Panel commands still read banding fallbacks; a catalogue refresh path is not wired yet.
+- Existing banding records still use stored fallbacks; a catalogue refresh path is not wired yet.
 - `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not implemented.
 - The app always loads `sample_session()`; there is no scene load/save path.
 - `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

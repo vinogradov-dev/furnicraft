@@ -34,6 +34,26 @@ pub const fn sample_panel_thickness() -> Length {
     Length::from_micrometres(18_000)
 }
 
+/// A 5 mm fallback thickness for material-change diagnostics.
+pub const fn sample_thin_panel_thickness() -> Length {
+    Length::from_micrometres(5_000)
+}
+
+/// A 500 mm banding thickness, wide enough to empty the sample core.
+pub const fn sample_wide_band_thickness() -> Length {
+    Length::from_micrometres(500_000)
+}
+
+/// A 2 mm banding profile thickness in the panel plane.
+pub const fn sample_band_thickness() -> Length {
+    Length::from_micrometres(2_000)
+}
+
+/// A 22 mm banding width.
+pub const fn sample_band_width() -> Length {
+    Length::from_micrometres(22_000)
+}
+
 /// A 700 x 500 mm nominal panel used by tests that need a valid size.
 #[allow(clippy::expect_used)]
 pub fn sample_panel_nominal_size() -> PanelNominalSize {

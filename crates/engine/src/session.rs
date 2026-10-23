@@ -107,14 +107,20 @@ impl Session {
 mod tests {
     use super::*;
 
-    use furnicraft_model::{CutoutDepth, CutoutShape, FaceSide, Id, Machining, Placement, ProjectError, Revision};
+    use furnicraft_model::{
+        Catalog, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, Id, Machining, PanelMaterial,
+        Placement, ProjectError, Revision,
+    };
     use furnicraft_testkit::{
-        sample_blind_depth, sample_catalog, sample_cutout_rect, sample_edge_cutout_rect, sample_material_id,
-        sample_narrow_panel_nominal_size, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
-        sample_panel_nominal_size, sample_panel_thickness, sample_project, sample_resized_panel_nominal_size,
+        sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
+        sample_edge_cutout_rect, sample_edge_material_id, sample_material_id, sample_narrow_panel_nominal_size,
+        sample_outside_cutout_rect, sample_overlapping_cutout_rect, sample_panel_nominal_size, sample_panel_thickness,
+        sample_project, sample_resized_panel_nominal_size, sample_thin_panel_thickness, sample_wide_band_thickness,
     };
 
-    use crate::panel_cmds::{CutoutCreate, PanelCreate, PanelResize};
+    use crate::panel_cmds::{
+        CutoutCreate, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelResize,
+    };
 
     fn sample_session() -> Session {
         Session::with_catalog(sample_project(), sample_catalog())
@@ -385,6 +391,160 @@ mod tests {
             FaceSide::A,
         );
         assert!(!spec.enabled(&session, &json_params(&overlapping)));
+    }
+
+    #[test]
+    fn dispatch_material_set_changes_the_panel_and_history() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let params = json_params(&PanelMaterialSet { panel: panel_id, material: sample_material_id() });
+
+        let outcome = session.dispatch("panel.material.set", &params).expect("set material");
+        assert_eq!(outcome.created_id(), None);
+        assert_eq!(session.project().revision().get(), 1);
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(panel.material(), Some(sample_material_id()));
+        assert_eq!(panel.last_known_thickness(), sample_panel_thickness());
+        assert!(session.is_dirty());
+
+        session.undo().expect("undo");
+        assert_eq!(session.project().revision().get(), 2);
+        assert_eq!(session.project().panel(panel_id).expect("panel").material(), None);
+        assert!(!session.is_dirty());
+
+        session.redo().expect("redo");
+        assert_eq!(session.project().panel(panel_id).expect("panel").material(), Some(sample_material_id()));
+        assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn material_set_accepts_machining_that_no_longer_fits() {
+        let panel_material =
+            PanelMaterial::new(sample_material_id(), "Thin board", "mdf", sample_thin_panel_thickness(), "white")
+                .expect("thin material");
+        let catalog = Catalog::new(vec![panel_material], Vec::new()).expect("catalog");
+        let mut session = Session::with_catalog(sample_project(), catalog);
+        let panel_id = Id::new(4).expect("id");
+        let blind = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Blind { depth: sample_blind_depth() },
+            FaceSide::A,
+        );
+        session.dispatch("cutout.create", &json_params(&blind)).expect("blind cutout");
+
+        let params = json_params(&PanelMaterialSet { panel: panel_id, material: sample_material_id() });
+        session.dispatch("panel.material.set", &params).expect("thinner material is accepted");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(panel.last_known_thickness(), sample_thin_panel_thickness());
+        assert_eq!(panel.machining().len(), 1, "machining data is preserved");
+    }
+
+    #[test]
+    fn unknown_materials_are_rejected_without_mutation() {
+        let mut session = sample_session();
+        let missing = furnicraft_model::MaterialId::new(999).expect("id");
+        let params = json_params(&PanelMaterialSet { panel: Id::new(2).expect("id"), material: missing });
+        let error = session.dispatch("panel.material.set", &params).expect_err("unknown material");
+        assert!(matches!(error, CommandError::UnknownMaterial { material } if material == missing));
+        assert_eq!(session.project().revision(), Revision::ZERO);
+
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.material.set").expect("registered");
+        assert!(!spec.enabled(&session, &params));
+
+        let mut create = panel_create(&session, "Back");
+        create.material = missing;
+        assert!(!registry.get("panel.create").expect("registered").enabled(&session, &json_params(&create)));
+    }
+
+    #[test]
+    fn edge_banding_set_orders_replaces_and_clears() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let bottom = EdgeId::new(1).expect("edge id");
+        let right = EdgeId::new(2).expect("edge id");
+
+        let first = PanelEdgeBandingSet {
+            panel: panel_id,
+            edge: bottom,
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        session.dispatch("panel.edge_banding.set", &json_params(&first)).expect("first banding");
+        assert_eq!(session.project().revision().get(), 1);
+        let geometry = session.project().panel(panel_id).expect("panel").geometry_with_fallbacks().expect("geometry");
+        assert_eq!(
+            geometry.core_width(),
+            sample_panel_nominal_size().width().checked_sub(sample_band_thickness()).expect("sample core fits")
+        );
+        assert_eq!(geometry.overall_width(), sample_panel_nominal_size().width());
+
+        let second = PanelEdgeBandingSet {
+            panel: panel_id,
+            edge: right,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        session.dispatch("panel.edge_banding.set", &json_params(&second)).expect("second banding");
+        let bands = session.project().panel(panel_id).expect("panel").edge_banding();
+        assert_eq!(bands.iter().map(|band| band.edge().get()).collect::<Vec<_>>(), vec![1, 2]);
+
+        session.dispatch("panel.edge_banding.set", &json_params(&first)).expect("reapply bottom");
+        let bands = session.project().panel(panel_id).expect("panel").edge_banding();
+        assert_eq!(bands.iter().map(|band| band.edge().get()).collect::<Vec<_>>(), vec![2, 1]);
+
+        let clear = PanelEdgeBandingClear { panel: panel_id, edge: bottom };
+        session.dispatch("panel.edge_banding.clear", &json_params(&clear)).expect("clear bottom");
+        let bands = session.project().panel(panel_id).expect("panel").edge_banding();
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].edge(), right);
+
+        session.undo().expect("undo clear");
+        let bands = session.project().panel(panel_id).expect("panel").edge_banding();
+        assert_eq!(bands.iter().map(|band| band.edge().get()).collect::<Vec<_>>(), vec![2, 1]);
+    }
+
+    #[test]
+    fn edge_banding_set_rejects_a_band_that_empties_the_core() {
+        let edge_material = EdgeBandingMaterial::new(
+            sample_edge_material_id(),
+            "Wide edge",
+            "pvc",
+            sample_wide_band_thickness(),
+            sample_band_width(),
+            "white",
+        )
+        .expect("wide edge material");
+        let catalog = Catalog::new(Vec::new(), vec![edge_material]).expect("catalog");
+        let mut session = Session::with_catalog(sample_project(), catalog);
+        let params = PanelEdgeBandingSet {
+            panel: Id::new(2).expect("id"),
+            edge: EdgeId::new(1).expect("edge id"),
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.edge_banding.set").expect("registered");
+        assert!(!spec.enabled(&session, &json_params(&params)));
+
+        let error = session.dispatch("panel.edge_banding.set", &json_params(&params)).expect_err("empty core");
+        assert!(matches!(error, CommandError::Model(ProjectError::PanelGeometry(_))));
+        assert!(session.project().panel(Id::new(2).expect("id")).expect("panel").edge_banding().is_empty());
+        assert_eq!(session.project().revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn edge_banding_clear_of_a_missing_edge_is_rejected() {
+        let mut session = sample_session();
+        let params = PanelEdgeBandingClear { panel: Id::new(2).expect("id"), edge: EdgeId::new(1).expect("edge id") };
+        let error = session.dispatch("panel.edge_banding.clear", &json_params(&params)).expect_err("missing band");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::EdgeBandingNotFound { panel, edge })
+                if panel == Id::new(2).expect("id") && edge == EdgeId::new(1).expect("edge id")
+        ));
+        assert_eq!(session.project().revision(), Revision::ZERO);
     }
 
     #[test]

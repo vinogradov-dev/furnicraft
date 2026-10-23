@@ -80,7 +80,14 @@ impl CommandSpec {
 }
 
 /// The commands compiled into this build.
-static COMMANDS: &[CommandSpec] = &[panel_cmds::CREATE, panel_cmds::RESIZE, panel_cmds::CUTOUT_CREATE];
+static COMMANDS: &[CommandSpec] = &[
+    panel_cmds::CREATE,
+    panel_cmds::RESIZE,
+    panel_cmds::MATERIAL_SET,
+    panel_cmds::EDGE_BANDING_SET,
+    panel_cmds::EDGE_BANDING_CLEAR,
+    panel_cmds::CUTOUT_CREATE,
+];
 
 /// A lookup table for the compiled command specs.
 #[derive(Clone, Copy, Debug, Default)]
@@ -150,10 +157,19 @@ mod tests {
         let resize = registry.get("panel.resize").expect("panel.resize is registered");
         assert_eq!(resize.id(), "panel.resize");
         assert_eq!(resize.label(), "Resize panel");
+        let material = registry.get("panel.material.set").expect("panel.material.set is registered");
+        assert_eq!(material.id(), "panel.material.set");
+        assert_eq!(material.label(), "Set panel material");
+        let band = registry.get("panel.edge_banding.set").expect("panel.edge_banding.set is registered");
+        assert_eq!(band.id(), "panel.edge_banding.set");
+        assert_eq!(band.label(), "Set edge banding");
+        let clear = registry.get("panel.edge_banding.clear").expect("panel.edge_banding.clear is registered");
+        assert_eq!(clear.id(), "panel.edge_banding.clear");
+        assert_eq!(clear.label(), "Clear edge banding");
         let cutout = registry.get("cutout.create").expect("cutout.create is registered");
         assert_eq!(cutout.id(), "cutout.create");
         assert_eq!(cutout.label(), "Create cutout");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 3);
+        assert_eq!(registry.specs().len(), 6);
     }
 }

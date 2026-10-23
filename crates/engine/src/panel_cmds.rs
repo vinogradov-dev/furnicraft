@@ -1,7 +1,8 @@
 //! Document commands for panels and their cutouts.
 
 use furnicraft_model::{
-    Catalog, CutoutDepth, CutoutShape, FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project,
+    Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, PanelNominalSize, Placement,
+    Project, ProjectError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -161,4 +162,162 @@ fn cutout_create_run(
     let params = CutoutCreate::parse(params)?;
     let id = project.add_cutout(params.panel, params.shape, params.depth, params.entry)?;
     Ok(CommandOutcome::created(id))
+}
+
+/// Stable id of the panel material command.
+pub const MATERIAL_SET_ID: &str = "panel.material.set";
+
+/// User-facing label of the panel material command.
+pub const MATERIAL_SET_LABEL: &str = "Set panel material";
+
+/// Parameters for `panel.material.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelMaterialSet {
+    /// Id of the panel whose material changes.
+    pub panel: Id,
+    /// Panel-body material from the session catalogue.
+    pub material: MaterialId,
+}
+
+impl PanelMaterialSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: MATERIAL_SET_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.material.set` command.
+pub(crate) const MATERIAL_SET: CommandSpec =
+    CommandSpec::new(MATERIAL_SET_ID, MATERIAL_SET_LABEL, material_set_enabled, material_set_run);
+
+fn material_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelMaterialSet::parse(params) else {
+        return false;
+    };
+    let Some(material) = session.catalog().panel_material(params.material) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some_and(|panel| panel.geometry(material.nominal_thickness()).is_ok())
+}
+
+fn material_set_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelMaterialSet::parse(params)?;
+    let material =
+        catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
+    project.set_panel_material(params.panel, params.material, material.nominal_thickness())?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the edge-banding command.
+pub const EDGE_BANDING_SET_ID: &str = "panel.edge_banding.set";
+
+/// User-facing label of the edge-banding command.
+pub const EDGE_BANDING_SET_LABEL: &str = "Set edge banding";
+
+/// Parameters for `panel.edge_banding.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelEdgeBandingSet {
+    /// Id of the panel whose edge is banded.
+    pub panel: Id,
+    /// Edge to cover.
+    pub edge: EdgeId,
+    /// Edge-banding material from the session catalogue.
+    pub material: MaterialId,
+    /// Whether the banding thickness is taken out of the nominal size.
+    pub included_in_size: bool,
+}
+
+impl PanelEdgeBandingSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: EDGE_BANDING_SET_ID, message: error.to_string() })
+    }
+
+    fn band(&self, catalog: &Catalog) -> Option<EdgeBanding> {
+        let material = catalog.edge_material(self.material)?;
+        EdgeBanding::new(self.edge, self.material, self.included_in_size, material.thickness(), material.width()).ok()
+    }
+}
+
+/// The `panel.edge_banding.set` command.
+pub(crate) const EDGE_BANDING_SET: CommandSpec =
+    CommandSpec::new(EDGE_BANDING_SET_ID, EDGE_BANDING_SET_LABEL, edge_banding_set_enabled, edge_banding_set_run);
+
+fn edge_banding_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelEdgeBandingSet::parse(params) else {
+        return false;
+    };
+    let Some(band) = params.band(session.catalog()) else {
+        return false;
+    };
+    session.project().validate_edge_banding(params.panel, band).is_ok()
+}
+
+fn edge_banding_set_run(
+    project: &mut Project,
+    catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelEdgeBandingSet::parse(params)?;
+    let Some(material) = catalog.edge_material(params.material) else {
+        return Err(CommandError::UnknownMaterial { material: params.material });
+    };
+    let band =
+        EdgeBanding::new(params.edge, params.material, params.included_in_size, material.thickness(), material.width())
+            .map_err(|error| CommandError::Model(ProjectError::PanelDimension(error)))?;
+    project.set_edge_banding(params.panel, band)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the edge-banding clear command.
+pub const EDGE_BANDING_CLEAR_ID: &str = "panel.edge_banding.clear";
+
+/// User-facing label of the edge-banding clear command.
+pub const EDGE_BANDING_CLEAR_LABEL: &str = "Clear edge banding";
+
+/// Parameters for `panel.edge_banding.clear`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelEdgeBandingClear {
+    /// Id of the panel whose edge is cleared.
+    pub panel: Id,
+    /// Edge to clear.
+    pub edge: EdgeId,
+}
+
+impl PanelEdgeBandingClear {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: EDGE_BANDING_CLEAR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.edge_banding.clear` command.
+pub(crate) const EDGE_BANDING_CLEAR: CommandSpec = CommandSpec::new(
+    EDGE_BANDING_CLEAR_ID,
+    EDGE_BANDING_CLEAR_LABEL,
+    edge_banding_clear_enabled,
+    edge_banding_clear_run,
+);
+
+fn edge_banding_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelEdgeBandingClear::parse(params) else {
+        return false;
+    };
+    session
+        .project()
+        .panel(params.panel)
+        .is_some_and(|panel| panel.edge_banding().iter().any(|band| band.edge() == params.edge))
+}
+
+fn edge_banding_clear_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelEdgeBandingClear::parse(params)?;
+    project.clear_edge_banding(params.panel, params.edge)?;
+    Ok(CommandOutcome::changed())
 }
