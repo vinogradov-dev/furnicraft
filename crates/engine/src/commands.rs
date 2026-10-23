@@ -87,6 +87,10 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::MATERIAL_SET,
     panel_cmds::EDGE_BANDING_SET,
     panel_cmds::EDGE_BANDING_CLEAR,
+    panel_cmds::CORNER_SET,
+    panel_cmds::CORNER_CLEAR,
+    panel_cmds::BOW_SET,
+    panel_cmds::BOW_CLEAR,
     panel_cmds::CUTOUT_CREATE,
 ];
 
@@ -170,10 +174,22 @@ mod tests {
         let clear = registry.get("panel.edge_banding.clear").expect("panel.edge_banding.clear is registered");
         assert_eq!(clear.id(), "panel.edge_banding.clear");
         assert_eq!(clear.label(), "Clear edge banding");
+        let corner_set = registry.get("panel.corner.set").expect("panel.corner.set is registered");
+        assert_eq!(corner_set.id(), "panel.corner.set");
+        assert_eq!(corner_set.label(), "Set corner feature");
+        let corner_clear = registry.get("panel.corner.clear").expect("panel.corner.clear is registered");
+        assert_eq!(corner_clear.id(), "panel.corner.clear");
+        assert_eq!(corner_clear.label(), "Clear corner feature");
+        let bow_set = registry.get("panel.bow.set").expect("panel.bow.set is registered");
+        assert_eq!(bow_set.id(), "panel.bow.set");
+        assert_eq!(bow_set.label(), "Set edge bow");
+        let bow_clear = registry.get("panel.bow.clear").expect("panel.bow.clear is registered");
+        assert_eq!(bow_clear.id(), "panel.bow.clear");
+        assert_eq!(bow_clear.label(), "Clear edge bow");
         let cutout = registry.get("cutout.create").expect("cutout.create is registered");
         assert_eq!(cutout.id(), "cutout.create");
         assert_eq!(cutout.label(), "Create cutout");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 7);
+        assert_eq!(registry.specs().len(), 11);
     }
 }

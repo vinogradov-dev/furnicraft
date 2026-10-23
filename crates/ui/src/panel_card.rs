@@ -5,12 +5,17 @@
 
 use egui::{Color32, ComboBox, RichText, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
-    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
+    BOW_CLEAR_ID, BOW_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID, EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID,
+    MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
 };
 use furnicraft_engine::{
-    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize, Session,
+    PanelBowClear, PanelBowSet, PanelCornerClear, PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear,
+    PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize, Session,
 };
-use furnicraft_model::{EdgeBanding, EdgeId, Id, MaterialId, Panel, PanelNominalSize};
+use furnicraft_model::{
+    CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel, PanelNominalSize, RectCorner,
+    RectEdge, VertexId,
+};
 use furnicraft_units::Length;
 use serde_json::Value;
 
@@ -50,8 +55,32 @@ enum Action {
     SetMaterial { panel: Id, material: MaterialId },
     SetBand { panel: Id, edge: EdgeId, material: MaterialId, included_in_size: bool },
     ClearBand { panel: Id, edge: EdgeId },
+    SetCorner { panel: Id, corner: VertexId, feature: CornerFeatureKind },
+    ClearCorner { panel: Id, corner: VertexId },
+    SetBow { panel: Id, edge: EdgeId, sagitta: Length },
+    ClearBow { panel: Id, edge: EdgeId },
     Undo,
     Redo,
+}
+
+/// The three states of a corner in the outline editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CornerMode {
+    None,
+    Radius,
+    Chamfer,
+}
+
+impl CornerMode {
+    const ALL: [Self; 3] = [Self::None, Self::Radius, Self::Chamfer];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Radius => "Radius",
+            Self::Chamfer => "Chamfer",
+        }
+    }
 }
 
 impl PanelCard {
@@ -139,8 +168,9 @@ impl PanelCard {
 
         ui.separator();
         self.show_material(ui, session, panel_id, panel.material(), &mut actions);
+        self.show_shape(ui, session, panel_id, panel, &mut actions);
         self.show_geometry(ui, session, panel_id);
-        self.show_bands(ui, session, panel_id, panel.edge_banding(), &mut actions);
+        self.show_bands(ui, session, panel_id, panel, &mut actions);
         self.show_diagnostics(ui, session, panel_id);
 
         if let Some(error) = &self.error {
@@ -213,16 +243,134 @@ impl PanelCard {
         }
     }
 
-    fn show_bands(
-        &self,
-        ui: &mut Ui,
-        session: &Session,
-        panel_id: Id,
-        bands: &[EdgeBanding],
-        actions: &mut Vec<Action>,
-    ) {
+    fn show_shape(&self, ui: &mut Ui, _session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        ui.separator();
+        ui.label(RichText::new("Outline").strong());
+        let locked = !panel.edge_banding().is_empty() || !panel.machining().is_empty();
+        if locked {
+            ui.colored_label(Color32::LIGHT_RED, "Clear edge banding and machining before shaping the outline.");
+        }
+        ui.add_enabled_ui(!locked, |ui| {
+            for corner in RectCorner::ALL {
+                let corner_id = corner.id();
+                let current = panel.corner_feature(corner_id);
+                let mode = current.map_or(CornerMode::None, |feature| match feature.feature() {
+                    CornerFeatureKind::Radius { .. } => CornerMode::Radius,
+                    CornerFeatureKind::Chamfer { .. } => CornerMode::Chamfer,
+                });
+                ui.horizontal(|ui| {
+                    ui.label(format!("Corner {}", corner.label()));
+                    let mut selected = mode;
+                    ComboBox::from_id_salt(("corner_mode", panel_id.get(), corner_id.get()))
+                        .selected_text(mode.label())
+                        .show_ui(ui, |ui| {
+                            for option in CornerMode::ALL {
+                                if ui.selectable_label(selected == option, option.label()).clicked()
+                                    && selected != option
+                                {
+                                    selected = option;
+                                    if option == CornerMode::None {
+                                        if current.is_some() {
+                                            actions.push(Action::ClearCorner { panel: panel_id, corner: corner_id });
+                                        }
+                                    } else if let Some(feature) = corner_feature_for_mode(option, current) {
+                                        actions.push(Action::SetCorner { panel: panel_id, corner: corner_id, feature });
+                                    }
+                                }
+                            }
+                        });
+                    match current.map(CornerFeature::feature) {
+                        Some(CornerFeatureKind::Radius { radius }) => {
+                            let mut millimetres = radius.millimetres_f64();
+                            let response = ui.add(
+                                egui::DragValue::new(&mut millimetres).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                            );
+                            if (response.drag_stopped() || response.lost_focus())
+                                && let Some(value) = positive_length(millimetres)
+                                && value != radius
+                            {
+                                actions.push(Action::SetCorner {
+                                    panel: panel_id,
+                                    corner: corner_id,
+                                    feature: CornerFeatureKind::Radius { radius: value },
+                                });
+                            }
+                        }
+                        Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => {
+                            let mut incoming_mm = incoming.millimetres_f64();
+                            let mut outgoing_mm = outgoing.millimetres_f64();
+                            ui.label("in");
+                            let incoming_response = ui.add(
+                                egui::DragValue::new(&mut incoming_mm).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                            );
+                            ui.label("out");
+                            let outgoing_response = ui.add(
+                                egui::DragValue::new(&mut outgoing_mm).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                            );
+                            let committed = incoming_response.drag_stopped()
+                                || outgoing_response.drag_stopped()
+                                || incoming_response.lost_focus()
+                                || outgoing_response.lost_focus();
+                            if committed
+                                && let (Some(incoming_value), Some(outgoing_value)) =
+                                    (positive_length(incoming_mm), positive_length(outgoing_mm))
+                                && (incoming_value != incoming || outgoing_value != outgoing)
+                            {
+                                actions.push(Action::SetCorner {
+                                    panel: panel_id,
+                                    corner: corner_id,
+                                    feature: CornerFeatureKind::Chamfer {
+                                        incoming: incoming_value,
+                                        outgoing: outgoing_value,
+                                    },
+                                });
+                            }
+                        }
+                        None => {}
+                    }
+                });
+            }
+
+            ui.separator();
+            ui.label(RichText::new("Bowed edges").strong());
+            for edge in RectEdge::ALL {
+                let edge_id = edge.id();
+                let current = panel.edge_bow(edge_id);
+                ui.horizontal(|ui| {
+                    ui.label(edge_label(edge_id.get()));
+                    let mut millimetres = current.map_or(0.0, |bow| bow.sagitta().millimetres_f64());
+                    let response = ui
+                        .add(egui::DragValue::new(&mut millimetres).speed(0.5).range(-1_000.0..=1_000.0).suffix(" mm"));
+                    if (response.drag_stopped() || response.lost_focus())
+                        && let Some(sagitta) = signed_length(millimetres)
+                    {
+                        if sagitta.is_zero() {
+                            if current.is_some() {
+                                actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
+                            }
+                        } else if current.is_none_or(|bow| bow.sagitta() != sagitta) {
+                            actions.push(Action::SetBow { panel: panel_id, edge: edge_id, sagitta });
+                        }
+                    }
+                    if current.is_some() && ui.button("Clear").clicked() {
+                        actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
+                    }
+                });
+            }
+        });
+    }
+
+    fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
         ui.separator();
         ui.label(RichText::new("Edge banding").strong());
+        let shaped = panel.has_contour_features();
+        if shaped {
+            ui.colored_label(
+                Color32::LIGHT_RED,
+                "New banding on shaped panels is not available yet; existing bands can be cleared.",
+            );
+        }
+        let bands = panel.edge_banding();
         for edge in 1..=4 {
             let Some(edge_id) = EdgeId::new(edge) else {
                 continue;
@@ -239,29 +387,33 @@ impl PanelCard {
                         )
                     },
                 );
-                ComboBox::from_id_salt(("edge_material", panel_id.get(), edge)).selected_text(selected_text).show_ui(
-                    ui,
-                    |ui| {
-                        if ui.selectable_label(band.is_none(), "None").clicked() && band.is_some() {
-                            actions.push(Action::ClearBand { panel: panel_id, edge: edge_id });
-                        }
-                        for material in session.catalog().edge_materials() {
-                            let selected = band.is_some_and(|band| band.material() == material.id());
-                            if ui.selectable_label(selected, material.name()).clicked() && !selected {
-                                actions.push(Action::SetBand {
-                                    panel: panel_id,
-                                    edge: edge_id,
-                                    material: material.id(),
-                                    included_in_size: band.is_some_and(EdgeBanding::included_in_size),
-                                });
+                ui.add_enabled_ui(!shaped, |ui| {
+                    ComboBox::from_id_salt(("edge_material", panel_id.get(), edge))
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(band.is_none(), "None").clicked() && band.is_some() {
+                                actions.push(Action::ClearBand { panel: panel_id, edge: edge_id });
                             }
-                        }
-                    },
-                );
+                            for material in session.catalog().edge_materials() {
+                                let selected = band.is_some_and(|band| band.material() == material.id());
+                                if ui.selectable_label(selected, material.name()).clicked() && !selected {
+                                    actions.push(Action::SetBand {
+                                        panel: panel_id,
+                                        edge: edge_id,
+                                        material: material.id(),
+                                        included_in_size: band.is_some_and(EdgeBanding::included_in_size),
+                                    });
+                                }
+                            }
+                        });
+                });
                 if let Some(band) = band {
                     let mut included = band.included_in_size();
                     let material_known = session.catalog().edge_material(band.material()).is_some();
-                    if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+                    if ui
+                        .add_enabled(!shaped && material_known, egui::Checkbox::new(&mut included, "Included"))
+                        .changed()
+                    {
                         actions.push(Action::SetBand {
                             panel: panel_id,
                             edge: edge_id,
@@ -318,6 +470,22 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
             let params = json(&PanelEdgeBandingClear { panel: *panel, edge: *edge })?;
             dispatch(session, EDGE_BANDING_CLEAR_ID, &params)
         }
+        Action::SetCorner { panel, corner, feature } => {
+            let params = json(&PanelCornerSet { panel: *panel, corner: *corner, feature: *feature })?;
+            dispatch(session, CORNER_SET_ID, &params)
+        }
+        Action::ClearCorner { panel, corner } => {
+            let params = json(&PanelCornerClear { panel: *panel, corner: *corner })?;
+            dispatch(session, CORNER_CLEAR_ID, &params)
+        }
+        Action::SetBow { panel, edge, sagitta } => {
+            let params = json(&PanelBowSet { panel: *panel, edge: *edge, sagitta: *sagitta })?;
+            dispatch(session, BOW_SET_ID, &params)
+        }
+        Action::ClearBow { panel, edge } => {
+            let params = json(&PanelBowClear { panel: *panel, edge: *edge })?;
+            dispatch(session, BOW_CLEAR_ID, &params)
+        }
         Action::Undo => session.undo().map_err(|error| error.to_string()),
         Action::Redo => session.redo().map_err(|error| error.to_string()),
     }
@@ -339,6 +507,50 @@ fn edge_label(edge: u32) -> &'static str {
         4 => "Left",
         _ => "Edge",
     }
+}
+
+fn corner_feature_for_mode(mode: CornerMode, current: Option<CornerFeature>) -> Option<CornerFeatureKind> {
+    match mode {
+        CornerMode::None => None,
+        CornerMode::Radius => {
+            let radius = match current.map(CornerFeature::feature) {
+                Some(CornerFeatureKind::Radius { radius }) => radius,
+                _ => default_feature_length(),
+            };
+            Some(CornerFeatureKind::Radius { radius })
+        }
+        CornerMode::Chamfer => {
+            let (incoming, outgoing) = match current.map(CornerFeature::feature) {
+                Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => (incoming, outgoing),
+                _ => (default_feature_length(), default_feature_length()),
+            };
+            Some(CornerFeatureKind::Chamfer { incoming, outgoing })
+        }
+    }
+}
+
+fn default_feature_length() -> Length {
+    Length::from_micrometres(10_000)
+}
+
+fn positive_length(millimetres: f64) -> Option<Length> {
+    let value = millimetres_to_length(millimetres)?;
+    value.is_positive().then_some(value)
+}
+
+fn signed_length(millimetres: f64) -> Option<Length> {
+    millimetres_to_length(millimetres)
+}
+
+fn millimetres_to_length(millimetres: f64) -> Option<Length> {
+    if !millimetres.is_finite() || millimetres.abs() > 1_000_000.0 {
+        return None;
+    }
+    let micrometres = (millimetres * 1000.0).round();
+    if !micrometres.is_finite() {
+        return None;
+    }
+    Some(Length::from_micrometres(micrometres as i64))
 }
 
 /// Formats one derived panel issue for the card.
@@ -435,5 +647,65 @@ mod tests {
 
         run_action(&mut session, &Action::Undo).expect("undo");
         assert!(session.project().panel(panel_id).expect("panel").edge_banding().is_empty());
+    }
+
+    #[test]
+    fn corner_and_bow_actions_dispatch_through_the_engine() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let corner = RectCorner::TopRight.id();
+        let edge = RectEdge::Top.id();
+
+        run_action(
+            &mut session,
+            &Action::SetCorner {
+                panel: panel_id,
+                corner,
+                feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(25).expect("radius") },
+            },
+        )
+        .expect("set corner");
+        assert!(session.project().panel(panel_id).expect("panel").corner_feature(corner).is_some());
+
+        run_action(
+            &mut session,
+            &Action::SetBow { panel: panel_id, edge, sagitta: Length::from_millimetres(12).expect("sagitta") },
+        )
+        .expect("set bow");
+        assert!(session.project().panel(panel_id).expect("panel").edge_bow(edge).is_some());
+
+        run_action(&mut session, &Action::ClearBow { panel: panel_id, edge }).expect("clear bow");
+        assert!(session.project().panel(panel_id).expect("panel").edge_bow(edge).is_none());
+
+        run_action(&mut session, &Action::ClearCorner { panel: panel_id, corner }).expect("clear corner");
+        assert!(session.project().panel(panel_id).expect("panel").corner_feature(corner).is_none());
+    }
+
+    #[test]
+    fn corner_modes_start_from_existing_values_and_sane_defaults() {
+        let default = default_feature_length();
+        assert_eq!(
+            corner_feature_for_mode(CornerMode::Radius, None),
+            Some(CornerFeatureKind::Radius { radius: default })
+        );
+        assert_eq!(
+            corner_feature_for_mode(CornerMode::Chamfer, None),
+            Some(CornerFeatureKind::Chamfer { incoming: default, outgoing: default })
+        );
+        assert_eq!(corner_feature_for_mode(CornerMode::None, None), None);
+
+        let existing = CornerFeature::new(
+            RectCorner::BottomLeft.id(),
+            CornerFeatureKind::Chamfer {
+                incoming: Length::from_millimetres(8).expect("incoming"),
+                outgoing: Length::from_millimetres(14).expect("outgoing"),
+            },
+        )
+        .expect("feature");
+        assert_eq!(corner_feature_for_mode(CornerMode::Chamfer, Some(existing)), Some(existing.feature()));
+        assert_eq!(positive_length(0.0), None);
+        assert_eq!(positive_length(-5.0), None);
+        assert!(signed_length(-5.0).is_some());
     }
 }

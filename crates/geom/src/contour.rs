@@ -9,7 +9,7 @@
 //! self-intersection; callers build a simple contour and offset paths that are known to be tangent
 //! continuous. Closed contours must not self-intersect.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::fmt;
 
 use crate::DVec2;
@@ -136,6 +136,13 @@ impl Line {
     /// The line length.
     pub fn length(self) -> f64 {
         (self.end - self.start).length()
+    }
+
+    /// The axis-aligned bounds of the line.
+    pub fn bounds(self) -> (DVec2, DVec2) {
+        let min = DVec2::new(self.start.x.min(self.end.x), self.start.y.min(self.end.y));
+        let max = DVec2::new(self.start.x.max(self.end.x), self.start.y.max(self.end.y));
+        (min, max)
     }
 
     /// A point at parameter `t` in `0..=1`.
@@ -268,6 +275,38 @@ impl Arc {
         self.radius * self.sweep_angle.abs()
     }
 
+    /// The axis-aligned bounds of the arc.
+    ///
+    /// The bounds include the endpoints and every axis extreme crossed by the sweep.
+    pub fn bounds(self) -> (DVec2, DVec2) {
+        let start = self.start();
+        let end = self.end();
+        let mut min = DVec2::new(start.x.min(end.x), start.y.min(end.y));
+        let mut max = DVec2::new(start.x.max(end.x), start.y.max(end.y));
+        for angle in [0.0, FRAC_PI_2, PI, 3.0 * FRAC_PI_2] {
+            if self.contains_angle(angle) {
+                let point = self.point_at_angle(angle);
+                min = DVec2::new(min.x.min(point.x), min.y.min(point.y));
+                max = DVec2::new(max.x.max(point.x), max.y.max(point.y));
+            }
+        }
+        (min, max)
+    }
+
+    /// Whether the sweep from the start angle reaches `angle` in its direction of travel.
+    fn contains_angle(self, angle: f64) -> bool {
+        let sweep = self.sweep_angle;
+        if sweep.abs() >= TAU - EPSILON {
+            return true;
+        }
+        let delta = if sweep > 0.0 {
+            positive_angle(angle - self.start_angle)
+        } else {
+            positive_angle(self.start_angle - angle)
+        };
+        delta <= sweep.abs() + EPSILON
+    }
+
     /// A point at parameter `t` in `0..=1`.
     pub fn point_at(self, t: f64) -> Option<DVec2> {
         if !t.is_finite() || !(0.0..=1.0).contains(&t) {
@@ -366,6 +405,14 @@ impl Segment {
         }
     }
 
+    /// The axis-aligned bounds of the segment.
+    pub fn bounds(self) -> (DVec2, DVec2) {
+        match self {
+            Self::Line(line) => line.bounds(),
+            Self::Arc(arc) => arc.bounds(),
+        }
+    }
+
     /// Moves the segment to the left by `distance` millimetres.
     pub fn offset(self, distance: f64) -> Result<Self, ContourError> {
         match self {
@@ -444,6 +491,27 @@ impl Contour {
     /// The total path length.
     pub fn length(&self) -> f64 {
         self.segments.iter().map(|segment| segment.length()).sum()
+    }
+
+    /// The axis-aligned bounds of the whole contour.
+    ///
+    /// Returns `None` only for an empty contour, which constructors reject.
+    pub fn bounds(&self) -> Option<(DVec2, DVec2)> {
+        let mut min = DVec2::ZERO;
+        let mut max = DVec2::ZERO;
+        let mut first = true;
+        for segment in &self.segments {
+            let (segment_min, segment_max) = segment.bounds();
+            if first {
+                min = segment_min;
+                max = segment_max;
+                first = false;
+            } else {
+                min = DVec2::new(min.x.min(segment_min.x), min.y.min(segment_min.y));
+                max = DVec2::new(max.x.max(segment_max.x), max.y.max(segment_max.y));
+            }
+        }
+        (!first).then_some((min, max))
     }
 
     /// The signed area for a closed contour, positive for counter-clockwise.
@@ -544,6 +612,14 @@ impl Contour {
 
 fn tangent_angle(first: DVec2, second: DVec2) -> f64 {
     first.perp_dot(second).atan2(first.dot(second)).abs()
+}
+
+fn positive_angle(angle: f64) -> f64 {
+    let mut value = angle % TAU;
+    if value < 0.0 {
+        value += TAU;
+    }
+    value
 }
 
 fn segment_signed_area(segment: Segment) -> f64 {
@@ -714,5 +790,26 @@ mod tests {
         let points = contour.sample(0.05).expect("samples");
         assert!(points.len() > 8);
         assert!((points.first().copied().expect("first") - points.last().copied().expect("last")).length() > 1e-9);
+    }
+
+    #[test]
+    fn contour_bounds_follow_arc_extremes() {
+        let contour = rounded_rectangle(100.0, 60.0, 10.0);
+        let (min, max) = contour.bounds().expect("bounds");
+        assert!((min - point(0.0, 0.0)).length() < 1e-12, "min {min:?}");
+        assert!((max - point(100.0, 60.0)).length() < 1e-12, "max {max:?}");
+
+        let arc = Arc::new(DVec2::ZERO, 10.0, 0.0, PI * 0.5).expect("quarter arc");
+        let (min, max) = arc.bounds();
+        assert!((min - point(0.0, 0.0)).length() < 1e-12, "arc min {min:?}");
+        assert!((max - point(10.0, 10.0)).length() < 1e-12, "arc max {max:?}");
+    }
+
+    #[test]
+    fn bow_bounds_follow_the_bulge() {
+        let outward = Arc::from_endpoints_sagitta(point(0.0, 0.0), point(100.0, 0.0), -10.0).expect("bow");
+        let (min, max) = outward.bounds();
+        assert!((min.y + 10.0).abs() < 1e-9, "outward min {min:?}");
+        assert!((max.y - 0.0).abs() < 1e-9, "outward max {max:?}");
     }
 }

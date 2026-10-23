@@ -133,8 +133,8 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, Id, Machining, PanelMaterial,
-        Placement, ProjectError, Revision,
+        Catalog, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, Id, Machining,
+        PanelMaterial, Placement, ProjectError, RectCorner, RectEdge, Revision, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -142,10 +142,11 @@ mod tests {
         sample_outside_cutout_rect, sample_overlapping_cutout_rect, sample_panel_nominal_size, sample_panel_thickness,
         sample_project, sample_resized_panel_nominal_size, sample_thin_panel_thickness, sample_wide_band_thickness,
     };
+    use furnicraft_units::Length;
 
     use crate::panel_cmds::{
-        CutoutCreate, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
-        PanelResize,
+        CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear,
+        PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize,
     };
 
     fn sample_session() -> Session {
@@ -625,6 +626,114 @@ mod tests {
                 if panel == Id::new(2).expect("id") && edge == EdgeId::new(1).expect("edge id")
         ));
         assert_eq!(session.project().revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn corner_and_bow_commands_change_the_contour_and_history() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::TopRight.id();
+        let edge = RectEdge::Top.id();
+        let radius = Length::from_millimetres(25).expect("radius");
+        let sagitta = Length::from_millimetres(12).expect("sagitta");
+
+        let set_corner = PanelCornerSet { panel: panel_id, corner, feature: CornerFeatureKind::Radius { radius } };
+        session.dispatch("panel.corner.set", &json_params(&set_corner)).expect("set corner");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.corner_feature(corner).is_some());
+        assert_eq!(session.project().revision().get(), 1);
+
+        let set_bow = PanelBowSet { panel: panel_id, edge, sagitta };
+        session.dispatch("panel.bow.set", &json_params(&set_bow)).expect("set bow");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(panel.edge_bow(edge).expect("bow").sagitta(), sagitta);
+        assert_eq!(session.project().revision().get(), 2);
+
+        session.undo().expect("undo bow");
+        assert!(session.project().panel(panel_id).expect("panel").edge_bow(edge).is_none());
+        session.undo().expect("undo corner");
+        assert!(session.project().panel(panel_id).expect("panel").corner_feature(corner).is_none());
+
+        session.redo().expect("redo corner");
+        session.redo().expect("redo bow");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.corner_feature(corner).is_some());
+        assert!(panel.edge_bow(edge).is_some());
+
+        let clear_bow = PanelBowClear { panel: panel_id, edge };
+        session.dispatch("panel.bow.clear", &json_params(&clear_bow)).expect("clear bow");
+        let clear_corner = PanelCornerClear { panel: panel_id, corner };
+        session.dispatch("panel.corner.clear", &json_params(&clear_corner)).expect("clear corner");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(!panel.has_contour_features());
+    }
+
+    #[test]
+    fn shaped_panels_and_banded_panels_cannot_be_combined_yet() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::BottomLeft.id();
+        let set_corner = PanelCornerSet {
+            panel: panel_id,
+            corner,
+            feature: CornerFeatureKind::Chamfer {
+                incoming: Length::from_millimetres(10).expect("incoming"),
+                outgoing: Length::from_millimetres(20).expect("outgoing"),
+            },
+        };
+        session.dispatch("panel.corner.set", &json_params(&set_corner)).expect("set corner");
+
+        let band = PanelEdgeBandingSet {
+            panel: panel_id,
+            edge: EdgeId::new(1).expect("edge"),
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.edge_banding.set").expect("registered");
+        assert!(!spec.enabled(&session, &json_params(&band)));
+        assert!(matches!(
+            session.dispatch("panel.edge_banding.set", &json_params(&band)),
+            Err(CommandError::Model(ProjectError::PanelGeometry(_)))
+        ));
+
+        let mut banded = sample_session();
+        banded.dispatch("panel.edge_banding.set", &json_params(&band)).expect("set banding");
+        assert!(!registry.get("panel.corner.set").expect("registered").enabled(&banded, &json_params(&set_corner)));
+    }
+
+    #[test]
+    fn corner_and_bow_params_reject_unknown_fields_and_bad_ids() {
+        let value = serde_json::json!({
+            "panel": 2,
+            "corner": 1,
+            "feature": {"kind": "radius", "radius": 10000},
+            "extra": true
+        });
+        assert!(serde_json::from_value::<PanelCornerSet>(value).is_err());
+
+        let bad_corner = PanelCornerSet {
+            panel: Id::new(2).expect("id"),
+            corner: VertexId::new(5).expect("id"),
+            feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(10).expect("radius") },
+        };
+        let mut session = sample_session();
+        let registry = CommandRegistry::new();
+        assert!(!registry.get("panel.corner.set").expect("registered").enabled(&session, &json_params(&bad_corner)));
+        assert!(matches!(
+            session.dispatch("panel.corner.set", &json_params(&bad_corner)),
+            Err(CommandError::InvalidParams { command: "panel.corner.set", .. })
+        ));
+
+        let bad_edge = PanelBowSet {
+            panel: Id::new(2).expect("id"),
+            edge: EdgeId::new(5).expect("id"),
+            sagitta: Length::from_millimetres(5).expect("sagitta"),
+        };
+        assert!(matches!(
+            session.dispatch("panel.bow.set", &json_params(&bad_edge)),
+            Err(CommandError::InvalidParams { command: "panel.bow.set", .. })
+        ));
     }
 
     #[test]

@@ -1,9 +1,10 @@
 //! Document commands for panels and their cutouts.
 
 use furnicraft_model::{
-    Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Id, MaterialId, PanelNominalSize, Placement,
-    Project, ProjectError,
+    Catalog, CornerFeature, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBanding, EdgeBow, EdgeId, FaceSide, Id,
+    MaterialId, PanelNominalSize, Placement, Project, ProjectError, VertexId,
 };
+use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -370,4 +371,202 @@ fn edge_banding_clear_run(
     let params = PanelEdgeBandingClear::parse(params)?;
     project.clear_edge_banding(params.panel, params.edge)?;
     Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the corner-feature command.
+pub const CORNER_SET_ID: &str = "panel.corner.set";
+
+/// User-facing label of the corner-feature command.
+pub const CORNER_SET_LABEL: &str = "Set corner feature";
+
+/// Parameters for `panel.corner.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelCornerSet {
+    /// Id of the panel whose corner changes.
+    pub panel: Id,
+    /// Corner vertex to treat.
+    pub corner: VertexId,
+    /// Radius or chamfer dimensions.
+    pub feature: CornerFeatureKind,
+}
+
+impl PanelCornerSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: CORNER_SET_ID, message: error.to_string() })
+    }
+
+    fn feature(&self) -> Result<CornerFeature, CommandError> {
+        if !is_rect_corner(self.corner) {
+            return Err(CommandError::InvalidParams {
+                command: CORNER_SET_ID,
+                message: format!("corner {} is outside the rectangular outline", self.corner),
+            });
+        }
+        CornerFeature::new(self.corner, self.feature)
+            .map_err(|error| CommandError::Model(ProjectError::PanelDimension(error)))
+    }
+}
+
+/// The `panel.corner.set` command.
+pub(crate) const CORNER_SET: CommandSpec =
+    CommandSpec::new(CORNER_SET_ID, CORNER_SET_LABEL, corner_set_enabled, corner_set_run);
+
+fn corner_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelCornerSet::parse(params) else {
+        return false;
+    };
+    let Ok(feature) = params.feature() else {
+        return false;
+    };
+    session.project().validate_corner_feature(params.panel, feature).is_ok()
+}
+
+fn corner_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelCornerSet::parse(params)?;
+    project.set_corner_feature(params.panel, params.feature()?)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the corner-feature clear command.
+pub const CORNER_CLEAR_ID: &str = "panel.corner.clear";
+
+/// User-facing label of the corner-feature clear command.
+pub const CORNER_CLEAR_LABEL: &str = "Clear corner feature";
+
+/// Parameters for `panel.corner.clear`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelCornerClear {
+    /// Id of the panel whose corner changes.
+    pub panel: Id,
+    /// Corner vertex to clear.
+    pub corner: VertexId,
+}
+
+impl PanelCornerClear {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: CORNER_CLEAR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.corner.clear` command.
+pub(crate) const CORNER_CLEAR: CommandSpec =
+    CommandSpec::new(CORNER_CLEAR_ID, CORNER_CLEAR_LABEL, corner_clear_enabled, corner_clear_run);
+
+fn corner_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelCornerClear::parse(params) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some_and(|panel| panel.corner_feature(params.corner).is_some())
+}
+
+fn corner_clear_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelCornerClear::parse(params)?;
+    project.clear_corner_feature(params.panel, params.corner)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the edge-bow command.
+pub const BOW_SET_ID: &str = "panel.bow.set";
+
+/// User-facing label of the edge-bow command.
+pub const BOW_SET_LABEL: &str = "Set edge bow";
+
+/// Parameters for `panel.bow.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelBowSet {
+    /// Id of the panel whose edge changes.
+    pub panel: Id,
+    /// Edge to bow.
+    pub edge: EdgeId,
+    /// Signed sagitta: positive outward, negative inward.
+    pub sagitta: Length,
+}
+
+impl PanelBowSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: BOW_SET_ID, message: error.to_string() })
+    }
+
+    fn bow(&self) -> Result<EdgeBow, CommandError> {
+        if !is_rect_edge(self.edge) {
+            return Err(CommandError::InvalidParams {
+                command: BOW_SET_ID,
+                message: format!("edge {} is outside the rectangular outline", self.edge),
+            });
+        }
+        EdgeBow::new(self.edge, self.sagitta).map_err(|error| CommandError::Model(ProjectError::PanelDimension(error)))
+    }
+}
+
+/// The `panel.bow.set` command.
+pub(crate) const BOW_SET: CommandSpec = CommandSpec::new(BOW_SET_ID, BOW_SET_LABEL, bow_set_enabled, bow_set_run);
+
+fn bow_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelBowSet::parse(params) else {
+        return false;
+    };
+    let Ok(bow) = params.bow() else {
+        return false;
+    };
+    session.project().validate_edge_bow(params.panel, bow).is_ok()
+}
+
+fn bow_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelBowSet::parse(params)?;
+    project.set_edge_bow(params.panel, params.bow()?)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the edge-bow clear command.
+pub const BOW_CLEAR_ID: &str = "panel.bow.clear";
+
+/// User-facing label of the edge-bow clear command.
+pub const BOW_CLEAR_LABEL: &str = "Clear edge bow";
+
+/// Parameters for `panel.bow.clear`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelBowClear {
+    /// Id of the panel whose edge changes.
+    pub panel: Id,
+    /// Edge to clear.
+    pub edge: EdgeId,
+}
+
+impl PanelBowClear {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: BOW_CLEAR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.bow.clear` command.
+pub(crate) const BOW_CLEAR: CommandSpec =
+    CommandSpec::new(BOW_CLEAR_ID, BOW_CLEAR_LABEL, bow_clear_enabled, bow_clear_run);
+
+fn bow_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelBowClear::parse(params) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some_and(|panel| panel.edge_bow(params.edge).is_some())
+}
+
+fn bow_clear_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelBowClear::parse(params)?;
+    project.clear_edge_bow(params.panel, params.edge)?;
+    Ok(CommandOutcome::changed())
+}
+
+fn is_rect_corner(corner: VertexId) -> bool {
+    (1..=4).contains(&corner.get())
+}
+
+fn is_rect_edge(edge: EdgeId) -> bool {
+    (1..=4).contains(&edge.get())
 }

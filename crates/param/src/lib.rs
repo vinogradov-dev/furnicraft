@@ -18,16 +18,18 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{DVec2, DVec3, Frame};
+use furnicraft_geom::{ContourError, DVec2, DVec3, Frame};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelGeometry,
+    Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelContourError, PanelGeometry,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
 
 /// Extra millimetres added to a cutting tool so booleans do not depend on coincident faces.
 const TOOL_OVERSHOOT_MM: f64 = 0.001;
+/// Chord tolerance used when an analytic contour becomes a kernel polyline.
+const CONTOUR_SAMPLE_TOLERANCE_MM: f64 = 0.05;
 
 /// An error raised while evaluating a parametric feature.
 #[derive(Debug, Error)]
@@ -41,6 +43,18 @@ pub enum ParamError {
         /// The rejected edge.
         edge: EdgeId,
     },
+    /// The nominal contour cannot be built.
+    #[error(transparent)]
+    Contour(#[from] PanelContourError),
+    /// The contour cannot be sampled for the polygon-only kernel profile.
+    #[error(transparent)]
+    ContourSampling(#[from] ContourError),
+    /// Shaped panels do not support banding until contour offsets are wired in.
+    #[error("shaped panels do not support edge banding yet")]
+    UnsupportedContourBanding,
+    /// Shaped panels do not support machining until the contour boolean layer lands.
+    #[error("shaped panels do not support machining yet")]
+    UnsupportedContourMachining,
 }
 
 /// Builds the solid body of a rectangular panel in its local frame.
@@ -52,6 +66,17 @@ pub enum ParamError {
 /// from its entry face. The caller owns the returned handle and must eventually release it through
 /// [`SolidKernel::clear`].
 pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
+    if panel.has_contour_features() {
+        if !panel.machining().is_empty() {
+            return Err(ParamError::UnsupportedContourMachining);
+        }
+        let contour = panel.nominal_contour()?;
+        let points = contour.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+        let profile = Profile::new(points, Vec::new())?;
+        let thickness = geometry.thickness().millimetres_f64();
+        return Ok(kernel.extrude(&profile, &Frame::WORLD, thickness)?);
+    }
+
     let core_x = geometry.core_x().millimetres_f64();
     let core_y = geometry.core_y().millimetres_f64();
     let length = geometry.core_length().millimetres_f64();
@@ -149,6 +174,9 @@ pub fn build_edge_bands_with<F>(
 where
     F: Fn(&EdgeBanding) -> EdgeBandProfile,
 {
+    if panel.has_contour_features() {
+        return Err(ParamError::UnsupportedContourBanding);
+    }
     let bands = panel.edge_banding();
     let mut parts = Vec::with_capacity(bands.len());
     for (index, band) in bands.iter().enumerate() {
@@ -261,7 +289,8 @@ mod tests {
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
-        Assembly, EdgeBanding, EdgeId, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project,
+        Assembly, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Id, MaterialId, PanelNominalSize,
+        PanelRect, Placement, Project, RectCorner, RectEdge,
     };
     use furnicraft_units::Length;
 
@@ -322,6 +351,28 @@ mod tests {
             .expect("valid panel")
     }
 
+    fn panel_with_corner(kind: CornerFeatureKind) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        let feature = CornerFeature::new(RectCorner::BottomRight.id(), kind).expect("corner feature");
+        project.set_corner_feature(panel_id, feature).expect("set corner");
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn panel_with_bow(sagitta: Length) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        let bow = EdgeBow::new(RectEdge::Bottom.id(), sagitta).expect("bow");
+        project.set_edge_bow(panel_id, bow).expect("set bow");
+        project.panel(panel_id).expect("panel").clone()
+    }
+
     fn geometry(panel: &Panel) -> PanelGeometry {
         panel.geometry_with_fallbacks().expect("resolved panel geometry")
     }
@@ -378,6 +429,51 @@ mod tests {
         let volumes = parts.iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).collect();
         kernel.clear();
         volumes
+    }
+
+    #[test]
+    fn build_panel_samples_the_nominal_contour_for_a_shaped_panel() {
+        let mut kernel = RecordingKernel::default();
+        let panel = panel_with_corner(CornerFeatureKind::Radius { radius: millimetres(25) });
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("shaped panel body");
+
+        assert_eq!(body, BodyId::from_raw(7));
+        let profile = kernel.profile.as_ref().expect("recorded profile");
+        assert!(profile.outer.len() > 4);
+        assert!(profile.outer.iter().all(|point| *point != DVec2::new(700.0, 0.0)));
+        assert!(profile.holes.is_empty());
+        assert_eq!(kernel.frame, Some(Frame::WORLD));
+        assert_eq!(kernel.height, Some(18.0));
+    }
+
+    #[test]
+    fn truck_kernel_builds_a_chamfered_panel_with_the_cut_corner_removed() {
+        let mut kernel = TruckKernel::new();
+        let panel =
+            panel_with_corner(CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(10) });
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("shaped panel body");
+
+        let measure = kernel.measure(body).expect("panel measure");
+        let expected = (700.0 * 500.0 - 0.5 * 20.0 * 10.0) * 18.0;
+        assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
+    #[test]
+    fn shaped_panel_banding_is_rejected_until_path_offsets_land() {
+        let mut kernel = RecordingKernel::default();
+        let panel = panel_with_corner(CornerFeatureKind::Radius { radius: millimetres(25) });
+        let error = build_edge_bands(&mut kernel, &panel, geometry(&panel)).expect_err("banding unsupported");
+        assert!(matches!(error, ParamError::UnsupportedContourBanding));
+    }
+
+    #[test]
+    fn outward_bow_extends_the_extruded_profile_outside_the_nominal_frame() {
+        let mut kernel = RecordingKernel::default();
+        let panel = panel_with_bow(millimetres(10));
+        build_panel(&mut kernel, &panel, geometry(&panel)).expect("bowed panel body");
+        let profile = kernel.profile.as_ref().expect("recorded profile");
+        let min_y = profile.outer.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
+        assert!((min_y + 10.0).abs() < 0.1, "min y was {min_y}");
     }
 
     #[test]

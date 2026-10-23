@@ -18,6 +18,10 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 - **Panel body** (core, board) — the board after trimming the edges where banding is included in the size.
 - **Edge banding** — a material profile applied to one edge of a panel. It is not a separate object in the document tree.
 - **Edge** — a side face of a panel. A rectangular panel has four edges with stable `EdgeId` values 1–4.
+- **Contour feature** — a corner radius or chamfer stored against a stable `VertexId`, or a signed bow stored against a stable `EdgeId`.
+- **Bow** — a circular arc replacing a straight edge. A positive sagitta bows outward from the nominal rectangle; a negative sagitta bows inward.
+- **Shaped panel** — a panel with at least one contour feature. Its nominal outline is the rectangle with those features applied.
+- **Banding path** — a maximal tangent-continuous chain of nominal contour segments between sharp joints. One path is one banding unit.
 - **Nominal size** — the length and width entered in the panel card. It is not always the finished overall size.
 - **Core** — the actual length and width of the board after trimming for included edge banding.
 - **Overall size** — the finished outer length and width including all edge banding.
@@ -51,6 +55,8 @@ Panel material and edge-banding material are described in [Materials and catalog
   nominal zero: 1 is `(0, 0)`, 2 is `(nominal_length, 0)`, 3 is `(nominal_length, nominal_width)`,
   4 is `(0, nominal_width)`. The core is inset from these edges when banding is included.
 - Edge `i` runs from vertex `i` to vertex `i + 1`, wrapping at 4. For a rectangle: 1 is the bottom (`-Y`), 2 the right (`+X`), 3 the top (`+Y`), 4 the left (`-X`).
+- A shaped panel keeps the same vertex and edge ids: a radius or chamfer belongs to its nominal corner vertex, a bow belongs to its nominal edge. The contour is counter-clockwise from face `A` and starts on edge 1 after vertex 1.
+- The nominal outline stays anchored at the nominal zero corner. An outward bow may extend outside that rectangle; the panel bounds are the bounds of the finished contour, not always `0..nominal`.
 - In core-local coordinates, banding on the bottom and left sides has negative coordinates. In the
   nominal frame an included band lies inside the nominal edge, for example `y` from `0` to `t` on the
   bottom; a non-included band lies outside it, for example `y` from `-t` to `0`.
@@ -125,6 +131,17 @@ The `included_in_size` flag does not change the position of the banding relative
 
 The same rule applies on the bottom: included gives `core_y = t` and the band occupies `y` from `0` to `t`; non-included gives `core_y = 0` and the band occupies `y` from `-t` to `0`. Top and right banding do not move the core origin; included banding occupies the last `t` of the nominal side, non-included banding extends beyond it.
 
+### 4.5. Shaped panels (stage 2a)
+
+A shaped panel resolves its body from the nominal contour `N`: straight edges, bows, corner radii and
+chamfers are sampled within the geometry tolerance for the polygon-only kernel profile. The card
+reports core and overall sizes from the contour bounds.
+
+Until tangent path offsets and the core/outer construction land, a shaped panel rejects edge banding
+and machining with a typed error. This is a temporary staged restriction, not a file-format rule:
+loading such a panel preserves its data and reports a problem panel. Corner features and bows cannot
+be added to a panel that already has banding or machining.
+
 ## 5. Edge banding
 
 ### 5.1. Profile
@@ -151,8 +168,9 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 ### 5.4. Corners
 
 - **Right angle, 90°.** The later band covers the corner and is trimmed flush with the earlier band's outer face; its end face is visible. There is no mitre in the first version. At each end that meets an earlier band, the later band is extended along the edge by that band's thickness.
-- **Chamfer.** The later band is trimmed along the chamfer; its end face is visible.
+- **Chamfer.** The later band is trimmed along the chamfer; its end face is visible. A chamfer is a separate banding path with a butt joint at each end, so its seam does not depend on application order.
 - **Radius.** Banding is continuous around the radius and the adjacent straight sections. Application order does not affect a radius. This is a later step: it requires a profile sweep along an arc; the port currently supports linear extrusion and booleans.
+- **Stage 2a.** Corner features and bows are document data and shape the body, but shaped-panel banding is not built yet. The banding rules above describe the stage-2b target.
 - **Single banded edge at a corner.** If the adjacent edge has no earlier band, the band ends flush with the adjacent side face of the core. It is not extended into the corner.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
@@ -196,8 +214,12 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.material.set` — panel, material.
 - `panel.edge_banding.set` — panel, edge, material, included_in_size. If the edge already has banding, it is replaced and becomes the last one.
 - `panel.edge_banding.clear` — panel, edge.
+- `panel.corner.set` — panel, corner `VertexId`, and a feature: `Radius { radius }` or `Chamfer { incoming, outgoing }`. The two chamfer setbacks are measured along the incoming and outgoing edges and may differ.
+- `panel.corner.clear` — panel, corner `VertexId`.
+- `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
+- `panel.bow.clear` — panel, edge `EdgeId`.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, and a resize that would leave a machining feature outside the core. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core or machining outside the core preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A successful command is one undo entry; a failed command leaves the document unchanged.
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, and a resize that would leave a machining feature outside the core or a corner feature that no longer fits. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core or machining outside the core preserves the panel as a problem panel; those conditions are diagnostics, not load errors. In stage 2a, shaping a panel that has banding or machining is rejected, and banding or machining a shaped panel is rejected. A successful command is one undo entry; a failed command leaves the document unchanged.
 
 ## 8. Panel tests
 
@@ -216,10 +238,13 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 
 ## 9. Open questions
 
-1. Contour implementation: the model and rules are in [ADR 0009](../decisions/0009-contour-first-panel-model.md); the line/arc offset layer is decided in [ADR 0010](../decisions/0010-analytic-line-arc-contours.md). The document schema for corner features and bows, and the 2D boolean layer for through cutouts, are still open.
-2. Edge banding milling: rounding the faces and corner.
-3. Whether the card should show core and overall size separately from the nominal size.
+1. Tangent-path grouping: confirm that banding one edge of a tangent path applies to the whole path and that an incompatible parameter on another edge rejects the command.
+2. Corner banding: the working design stores a separate `CornerBanding` record per chamfer corner; the exact schema and order relative to edge banding remain to be accepted. Radius banding needs no separate record because the radius is part of a tangent path.
+3. Bow-to-radius tangency: a bow with non-zero sagitta meets a tangent corner radius at an angle, so the joint is sharp by geometry. Confirm this is the intended model.
+4. Stage 3: the 2D union/boolean layer for through cutouts is not chosen; ADR 0010 defers it. The current document still rejects cutouts outside the core and overlapping cutouts.
+5. Edge banding milling: rounding the faces and corner.
+6. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
-no-division invariant — are recorded in ADR 0009. They are staged after the rectangle implementation;
-the current document still rejects cutouts outside the core and overlapping cutouts.
+no-division invariant — are recorded in ADR 0009. Corner features and bows are implemented as
+document data and body geometry; banding paths and cutout union are staged next.

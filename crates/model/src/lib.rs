@@ -27,8 +27,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
 mod catalog;
+mod panel_contour;
+mod panel_features;
 
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
+pub use panel_contour::PanelContourError;
+pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 
 /// A stable document identifier.
 ///
@@ -348,6 +352,78 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether a corner treatment can be applied without invalidating the panel.
+    pub fn validate_corner_feature(&self, id: Id, feature: CornerFeature) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let mut candidate = panel.clone();
+        candidate.upsert_corner_feature(feature);
+        candidate.geometry_with_fallbacks()?;
+        Ok(())
+    }
+
+    /// Adds or replaces a corner treatment and bumps the revision once.
+    pub fn set_corner_feature(&mut self, id: Id, feature: CornerFeature) -> Result<Revision, ProjectError> {
+        self.validate_corner_feature(id, feature)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.upsert_corner_feature(feature);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes a corner treatment and bumps the revision once.
+    pub fn clear_corner_feature(&mut self, id: Id, corner: VertexId) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if panel.corner_feature(corner).is_none() {
+            return Err(ProjectError::CornerFeatureNotFound { panel: id, corner });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_corner_feature(corner);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Checks whether a bowed edge can be applied without invalidating the panel.
+    pub fn validate_edge_bow(&self, id: Id, bow: EdgeBow) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let mut candidate = panel.clone();
+        candidate.upsert_edge_bow(bow);
+        candidate.geometry_with_fallbacks()?;
+        Ok(())
+    }
+
+    /// Adds or replaces a bowed edge and bumps the revision once.
+    pub fn set_edge_bow(&mut self, id: Id, bow: EdgeBow) -> Result<Revision, ProjectError> {
+        self.validate_edge_bow(id, bow)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.upsert_edge_bow(bow);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes a bowed edge and bumps the revision once.
+    pub fn clear_edge_bow(&mut self, id: Id, edge: EdgeId) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if panel.edge_bow(edge).is_none() {
+            return Err(ProjectError::EdgeBowNotFound { panel: id, edge });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_edge_bow(edge);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Checks whether a cutout can be added to a panel without changing the document.
     pub fn validate_cutout(&self, panel: Id, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
         let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
@@ -600,6 +676,9 @@ fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> {
 }
 
 fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<(), ProjectError> {
+    if panel.has_contour_features() && !panel.machining().is_empty() {
+        return Err(ProjectError::ContourMachiningUnsupported { panel: panel.id() });
+    }
     let mut validated: Vec<&Cutout> = Vec::new();
     for machining in panel.machining() {
         match machining {
@@ -618,6 +697,9 @@ fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<()
 }
 
 fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+    if panel.has_contour_features() {
+        return Err(ProjectError::ContourMachiningUnsupported { panel: panel.id() });
+    }
     let geometry = panel.geometry_with_fallbacks()?;
     validate_cutout_geometry(panel.id(), geometry, shape, depth)?;
     for machining in panel.machining() {
@@ -741,6 +823,22 @@ pub enum ProjectError {
         /// The edge that was requested.
         edge: EdgeId,
     },
+    /// The requested corner has no treatment to clear.
+    #[error("panel {panel} has no corner feature on corner {corner}")]
+    CornerFeatureNotFound {
+        /// The panel that owns the feature.
+        panel: Id,
+        /// The corner that was requested.
+        corner: VertexId,
+    },
+    /// The requested edge has no bow to clear.
+    #[error("panel {panel} has no bow on edge {edge}")]
+    EdgeBowNotFound {
+        /// The panel that owns the bow.
+        panel: Id,
+        /// The edge that was requested.
+        edge: EdgeId,
+    },
     /// A cutout is not fully inside the panel outline.
     #[error("cutout on panel {panel} lies outside the panel")]
     CutoutOutsidePanel {
@@ -764,6 +862,12 @@ pub enum ProjectError {
         panel: Id,
         /// The other cutout in the conflicting pair.
         other: Id,
+    },
+    /// A shaped panel cannot take machining until the contour boolean layer lands.
+    #[error("shaped panel {panel} does not support machining yet")]
+    ContourMachiningUnsupported {
+        /// The shaped panel.
+        panel: Id,
     },
     /// The next id would collide with an id already used by the tree.
     #[error("next document id {next} must be greater than the largest used id {max}")]
@@ -873,6 +977,8 @@ pub struct Panel {
     placement: Placement,
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
+    corner_features: Vec<CornerFeature>,
+    edge_bows: Vec<EdgeBow>,
 }
 
 impl Panel {
@@ -905,6 +1011,8 @@ impl Panel {
             placement,
             machining: Vec::new(),
             edge_banding: Vec::new(),
+            corner_features: Vec::new(),
+            edge_bows: Vec::new(),
         })
     }
 
@@ -946,6 +1054,31 @@ impl Panel {
     /// Edge banding in application order.
     pub fn edge_banding(&self) -> &[EdgeBanding] {
         &self.edge_banding
+    }
+
+    /// Corner treatments in application order.
+    pub fn corner_features(&self) -> &[CornerFeature] {
+        &self.corner_features
+    }
+
+    /// Bowed edges in application order.
+    pub fn edge_bows(&self) -> &[EdgeBow] {
+        &self.edge_bows
+    }
+
+    /// Whether the nominal outline is not a plain rectangle.
+    pub fn has_contour_features(&self) -> bool {
+        !self.corner_features.is_empty() || !self.edge_bows.is_empty()
+    }
+
+    /// The corner treatment on a vertex, if present.
+    pub fn corner_feature(&self, corner: VertexId) -> Option<CornerFeature> {
+        self.corner_features.iter().copied().find(|feature| feature.corner() == corner)
+    }
+
+    /// The bow on an edge, if present.
+    pub fn edge_bow(&self, edge: EdgeId) -> Option<EdgeBow> {
+        self.edge_bows.iter().copied().find(|bow| bow.edge() == edge)
     }
 
     /// Resolves the geometry with the supplied panel thickness and fallback banding thicknesses.
@@ -990,6 +1123,28 @@ impl Panel {
         F: Fn(&EdgeBanding) -> Length,
     {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
+
+        if self.has_contour_features() {
+            if !self.edge_banding.is_empty() {
+                return Err(PanelGeometryError::UnsupportedContourBanding);
+            }
+            if !self.machining.is_empty() {
+                return Err(PanelGeometryError::UnsupportedContourMachining);
+            }
+            let contour = self.nominal_contour_for(nominal_size).map_err(|_| PanelGeometryError::Contour)?;
+            let (min, max) = contour.bounds().ok_or(PanelGeometryError::Contour)?;
+            let core_length = length_from_millimetres(max.x - min.x)?;
+            let core_width = length_from_millimetres(max.y - min.y)?;
+            return PanelGeometry::new(
+                Length::ZERO,
+                Length::ZERO,
+                core_length,
+                core_width,
+                thickness,
+                core_length,
+                core_width,
+            );
+        }
 
         let mut included_bottom = Length::ZERO;
         let mut included_right = Length::ZERO;
@@ -1065,6 +1220,30 @@ impl Panel {
         self.edge_banding.retain(|existing| existing.edge() != edge);
         self.edge_banding.len() != before
     }
+
+    fn upsert_corner_feature(&mut self, feature: CornerFeature) {
+        let corner = feature.corner();
+        self.corner_features.retain(|existing| existing.corner() != corner);
+        self.corner_features.push(feature);
+    }
+
+    fn remove_corner_feature(&mut self, corner: VertexId) -> bool {
+        let before = self.corner_features.len();
+        self.corner_features.retain(|existing| existing.corner() != corner);
+        self.corner_features.len() != before
+    }
+
+    fn upsert_edge_bow(&mut self, bow: EdgeBow) {
+        let edge = bow.edge();
+        self.edge_bows.retain(|existing| existing.edge() != edge);
+        self.edge_bows.push(bow);
+    }
+
+    fn remove_edge_bow(&mut self, edge: EdgeId) -> bool {
+        let before = self.edge_bows.len();
+        self.edge_bows.retain(|existing| existing.edge() != edge);
+        self.edge_bows.len() != before
+    }
 }
 
 /// Why a serialized panel cannot be read as the current schema.
@@ -1082,6 +1261,30 @@ pub enum PanelError {
     /// A stored dimension is not usable.
     #[error(transparent)]
     Dimension(#[from] PanelDimensionError),
+    /// A corner feature was stored twice for the same corner.
+    #[error("panel has duplicate corner feature on corner {corner}")]
+    DuplicateCornerFeature {
+        /// The duplicated corner.
+        corner: VertexId,
+    },
+    /// An edge bow was stored twice for the same edge.
+    #[error("panel has duplicate bow on edge {edge}")]
+    DuplicateEdgeBow {
+        /// The duplicated edge.
+        edge: EdgeId,
+    },
+    /// A corner feature uses a corner outside the rectangular outline.
+    #[error("panel corner feature uses unsupported corner {corner}")]
+    UnsupportedCornerFeature {
+        /// The rejected corner.
+        corner: VertexId,
+    },
+    /// A bow uses an edge outside the rectangular outline.
+    #[error("panel bow uses unsupported edge {edge}")]
+    UnsupportedEdgeBow {
+        /// The rejected edge.
+        edge: EdgeId,
+    },
 }
 
 /// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
@@ -1101,6 +1304,10 @@ struct PanelWire {
     machining: Vec<Machining>,
     #[serde(default)]
     edge_banding: Vec<EdgeBanding>,
+    #[serde(default)]
+    corner_features: Vec<CornerFeature>,
+    #[serde(default)]
+    edge_bows: Vec<EdgeBow>,
     #[serde(default)]
     size: Option<LegacyPanelSize>,
 }
@@ -1123,6 +1330,8 @@ impl TryFrom<PanelWire> for Panel {
                     || wire.material.is_some()
                     || wire.last_known_thickness.is_some()
                     || !wire.edge_banding.is_empty()
+                    || !wire.corner_features.is_empty()
+                    || !wire.edge_bows.is_empty()
                 {
                     return Err(PanelError::AmbiguousSize);
                 }
@@ -1136,11 +1345,38 @@ impl TryFrom<PanelWire> for Panel {
             }
         };
 
+        validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
+        panel.corner_features = wire.corner_features;
+        panel.edge_bows = wire.edge_bows;
         Ok(panel)
     }
+}
+
+fn validate_contour_features(features: &[CornerFeature], bows: &[EdgeBow]) -> Result<(), PanelError> {
+    let mut corners = HashSet::new();
+    for feature in features {
+        let corner = feature.corner();
+        if !(1..=4).contains(&corner.get()) {
+            return Err(PanelError::UnsupportedCornerFeature { corner });
+        }
+        if !corners.insert(corner.get()) {
+            return Err(PanelError::DuplicateCornerFeature { corner });
+        }
+    }
+    let mut edges = HashSet::new();
+    for bow in bows {
+        let edge = bow.edge();
+        if !(1..=4).contains(&edge.get()) {
+            return Err(PanelError::UnsupportedEdgeBow { edge });
+        }
+        if !edges.insert(edge.get()) {
+            return Err(PanelError::DuplicateEdgeBow { edge });
+        }
+    }
+    Ok(())
 }
 
 /// A machining feature owned by a panel.
@@ -1540,6 +1776,15 @@ pub enum PanelGeometryError {
         /// The rejected edge.
         edge: EdgeId,
     },
+    /// The nominal contour of a shaped panel is not valid.
+    #[error("the panel contour is invalid")]
+    Contour,
+    /// Contour panels do not support edge banding yet.
+    #[error("shaped panels do not support edge banding yet")]
+    UnsupportedContourBanding,
+    /// Contour panels do not support machining yet.
+    #[error("shaped panels do not support machining yet")]
+    UnsupportedContourMachining,
 }
 
 /// One edge-banding strip in application order.
@@ -1591,6 +1836,14 @@ impl EdgeBanding {
     pub const fn last_known_width(&self) -> Length {
         self.last_known_width
     }
+}
+
+fn length_from_millimetres(value: f64) -> Result<Length, PanelGeometryError> {
+    let micrometres = (value * 1000.0).round();
+    if !micrometres.is_finite() || micrometres < 0.0 || micrometres > i64::MAX as f64 {
+        return Err(PanelGeometryError::Contour);
+    }
+    Ok(Length::from_micrometres(micrometres as i64))
 }
 
 fn validate_dimension(field: &'static str, value: Length, max: Length) -> Result<(), PanelDimensionError> {
@@ -1994,6 +2247,141 @@ mod tests {
         let root =
             Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
         Project::new(root).expect("valid project")
+    }
+
+    fn sample_material() -> MaterialId {
+        MaterialId::new(1).expect("material id")
+    }
+
+    #[test]
+    fn corner_features_and_bows_survive_a_project_round_trip() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let corner =
+            CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(25) })
+                .expect("corner feature");
+        project.set_corner_feature(panel_id, corner).expect("set corner");
+        project
+            .set_edge_bow(panel_id, EdgeBow::new(RectEdge::Top.id(), millimetres(12)).expect("bow"))
+            .expect("set bow");
+
+        let panel = project.panel(panel_id).expect("panel");
+        assert!(panel.has_contour_features());
+        assert_eq!(panel.corner_feature(RectCorner::TopRight.id()), Some(corner));
+        assert_eq!(panel.edge_bow(RectEdge::Top.id()).expect("bow").sagitta(), millimetres(12));
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+
+        let geometry = panel.geometry_with_fallbacks().expect("contour geometry");
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.core_width(), millimetres(512));
+        assert_eq!(geometry.overall_width(), millimetres(512));
+    }
+
+    #[test]
+    fn shaping_rejects_banding_and_machining_until_contour_offsets_land() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let corner = CornerFeature::new(
+            RectCorner::BottomLeft.id(),
+            CornerFeatureKind::Chamfer { incoming: millimetres(10), outgoing: millimetres(20) },
+        )
+        .expect("corner feature");
+
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(20))
+                    .expect("banding"),
+            )
+            .expect("set banding");
+        assert!(matches!(
+            project.set_corner_feature(panel_id, corner),
+            Err(ProjectError::PanelGeometry(PanelGeometryError::UnsupportedContourBanding))
+        ));
+
+        let mut shaped = sample_project();
+        shaped.set_corner_feature(panel_id, corner).expect("set corner");
+        assert!(matches!(
+            shaped.add_cutout(
+                panel_id,
+                CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)),
+                CutoutDepth::Through,
+                FaceSide::A
+            ),
+            Err(ProjectError::ContourMachiningUnsupported { panel }) if panel == panel_id
+        ));
+        assert!(matches!(
+            shaped.set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(20))
+                    .expect("banding")
+            ),
+            Err(ProjectError::PanelGeometry(PanelGeometryError::UnsupportedContourBanding))
+        ));
+    }
+
+    #[test]
+    fn shaped_panel_with_machining_is_a_geometry_error() {
+        let mut panel = sample_panel(Id::new(2).expect("id"), "Shaped");
+        panel.corner_features.push(
+            CornerFeature::new(RectCorner::BottomLeft.id(), CornerFeatureKind::Radius { radius: millimetres(8) })
+                .expect("radius"),
+        );
+        panel.machining.push(Machining::Cutout(Cutout::new(
+            Id::new(5).expect("id"),
+            CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)),
+            CutoutDepth::Through,
+            FaceSide::A,
+        )));
+        assert_eq!(panel.geometry_with_fallbacks(), Err(PanelGeometryError::UnsupportedContourMachining));
+    }
+
+    #[test]
+    fn panel_load_rejects_duplicate_and_out_of_range_contour_features() {
+        let base = |corner_features: serde_json::Value, edge_bows: serde_json::Value| {
+            serde_json::json!({
+                "id": 2,
+                "name": "Panel",
+                "nominal_size": {"length": 700000, "width": 500000},
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "last_known_thickness": 18000,
+                "corner_features": corner_features,
+                "edge_bows": edge_bows,
+            })
+        };
+
+        let duplicate = base(
+            serde_json::json!([
+                {"corner": 1, "feature": {"kind": "radius", "radius": 10000}},
+                {"corner": 1, "feature": {"kind": "chamfer", "incoming": 10000, "outgoing": 20000}}
+            ]),
+            serde_json::json!([]),
+        );
+        let duplicate: PanelWire = serde_json::from_value(duplicate).expect("panel wire");
+        assert_eq!(
+            Panel::try_from(duplicate),
+            Err(PanelError::DuplicateCornerFeature { corner: RectCorner::BottomLeft.id() })
+        );
+
+        let unsupported = base(
+            serde_json::json!([{"corner": 5, "feature": {"kind": "radius", "radius": 10000}}]),
+            serde_json::json!([]),
+        );
+        let unsupported: PanelWire = serde_json::from_value(unsupported).expect("panel wire");
+        assert_eq!(
+            Panel::try_from(unsupported),
+            Err(PanelError::UnsupportedCornerFeature { corner: VertexId::new(5).expect("corner") })
+        );
+
+        let bad_bow = base(
+            serde_json::json!([]),
+            serde_json::json!([{"edge": 1, "sagitta": 1000}, {"edge": 1, "sagitta": 2000}]),
+        );
+        let bad_bow: PanelWire = serde_json::from_value(bad_bow).expect("panel wire");
+        assert_eq!(Panel::try_from(bad_bow), Err(PanelError::DuplicateEdgeBow { edge: RectEdge::Bottom.id() }));
     }
 
     #[test]
