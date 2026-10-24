@@ -74,11 +74,11 @@ pub fn sample_resized_panel_nominal_size() -> PanelNominalSize {
     .expect("sample panel size is within limits")
 }
 
-/// A 620 x 500 mm nominal panel, narrow enough to invalidate a cutout near the right edge.
+/// A 500 x 500 mm nominal panel, narrow enough to leave the 600 mm cutout fully outside the core.
 #[allow(clippy::expect_used)]
 pub fn sample_narrow_panel_nominal_size() -> PanelNominalSize {
     PanelNominalSize::new(
-        Length::from_millimetres(620).expect("620 mm fits a length"),
+        Length::from_millimetres(500).expect("500 mm fits a length"),
         Length::from_millimetres(500).expect("500 mm fits a length"),
     )
     .expect("sample panel size is within limits")
@@ -137,16 +137,28 @@ pub fn sample_edge_cutout_rect() -> PanelRect {
     .expect("edge cutout rectangle is valid")
 }
 
-/// A rectangle that runs past the 700 mm sample panel.
+/// A rectangle that starts entirely past the 700 mm sample panel.
 #[allow(clippy::expect_used)]
 pub fn sample_outside_cutout_rect() -> PanelRect {
+    PanelRect::new(
+        Length::from_millimetres(720).expect("720 mm fits a length"),
+        Length::from_millimetres(10).expect("10 mm fits a length"),
+        Length::from_millimetres(100).expect("100 mm fits a length"),
+        Length::from_millimetres(50).expect("50 mm fits a length"),
+    )
+    .expect("outside cutout rectangle is valid")
+}
+
+/// A rectangle that crosses the right edge of the 700 mm sample panel.
+#[allow(clippy::expect_used)]
+pub fn sample_notch_cutout_rect() -> PanelRect {
     PanelRect::new(
         Length::from_millimetres(650).expect("650 mm fits a length"),
         Length::from_millimetres(10).expect("10 mm fits a length"),
         Length::from_millimetres(100).expect("100 mm fits a length"),
         Length::from_millimetres(50).expect("50 mm fits a length"),
     )
-    .expect("outside cutout rectangle is valid")
+    .expect("notch cutout rectangle is valid")
 }
 
 /// An 8 mm blind depth for the 18 mm sample panel.

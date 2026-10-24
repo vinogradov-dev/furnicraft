@@ -1,17 +1,19 @@
 # Status
 
-Updated: 2026-10-23. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-24. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: stage 3 — the rectangle cutout boolean is in place in `geom::region` (union, boundary
-  notches, connected-core count); applying those rules to `model` and the diagnostics is next
+- Working on: stage 3 — through cutouts now union in `model`: overlapping cutouts merge, a cutout
+  crossing the boundary opens a notch, and a split or emptied core is rejected; tracing `Region`
+  rings and covering shaped cores is next
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat(model): union through cutouts and reject a split core`
 - `feat(geom): add rectangle union, subtraction and connectivity`
 - `feat(model): move panel machining to the nominal panel frame`
 - `feat: add tangent-path banding and shaped panel strips`
@@ -36,30 +38,28 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: apply the `geom::region` rectangle boolean to panel cutouts in `model` — overlapping
-   through cutouts merge, a cutout crossing the boundary opens a notch, and a split core is rejected.
-2. Stage 3: replace the v1 "cutout outside the core" diagnostic with the union and connectivity ones.
-3. Stage 3: trace `Region` rings from the rectangle decomposition and cover shaped cores.
-4. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
-5. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Stage 3: trace closed `Region` rings, with holes, from the rectangle decomposition.
+2. Stage 3: extend the union and connectivity rules to shaped cores.
+3. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
+4. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
 
 ## Open questions
 
 - At a sharp joint between two included paths with different thicknesses, the model uses butt connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
-- The 2D union/boolean layer for through cutouts is not chosen yet; ADR 0010 defers it to stage 3.
 - The path representation for inner cutout loops is not designed yet; stage 4 needs it.
+- How a shaped core should carry a true notch on its curved outline is not designed; stage 3's ring tracer must sample it without losing the band paths.
 - Tangent tolerance remains `1e-6` radians and a `1e-6` mm connection gap.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
-- Shaped panels support edge and chamfer-corner banding but still reject machining until stage 3.
+- Shaped panels support edge and chamfer-corner banding but still reject machining until the shaped-core boolean lands.
+- Blind cutouts that overlap any other cutout or cross the core edge are still rejected until the 3D edge-pocket stage.
 - Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error. Stage 3's union layer should own the stronger check.
 - At a sharp joint where an included path meets an unbanded or non-included path, the butt connector keeps the adjacent nominal endpoint. The core bounds then include that corner and the core contour can contain a zero-width slit even though the body and band volumes are correct; stage 3 should replace the connector with the offset intersection.
 - `PanelGeometry` reports shaped core extents with a zero core origin; the body is built directly from the core contour, while machining still needs a core-local frame.
 - Path-wide banding uses the first edge id as the band part identity; a closed rounded path reports its first edge, not a path id.
 - The panel card locks outline edits while any banding or machining exists; the model is path-aware, the UI is still coarse.
-- Cutouts outside the core and overlapping cutouts are still rejected; stage 3 replaces those v1 rules.
 - The panel card does not edit cutouts yet.
 - The outliner is the only way to select a panel; the viewport has no picking or selection highlight.
 - Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks for some checks; rendering and diagnostics use the catalogue.

@@ -144,7 +144,7 @@ reported size, because the card shows the envelope rather than a per-edge minimu
 directly from `C`, so no stored core origin is needed for a shaped panel.
 
 Edge banding is supported on shaped panels. Machining is still rejected with a typed error until the
-stage-3 cutout union lands. The card locks outline edits while any banding or machining exists; the
+shaped-core cutout union lands. The card locks outline edits while any banding or machining exists; the
 model allows a shape change only when every resulting path keeps one consistent banding spec, and
 otherwise rejects it. A chamfer with corner banding cannot be changed to a radius or cleared until
 that band is cleared.
@@ -242,7 +242,7 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
 - `panel.bow.clear` — panel, edge `EdgeId`.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, and a resize that would leave a machining feature outside the core or a corner feature that no longer fits. A shape command is rejected when it would merge differently banded paths or otherwise leave a path with inconsistent banding. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core or machining outside the core preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Machining a shaped panel is rejected until stage 3. A successful command is one undo entry; a failed command leaves the document unchanged.
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is rejected when it would merge differently banded paths or otherwise leave a path with inconsistent banding. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Machining a shaped panel is still rejected until the shaped-core boolean lands. A successful command is one undo entry; a failed command leaves the document unchanged.
 
 ## 8. Panel tests
 
@@ -259,6 +259,8 @@ At minimum:
 - a shaped panel with an included band trims the core and a non-included band extends the outer envelope;
 - a shape change that would merge differently banded paths is rejected;
 - machining that no longer fits the core marks the panel as a problem panel without losing data;
+- overlapping through cutouts merge and a cutout crossing the boundary opens a notch;
+- a cutout that would split the core into disconnected pieces or remove it is rejected, and a loaded file with such a core is diagnosed;
 - machining keeps its core-local position when an included band moves the core origin.
 
 Catalogue and scene-loading tests live in [Materials and catalogue](materials.md) and [Scene document](document.md).
@@ -266,11 +268,12 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 ## 9. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the 2D union/boolean layer is chosen — the in-house `geom::region` module, ADR 0012. It is not implemented yet; the current document still rejects cutouts outside the core and overlapping cutouts.
+2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches and the one-component core invariant for rectangular panels (ADR 0012). Shaped cores and traced `Region` rings with holes are next.
 3. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
 4. Edge banding milling: rounding the faces and corner.
 5. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
 no-division invariant — are recorded in ADR 0009. Corner features, bows, tangent paths, chamfer corner
-banding and shaped-panel band strips are implemented; the cutout union and cutout banding are staged next.
+banding and shaped-panel band strips are implemented; the rectangular cutout union is implemented, and
+shaped-core rings plus cutout banding are staged next.

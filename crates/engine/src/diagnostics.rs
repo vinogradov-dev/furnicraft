@@ -5,7 +5,7 @@
 //! the document and never make a scene unreadable.
 
 use furnicraft_model::{
-    Catalog, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometry, PanelGeometryError, PanelRect,
+    Catalog, CoreViolation, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometryError, PanelRect,
     Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
@@ -36,11 +36,15 @@ pub enum PanelDiagnostic {
     },
     /// The resolved core has a non-positive length or width.
     NonPositiveCore,
-    /// A cutout does not fit inside the resolved core.
+    /// A through cutout does not reach the core, or a blind cutout is not fully inside it.
     MachiningOutsideCore {
         /// The cutout that does not fit.
         cutout: Id,
     },
+    /// The through cutouts remove the whole core.
+    CoreRemoved,
+    /// The through cutouts split the remaining core into disconnected pieces.
+    CoreDisconnected,
     /// A blind cutout is at least as deep as the resolved panel thickness.
     BlindDepthNotLessThanThickness {
         /// The cutout that is too deep.
@@ -96,18 +100,31 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
 
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
-        if !rect_inside(cutout_rect(cutout.shape()), geometry) {
-            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+        let rect = cutout_rect(cutout.shape());
+        match cutout.depth() {
+            CutoutDepth::Through => {
+                if !geometry.cutout_reaches_core(rect) {
+                    diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+                }
+            }
+            CutoutDepth::Blind { depth } => {
+                if !geometry.cutout_fits_core(rect) {
+                    diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+                }
+                if depth >= geometry.thickness() {
+                    diagnostics.push(PanelDiagnostic::BlindDepthNotLessThanThickness {
+                        cutout: cutout.id(),
+                        depth,
+                        thickness: geometry.thickness(),
+                    });
+                }
+            }
         }
-        if let CutoutDepth::Blind { depth } = cutout.depth()
-            && depth >= geometry.thickness()
-        {
-            diagnostics.push(PanelDiagnostic::BlindDepthNotLessThanThickness {
-                cutout: cutout.id(),
-                depth,
-                thickness: geometry.thickness(),
-            });
-        }
+    }
+    match panel.core_violation(geometry) {
+        Some(CoreViolation::Removed) => diagnostics.push(PanelDiagnostic::CoreRemoved),
+        Some(CoreViolation::Split) => diagnostics.push(PanelDiagnostic::CoreDisconnected),
+        None => {}
     }
 
     diagnostics
@@ -117,18 +134,6 @@ fn cutout_rect(shape: CutoutShape) -> PanelRect {
     match shape {
         CutoutShape::Rectangle(rect) => rect,
     }
-}
-
-fn rect_inside(rect: PanelRect, geometry: PanelGeometry) -> bool {
-    let x0 = rect.x().micrometres() as i128;
-    let y0 = rect.y().micrometres() as i128;
-    let x1 = x0 + rect.width().micrometres() as i128;
-    let y1 = y0 + rect.height().micrometres() as i128;
-    let core_x0 = geometry.core_x().micrometres() as i128;
-    let core_y0 = geometry.core_y().micrometres() as i128;
-    let core_x1 = core_x0 + geometry.core_length().micrometres() as i128;
-    let core_y1 = core_y0 + geometry.core_width().micrometres() as i128;
-    x0 >= core_x0 && y0 >= core_y0 && x1 <= core_x1 && y1 <= core_y1
 }
 
 #[cfg(test)]
@@ -304,6 +309,54 @@ mod tests {
         assert!(
             diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(3).expect("cutout id") })
         );
+    }
+
+    fn project_with_through_cutout(x: i64, y: i64, width: i64, height: i64) -> Project {
+        let value = serde_json::json!({
+            "schema_version": 3,
+            "revision": 0,
+            "next_id": 20,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Panel",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "last_known_thickness": 18000,
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "machining": [{"cutout": {
+                        "id": 3,
+                        "shape": {"rectangle": {"x": x, "y": y, "width": width, "height": height}},
+                        "depth": "through",
+                        "entry": "A"
+                    }}],
+                    "edge_banding": []
+                }}]
+            }
+        });
+        serde_json::from_value(value).expect("project loads")
+    }
+
+    #[test]
+    fn a_boundary_notch_is_not_an_outside_cutout() {
+        let project = project_with_through_cutout(650_000, 10_000, 100_000, 50_000);
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(3).expect("id") }));
+        assert!(!diagnostics.contains(&PanelDiagnostic::CoreDisconnected));
+        assert!(!diagnostics.contains(&PanelDiagnostic::CoreRemoved));
+    }
+
+    #[test]
+    fn split_and_removed_cores_are_diagnostics() {
+        let split = project_with_through_cutout(0, 200_000, 700_000, 50_000);
+        let diagnostics = diagnose_panel(&split, &sample_catalog(), panel_id());
+        assert!(diagnostics.contains(&PanelDiagnostic::CoreDisconnected));
+
+        let removed = project_with_through_cutout(0, 0, 700_000, 500_000);
+        let diagnostics = diagnose_panel(&removed, &sample_catalog(), panel_id());
+        assert!(diagnostics.contains(&PanelDiagnostic::CoreRemoved));
     }
 
     #[test]

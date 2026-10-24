@@ -634,6 +634,18 @@ mod tests {
         project.panel(panel_id).expect("panel exists").clone()
     }
 
+    fn panel_with_cutouts(cutouts: &[(CutoutShape, CutoutDepth)]) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        for (shape, depth) in cutouts {
+            project.add_cutout(panel_id, *shape, *depth, FaceSide::A).expect("add cutout");
+        }
+        project.panel(panel_id).expect("panel exists").clone()
+    }
+
     fn edge_material() -> MaterialId {
         MaterialId::new(101).expect("material id")
     }
@@ -953,6 +965,34 @@ mod tests {
 
         let measure = kernel.measure(body).expect("panel measure");
         let expected = 6_300_000.0 - 100.0 * 50.0 * 18.0;
+        assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
+    #[test]
+    fn overlapping_through_cutouts_remove_their_union_volume() {
+        let mut kernel = TruckKernel::new();
+        let panel = panel_with_cutouts(&[
+            (CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50)), CutoutDepth::Through),
+            (CutoutShape::Rectangle(cutout_rect(150, 120, 100, 50)), CutoutDepth::Through),
+        ]);
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+
+        let measure = kernel.measure(body).expect("panel measure");
+        // The rectangles overlap on 50 x 30 mm, so the union removes 8500 mm^2.
+        let expected = 6_300_000.0 - 8500.0 * 18.0;
+        assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
+    #[test]
+    fn a_cutout_across_the_edge_opens_a_notch() {
+        let mut kernel = TruckKernel::new();
+        let panel =
+            panel_with_cutouts(&[(CutoutShape::Rectangle(cutout_rect(650, 10, 100, 50)), CutoutDepth::Through)]);
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+
+        let measure = kernel.measure(body).expect("panel measure");
+        // The 700 mm core keeps only the 50 mm of the cutout that reaches inside it.
+        let expected = 6_300_000.0 - 50.0 * 50.0 * 18.0;
         assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
     }
 

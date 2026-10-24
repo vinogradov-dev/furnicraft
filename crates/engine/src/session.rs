@@ -144,8 +144,9 @@ mod tests {
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
         sample_edge_cutout_rect, sample_edge_material_id, sample_material_id, sample_narrow_panel_nominal_size,
-        sample_outside_cutout_rect, sample_overlapping_cutout_rect, sample_panel_nominal_size, sample_panel_thickness,
-        sample_project, sample_resized_panel_nominal_size, sample_thin_panel_thickness, sample_wide_band_thickness,
+        sample_notch_cutout_rect, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
+        sample_panel_nominal_size, sample_panel_thickness, sample_project, sample_resized_panel_nominal_size,
+        sample_thin_panel_thickness, sample_wide_band_thickness,
     };
     use furnicraft_units::Length;
 
@@ -411,11 +412,15 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_cutout_is_reported_without_consuming_an_id() {
+    fn blind_overlap_is_reported_without_consuming_an_id() {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
-        let first =
-            cutout_request(panel_id, CutoutShape::Rectangle(sample_cutout_rect()), CutoutDepth::Through, FaceSide::A);
+        let first = cutout_request(
+            panel_id,
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Blind { depth: sample_blind_depth() },
+            FaceSide::A,
+        );
         let first_id = session
             .dispatch("cutout.create", &json_params(&first))
             .expect("first cutout")
@@ -439,6 +444,22 @@ mod tests {
         assert_eq!(session.project().revision().get(), 1);
         assert_eq!(session.project().next_id().get(), 6);
         assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
+    }
+
+    #[test]
+    fn overlapping_through_cutouts_and_a_notch_are_accepted() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let requests = [
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutShape::Rectangle(sample_overlapping_cutout_rect()),
+            CutoutShape::Rectangle(sample_notch_cutout_rect()),
+        ];
+        for shape in requests {
+            let request = cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A);
+            session.dispatch("cutout.create", &json_params(&request)).expect("through cutout");
+        }
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 3);
     }
 
     #[test]
@@ -476,7 +497,7 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        assert!(!spec.enabled(&session, &json_params(&overlapping)));
+        assert!(spec.enabled(&session, &json_params(&overlapping)));
     }
 
     #[test]
