@@ -5,14 +5,14 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: stage 3 — through cutouts now union in `model`: overlapping cutouts merge, a cutout
-  crossing the boundary opens a notch, and a split or emptied core is rejected; tracing `Region`
-  rings and covering shaped cores is next
+- Working on: stage 3 — through cutouts union in `model` and trace into `Region` rings with holes;
+  covering shaped cores is next
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat(geom): trace region rings from rectangles`
 - `feat(model): union through cutouts and reject a split core`
 - `feat(geom): add rectangle union, subtraction and connectivity`
 - `feat(model): move panel machining to the nominal panel frame`
@@ -38,22 +38,22 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: trace closed `Region` rings, with holes, from the rectangle decomposition.
-2. Stage 3: extend the union and connectivity rules to shaped cores.
-3. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
-4. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Stage 3: extend the union, connectivity and ring-tracing rules to shaped cores.
+2. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
+3. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
 
 ## Open questions
 
 - At a sharp joint between two included paths with different thicknesses, the model uses butt connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
-- The path representation for inner cutout loops is not designed yet; stage 4 needs it.
-- How a shaped core should carry a true notch on its curved outline is not designed; stage 3's ring tracer must sample it without losing the band paths.
+- Stage 4 needs `Region` rings as tangent paths; the conversion from traced polylines to `Contour` segments is not designed yet.
+- How a shaped core should carry a true notch on its curved outline is not designed; the shaped-core tracer must sample it without losing the band paths.
 - Tangent tolerance remains `1e-6` radians and a `1e-6` mm connection gap.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
 - Shaped panels support edge and chamfer-corner banding but still reject machining until the shaped-core boolean lands.
+- `regions_from_rects` is orthogonal-only: it normalizes rectangles and cannot trace arc boundaries; shaped cores need the contour tracer.
 - Blind cutouts that overlap any other cutout or cross the core edge are still rejected until the 3D edge-pocket stage.
 - Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error. Stage 3's union layer should own the stronger check.
 - At a sharp joint where an included path meets an unbanded or non-included path, the butt connector keeps the adjacent nominal endpoint. The core bounds then include that corner and the core contour can contain a zero-width slit even though the body and band volumes are correct; stage 3 should replace the connector with the offset intersection.

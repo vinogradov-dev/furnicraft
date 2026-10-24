@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU64;
 
-use furnicraft_geom::{DQuat, DVec2, DVec3, Rect, connected_count, subtract_rects, total_area};
+use furnicraft_geom::{DQuat, DVec2, DVec3, Rect, regions_from_rects, subtract_rects};
 use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -826,7 +826,7 @@ fn validate_core(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect
     }
 }
 
-/// The core minus the union of the through cutouts, checked for positive area and one component.
+/// The core minus the union of the through cutouts, traced into material regions.
 fn core_violation_of(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect>) -> Option<CoreViolation> {
     let core = geometry.core_rect()?;
     let mut cuts = Vec::new();
@@ -844,11 +844,13 @@ fn core_violation_of(panel: &Panel, geometry: PanelGeometry, extra: Option<Panel
     if cuts.is_empty() {
         return None;
     }
-    let material = subtract_rects(core, &cuts);
-    if total_area(&material) <= 0.0 {
+    let regions = regions_from_rects(&subtract_rects(core, &cuts));
+    if regions.is_empty() {
         Some(CoreViolation::Removed)
-    } else if connected_count(&material) > 1 {
+    } else if regions.len() > 1 {
         Some(CoreViolation::Split)
+    } else if regions.first().is_some_and(|region| region.area() <= 0.0) {
+        Some(CoreViolation::Removed)
     } else {
         None
     }
