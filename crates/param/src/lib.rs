@@ -51,9 +51,6 @@ pub enum ParamError {
     /// The contour cannot be sampled for the polygon-only kernel profile.
     #[error(transparent)]
     ContourSampling(#[from] ContourError),
-    /// Shaped panels do not support machining until the contour boolean layer lands.
-    #[error("shaped panels do not support machining yet")]
-    UnsupportedContourMachining,
 }
 
 /// Builds the solid body of a rectangular panel in its local frame.
@@ -66,10 +63,8 @@ pub enum ParamError {
 /// returned handle and must eventually release it through [`SolidKernel::clear`].
 pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
     if panel.has_contour_features() {
-        if !panel.machining().is_empty() {
-            return Err(ParamError::UnsupportedContourMachining);
-        }
-        return build_shaped_body_with(kernel, panel, geometry, &EdgeBandProfile::from_spec);
+        let body = build_shaped_body_with(kernel, panel, geometry, &EdgeBandProfile::from_spec)?;
+        return subtract_machining(kernel, panel, geometry, body);
     }
 
     let core_x = geometry.core_x().millimetres_f64();
@@ -79,14 +74,24 @@ pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelG
     let thickness = geometry.thickness().millimetres_f64();
     let profile = Profile::rectangle(length, width)?;
     let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
-    let mut body = kernel.extrude(&profile, &frame, thickness)?;
+    let body = kernel.extrude(&profile, &frame, thickness)?;
+    subtract_machining(kernel, panel, geometry, body)
+}
+
+/// Removes every cutout tool from a panel body.
+///
+/// The same 3D subtraction serves rectangular and shaped cores: tools are nominal panel-local, so
+/// they line up with either body without a core-origin translation.
+fn subtract_machining(
+    kernel: &mut dyn SolidKernel,
+    panel: &Panel,
+    geometry: PanelGeometry,
+    mut body: BodyId,
+) -> Result<BodyId, ParamError> {
     for machining in panel.machining() {
-        match machining {
-            Machining::Cutout(cutout) => {
-                let tool = build_cutout_tool(kernel, geometry, cutout)?;
-                body = kernel.boolean(BooleanOp::Difference, body, tool)?;
-            }
-        }
+        let Machining::Cutout(cutout) = machining;
+        let tool = build_cutout_tool(kernel, geometry, cutout)?;
+        body = kernel.boolean(BooleanOp::Difference, body, tool)?;
     }
     Ok(body)
 }
@@ -226,10 +231,8 @@ where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
     if panel.has_contour_features() {
-        if !panel.machining().is_empty() {
-            return Err(ParamError::UnsupportedContourMachining);
-        }
         let body = build_shaped_body_with(kernel, panel, geometry, &band_profile)?;
+        let body = subtract_machining(kernel, panel, geometry, body)?;
         let bands = build_shaped_bands(kernel, panel, geometry, &band_profile)?;
         return Ok(PanelParts { body, bands });
     }
@@ -510,6 +513,25 @@ mod tests {
             .expect("add panel");
         let feature = CornerFeature::new(RectCorner::BottomRight.id(), kind).expect("corner feature");
         project.set_corner_feature(panel_id, feature).expect("set corner");
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn panel_with_radius_and_cutout(cutout: Option<CutoutShape>) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        if let Some(shape) = cutout {
+            project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        }
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(RectCorner::BottomRight.id(), CornerFeatureKind::Radius { radius: millimetres(25) })
+                    .expect("radius"),
+            )
+            .expect("set corner");
         project.panel(panel_id).expect("panel").clone()
     }
 
@@ -966,6 +988,23 @@ mod tests {
         let measure = kernel.measure(body).expect("panel measure");
         let expected = 6_300_000.0 - 100.0 * 50.0 * 18.0;
         assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
+    #[test]
+    fn shaped_panel_subtracts_cutouts() {
+        let mut kernel = TruckKernel::new();
+        let shape = CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50));
+        let shaped = panel_with_radius_and_cutout(Some(shape));
+        let body = build_panel(&mut kernel, &shaped, geometry(&shaped)).expect("shaped body with cutout");
+        let with_cutout = kernel.measure(body).expect("shaped measure").volume;
+
+        let reference = panel_with_radius_and_cutout(None);
+        let reference_body = build_panel(&mut kernel, &reference, geometry(&reference)).expect("shaped reference");
+        let without_cutout = kernel.measure(reference_body).expect("reference measure").volume;
+
+        let removed = without_cutout - with_cutout;
+        let expected = 100.0 * 50.0 * 18.0;
+        assert!((removed - expected).abs() < 1.0, "removed {removed}, expected {expected}");
     }
 
     #[test]

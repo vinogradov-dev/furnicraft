@@ -143,11 +143,11 @@ sizes from the bounds of `C` and `O`; a trim localized at one corner may therefo
 reported size, because the card shows the envelope rather than a per-edge minimum. The body is built
 directly from `C`, so no stored core origin is needed for a shaped panel.
 
-Edge banding is supported on shaped panels. Machining is still rejected with a typed error until the
-shaped-core cutout union lands. The card locks outline edits while any banding or machining exists; the
-model allows a shape change only when every resulting path keeps one consistent banding spec, and
-otherwise rejects it. A chamfer with corner banding cannot be changed to a radius or cleared until
-that band is cleared.
+Edge banding is supported on shaped panels. A panel may keep its machining when its outline changes:
+the cutout tools are subtracted from the shaped body in 3D. Adding new machining to a shaped panel
+still waits for the contour-aware cutout union. Outline controls are never locked by banding or
+machining: a shape change keeps every edge and corner banding record, and a corner banding on a point
+or radius corner is kept even when there is no surface to draw it on.
 
 ## 5. Edge banding
 
@@ -189,7 +189,8 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
   the sampled line/arc path; an included radius is offset inward with the whole path.
 - **Stage 2b.** Shaped-panel banding is available. One strip is built per tangent path; included
   paths offset the core and non-included paths extend the outer envelope. Machining on a shaped panel
-  remains a typed error until stage 3.
+  is subtracted from the shaped body in 3D; adding new machining still waits for the contour-aware
+  cutout union.
 - **Single banded edge at a corner.** If the adjacent edge has no earlier band, the band ends flush with the adjacent side face of the core. It is not extended into the corner.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
@@ -242,7 +243,7 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
 - `panel.bow.clear` — panel, edge `EdgeId`.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is rejected when it would merge differently banded paths or otherwise leave a path with inconsistent banding. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Machining a shaped panel is still rejected until the shaped-core boolean lands. A successful command is one undo entry; a failed command leaves the document unchanged.
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: records stay on their edges and corners, and a corner banding on a point or radius corner is kept but not drawn. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged.
 
 ## 8. Panel tests
 
@@ -255,9 +256,10 @@ At minimum:
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;
 - banding one edge updates every edge of its tangent path, and clearing one edge clears the path;
-- a chamfer corner band is its own record and is rejected on a radius;
+- corner banding is its own record on any corner and survives a change to a radius or a point;
 - a shaped panel with an included band trims the core and a non-included band extends the outer envelope;
-- a shape change that would merge differently banded paths is rejected;
+- a shape change keeps every edge and corner banding record and every machining feature;
+- a shaped panel with machining builds and subtracts the cutout volume;
 - machining that no longer fits the core marks the panel as a problem panel without losing data;
 - overlapping through cutouts merge and a cutout crossing the boundary opens a notch;
 - a cutout that would split the core into disconnected pieces or remove it is rejected, and a loaded file with such a core is diagnosed;
