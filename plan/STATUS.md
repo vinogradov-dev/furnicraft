@@ -5,13 +5,14 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: stage 3 — panel machining now lives in the nominal panel frame (ADR 0011, schema v3);
-  the through-cutout union layer is next
+- Working on: stage 3 — the rectangle cutout boolean is in place in `geom::region` (union, boundary
+  notches, connected-core count); applying those rules to `model` and the diagnostics is next
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat(geom): add rectangle union, subtraction and connectivity`
 - `feat(model): move panel machining to the nominal panel frame`
 - `feat: add tangent-path banding and shaped panel strips`
 - `feat(model): add contour corner features and bowed edges`
@@ -35,9 +36,12 @@ Updated: 2026-10-23. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: union all through cutouts into one region, support boundary notches and enforce the connected-core invariant.
-2. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
-3. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Stage 3: apply the `geom::region` rectangle boolean to panel cutouts in `model` — overlapping
+   through cutouts merge, a cutout crossing the boundary opens a notch, and a split core is rejected.
+2. Stage 3: replace the v1 "cutout outside the core" diagnostic with the union and connectivity ones.
+3. Stage 3: trace `Region` rings from the rectangle decomposition and cover shaped cores.
+4. Stage 4: banding on cutout edges and openings, using the same tangent-path and inclusion rules.
+5. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
 
 ## Open questions
 
