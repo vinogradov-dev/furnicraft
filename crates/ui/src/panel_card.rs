@@ -281,9 +281,14 @@ impl PanelCard {
                         Some(CornerFeatureKind::Radius { radius }) => {
                             let mut millimetres = radius.millimetres_f64();
                             let response = ui.add(
-                                egui::DragValue::new(&mut millimetres).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                                egui::DragValue::new(&mut millimetres)
+                                    .speed(0.5)
+                                    .range(0.1..=1_000.0)
+                                    .suffix(" mm")
+                                    .update_while_editing(true),
                             );
-                            if (response.drag_stopped() || response.lost_focus())
+                            let entered = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                            if (response.drag_stopped() || response.lost_focus() || entered)
                                 && let Some(value) = positive_length(millimetres)
                                 && value != radius
                             {
@@ -299,16 +304,27 @@ impl PanelCard {
                             let mut outgoing_mm = outgoing.millimetres_f64();
                             ui.label("in");
                             let incoming_response = ui.add(
-                                egui::DragValue::new(&mut incoming_mm).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                                egui::DragValue::new(&mut incoming_mm)
+                                    .speed(0.5)
+                                    .range(0.1..=1_000.0)
+                                    .suffix(" mm")
+                                    .update_while_editing(true),
                             );
                             ui.label("out");
                             let outgoing_response = ui.add(
-                                egui::DragValue::new(&mut outgoing_mm).speed(0.5).range(0.1..=1_000.0).suffix(" mm"),
+                                egui::DragValue::new(&mut outgoing_mm)
+                                    .speed(0.5)
+                                    .range(0.1..=1_000.0)
+                                    .suffix(" mm")
+                                    .update_while_editing(true),
                             );
+                            let entered = (incoming_response.has_focus() || outgoing_response.has_focus())
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
                             let committed = incoming_response.drag_stopped()
                                 || outgoing_response.drag_stopped()
                                 || incoming_response.lost_focus()
-                                || outgoing_response.lost_focus();
+                                || outgoing_response.lost_focus()
+                                || entered;
                             if committed
                                 && let (Some(incoming_value), Some(outgoing_value)) =
                                     (positive_length(incoming_mm), positive_length(outgoing_mm))
@@ -417,8 +433,13 @@ impl PanelCard {
 
         ui.add_space(4.0);
         ui.label(RichText::new("Corner banding").strong());
+        let mut has_corner_segment = false;
         for corner in RectCorner::ALL {
             let corner_id = corner.id();
+            if panel.corner_feature(corner_id).is_none() {
+                continue;
+            }
+            has_corner_segment = true;
             let band = panel.corner_banding_at(corner_id);
             ui.horizontal(|ui| {
                 ui.label(format!("Corner {}", corner.label()));
@@ -465,6 +486,9 @@ impl PanelCard {
                     }
                 }
             });
+        }
+        if !has_corner_segment {
+            ui.label("Shape a corner to band it.");
         }
     }
 

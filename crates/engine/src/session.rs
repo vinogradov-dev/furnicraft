@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn corner_banding_survives_shape_changes() {
+    fn corner_banding_goes_with_its_segment() {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let corner = RectCorner::TopRight.id();
@@ -812,10 +812,7 @@ mod tests {
             included_in_size: false,
         };
         session.dispatch("panel.corner_banding.set", &json_params(&set_band)).expect("band a radius corner");
-        assert!(
-            session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some(),
-            "the record exists even when nothing is drawn"
-        );
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some());
 
         let set_chamfer = PanelCornerSet {
             panel: panel_id,
@@ -832,11 +829,7 @@ mod tests {
         session.dispatch("panel.corner.clear", &json_params(&clear_corner)).expect("clear the corner");
         let panel = session.project().panel(panel_id).expect("panel");
         assert!(panel.corner_feature(corner).is_none());
-        assert!(panel.corner_banding_at(corner).is_some());
-
-        let clear_band = PanelCornerBandingClear { panel: panel_id, corner };
-        session.dispatch("panel.corner_banding.clear", &json_params(&clear_band)).expect("clear the band");
-        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_none());
+        assert!(panel.corner_banding_at(corner).is_none(), "the banding is removed with its segment");
     }
 
     #[test]

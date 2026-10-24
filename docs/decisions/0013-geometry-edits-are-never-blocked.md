@@ -22,10 +22,11 @@ A geometry command is accepted whenever the resulting outline is geometrically v
 machining never reject it.
 
 - `panel.corner.set`, `panel.corner.clear`, `panel.bow.set`, `panel.bow.clear` and `panel.resize`
-  keep every edge-banding and corner-banding record. A chamfer or radius does not move, duplicate or
-  drop a record on an adjacent edge.
-- Corner banding may be assigned to any of the four corners, with or without a treatment. On a point
-  corner the record is kept but has no surface and is not drawn.
+  keep every edge-banding record. A chamfer or radius does not move, duplicate or drop a record on an
+  adjacent edge.
+- A banding belongs to a contour segment. Corner banding is assigned only while the corner has a
+  chamfer or radius segment; changing the treatment between a chamfer and a radius keeps it, and
+  removing the treatment removes the banding with the segment.
 - A shaped panel may keep its machining. The parametric layer subtracts the cutout tools from the
   shaped body with the same 3D boolean it uses for a rectangular core.
 - Only invalid geometry still rejects a command: an outline whose offsets self-intersect, a corner
@@ -37,8 +38,9 @@ a precondition for a geometry change.
 ## Consequences
 
 - Geometry is always editable; no "clear banding and machining" gate remains in the panel card.
-- Existing records survive a shape change and keep their edge or corner id. Undo restores the whole
-  edit in one step.
+- Edge records survive a shape change and keep their edge id. Corner records survive a change between
+  a chamfer and a radius and are deleted when the corner becomes a point. Undo restores the whole edit
+  in one step.
 - A banded path can become partially banded after a tangent radius; the panel still resolves and the
   first record on the path drives the current strip. Per-segment banding assignment and strips are the
   next step.

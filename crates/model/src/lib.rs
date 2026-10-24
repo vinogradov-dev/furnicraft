@@ -361,11 +361,16 @@ impl Project {
     }
 
     /// Validates a corner-banding record without changing the document.
+    ///
+    /// A banding belongs to a segment, so the corner must currently have a chamfer or radius.
     pub fn validate_corner_banding(&self, id: Id, band: CornerBanding) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let corner = band.corner();
         if !(1..=4).contains(&corner.get()) {
             return Err(ProjectError::UnsupportedCornerBanding { panel: id, corner });
+        }
+        if panel.corner_feature(corner).is_none() {
+            return Err(ProjectError::CornerFeatureNotFound { panel: id, corner });
         }
         let mut candidate = panel.clone();
         candidate.upsert_corner_banding(band);
@@ -374,9 +379,6 @@ impl Project {
     }
 
     /// Adds or replaces corner banding and moves it to the end of the order.
-    ///
-    /// The record is valid on any corner, including a point that has no treatment; such a record is
-    /// kept but has no surface to draw on.
     pub fn set_corner_banding(&mut self, id: Id, band: CornerBanding) -> Result<Revision, ProjectError> {
         self.validate_corner_banding(id, band.clone())?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
@@ -428,6 +430,9 @@ impl Project {
     }
 
     /// Removes a corner treatment and bumps the revision once.
+    ///
+    /// The corner banding belongs to the corner segment, so it is removed together with the
+    /// treatment; adjacent edge banding is untouched.
     pub fn clear_corner_feature(&mut self, id: Id, corner: VertexId) -> Result<Revision, ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         if panel.corner_feature(corner).is_none() {
@@ -437,6 +442,7 @@ impl Project {
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
+        panel.remove_corner_banding(corner);
         panel.remove_corner_feature(corner);
         self.revision = next_revision;
         Ok(next_revision)
@@ -2829,20 +2835,34 @@ mod tests {
     }
 
     #[test]
-    fn corner_banding_can_be_assigned_without_a_treatment() {
+    fn corner_banding_requires_a_segment_and_goes_with_it() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         let corner = RectCorner::BottomLeft.id();
         let band = CornerBanding::new(corner, sample_material(), false, millimetres(2), millimetres(22))
             .expect("corner banding");
-        project.set_corner_banding(panel_id, band).expect("band a point corner");
+        assert_eq!(
+            project.set_corner_banding(panel_id, band.clone()),
+            Err(ProjectError::CornerFeatureNotFound { panel: panel_id, corner })
+        );
+
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(
+                    corner,
+                    CornerFeatureKind::Chamfer { incoming: millimetres(10), outgoing: millimetres(15) },
+                )
+                .expect("chamfer"),
+            )
+            .expect("shape the corner");
+        project.set_corner_banding(panel_id, band).expect("band the chamfer segment");
+        assert!(project.panel(panel_id).expect("panel").corner_banding_at(corner).is_some());
+
+        project.clear_corner_feature(panel_id, corner).expect("remove the segment");
         let panel = project.panel(panel_id).expect("panel");
         assert!(panel.corner_feature(corner).is_none());
-        assert!(panel.corner_banding_at(corner).is_some());
-
-        let text = serde_json::to_string(&project).expect("serialize");
-        let decoded: Project = serde_json::from_str(&text).expect("load");
-        assert_eq!(decoded, project);
+        assert!(panel.corner_banding_at(corner).is_none());
     }
 
     #[test]
