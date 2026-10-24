@@ -11,13 +11,15 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0004](0004-panel-local-frame.md) | Panel-local frame, faces and topology ids | Accepted; frame origin superseded by 0009 |
 | [0005](0005-material-catalogue.md) | Material catalogue is external and session-scoped | Accepted |
 | [0006](0006-panel-nominal-and-resolved-geometry.md) | Panels store nominal size; geometry is resolved | Accepted; core-origin placement superseded by 0009 |
-| [0007](0007-edge-banding-v1.md) | Edge banding v1: ordered bands and butt joints | Accepted |
+| [0007](0007-edge-banding-v1.md) | Edge banding v1: ordered bands and butt joints | Accepted; per-path banding unit superseded by 0014 |
 | [0008](0008-panel-diagnostics.md) | Panel diagnostics and command invalidation | Accepted |
-| [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted; core-local machining superseded by 0011 |
+| [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted; core-local machining superseded by 0011; banding-path unit superseded by 0014 |
 | [0010](0010-analytic-line-arc-contours.md) | Analytic line and arc contours for panel offsets | Accepted |
 | [0011](0011-panel-local-machining.md) | Machining uses the nominal panel frame | Accepted |
 | [0012](0012-in-panel-cutout-union.md) | In-house panel cutout union | Accepted |
 | [0013](0013-geometry-edits-are-never-blocked.md) | Geometry edits are never blocked by banding or machining | Accepted |
+| [0014](0014-banding-belongs-to-segments.md) | Banding belongs to one contour segment | Accepted |
+| [0015](0015-band-joint-trim.md) | Band joints extend and trim in application order | Accepted |
 
 ## Format
 

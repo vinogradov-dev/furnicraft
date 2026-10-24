@@ -5,13 +5,16 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: stage 3 — corner banding now belongs to its corner segment and is removed with it;
-  the ordered banding list by segments and the straight-joint trim are next
+- Working on: stage 3 — banding is an ordered list of contour segments (schema v4) with per-segment
+  core offsets and strips; straight-joint extension and order trimming are in place, arc joints are
+  next
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat(param): trim band joints in application order`
+- `feat(model): band by contour segment in one order`
 - `fix(ui): commit corner fields while editing`
 - `fix(model): remove corner banding with its segment`
 - `feat(model): let geometry edits ignore banding and machining`
@@ -41,19 +44,15 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: ordered banding list by contour segments — one band per existing segment, add/remove in
-   the card, order stored in the model (schema v4) and used for trimming.
-2. Stage 3: straight-joint trim — the later band extends over the earlier one to its outer face and is
-   cut there; the earlier band is cut under it. Arcs and radii follow.
-3. Stage 3: extend the union, connectivity and ring-tracing rules to shaped cores.
-4. Stage 4: banding on cutout edges and openings, using the same segment and inclusion rules.
-5. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Stage 3: arc and radius band joints — line-arc and arc-arc outer-face intersections.
+2. Stage 3: extend the union, connectivity and ring-tracing rules to shaped cores.
+3. Stage 4: banding on cutout edges and openings, using the same segment and inclusion rules.
+4. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
 
 ## Open questions
 
-- Per-segment banding raises a core question: an included band on one tangent segment must step the
-  core at the joint, or one included spec must still offset the whole tangent path. Decide the
-  physically correct rule before changing the core offsets.
+- An included band on one tangent segment now steps the core at the joint with its neighbour. Confirm
+  the step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
 - Stage 4 needs `Region` rings as segment paths; the conversion from traced polylines to `Contour` segments is not designed yet.
 - How a shaped core should carry a true notch on its curved outline is not designed; the shaped-core tracer must sample it without losing the band paths.
@@ -63,14 +62,14 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 ## Known debt
 
 - Adding new machining to a shaped panel is still rejected until the contour-aware cutout union lands.
-- A tangent radius can leave a path partially banded; the first record on the path drives the current strip until per-segment banding lands.
+- Band joint extension and trimming cover straight line segments only; arc and radius joints keep butt joints.
+- Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt untrimmed instead of failing the build.
 - A legacy file can still carry a corner banding on a point corner; the card does not show it and it is removed when the corner next becomes a segment.
 - `regions_from_rects` is orthogonal-only: it normalizes rectangles and cannot trace arc boundaries; shaped cores need the contour tracer.
 - Blind cutouts that overlap any other cutout or cross the core edge are still rejected until the 3D edge-pocket stage.
 - Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error. Stage 3's union layer should own the stronger check.
 - At a sharp joint where an included path meets an unbanded or non-included path, the butt connector keeps the adjacent nominal endpoint. The core bounds then include that corner and the core contour can contain a zero-width slit even though the body and band volumes are correct; stage 3 should replace the connector with the offset intersection.
 - `PanelGeometry` reports shaped core extents with a zero core origin; the body and cutout tools use nominal coordinates, but cutout validation on a shaped panel only sees the core bounding box.
-- Path-wide banding uses the first edge id as the band part identity; a closed rounded path reports its first edge, not a path id.
 - The panel card does not edit cutouts yet.
 - The outliner is the only way to select a panel; the viewport has no picking or selection highlight.
 - Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks for some checks; rendering and diagnostics use the catalogue.

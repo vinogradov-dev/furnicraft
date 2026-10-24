@@ -214,7 +214,7 @@ impl Project {
     /// The schema version written by this build.
     ///
     /// Version 3 moved panel-owned machining from core-local to nominal panel-local coordinates.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
     /// Maximum nesting depth of assemblies, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -324,31 +324,27 @@ impl Project {
         let mut candidate = panel.clone();
         candidate.apply_edge_banding(band)?;
         candidate.geometry_with_fallbacks()?;
-        if candidate.has_path_banding_conflict()? {
-            return Err(ProjectError::IncompatiblePathBanding { panel: id });
-        }
         Ok(())
     }
 
-    /// Adds or replaces banding on a tangent path and moves the path to the end of the order.
+    /// Adds or replaces banding on one edge segment and moves it to the end of the order.
     pub fn set_edge_banding(&mut self, id: Id, band: EdgeBanding) -> Result<Revision, ProjectError> {
         self.validate_edge_banding(id, band.clone())?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
+        let edge = band.edge();
         panel.apply_edge_banding(band)?;
+        panel.add_band_source(SegmentSource::Edge(edge));
         self.revision = next_revision;
         Ok(next_revision)
     }
 
-    /// Removes banding from the tangent path that contains `edge` and bumps the revision once.
+    /// Removes banding from one edge segment and bumps the revision once.
     pub fn clear_edge_banding(&mut self, id: Id, edge: EdgeId) -> Result<Revision, ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
-        let path = panel.path_containing_edge(edge)?.ok_or(ProjectError::EdgeBandingNotFound { panel: id, edge })?;
-        let has_band =
-            path.edge_ids().any(|path_edge| panel.edge_banding().iter().any(|band| band.edge() == path_edge));
-        if !has_band {
+        if !panel.edge_banding().iter().any(|band| band.edge() == edge) {
             return Err(ProjectError::EdgeBandingNotFound { panel: id, edge });
         }
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
@@ -356,6 +352,7 @@ impl Project {
             return Err(ProjectError::PanelNotFound { id });
         };
         panel.clear_edge_banding_path(edge)?;
+        panel.remove_band_source(SegmentSource::Edge(edge));
         self.revision = next_revision;
         Ok(next_revision)
     }
@@ -385,12 +382,14 @@ impl Project {
         let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
             return Err(ProjectError::PanelNotFound { id });
         };
+        let corner = band.corner();
         panel.upsert_corner_banding(band);
+        panel.add_band_source(SegmentSource::Corner(corner));
         self.revision = next_revision;
         Ok(next_revision)
     }
 
-    /// Removes banding from a chamfer corner and bumps the revision once.
+    /// Removes banding from a corner segment and bumps the revision once.
     pub fn clear_corner_banding(&mut self, id: Id, corner: VertexId) -> Result<Revision, ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         if panel.corner_banding_at(corner).is_none() {
@@ -401,14 +400,15 @@ impl Project {
             return Err(ProjectError::PanelNotFound { id });
         };
         panel.remove_corner_banding(corner);
+        panel.remove_band_source(SegmentSource::Corner(corner));
         self.revision = next_revision;
         Ok(next_revision)
     }
 
     /// Checks whether a corner treatment can be applied without invalidating the panel.
     ///
-    /// Banding does not block a geometry change: corner-banding records stay with the corner even
-    /// when its treatment becomes a radius or is cleared.
+    /// Banding does not block a geometry change: edge records stay on their edges and a corner
+    /// record stays while its corner segment exists.
     pub fn validate_corner_feature(&self, id: Id, feature: CornerFeature) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let mut candidate = panel.clone();
@@ -443,6 +443,7 @@ impl Project {
             return Err(ProjectError::PanelNotFound { id });
         };
         panel.remove_corner_banding(corner);
+        panel.remove_band_source(SegmentSource::Corner(corner));
         panel.remove_corner_feature(corner);
         self.revision = next_revision;
         Ok(next_revision)
@@ -1179,6 +1180,8 @@ pub struct Panel {
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
     corner_banding: Vec<CornerBanding>,
+    /// Banded segments in application order; the last one is drawn on top.
+    band_order: Vec<SegmentSource>,
     corner_features: Vec<CornerFeature>,
     edge_bows: Vec<EdgeBow>,
 }
@@ -1214,9 +1217,25 @@ impl Panel {
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
+            band_order: Vec::new(),
             corner_features: Vec::new(),
             edge_bows: Vec::new(),
         })
+    }
+
+    /// Banded segments in application order; the last one is drawn on top.
+    pub fn band_order(&self) -> &[SegmentSource] {
+        &self.band_order
+    }
+
+    fn add_band_source(&mut self, source: SegmentSource) {
+        if !self.band_order.contains(&source) {
+            self.band_order.push(source);
+        }
+    }
+
+    fn remove_band_source(&mut self, source: SegmentSource) {
+        self.band_order.retain(|existing| *existing != source);
     }
 
     /// The stable panel id.
@@ -1357,34 +1376,11 @@ impl Panel {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
 
         if self.has_contour_features() {
-            let paths = self.contour_paths_for(nominal_size).map_err(|_| PanelGeometryError::Contour)?;
-            let mut core_min = DVec2::splat(f64::INFINITY);
-            let mut core_max = DVec2::splat(f64::NEG_INFINITY);
-            let mut overall_min = DVec2::splat(f64::INFINITY);
-            let mut overall_max = DVec2::splat(f64::NEG_INFINITY);
-            for path in &paths {
-                let (nominal_min, nominal_max) = path.contour().bounds().ok_or(PanelGeometryError::Contour)?;
-                let (core_bounds, overall_bounds) = match self.path_banding(path) {
-                    Some(spec) => {
-                        let distance = band_thickness(&spec).millimetres_f64();
-                        if spec.included_in_size() {
-                            let inner = path.contour().offset(distance).map_err(|_| PanelGeometryError::Contour)?;
-                            (inner.bounds().ok_or(PanelGeometryError::Contour)?, (nominal_min, nominal_max))
-                        } else {
-                            let outer = path.contour().offset(-distance).map_err(|_| PanelGeometryError::Contour)?;
-                            ((nominal_min, nominal_max), outer.bounds().ok_or(PanelGeometryError::Contour)?)
-                        }
-                    }
-                    None => ((nominal_min, nominal_max), (nominal_min, nominal_max)),
-                };
-                core_min = core_min.min(core_bounds.0);
-                core_max = core_max.max(core_bounds.1);
-                overall_min = overall_min.min(overall_bounds.0);
-                overall_max = overall_max.max(overall_bounds.1);
-            }
-            if !core_min.is_finite() || !core_max.is_finite() || !overall_min.is_finite() || !overall_max.is_finite() {
-                return Err(PanelGeometryError::Contour);
-            }
+            let core =
+                self.core_contour_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
+            let (core_min, core_max) = core.bounds().ok_or(PanelGeometryError::Contour)?;
+            let (overall_min, overall_max) =
+                self.outer_bounds_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
             let core_length = length_from_millimetres(core_max.x - core_min.x)?;
             let core_width = length_from_millimetres(core_max.y - core_min.y)?;
             let overall_length = length_from_millimetres(overall_max.x - overall_min.x)?;
@@ -1616,6 +1612,8 @@ struct PanelWire {
     #[serde(default)]
     corner_banding: Vec<CornerBanding>,
     #[serde(default)]
+    band_order: Vec<SegmentSource>,
+    #[serde(default)]
     corner_features: Vec<CornerFeature>,
     #[serde(default)]
     edge_bows: Vec<EdgeBow>,
@@ -1642,6 +1640,7 @@ impl TryFrom<PanelWire> for Panel {
                     || wire.last_known_thickness.is_some()
                     || !wire.edge_banding.is_empty()
                     || !wire.corner_banding.is_empty()
+                    || !wire.band_order.is_empty()
                     || !wire.corner_features.is_empty()
                     || !wire.edge_bows.is_empty()
                 {
@@ -1663,10 +1662,45 @@ impl TryFrom<PanelWire> for Panel {
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
         panel.corner_banding = wire.corner_banding;
+        panel.band_order = normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding);
         panel.corner_features = wire.corner_features;
         panel.edge_bows = wire.edge_bows;
         Ok(panel)
     }
+}
+
+/// Keeps one entry per band record and appends records that older files did not order.
+///
+/// Schema 3 stored edge and corner banding in two separate lists; the migration uses their order,
+/// edges first and corners second.
+fn normalize_band_order(
+    order: Vec<SegmentSource>,
+    edges: &[EdgeBanding],
+    corners: &[CornerBanding],
+) -> Vec<SegmentSource> {
+    let mut normalized = Vec::new();
+    for source in order {
+        let present = match source {
+            SegmentSource::Edge(edge) => edges.iter().any(|band| band.edge() == edge),
+            SegmentSource::Corner(corner) => corners.iter().any(|band| band.corner() == corner),
+        };
+        if present && !normalized.contains(&source) {
+            normalized.push(source);
+        }
+    }
+    for band in edges {
+        let source = SegmentSource::Edge(band.edge());
+        if !normalized.contains(&source) {
+            normalized.push(source);
+        }
+    }
+    for band in corners {
+        let source = SegmentSource::Corner(band.corner());
+        if !normalized.contains(&source) {
+            normalized.push(source);
+        }
+    }
+    normalized
 }
 
 fn validate_corner_banding(bands: &[CornerBanding]) -> Result<(), PanelError> {
@@ -2239,16 +2273,12 @@ impl EdgeBanding {
             last_known_width: self.last_known_width,
         }
     }
-
-    pub(crate) fn with_edge(self, edge: EdgeId) -> Self {
-        Self { edge, ..self }
-    }
 }
 
-/// One corner-banding strip on a chamfer corner.
+/// One corner-banding strip on a corner segment.
 ///
-/// A radius is tangent to its adjacent edges and is banded by the edge path that contains it. A
-/// chamfer is a sharp separate path, so it needs its own record keyed by the corner vertex.
+/// A chamfer or radius is its own contour segment, so its banding is keyed by the corner vertex.
+/// The record is removed together with the segment when the corner becomes a point.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "CornerBandingWire")]
 pub struct CornerBanding {
@@ -2886,7 +2916,7 @@ mod tests {
     }
 
     #[test]
-    fn included_banding_on_a_closed_rounded_path_insets_the_core_extents() {
+    fn per_segment_banding_insets_only_the_banded_segments() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         for corner in RectCorner::ALL {
@@ -2898,15 +2928,26 @@ mod tests {
                 )
                 .expect("set radius");
         }
-        project
-            .set_edge_banding(
-                panel_id,
-                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(22))
-                    .expect("band"),
-            )
-            .expect("band the closed path");
+        for edge in RectEdge::ALL {
+            project
+                .set_edge_banding(
+                    panel_id,
+                    EdgeBanding::new(edge.id(), sample_material(), true, millimetres(2), millimetres(22))
+                        .expect("band"),
+                )
+                .expect("band the edge");
+        }
+        for corner in RectCorner::ALL {
+            project
+                .set_corner_banding(
+                    panel_id,
+                    CornerBanding::new(corner.id(), sample_material(), true, millimetres(2), millimetres(22))
+                        .expect("corner band"),
+                )
+                .expect("band the corner");
+        }
         let panel = project.panel(panel_id).expect("panel");
-        assert_eq!(panel.edge_banding().len(), 4);
+        assert_eq!(panel.band_order().len(), 8);
         let geometry = panel.geometry_with_fallbacks().expect("geometry");
         assert_eq!(geometry.core_length(), millimetres(696));
         assert_eq!(geometry.core_width(), millimetres(496));
@@ -2922,10 +2963,125 @@ mod tests {
             .expect("non-included band");
         let panel = project.panel(panel_id).expect("panel");
         let geometry = panel.geometry_with_fallbacks().expect("geometry");
-        assert_eq!(geometry.core_length(), millimetres(700));
-        assert_eq!(geometry.core_width(), millimetres(500));
-        assert_eq!(geometry.overall_length(), millimetres(704));
-        assert_eq!(geometry.overall_width(), millimetres(504));
+        assert_eq!(geometry.core_length(), millimetres(696));
+        assert_eq!(geometry.core_width(), millimetres(498));
+        assert_eq!(geometry.overall_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(502));
+    }
+
+    #[test]
+    fn band_order_tracks_application_and_parameter_edits() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let bottom = EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(22))
+            .expect("bottom");
+        let top = EdgeBanding::new(RectEdge::Top.id(), sample_material(), true, millimetres(2), millimetres(22))
+            .expect("top");
+        project.set_edge_banding(panel_id, bottom.clone()).expect("band bottom");
+        project.set_edge_banding(panel_id, top.clone()).expect("band top");
+        assert_eq!(
+            project.panel(panel_id).expect("panel").band_order(),
+            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Edge(RectEdge::Top.id())]
+        );
+
+        let edited = EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), false, millimetres(2), millimetres(22))
+            .expect("bottom");
+        project.set_edge_banding(panel_id, edited.clone()).expect("edit bottom");
+        assert_eq!(
+            project.panel(panel_id).expect("panel").band_order(),
+            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Edge(RectEdge::Top.id())],
+            "a parameter edit keeps the order"
+        );
+
+        project.clear_edge_banding(panel_id, RectEdge::Bottom.id()).expect("clear bottom");
+        assert_eq!(project.panel(panel_id).expect("panel").band_order(), &[SegmentSource::Edge(RectEdge::Top.id())]);
+        project.set_edge_banding(panel_id, edited).expect("re-add bottom");
+        assert_eq!(
+            project.panel(panel_id).expect("panel").band_order(),
+            &[SegmentSource::Edge(RectEdge::Top.id()), SegmentSource::Edge(RectEdge::Bottom.id())]
+        );
+    }
+
+    #[test]
+    fn corner_banding_joins_the_order_and_leaves_with_its_segment() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::TopRight.id();
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), sample_material(), true, millimetres(2), millimetres(22))
+                    .expect("bottom"),
+            )
+            .expect("band bottom");
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(
+                    corner,
+                    CornerFeatureKind::Chamfer { incoming: millimetres(10), outgoing: millimetres(15) },
+                )
+                .expect("chamfer"),
+            )
+            .expect("shape the corner");
+        project
+            .set_corner_banding(
+                panel_id,
+                CornerBanding::new(corner, sample_material(), false, millimetres(2), millimetres(22))
+                    .expect("corner band"),
+            )
+            .expect("band the corner");
+        assert_eq!(
+            project.panel(panel_id).expect("panel").band_order(),
+            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Corner(corner)]
+        );
+
+        project.clear_corner_feature(panel_id, corner).expect("remove the corner segment");
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.band_order(), &[SegmentSource::Edge(RectEdge::Bottom.id())]);
+        assert!(panel.corner_banding_at(corner).is_none());
+    }
+
+    #[test]
+    fn schema_three_banding_migrates_to_an_ordered_segment_list() {
+        let value = serde_json::json!({
+            "schema_version": 3,
+            "revision": 0,
+            "next_id": 20,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Panel",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "last_known_thickness": 18000,
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "edge_banding": [{
+                        "edge": 1,
+                        "material": 1,
+                        "included_in_size": true,
+                        "last_known_thickness": 2000,
+                        "last_known_width": 22000
+                    }],
+                    "corner_banding": [{
+                        "corner": 2,
+                        "material": 1,
+                        "included_in_size": false,
+                        "last_known_thickness": 2000,
+                        "last_known_width": 22000
+                    }],
+                    "corner_features": [{"corner": 2, "feature": {"kind": "chamfer", "incoming": 10000, "outgoing": 15000}}]
+                }}]
+            }
+        });
+        let project: Project = serde_json::from_value(value).expect("v3 project loads");
+        let panel = project.panel(Id::new(2).expect("id")).expect("panel");
+        assert_eq!(
+            panel.band_order(),
+            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Corner(RectCorner::BottomRight.id())]
+        );
     }
 
     #[test]
@@ -2948,7 +3104,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_an_unbanded_edge_clears_its_partially_banded_path() {
+    fn clearing_an_unbanded_edge_is_rejected() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         let Some((_depth, panel)) = find_panel_mut(&mut project.root, panel_id, 1) else {
@@ -2962,8 +3118,11 @@ mod tests {
             EdgeBanding::new(RectEdge::Right.id(), sample_material(), false, millimetres(2), millimetres(22))
                 .expect("band"),
         );
-        project.clear_edge_banding(panel_id, RectEdge::Top.id()).expect("clear the path from the unbanded edge");
-        assert!(project.panel(panel_id).expect("panel").edge_banding().is_empty());
+        assert_eq!(
+            project.clear_edge_banding(panel_id, RectEdge::Top.id()),
+            Err(ProjectError::EdgeBandingNotFound { panel: panel_id, edge: RectEdge::Top.id() })
+        );
+        assert_eq!(project.panel(panel_id).expect("panel").edge_banding().len(), 1);
     }
 
     #[test]
@@ -3410,7 +3569,7 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":3", "\"schema_version\":4", 1);
+        let newer = text.replacen("\"schema_version\":4", "\"schema_version\":5", 1);
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 

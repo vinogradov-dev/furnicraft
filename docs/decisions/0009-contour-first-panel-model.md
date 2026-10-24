@@ -1,6 +1,6 @@
 # 0009. Contour-first panel geometry
 
-- Status: Accepted; core-local machining superseded by 0011
+- Status: Accepted; core-local machining superseded by 0011; banding-path unit superseded by 0014
 - Date: 2026-10-23
 
 ## Context

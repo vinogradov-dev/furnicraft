@@ -1,6 +1,6 @@
 # 0007. Edge banding v1: ordered bands and butt joints
 
-- Status: Accepted
+- Status: Accepted; per-path banding unit superseded by 0014
 - Date: 2026-10-23
 
 ## Context

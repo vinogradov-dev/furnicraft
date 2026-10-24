@@ -165,41 +165,37 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 - If `width < panel_thickness`, the banding does not cover the whole edge. By default it is centred across the thickness; the visible coverage is shown in 3D.
 - Banding width does not change panel thickness and does not extend beyond faces `A`/`B` after trimming.
 
-### 5.3. Application order
+### 5.3. Segments and application order
 
-- Bandings are stored in application order.
-- Re-applying a banding to an edge makes it the last one.
-- Removing a banding preserves the order of the others.
-- Edge-banding records are grouped by tangent path. Setting banding on any edge of a path copies
-  the same material, thickness, width and inclusion flag to every edge in that path, and moves the
-  path to the end as one unit. Clearing any edge of a path clears the whole path. A path therefore
-  has one banding spec; a loaded file with a partially banded path or differing specs is a problem
-  state that topology-changing commands reject.
-- A lone chamfer stores its banding separately as `CornerBanding`, keyed by the corner `VertexId`.
-  A tangent radius is part of the edge path and needs no separate record.
-- Order matters at right-angle corners: the later band covers the corner and is cut flush with the
-  earlier band. Chamfer bands use butt joints.
+- A banding belongs to one contour segment: an edge (ids 1..4) or a corner segment created by a
+  chamfer or a radius. A segment carries at most one banding.
+- Corner segments exist only while the corner has a treatment. Removing the treatment deletes the
+  banding with the segment.
+- Edge and corner bandings share one ordered list. Adding a banding appends its segment; editing the
+  material, width or inclusion keeps its position; removing it preserves the order of the others.
+- The card lists the banded segments and offers only existing unbanded segments in the add control.
+  The order will later be reorderable; the last banding is drawn on top.
+- A tangent path is contour grouping only. It no longer copies a banding to adjacent edges and a
+  partially banded path is not an invalid state.
+- Order matters at joints: the later band covers the earlier one and is cut at its outer face.
 
 ### 5.4. Corners
 
-- **Right angle, 90°.** The later band covers the corner and is trimmed flush with the earlier band's outer face; its end face is visible. There is no mitre in the first version. At each end that meets an earlier band, the later band is extended along the edge by that band's thickness.
-- **Chamfer.** The later band is trimmed along the chamfer; its end face is visible. A chamfer is a separate banding path with a butt joint at each end, so its seam does not depend on application order.
-- **Radius.** Banding is continuous around the radius and the adjacent straight sections: a tangent
-  radius joins them into one path. Application order does not affect a radius. The band strip follows
-  the sampled line/arc path; an included radius is offset inward with the whole path.
-- **Stage 2b.** Shaped-panel banding is available. One strip is built per tangent path; included
-  paths offset the core and non-included paths extend the outer envelope. Machining on a shaped panel
-  is subtracted from the shaped body in 3D; adding new machining still waits for the contour-aware
-  cutout union.
-- **Single banded edge at a corner.** If the adjacent edge has no earlier band, the band ends flush with the adjacent side face of the core. It is not extended into the corner.
+- **Right angle, 90°.** Rectangular bands keep the v1 rectangle order. On a shaped panel the later band is extended over the earlier one to its outer face and cut there; the overlap is removed from the earlier band by a 3D subtraction.
+- **Chamfer.** The chamfer is its own segment with its own record. The adjacent edges keep their bandings. A later chamfer band whose outer face sits closer to the panel than an earlier band's is extended to that band's outer face and cut; when the chamfer is earlier, the later band is cut over it.
+- **Radius.** The radius is its own segment with its own record. Adjacent segments are not forced to share one record, so their strips meet at the tangent points. Tangent and arc joints keep butt joints until line-arc and arc-arc intersections are designed.
+- **Stage 2b.** One strip is built per banded segment. An included segment offsets the core and a
+  non-included segment extends the outer envelope. Machining on a shaped panel is subtracted from the
+  shaped body in 3D; adding new machining still waits for the contour-aware cutout union.
+- **Single banded edge at a corner.** With no earlier adjacent band the strip ends flush with the core side face. With an earlier adjacent band on a straight joint it is extended to that band's outer face and trimmed.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
 ### 5.5. Inclusion in size
 
-- `included_in_size = true`: the core is reduced by `thickness` on that path; a bottom or left straight band also moves the core origin inward by `thickness`; the banding fills the freed space; the overall size does not grow.
-- `included_in_size = false`: the core is unchanged; the banding is added outside; the overall size grows by `thickness`.
-- On a shaped panel both rules apply to the whole tangent path, including its radius or bow. A chamfer corner band uses the same flag on its separate `CornerBanding` record.
-- The flag belongs to the panel and the specific path, not to the banding material.
+- `included_in_size = true`: the core is reduced by `thickness` on that segment; a bottom or left straight band on a rectangular panel also moves the core origin inward; the banding fills the freed space; the overall size does not grow.
+- `included_in_size = false`: the core is unchanged on that segment; the banding is added outside; the overall size grows by `thickness`.
+- On a shaped panel the rule applies to the segment itself: an included segment is offset inward and its tangent neighbours are not moved. A straight connector joins the step in the core outline.
+- The flag belongs to the segment's banding record, not to the banding material.
 - Machining coordinates do not change when the flag changes: the machine works on the core, and the parametric layer applies the core origin when building the body and tools.
 
 ## 6. Display and diagnostics
@@ -234,10 +230,10 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.rename` — panel, a non-blank name.
 - `panel.resize` — panel, nominal length, nominal width.
 - `panel.material.set` — panel, material.
-- `panel.edge_banding.set` — panel, edge, material, included_in_size. The command applies to the whole tangent path that contains the edge; if the path already has banding, it is replaced and the path becomes the last one.
-- `panel.edge_banding.clear` — panel, edge. Clears the whole tangent path.
-- `panel.corner_banding.set` — panel, chamfer corner `VertexId`, material, included_in_size. Replaces the corner band and moves it to the end of the corner-banding order.
-- `panel.corner_banding.clear` — panel, chamfer corner `VertexId`.
+- `panel.edge_banding.set` — panel, edge, material, included_in_size. The command applies to that edge segment only. A new banding is appended to the order; editing an existing one keeps its position.
+- `panel.edge_banding.clear` — panel, edge. Removes that edge's banding.
+- `panel.corner_banding.set` — panel, corner `VertexId`, material, included_in_size. The corner must currently have a chamfer or radius segment. A new banding is appended; editing keeps its position.
+- `panel.corner_banding.clear` — panel, corner `VertexId`. Removes the corner segment's banding.
 - `panel.corner.set` — panel, corner `VertexId`, and a feature: `Radius { radius }` or `Chamfer { incoming, outgoing }`. The two chamfer setbacks are measured along the incoming and outgoing edges and may differ.
 - `panel.corner.clear` — panel, corner `VertexId`. The corner becomes a point; its corner banding is removed with the segment.
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
@@ -252,10 +248,13 @@ At minimum:
 - the 720 × 500 size table for every inclusion combination;
 - an included bottom or left band moves the core inward and leaves the nominal envelope unchanged;
 - banding order and corner coverage by the later band at a right angle;
+- a later band at a straight joint is extended to an earlier band's outer face and cut there;
+- overlapping bands are trimmed so the later band stays visible;
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;
-- banding one edge updates every edge of its tangent path, and clearing one edge clears the path;
+- banding one edge leaves the neighbouring segments of its tangent path unbanded;
+- a new banding is appended, a parameter edit keeps its position, and clearing it returns the segment to the add picker;
 - corner banding survives a chamfer-to-radius change and is removed when the corner becomes a point;
 - a shaped panel with an included band trims the core and a non-included band extends the outer envelope;
 - a shape change keeps every edge banding record and every machining feature;
