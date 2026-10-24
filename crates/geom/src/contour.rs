@@ -171,6 +171,23 @@ impl Line {
         let shift = self.left_normal() * distance;
         Self::new(self.start + shift, self.end + shift)
     }
+
+    /// The point where the two infinite lines meet, or `None` when they are parallel.
+    ///
+    /// The result is not checked against either segment: a call site that joins offset segments
+    /// decides whether the mitre is acceptable.
+    pub fn intersection(self, other: Self) -> Option<DVec2> {
+        let direction = self.end - self.start;
+        let other_direction = other.end - other.start;
+        let denominator = direction.x * other_direction.y - direction.y * other_direction.x;
+        if denominator.abs() <= EPSILON {
+            return None;
+        }
+        let offset = other.start - self.start;
+        let parameter = (offset.x * other_direction.y - offset.y * other_direction.x) / denominator;
+        let point = self.start + direction * parameter;
+        point.is_finite().then_some(point)
+    }
 }
 
 /// A directed circular arc.
@@ -680,6 +697,17 @@ mod tests {
         assert!((offset.start() - point(0.0, 2.0)).length() < 1e-12);
         assert!((offset.end() - point(10.0, 2.0)).length() < 1e-12);
         assert!((offset.length() - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn line_intersection_meets_the_supporting_lines() {
+        let bottom = Line::new(point(0.0, 2.0), point(80.0, 2.0)).expect("bottom");
+        let chamfer = Line::new(point(80.0, 0.0), point(100.0, 5.0)).expect("chamfer");
+        let meeting = bottom.intersection(chamfer).expect("the lines meet");
+        assert!((meeting - point(88.0, 2.0)).length() < 1e-12, "met at {meeting:?}");
+
+        let parallel = Line::new(point(0.0, 4.0), point(10.0, 4.0)).expect("parallel");
+        assert!(bottom.intersection(parallel).is_none());
     }
 
     #[test]

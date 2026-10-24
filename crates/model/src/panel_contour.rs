@@ -221,11 +221,50 @@ impl Panel {
         Ok(segments)
     }
 
+    /// The core outline segment for every nominal segment.
+    ///
+    /// Each nominal segment is offset inward by its own included band thickness. A joint between two
+    /// straight segments is mitred at the intersection of their offset lines, so a band's inner face
+    /// bounds the core and the next face's body cannot cover the band. Arc joints keep their offset
+    /// endpoints and are joined with a straight connector by [`Self::core_contour_with`].
+    pub fn core_segments_with<F>(&self, band_thickness: F) -> Result<Vec<(Segment, SegmentSource)>, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        self.core_segments_for_with(self.nominal_size(), band_thickness)
+    }
+
+    /// The core outline segments for a candidate size and band thickness.
+    pub fn core_segments_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        band_thickness: F,
+    ) -> Result<Vec<(Segment, SegmentSource)>, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        let nominal = self.nominal_segments_for(nominal_size)?;
+        let mut pieces = Vec::with_capacity(nominal.len());
+        for (segment, source) in &nominal {
+            let distance = self
+                .segment_banding(*source)
+                .filter(|spec| spec.included_in_size())
+                .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
+            let piece = if distance > 0.0 { segment.offset(distance)? } else { *segment };
+            pieces.push((piece, *source));
+        }
+        let nominal_segments = nominal.iter().map(|(segment, _)| *segment).collect();
+        let nominal_contour = Contour::new(nominal_segments, true)?;
+        let (min, max) = nominal_contour.bounds().ok_or(ContourError::InvalidInput("panel outline bounds"))?;
+        trim_straight_joints(&mut pieces, min, max);
+        Ok(pieces)
+    }
+
     /// Builds the core outline with a per-segment offset for included banding.
     ///
-    /// Every nominal segment is offset inward by its own included band thickness. Consecutive
-    /// offset segments that no longer share an endpoint are joined with a straight connector, so a
-    /// band on one segment does not move its neighbours.
+    /// Straight joints are mitred; see [`Self::core_segments_with`]. Segments that still do not meet
+    /// (arc joints and degenerate mitres) are joined with a straight connector, so a band on one
+    /// segment does not move its neighbours.
     pub fn core_contour_with<F>(&self, band_thickness: F) -> Result<Contour, PanelContourError>
     where
         F: Fn(&BandingSpec) -> Length,
@@ -242,15 +281,8 @@ impl Panel {
     where
         F: Fn(&BandingSpec) -> Length,
     {
-        let mut segments = Vec::new();
-        for (segment, source) in self.nominal_segments_for(nominal_size)? {
-            let distance = self
-                .segment_banding(source)
-                .filter(|spec| spec.included_in_size())
-                .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
-            segments.push(if distance > 0.0 { segment.offset(distance)? } else { segment });
-        }
-        join_segments(segments)
+        let pieces = self.core_segments_for_with(nominal_size, band_thickness)?;
+        join_segments(pieces.into_iter().map(|(segment, _)| segment).collect())
     }
 
     /// The bounds of the outer envelope with a per-segment outward offset for non-included banding.
@@ -445,6 +477,50 @@ fn incoming_setback(feature: CornerFeatureKind) -> f64 {
     }
 }
 
+/// Mitres consecutive straight offset segments at the intersection of their supporting lines.
+///
+/// The intersection is only used when it lies inside the nominal outline and both trimmed pieces
+/// keep their travel direction: a band thicker than the feature it meets is not allowed to fold the
+/// core back on itself. A rejected mitre keeps the untouched offset endpoints and is joined by
+/// [`join_segments`].
+fn trim_straight_joints(pieces: &mut [(Segment, SegmentSource)], min: DVec2, max: DVec2) {
+    let count = pieces.len();
+    let tolerance = 1.0e-6;
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let (Segment::Line(current), Segment::Line(neighbour)) = (pieces[index].0, pieces[next].0) else {
+            continue;
+        };
+        let Some(meeting) = current.intersection(neighbour) else {
+            continue;
+        };
+        if meeting.x < min.x - tolerance
+            || meeting.x > max.x + tolerance
+            || meeting.y < min.y - tolerance
+            || meeting.y > max.y + tolerance
+        {
+            continue;
+        }
+        let Ok(trimmed_current) = Line::new(current.start(), meeting) else {
+            continue;
+        };
+        let Ok(trimmed_neighbour) = Line::new(meeting, neighbour.end()) else {
+            continue;
+        };
+        if trimmed_current.length() <= tolerance || trimmed_neighbour.length() <= tolerance {
+            continue;
+        }
+        let current_forward = (current.end() - current.start()).dot(trimmed_current.end() - trimmed_current.start());
+        let neighbour_forward =
+            (neighbour.end() - neighbour.start()).dot(trimmed_neighbour.end() - trimmed_neighbour.start());
+        if current_forward <= 0.0 || neighbour_forward <= 0.0 {
+            continue;
+        }
+        pieces[index].0 = Segment::Line(trimmed_current);
+        pieces[next].0 = Segment::Line(trimmed_neighbour);
+    }
+}
+
 /// Closes per-segment offset segments into one contour, adding a straight connector at a step.
 fn join_segments(segments: Vec<Segment>) -> Result<Contour, PanelContourError> {
     let Some(first) = segments.first().copied() else {
@@ -536,6 +612,40 @@ mod tests {
         assert_eq!(contour.segments().len(), 5);
         let expected = 6000.0 - 0.5 * 20.0 * 5.0;
         assert!((contour.signed_area().expect("area") - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_included_band_cuts_the_core_at_a_bare_chamfer() {
+        let mut panel = panel(100, 60);
+        panel.corner_features.push(
+            CornerFeature::new(
+                RectCorner::BottomRight.id(),
+                CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(5) },
+            )
+            .expect("chamfer"),
+        );
+        let material = MaterialId::new(1).expect("material");
+        for edge in [RectEdge::Bottom, RectEdge::Right] {
+            panel
+                .apply_edge_banding(
+                    EdgeBanding::new(edge.id(), material, true, millimetres(2), millimetres(20)).expect("band"),
+                )
+                .expect("apply band");
+        }
+
+        let core = panel.core_contour_with(|_| millimetres(2)).expect("core contour");
+        for segment in core.segments() {
+            for point in [segment.start(), segment.end()] {
+                assert!(point.y >= 2.0 - 1.0e-6, "core point {point:?} lies under the bottom band");
+                assert!(point.x <= 98.0 + 1.0e-6, "core point {point:?} lies over the right band");
+            }
+        }
+        assert!(
+            core.segments().iter().any(|segment| (segment.start() - DVec2::new(88.0, 2.0)).length() < 1.0e-6
+                || (segment.end() - DVec2::new(88.0, 2.0)).length() < 1.0e-6),
+            "the bottom band's inner face must meet the chamfer at (88, 2): {:?}",
+            core.segments()
+        );
     }
 
     #[test]

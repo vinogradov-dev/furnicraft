@@ -280,6 +280,7 @@ where
 {
     let panel_thickness = geometry.thickness();
     let segments = panel.nominal_segments()?;
+    let core = panel.core_segments_with(|spec| band_profile(spec).thickness())?;
     let mut parts = Vec::new();
     let mut solids = Vec::new();
     for (order_index, source) in panel.band_order().iter().enumerate() {
@@ -290,7 +291,8 @@ where
             continue;
         };
         let profile = band_profile(&spec);
-        let strip = shaped_band_strip(panel, &segments, segment_index, spec, profile, order_index, band_profile)?;
+        let strip =
+            shaped_band_strip(panel, &segments, &core, segment_index, spec, profile, order_index, band_profile)?;
         let visible_width = profile.width().min(panel_thickness).millimetres_f64();
         let panel_thickness_mm = panel_thickness.millimetres_f64();
         let z = (panel_thickness_mm - visible_width) * 0.5;
@@ -310,11 +312,17 @@ struct BandSolid {
     height: f64,
 }
 
-/// Builds one band strip, extending a later straight band over an earlier one at a sharp joint.
+/// Builds one band strip.
+///
+/// An included band fills the space between its nominal segment and its core segment, so the body
+/// is always cut back by the band's inner face. A non-included band lies outside the nominal
+/// outline and is cut flush with the neighbouring faces. A later band still reaches over an earlier
+/// neighbouring band's outer face at a sharp joint.
 #[allow(clippy::too_many_arguments)]
 fn shaped_band_strip<F>(
     panel: &Panel,
     segments: &[(Segment, SegmentSource)],
+    core: &[(Segment, SegmentSource)],
     segment_index: usize,
     spec: BandingSpec,
     profile: EdgeBandProfile,
@@ -324,21 +332,76 @@ fn shaped_band_strip<F>(
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
-    if let Segment::Line(line) = segments[segment_index].0
+    let nominal = segments[segment_index].0;
+    if spec.included_in_size()
+        && let Some((core_segment, _)) = core.get(segment_index)
+    {
+        if let (Segment::Line(line), Segment::Line(core_line)) = (nominal, *core_segment)
+            && let Some(strip) =
+                included_line_strip(panel, segments, segment_index, order_index, line, core_line, band_profile)
+        {
+            return Ok(strip);
+        }
+        return included_band_profile(nominal, *core_segment);
+    }
+    if let Segment::Line(line) = nominal
         && let Some(strip) =
-            extended_line_strip(panel, segments, segment_index, spec, profile, order_index, line, band_profile)
+            outside_line_strip(panel, segments, segment_index, profile, order_index, line, band_profile)
     {
         return Ok(strip);
     }
-    band_strip_profile(&Contour::new(vec![segments[segment_index].0], false)?, spec, profile)
+    band_strip_profile(&Contour::new(vec![nominal], false)?, spec, profile)
 }
 
+/// Fills the gap between a nominal straight segment and its mitred core segment.
 #[allow(clippy::too_many_arguments)]
-fn extended_line_strip<F>(
+fn included_line_strip<F>(
     panel: &Panel,
     segments: &[(Segment, SegmentSource)],
     segment_index: usize,
-    spec: BandingSpec,
+    order_index: usize,
+    line: Line,
+    core_line: Line,
+    band_profile: &F,
+) -> Option<Profile>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    let start = included_end_points(panel, segments, segment_index, false, order_index, line, core_line, band_profile)?;
+    let end = included_end_points(panel, segments, segment_index, true, order_index, line, core_line, band_profile)?;
+    Profile::new(vec![start.0, end.0, end.1, start.1], Vec::new()).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn included_end_points<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
+    at_end: bool,
+    order_index: usize,
+    line: Line,
+    core_line: Line,
+    band_profile: &F,
+) -> Option<(DVec2, DVec2)>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    let (anchor, along) =
+        if at_end { (line.end(), line.end() - line.start()) } else { (line.start(), line.start() - line.end()) };
+    if let Some(face) = extension_face(panel, segments, segment_index, at_end, order_index, 0.0, band_profile)
+        && let Some(points) = extended_end_points(line, core_line, face, anchor, along)
+    {
+        return Some(points);
+    }
+    Some((anchor, if at_end { core_line.end() } else { core_line.start() }))
+}
+
+/// Builds a band that lies outside the nominal outline.
+#[allow(clippy::too_many_arguments)]
+fn outside_line_strip<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
     profile: EdgeBandProfile,
     order_index: usize,
     line: Line,
@@ -348,93 +411,111 @@ where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
     let thickness = profile.thickness().millimetres_f64();
-    let outward = if spec.included_in_size() { 0.0 } else { thickness };
     let left = line.left_normal();
-    let outer_shift = if spec.included_in_size() { 0.0 } else { -thickness };
-    let inner_shift = if spec.included_in_size() { thickness } else { 0.0 };
-    let start = line.start();
-    let end = line.end();
-    let mut outer_start = start + left * outer_shift;
-    let mut outer_end = end + left * outer_shift;
-    let mut inner_start = start + left * inner_shift;
-    let mut inner_end = end + left * inner_shift;
-    let mut extended = false;
-
-    for at_end in [false, true] {
-        let adjacent_index = if at_end {
-            (segment_index + 1) % segments.len()
-        } else {
-            (segment_index + segments.len() - 1) % segments.len()
-        };
-        if !joint_is_sharp(segments, segment_index, at_end) {
-            continue;
-        }
-        let adjacent_source = segments[adjacent_index].1;
-        let Some(adjacent_spec) = panel.segment_banding(adjacent_source) else {
-            continue;
-        };
-        let adjacent_order = panel.band_order().iter().position(|candidate| *candidate == adjacent_source);
-        if adjacent_order.is_some_and(|adjacent| adjacent >= order_index) {
-            continue;
-        }
-        let adjacent_profile = band_profile(&adjacent_spec);
-        let adjacent_out =
-            if adjacent_spec.included_in_size() { 0.0 } else { adjacent_profile.thickness().millimetres_f64() };
-        if outward + 1.0e-9 >= adjacent_out {
-            continue;
-        }
-        let Segment::Line(adjacent_line) = segments[adjacent_index].0 else {
-            continue;
-        };
-        let adjacent_left = adjacent_line.left_normal();
-        let face_a = adjacent_line.start() - adjacent_left * adjacent_out;
-        let face_b = adjacent_line.end() - adjacent_left * adjacent_out;
-        let Some((outer_point, inner_point)) =
-            extended_end_points(outer_start, outer_end, inner_start, inner_end, face_a, face_b, start, end, at_end)
-        else {
-            continue;
-        };
-        if at_end {
-            outer_end = outer_point;
-            inner_end = inner_point;
-        } else {
-            outer_start = outer_point;
-            inner_start = inner_point;
-        }
-        extended = true;
-    }
-
-    if !extended {
-        return None;
-    }
-    Profile::new(vec![outer_start, outer_end, inner_end, inner_start], Vec::new()).ok()
+    let outer = Line::new(line.start() - left * thickness, line.end() - left * thickness).ok()?;
+    let start =
+        outside_end_points(panel, segments, segment_index, false, order_index, thickness, outer, line, band_profile)?;
+    let end =
+        outside_end_points(panel, segments, segment_index, true, order_index, thickness, outer, line, band_profile)?;
+    Profile::new(vec![start.0, end.0, end.1, start.1], Vec::new()).ok()
 }
 
 #[allow(clippy::too_many_arguments)]
-fn extended_end_points(
-    outer_start: DVec2,
-    outer_end: DVec2,
-    inner_start: DVec2,
-    inner_end: DVec2,
-    face_a: DVec2,
-    face_b: DVec2,
-    start: DVec2,
-    end: DVec2,
+fn outside_end_points<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
     at_end: bool,
-) -> Option<(DVec2, DVec2)> {
-    let outer = line_intersection(outer_start, outer_end, face_a, face_b)?;
-    let inner = line_intersection(inner_start, inner_end, face_a, face_b)?;
-    let anchor = if at_end { end } else { start };
-    let along = if at_end { end - start } else { start - end };
-    let outer_beyond = (outer - anchor).dot(along);
-    let inner_beyond = (inner - anchor).dot(along);
+    order_index: usize,
+    outward: f64,
+    outer: Line,
+    inner: Line,
+    band_profile: &F,
+) -> Option<(DVec2, DVec2)>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    let line = inner;
+    let (anchor, along) =
+        if at_end { (line.end(), line.end() - line.start()) } else { (line.start(), line.start() - line.end()) };
+    if let Some(face) = extension_face(panel, segments, segment_index, at_end, order_index, outward, band_profile)
+        && let Some(points) = extended_end_points(outer, inner, face, anchor, along)
+    {
+        return Some(points);
+    }
+    let adjacent_index = if at_end {
+        (segment_index + 1) % segments.len()
+    } else {
+        (segment_index + segments.len() - 1) % segments.len()
+    };
+    if let Segment::Line(adjacent) = segments[adjacent_index].0
+        && let (Some(outer_point), Some(inner_point)) = (outer.intersection(adjacent), inner.intersection(adjacent))
+    {
+        return Some((outer_point, inner_point));
+    }
+    Some((if at_end { outer.end() } else { outer.start() }, if at_end { inner.end() } else { inner.start() }))
+}
+
+/// The outer face of an earlier neighbouring band that a later band reaches over.
+#[allow(clippy::too_many_arguments)]
+fn extension_face<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
+    at_end: bool,
+    order_index: usize,
+    outward: f64,
+    band_profile: &F,
+) -> Option<Line>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    if !joint_is_sharp(segments, segment_index, at_end) {
+        return None;
+    }
+    let count = segments.len();
+    let adjacent_index = if at_end { (segment_index + 1) % count } else { (segment_index + count - 1) % count };
+    let adjacent_source = segments[adjacent_index].1;
+    let adjacent_spec = panel.segment_banding(adjacent_source)?;
+    let adjacent_order = panel.band_order().iter().position(|candidate| *candidate == adjacent_source)?;
+    if adjacent_order >= order_index {
+        return None;
+    }
+    let adjacent_profile = band_profile(&adjacent_spec);
+    let adjacent_out =
+        if adjacent_spec.included_in_size() { 0.0 } else { adjacent_profile.thickness().millimetres_f64() };
+    if outward + 1.0e-9 >= adjacent_out {
+        return None;
+    }
+    let Segment::Line(adjacent_line) = segments[adjacent_index].0 else {
+        return None;
+    };
+    let adjacent_left = adjacent_line.left_normal();
+    Line::new(adjacent_line.start() - adjacent_left * adjacent_out, adjacent_line.end() - adjacent_left * adjacent_out)
+        .ok()
+}
+
+fn extended_end_points(outer: Line, inner: Line, face: Line, anchor: DVec2, along: DVec2) -> Option<(DVec2, DVec2)> {
+    let outer_point = outer.intersection(face)?;
+    let inner_point = inner.intersection(face)?;
+    let outer_beyond = (outer_point - anchor).dot(along);
+    let inner_beyond = (inner_point - anchor).dot(along);
     if outer_beyond <= 1.0e-6 || inner_beyond <= 1.0e-6 {
         return None;
     }
-    if (outer - anchor).length() > 50.0 || (inner - anchor).length() > 50.0 {
+    if (outer_point - anchor).length() > 50.0 || (inner_point - anchor).length() > 50.0 {
         return None;
     }
-    Some((outer, inner))
+    Some((outer_point, inner_point))
+}
+
+/// A band that follows an arc: the nominal curve and its offset bound the strip.
+fn included_band_profile(nominal: Segment, core: Segment) -> Result<Profile, ParamError> {
+    let outer = Contour::new(vec![nominal], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let inner = Contour::new(vec![core], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let mut points = outer;
+    points.extend(inner.iter().rev().copied());
+    Ok(Profile::new(points, Vec::new())?)
 }
 
 fn joint_is_sharp(segments: &[(Segment, SegmentSource)], index: usize, at_end: bool) -> bool {
@@ -445,18 +526,6 @@ fn joint_is_sharp(segments: &[(Segment, SegmentSource)], index: usize, at_end: b
         (segments[(index + count - 1) % count].0, segments[index].0)
     };
     incoming.tangent_at_end().dot(outgoing.tangent_at_start()).clamp(-1.0, 1.0).acos() > 1.0e-6
-}
-
-fn line_intersection(a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2) -> Option<DVec2> {
-    let da = a1 - a0;
-    let db = b1 - b0;
-    let denominator = da.x * db.y - da.y * db.x;
-    if denominator.abs() < 1.0e-9 {
-        return None;
-    }
-    let offset = b0 - a0;
-    let t = (offset.x * db.y - offset.y * db.x) / denominator;
-    Some(a0 + da * t)
 }
 
 fn trim_overlaps(kernel: &mut dyn SolidKernel, parts: &mut [BandPart], solids: &[BandSolid]) -> Result<(), ParamError> {
@@ -618,6 +687,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingKernel {
         profile: Option<Profile>,
+        profiles: Vec<Profile>,
         frame: Option<Frame>,
         height: Option<f64>,
         fail: bool,
@@ -626,6 +696,7 @@ mod tests {
     impl SolidKernel for RecordingKernel {
         fn extrude(&mut self, profile: &Profile, frame: &Frame, height: f64) -> furnicraft_kernel::Result<BodyId> {
             self.profile = Some(profile.clone());
+            self.profiles.push(profile.clone());
             self.frame = Some(*frame);
             self.height = Some(height);
             if self.fail {
@@ -652,6 +723,7 @@ mod tests {
 
         fn clear(&mut self) {
             self.profile = None;
+            self.profiles.clear();
             self.frame = None;
             self.height = None;
         }
@@ -755,6 +827,121 @@ mod tests {
             )
             .expect("band the chamfer");
         project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn panel_with_chamfer_and_end_bands(
+        bottom_included: bool,
+        right_included: bool,
+        chamfer_included: Option<bool>,
+    ) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(
+                    RectEdge::Bottom.id(),
+                    edge_material(),
+                    bottom_included,
+                    millimetres(2),
+                    millimetres(22),
+                )
+                .expect("bottom band"),
+            )
+            .expect("band the bottom edge");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(
+                    RectEdge::Right.id(),
+                    edge_material(),
+                    right_included,
+                    millimetres(2),
+                    millimetres(22),
+                )
+                .expect("right band"),
+            )
+            .expect("band the right edge");
+        let corner = RectCorner::BottomRight.id();
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(
+                    corner,
+                    CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(5) },
+                )
+                .expect("chamfer"),
+            )
+            .expect("set chamfer");
+        if let Some(included) = chamfer_included {
+            project
+                .set_corner_banding(
+                    panel_id,
+                    CornerBanding::new(corner, edge_material(), included, millimetres(2), millimetres(22))
+                        .expect("corner band"),
+                )
+                .expect("band the chamfer");
+        }
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn assert_profile_point(profile: &Profile, x: f64, y: f64) {
+        assert!(
+            profile.outer.iter().any(|point| (*point - DVec2::new(x, y)).length() < 1.0e-6),
+            "expected ({x}, {y}) in {:?}",
+            profile.outer
+        );
+    }
+
+    #[test]
+    fn included_end_bands_fill_a_bare_chamfer_join() {
+        let panel = panel_with_chamfer_and_end_bands(true, true, None);
+        let mut kernel = RecordingKernel::default();
+        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+            .expect("shaped bands");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(kernel.profiles.len(), 2);
+        let bottom = &kernel.profiles[0];
+        let right = &kernel.profiles[1];
+        assert_profile_point(bottom, 680.0, 0.0);
+        assert_profile_point(bottom, 688.0, 2.0);
+        assert_profile_point(right, 700.0, 5.0);
+        assert_profile_point(right, 698.0, 4.5);
+    }
+
+    #[test]
+    fn non_included_end_bands_are_cut_flush_with_a_bare_chamfer() {
+        let panel = panel_with_chamfer_and_end_bands(false, false, None);
+        let mut kernel = RecordingKernel::default();
+        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+            .expect("shaped bands");
+        assert_eq!(parts.len(), 2);
+        let bottom = &kernel.profiles[0];
+        let right = &kernel.profiles[1];
+        assert_profile_point(bottom, 672.0, -2.0);
+        assert_profile_point(bottom, 680.0, 0.0);
+        assert_profile_point(right, 700.0, 5.0);
+        assert_profile_point(right, 702.0, 5.5);
+    }
+
+    #[test]
+    fn included_bands_meet_a_banded_chamfer_without_gaps_or_overlaps() {
+        let panel = panel_with_chamfer_and_end_bands(true, true, Some(true));
+        let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
+        let mut kernel = TruckKernel::new();
+        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+            .expect("banded chamfer parts");
+        let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
+        let band_volume: f64 =
+            parts.bands().iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).sum();
+        assert!(
+            (body_volume + band_volume - nominal_volume).abs() < nominal_volume * 1.0e-3,
+            "body {body_volume} + bands {band_volume} vs nominal {nominal_volume}"
+        );
+        kernel.clear();
     }
 
     fn panel_with_chamfer_band(included: bool) -> Panel {
