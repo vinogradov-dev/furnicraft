@@ -14,9 +14,11 @@
 )]
 
 pub mod contour;
+pub mod region;
 
 pub use contour::{Arc, Contour, ContourError, DEFAULT_TANGENT_TOLERANCE, Line, Segment};
 pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
+pub use region::{Rect, RectError, Region, RegionError, connected_count, subtract_rects, total_area, union_rects};
 
 /// A right-handed local frame: `x` and `y` span the profile plane, `z` is the extrusion axis.
 ///

@@ -93,9 +93,10 @@ cutout edge at a boolean intersection; that needs explicit compatible banding.
 4. Banding on cutout edges.
 5. Blind cutouts and future 3D edge profiles.
 
-The first step does not add a new crate or dependency. The later contour work needs a robust 2D
-line/arc offset and boolean layer; whether it is our own code, an extension of the kernel adapter or a
-pure-Rust library is decided by a spike before stage 2/3.
+The first step does not add a new crate or dependency. The later contour work was to need a robust 2D
+line/arc offset and boolean layer; offsets landed in stage 2 as analytic contour code (ADR 0010), and
+the boolean layer lands in stage 3 as the in-house `geom::region` module (ADR 0012), still with no new
+crate or dependency.
 
 ## Consequences
 

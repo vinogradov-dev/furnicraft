@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU64;
 
-use furnicraft_geom::{DQuat, DVec2, DVec3};
+use furnicraft_geom::{DQuat, DVec2, DVec3, Rect, connected_count, subtract_rects, total_area};
 use furnicraft_units::Length;
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -747,21 +747,12 @@ fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<()
     if panel.has_contour_features() && !panel.machining().is_empty() {
         return Err(ProjectError::ContourMachiningUnsupported { panel: panel.id() });
     }
-    let mut validated: Vec<&Cutout> = Vec::new();
     for machining in panel.machining() {
-        match machining {
-            Machining::Cutout(cutout) => {
-                validate_cutout_geometry(panel.id(), geometry, cutout.shape(), cutout.depth())?;
-                for other in &validated {
-                    if rects_overlap(cutout_rect(cutout.shape()), cutout_rect(other.shape())) {
-                        return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: other.id() });
-                    }
-                }
-                validated.push(cutout);
-            }
-        }
+        let Machining::Cutout(cutout) = machining;
+        validate_cutout_geometry(panel.id(), geometry, cutout.shape(), cutout.depth())?;
     }
-    Ok(())
+    validate_cutout_overlaps(panel.id(), panel.machining())?;
+    validate_core(panel, geometry, None)
 }
 
 fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
@@ -771,15 +762,14 @@ fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) ->
     let geometry = panel.geometry_with_fallbacks()?;
     validate_cutout_geometry(panel.id(), geometry, shape, depth)?;
     for machining in panel.machining() {
-        match machining {
-            Machining::Cutout(existing) => {
-                if rects_overlap(cutout_rect(shape), cutout_rect(existing.shape())) {
-                    return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
-                }
-            }
+        let Machining::Cutout(existing) = machining;
+        let both_through = matches!(depth, CutoutDepth::Through) && matches!(existing.depth(), CutoutDepth::Through);
+        if !both_through && rects_overlap(cutout_rect(shape), cutout_rect(existing.shape())) {
+            return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
         }
     }
-    Ok(())
+    let candidate = matches!(depth, CutoutDepth::Through).then(|| cutout_rect(shape));
+    validate_core(panel, geometry, candidate)
 }
 
 fn validate_cutout_geometry(
@@ -789,16 +779,79 @@ fn validate_cutout_geometry(
     depth: CutoutDepth,
 ) -> Result<(), ProjectError> {
     let rect = cutout_rect(shape);
-    if !rect_inside(rect, geometry) {
-        return Err(ProjectError::CutoutOutsidePanel { panel });
-    }
-    if let CutoutDepth::Blind { depth } = depth {
-        let thickness = geometry.thickness();
-        if !depth.is_positive() || depth >= thickness {
-            return Err(ProjectError::CutoutDepthInvalid { panel, depth, thickness });
+    match depth {
+        CutoutDepth::Through => {
+            if !geometry.cutout_reaches_core(rect) {
+                return Err(ProjectError::CutoutOutsidePanel { panel });
+            }
+        }
+        CutoutDepth::Blind { depth } => {
+            if !geometry.cutout_fits_core(rect) {
+                return Err(ProjectError::CutoutOutsidePanel { panel });
+            }
+            let thickness = geometry.thickness();
+            if !depth.is_positive() || depth >= thickness {
+                return Err(ProjectError::CutoutDepthInvalid { panel, depth, thickness });
+            }
         }
     }
     Ok(())
+}
+
+fn validate_cutout_overlaps(panel: Id, machining: &[Machining]) -> Result<(), ProjectError> {
+    let cutouts: Vec<&Cutout> = machining
+        .iter()
+        .map(|machining| {
+            let Machining::Cutout(cutout) = machining;
+            cutout
+        })
+        .collect();
+    for (index, cutout) in cutouts.iter().enumerate() {
+        for other in &cutouts[..index] {
+            let both_through =
+                matches!(cutout.depth(), CutoutDepth::Through) && matches!(other.depth(), CutoutDepth::Through);
+            if !both_through && rects_overlap(cutout_rect(cutout.shape()), cutout_rect(other.shape())) {
+                return Err(ProjectError::CutoutOverlap { panel, other: other.id() });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_core(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect>) -> Result<(), ProjectError> {
+    match core_violation_of(panel, geometry, extra) {
+        Some(CoreViolation::Removed) => Err(ProjectError::CutoutRemovesCore { panel: panel.id() }),
+        Some(CoreViolation::Split) => Err(ProjectError::CutoutSplitsCore { panel: panel.id() }),
+        None => Ok(()),
+    }
+}
+
+/// The core minus the union of the through cutouts, checked for positive area and one component.
+fn core_violation_of(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect>) -> Option<CoreViolation> {
+    let core = geometry.core_rect()?;
+    let mut cuts = Vec::new();
+    for machining in panel.machining() {
+        let Machining::Cutout(cutout) = machining;
+        if matches!(cutout.depth(), CutoutDepth::Through)
+            && let Some(rect) = geom_rect(cutout_rect(cutout.shape()))
+        {
+            cuts.push(rect);
+        }
+    }
+    if let Some(rect) = extra.and_then(geom_rect) {
+        cuts.push(rect);
+    }
+    if cuts.is_empty() {
+        return None;
+    }
+    let material = subtract_rects(core, &cuts);
+    if total_area(&material) <= 0.0 {
+        Some(CoreViolation::Removed)
+    } else if connected_count(&material) > 1 {
+        Some(CoreViolation::Split)
+    } else {
+        None
+    }
 }
 
 fn cutout_rect(shape: CutoutShape) -> PanelRect {
@@ -807,15 +860,24 @@ fn cutout_rect(shape: CutoutShape) -> PanelRect {
     }
 }
 
-fn rect_inside(rect: PanelRect, geometry: PanelGeometry) -> bool {
+/// The rectangle in millimetres, or `None` for a degenerate rectangle, which validated input rules out.
+fn geom_rect(rect: PanelRect) -> Option<Rect> {
+    let x = rect.x().millimetres_f64();
+    let y = rect.y().millimetres_f64();
+    let width = rect.width().millimetres_f64();
+    let height = rect.height().millimetres_f64();
+    Rect::new(DVec2::new(x, y), DVec2::new(x + width, y + height)).ok()
+}
+
+fn rect_inside(rect: PanelRect, core: PanelRect) -> bool {
     let x0 = rect.x().micrometres() as i128;
     let y0 = rect.y().micrometres() as i128;
     let x1 = x0 + rect.width().micrometres() as i128;
     let y1 = y0 + rect.height().micrometres() as i128;
-    let core_x0 = geometry.core_x().micrometres() as i128;
-    let core_y0 = geometry.core_y().micrometres() as i128;
-    let core_x1 = core_x0 + geometry.core_length().micrometres() as i128;
-    let core_y1 = core_y0 + geometry.core_width().micrometres() as i128;
+    let core_x0 = core.x().micrometres() as i128;
+    let core_y0 = core.y().micrometres() as i128;
+    let core_x1 = core_x0 + core.width().micrometres() as i128;
+    let core_y1 = core_y0 + core.height().micrometres() as i128;
     x0 >= core_x0 && y0 >= core_y0 && x1 <= core_x1 && y1 <= core_y1
 }
 
@@ -829,6 +891,15 @@ fn rects_overlap(a: PanelRect, b: PanelRect) -> bool {
     let b_x1 = b_x0 + b.width().micrometres() as i128;
     let b_y1 = b_y0 + b.height().micrometres() as i128;
     a_x0 < b_x1 && b_x0 < a_x1 && a_y0 < b_y1 && b_y0 < a_y1
+}
+
+/// Why the through cutouts of a panel do not leave a usable core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoreViolation {
+    /// The through cutouts remove the whole core.
+    Removed,
+    /// The remaining core is split into disconnected material pieces.
+    Split,
 }
 
 /// Why a project cannot be loaded, constructed or mutated.
@@ -942,8 +1013,8 @@ pub enum ProjectError {
         /// The edge that was requested.
         edge: EdgeId,
     },
-    /// A cutout is not fully inside the panel outline.
-    #[error("cutout on panel {panel} lies outside the panel")]
+    /// A through cutout does not reach the core, or a blind cutout is not fully inside it.
+    #[error("cutout on panel {panel} lies outside the core")]
     CutoutOutsidePanel {
         /// The panel that owns the cutout.
         panel: Id,
@@ -958,13 +1029,25 @@ pub enum ProjectError {
         /// The current panel thickness.
         thickness: Length,
     },
-    /// Two cutouts on the same panel overlap.
+    /// A blind cutout overlaps another cutout on the same panel.
     #[error("cutout on panel {panel} overlaps cutout {other}")]
     CutoutOverlap {
         /// The panel that owns the cutouts.
         panel: Id,
         /// The other cutout in the conflicting pair.
         other: Id,
+    },
+    /// The through cutouts would remove the whole core.
+    #[error("cutouts on panel {panel} would remove the whole core")]
+    CutoutRemovesCore {
+        /// The panel that owns the cutouts.
+        panel: Id,
+    },
+    /// The through cutouts would split the remaining core into disconnected pieces.
+    #[error("cutout on panel {panel} would split the core into disconnected pieces")]
+    CutoutSplitsCore {
+        /// The panel that owns the cutouts.
+        panel: Id,
     },
     /// A machining coordinate overflows while a legacy document is migrated.
     #[error("machining on panel {panel} overflows while migrating to the nominal frame")]
@@ -1184,6 +1267,19 @@ impl Panel {
     /// Machining owned by this panel, in nominal panel-local coordinates.
     pub fn machining(&self) -> &[Machining] {
         &self.machining
+    }
+
+    /// Checks whether the through cutouts leave one connected core with positive area.
+    ///
+    /// `Some` means the cutouts would empty the core or split it into disconnected pieces, so a
+    /// command must be rejected and a loaded panel must be reported as a problem panel. Blind
+    /// cutouts are not part of the 2D union (ADR 0009); a shaped panel returns `None` because its
+    /// core is not a rectangle and its machining is rejected before this check.
+    pub fn core_violation(&self, geometry: PanelGeometry) -> Option<CoreViolation> {
+        if self.has_contour_features() {
+            return None;
+        }
+        core_violation_of(self, geometry, None)
     }
 
     /// Edge banding in application order.
@@ -1936,6 +2032,28 @@ impl PanelGeometry {
             });
         }
         Ok(Self { core_x, core_y, core_length, core_width, thickness, overall_length, overall_width })
+    }
+
+    /// Whether a cutout rectangle shares a positive area with the core.
+    ///
+    /// A through cutout that does not reach the core would remove nothing and is rejected.
+    pub fn cutout_reaches_core(self, rect: PanelRect) -> bool {
+        self.core_panel_rect().is_some_and(|core| rects_overlap(rect, core))
+    }
+
+    /// Whether a cutout rectangle lies fully inside the core.
+    ///
+    /// Blind cutouts stay inside the core until the 3D edge-pocket stage.
+    pub fn cutout_fits_core(self, rect: PanelRect) -> bool {
+        self.core_panel_rect().is_some_and(|core| rect_inside(rect, core))
+    }
+
+    fn core_panel_rect(self) -> Option<PanelRect> {
+        PanelRect::new(self.core_x, self.core_y, self.core_length, self.core_width).ok()
+    }
+
+    fn core_rect(self) -> Option<Rect> {
+        geom_rect(self.core_panel_rect()?)
     }
 
     /// The core origin along local X, relative to the nominal minimum corner.
@@ -3026,7 +3144,7 @@ mod tests {
                 thickness: millimetres(18)
             })
         );
-        let outside = CutoutShape::Rectangle(sample_rect(650, 10, 100, 50));
+        let outside = CutoutShape::Rectangle(sample_rect(750, 10, 100, 50));
         assert_eq!(
             project.add_cutout(panel_id, outside, CutoutDepth::Through, FaceSide::A),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
@@ -3052,13 +3170,50 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_through_cutouts_and_boundary_notches_are_accepted() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let first = CutoutShape::Rectangle(sample_rect(100, 100, 100, 50));
+        let second = CutoutShape::Rectangle(sample_rect(150, 120, 100, 50));
+        // The 700 mm core ends at x = 700, so this cutout opens a notch in the right edge.
+        let notch = CutoutShape::Rectangle(sample_rect(650, 10, 100, 50));
+
+        project.add_cutout(panel_id, first, CutoutDepth::Through, FaceSide::A).expect("first through cutout");
+        project.add_cutout(panel_id, second, CutoutDepth::Through, FaceSide::A).expect("overlapping through cutout");
+        project.add_cutout(panel_id, notch, CutoutDepth::Through, FaceSide::A).expect("boundary notch");
+
+        let panel = project.panel(panel_id).expect("panel");
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(panel.core_violation(geometry), None);
+        assert_eq!(panel.machining().len(), 3);
+    }
+
+    #[test]
+    fn cutouts_that_split_or_empty_the_core_are_rejected() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let strip = CutoutShape::Rectangle(sample_rect(0, 200, 700, 50));
+        assert_eq!(
+            project.add_cutout(panel_id, strip, CutoutDepth::Through, FaceSide::A),
+            Err(ProjectError::CutoutSplitsCore { panel: panel_id })
+        );
+
+        let whole = CutoutShape::Rectangle(sample_rect(0, 0, 700, 500));
+        assert_eq!(
+            project.add_cutout(panel_id, whole, CutoutDepth::Through, FaceSide::A),
+            Err(ProjectError::CutoutRemovesCore { panel: panel_id })
+        );
+        assert!(project.panel(panel_id).expect("panel").machining().is_empty());
+    }
+
+    #[test]
     fn panel_resize_validates_existing_cutouts() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_rect(600, 10, 50, 50));
         project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
 
-        let smaller = PanelNominalSize::new(millimetres(620), millimetres(500)).expect("valid size");
+        let smaller = PanelNominalSize::new(millimetres(500), millimetres(500)).expect("valid size");
         assert_eq!(
             project.validate_panel_resize(panel_id, smaller),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
@@ -3344,7 +3499,9 @@ mod tests {
         let Machining::Cutout(cutout) = &panel.machining()[0];
         assert_eq!(cutout.shape(), shape);
 
-        let under_the_band = CutoutShape::Rectangle(sample_rect(1, 1, 10, 10));
+        // Nominal coordinates: the 2 mm included bands put the core origin at (2, 2), so this
+        // cutout lies entirely in the band and would remove no core material.
+        let under_the_band = CutoutShape::Rectangle(sample_rect(0, 0, 1, 1));
         assert_eq!(
             project.add_cutout(panel_id, under_the_band, CutoutDepth::Through, FaceSide::A),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })

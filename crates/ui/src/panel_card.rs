@@ -635,8 +635,10 @@ pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
         }
         PanelDiagnostic::NonPositiveCore => "The panel core is not positive.".to_owned(),
         PanelDiagnostic::MachiningOutsideCore { cutout } => {
-            format!("Cutout {cutout} does not fit inside the core.")
+            format!("Cutout {cutout} lies outside the core.")
         }
+        PanelDiagnostic::CoreRemoved => "The cutouts remove the whole panel core.".to_owned(),
+        PanelDiagnostic::CoreDisconnected => "The cutouts split the panel core into disconnected pieces.".to_owned(),
         PanelDiagnostic::BlindDepthNotLessThanThickness { cutout, depth, thickness } => {
             format!("Cutout {cutout} blind depth {depth} is not less than thickness {thickness}.")
         }
@@ -677,7 +679,12 @@ mod tests {
         assert_eq!(diagnostic_message(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
         assert_eq!(
             diagnostic_message(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(9).expect("id") }),
-            "Cutout 9 does not fit inside the core."
+            "Cutout 9 lies outside the core."
+        );
+        assert_eq!(diagnostic_message(&PanelDiagnostic::CoreRemoved), "The cutouts remove the whole panel core.");
+        assert_eq!(
+            diagnostic_message(&PanelDiagnostic::CoreDisconnected),
+            "The cutouts split the panel core into disconnected pieces."
         );
         assert_eq!(
             diagnostic_message(&PanelDiagnostic::BlindDepthNotLessThanThickness {
