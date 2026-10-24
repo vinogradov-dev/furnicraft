@@ -181,14 +181,13 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 ### 5.4. Corners
 
-- **Right angle, 90°.** The later band covers the corner and is trimmed flush with the earlier band's outer face; its end face is visible. There is no mitre in the first version. At each end that meets an earlier band, the later band is extended along the edge by that band's thickness.
-- **Chamfer.** The chamfer is its own segment with its own record. The adjacent edges keep their bandings; the chamfer strip meets them at butt joints.
-- **Radius.** The radius is its own segment with its own record. If the adjacent segments share the
-  same spec, the strips meet at the tangent points; they are not forced to share one record.
+- **Right angle, 90°.** Rectangular bands keep the v1 rectangle order. On a shaped panel the later band is extended over the earlier one to its outer face and cut there; the overlap is removed from the earlier band by a 3D subtraction.
+- **Chamfer.** The chamfer is its own segment with its own record. The adjacent edges keep their bandings. A later chamfer band whose outer face sits closer to the panel than an earlier band's is extended to that band's outer face and cut; when the chamfer is earlier, the later band is cut over it.
+- **Radius.** The radius is its own segment with its own record. Adjacent segments are not forced to share one record, so their strips meet at the tangent points. Tangent and arc joints keep butt joints until line-arc and arc-arc intersections are designed.
 - **Stage 2b.** One strip is built per banded segment. An included segment offsets the core and a
   non-included segment extends the outer envelope. Machining on a shaped panel is subtracted from the
   shaped body in 3D; adding new machining still waits for the contour-aware cutout union.
-- **Single banded edge at a corner.** If the adjacent segment has no later band, the strip ends flush with the adjacent side face of the core. Extending and trimming it into the joint is the next step.
+- **Single banded edge at a corner.** With no earlier adjacent band the strip ends flush with the core side face. With an earlier adjacent band on a straight joint it is extended to that band's outer face and trimmed.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
 ### 5.5. Inclusion in size
@@ -249,6 +248,8 @@ At minimum:
 - the 720 × 500 size table for every inclusion combination;
 - an included bottom or left band moves the core inward and leaves the nominal envelope unchanged;
 - banding order and corner coverage by the later band at a right angle;
+- a later band at a straight joint is extended to an earlier band's outer face and cut there;
+- overlapping bands are trimmed so the later band stays visible;
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;

@@ -19,6 +19,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0012](0012-in-panel-cutout-union.md) | In-house panel cutout union | Accepted |
 | [0013](0013-geometry-edits-are-never-blocked.md) | Geometry edits are never blocked by banding or machining | Accepted |
 | [0014](0014-banding-belongs-to-segments.md) | Banding belongs to one contour segment | Accepted |
+| [0015](0015-band-joint-trim.md) | Band joints extend and trim in application order | Accepted |
 
 ## Format
 

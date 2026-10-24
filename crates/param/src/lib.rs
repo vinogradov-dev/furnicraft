@@ -19,7 +19,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame};
+use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Line, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
     BandingSpec, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelContourError,
@@ -281,23 +281,225 @@ where
     let panel_thickness = geometry.thickness();
     let segments = panel.nominal_segments()?;
     let mut parts = Vec::new();
-    for source in panel.band_order() {
-        let Some(&(segment, _)) = segments.iter().find(|(_, candidate)| candidate == source) else {
+    let mut solids = Vec::new();
+    for (order_index, source) in panel.band_order().iter().enumerate() {
+        let Some(segment_index) = segments.iter().position(|(_, candidate)| candidate == source) else {
             continue;
         };
         let Some(spec) = panel.segment_banding(*source) else {
             continue;
         };
         let profile = band_profile(&spec);
-        let strip = band_strip_profile(&Contour::new(vec![segment], false)?, spec, profile)?;
+        let strip = shaped_band_strip(panel, &segments, segment_index, spec, profile, order_index, band_profile)?;
         let visible_width = profile.width().min(panel_thickness).millimetres_f64();
         let panel_thickness_mm = panel_thickness.millimetres_f64();
         let z = (panel_thickness_mm - visible_width) * 0.5;
         let frame = Frame { origin: DVec3::new(0.0, 0.0, z), ..Frame::WORLD };
         let body = kernel.extrude(&strip, &frame, visible_width)?;
+        solids.push(BandSolid { profile: strip, z, height: visible_width });
         parts.push(BandPart { source: band_source(*source), body });
     }
+    trim_overlaps(kernel, &mut parts, &solids)?;
     Ok(parts)
+}
+
+/// The planar profile and extrusion of one band, kept for order trimming.
+struct BandSolid {
+    profile: Profile,
+    z: f64,
+    height: f64,
+}
+
+/// Builds one band strip, extending a later straight band over an earlier one at a sharp joint.
+#[allow(clippy::too_many_arguments)]
+fn shaped_band_strip<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
+    spec: BandingSpec,
+    profile: EdgeBandProfile,
+    order_index: usize,
+    band_profile: &F,
+) -> Result<Profile, ParamError>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    if let Segment::Line(line) = segments[segment_index].0
+        && let Some(strip) =
+            extended_line_strip(panel, segments, segment_index, spec, profile, order_index, line, band_profile)
+    {
+        return Ok(strip);
+    }
+    band_strip_profile(&Contour::new(vec![segments[segment_index].0], false)?, spec, profile)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extended_line_strip<F>(
+    panel: &Panel,
+    segments: &[(Segment, SegmentSource)],
+    segment_index: usize,
+    spec: BandingSpec,
+    profile: EdgeBandProfile,
+    order_index: usize,
+    line: Line,
+    band_profile: &F,
+) -> Option<Profile>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    let thickness = profile.thickness().millimetres_f64();
+    let outward = if spec.included_in_size() { 0.0 } else { thickness };
+    let left = line.left_normal();
+    let outer_shift = if spec.included_in_size() { 0.0 } else { -thickness };
+    let inner_shift = if spec.included_in_size() { thickness } else { 0.0 };
+    let start = line.start();
+    let end = line.end();
+    let mut outer_start = start + left * outer_shift;
+    let mut outer_end = end + left * outer_shift;
+    let mut inner_start = start + left * inner_shift;
+    let mut inner_end = end + left * inner_shift;
+    let mut extended = false;
+
+    for at_end in [false, true] {
+        let adjacent_index = if at_end {
+            (segment_index + 1) % segments.len()
+        } else {
+            (segment_index + segments.len() - 1) % segments.len()
+        };
+        if !joint_is_sharp(segments, segment_index, at_end) {
+            continue;
+        }
+        let adjacent_source = segments[adjacent_index].1;
+        let Some(adjacent_spec) = panel.segment_banding(adjacent_source) else {
+            continue;
+        };
+        let adjacent_order = panel.band_order().iter().position(|candidate| *candidate == adjacent_source);
+        if adjacent_order.is_some_and(|adjacent| adjacent >= order_index) {
+            continue;
+        }
+        let adjacent_profile = band_profile(&adjacent_spec);
+        let adjacent_out =
+            if adjacent_spec.included_in_size() { 0.0 } else { adjacent_profile.thickness().millimetres_f64() };
+        if outward + 1.0e-9 >= adjacent_out {
+            continue;
+        }
+        let Segment::Line(adjacent_line) = segments[adjacent_index].0 else {
+            continue;
+        };
+        let adjacent_left = adjacent_line.left_normal();
+        let face_a = adjacent_line.start() - adjacent_left * adjacent_out;
+        let face_b = adjacent_line.end() - adjacent_left * adjacent_out;
+        let Some((outer_point, inner_point)) =
+            extended_end_points(outer_start, outer_end, inner_start, inner_end, face_a, face_b, start, end, at_end)
+        else {
+            continue;
+        };
+        if at_end {
+            outer_end = outer_point;
+            inner_end = inner_point;
+        } else {
+            outer_start = outer_point;
+            inner_start = inner_point;
+        }
+        extended = true;
+    }
+
+    if !extended {
+        return None;
+    }
+    Profile::new(vec![outer_start, outer_end, inner_end, inner_start], Vec::new()).ok()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extended_end_points(
+    outer_start: DVec2,
+    outer_end: DVec2,
+    inner_start: DVec2,
+    inner_end: DVec2,
+    face_a: DVec2,
+    face_b: DVec2,
+    start: DVec2,
+    end: DVec2,
+    at_end: bool,
+) -> Option<(DVec2, DVec2)> {
+    let outer = line_intersection(outer_start, outer_end, face_a, face_b)?;
+    let inner = line_intersection(inner_start, inner_end, face_a, face_b)?;
+    let anchor = if at_end { end } else { start };
+    let along = if at_end { end - start } else { start - end };
+    let outer_beyond = (outer - anchor).dot(along);
+    let inner_beyond = (inner - anchor).dot(along);
+    if outer_beyond <= 1.0e-6 || inner_beyond <= 1.0e-6 {
+        return None;
+    }
+    if (outer - anchor).length() > 50.0 || (inner - anchor).length() > 50.0 {
+        return None;
+    }
+    Some((outer, inner))
+}
+
+fn joint_is_sharp(segments: &[(Segment, SegmentSource)], index: usize, at_end: bool) -> bool {
+    let count = segments.len();
+    let (incoming, outgoing) = if at_end {
+        (segments[index].0, segments[(index + 1) % count].0)
+    } else {
+        (segments[(index + count - 1) % count].0, segments[index].0)
+    };
+    incoming.tangent_at_end().dot(outgoing.tangent_at_start()).clamp(-1.0, 1.0).acos() > 1.0e-6
+}
+
+fn line_intersection(a0: DVec2, a1: DVec2, b0: DVec2, b1: DVec2) -> Option<DVec2> {
+    let da = a1 - a0;
+    let db = b1 - b0;
+    let denominator = da.x * db.y - da.y * db.x;
+    if denominator.abs() < 1.0e-9 {
+        return None;
+    }
+    let offset = b0 - a0;
+    let t = (offset.x * db.y - offset.y * db.x) / denominator;
+    Some(a0 + da * t)
+}
+
+fn trim_overlaps(kernel: &mut dyn SolidKernel, parts: &mut [BandPart], solids: &[BandSolid]) -> Result<(), ParamError> {
+    for later in 1..parts.len() {
+        for earlier in 0..later {
+            let (Some(later_solid), Some(earlier_solid)) = (solids.get(later), solids.get(earlier)) else {
+                continue;
+            };
+            if !profile_boxes_overlap(&earlier_solid.profile, &later_solid.profile) {
+                continue;
+            }
+            let target = parts[earlier].body;
+            if target == parts[later].body {
+                continue;
+            }
+            let frame = Frame { origin: DVec3::new(0.0, 0.0, later_solid.z - TOOL_OVERSHOOT_MM), ..Frame::WORLD };
+            let tool = kernel.extrude(&later_solid.profile, &frame, later_solid.height + 2.0 * TOOL_OVERSHOOT_MM)?;
+            match kernel.boolean(BooleanOp::Difference, target, tool) {
+                Ok(body) => parts[earlier].body = body,
+                Err(_) => {
+                    // The boolean may consume the target even when it finds no solid to keep.
+                    // Rebuild the band so the caller still gets a valid body.
+                    let frame = Frame { origin: DVec3::new(0.0, 0.0, earlier_solid.z), ..Frame::WORLD };
+                    parts[earlier].body = kernel.extrude(&earlier_solid.profile, &frame, earlier_solid.height)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn profile_boxes_overlap(a: &Profile, b: &Profile) -> bool {
+    let bounds = |profile: &Profile| {
+        profile
+            .outer
+            .iter()
+            .fold((DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)), |(min, max), point| {
+                (min.min(*point), max.max(*point))
+            })
+    };
+    let (a_min, a_max) = bounds(a);
+    let (b_min, b_max) = bounds(b);
+    a_min.x < b_max.x - 1.0e-6 && b_min.x < a_max.x - 1.0e-6 && a_min.y < b_max.y - 1.0e-6 && b_min.y < a_max.y - 1.0e-6
 }
 
 fn band_source(source: SegmentSource) -> BandSource {
@@ -432,8 +634,8 @@ mod tests {
             Ok(BodyId::from_raw(7))
         }
 
-        fn boolean(&mut self, _op: BooleanOp, _target: BodyId, _tool: BodyId) -> furnicraft_kernel::Result<BodyId> {
-            Err(KernelError::Unsupported("recording kernel does not implement booleans"))
+        fn boolean(&mut self, _op: BooleanOp, target: BodyId, _tool: BodyId) -> furnicraft_kernel::Result<BodyId> {
+            Ok(target)
         }
 
         fn tessellate(
@@ -518,6 +720,40 @@ mod tests {
                     .expect("band"),
             )
             .expect("set band");
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn panel_with_bottom_band_and_chamfer_corner() -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), edge_material(), false, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("band the bottom edge");
+        let corner = RectCorner::BottomRight.id();
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(
+                    corner,
+                    CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(10) },
+                )
+                .expect("chamfer"),
+            )
+            .expect("set chamfer");
+        project
+            .set_corner_banding(
+                panel_id,
+                CornerBanding::new(corner, edge_material(), true, millimetres(2), millimetres(22))
+                    .expect("corner band"),
+            )
+            .expect("band the chamfer");
         project.panel(panel_id).expect("panel").clone()
     }
 
@@ -747,6 +983,22 @@ mod tests {
             .expect("rounded panel parts");
         assert_eq!(parts.bands().len(), 1);
         assert_eq!(parts.bands()[0].source(), BandSource::Edge(RectEdge::Right.id()));
+    }
+
+    #[test]
+    fn a_later_chamfer_band_reaches_an_earlier_edge_band_outer_face() {
+        let panel = panel_with_bottom_band_and_chamfer_corner();
+        assert_eq!(
+            panel.band_order(),
+            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Corner(RectCorner::BottomRight.id())]
+        );
+        let mut kernel = RecordingKernel::default();
+        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+            .expect("panel parts");
+        assert_eq!(parts.bands().len(), 2);
+        let strip = kernel.profile.as_ref().expect("the chamfer strip is the last extrusion");
+        let min_y = strip.outer.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
+        assert!(min_y <= -1.99, "the chamfer band must reach the bottom band outer face, min y {min_y}");
     }
 
     #[test]

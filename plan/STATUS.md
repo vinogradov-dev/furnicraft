@@ -6,12 +6,14 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
 - Working on: stage 3 — banding is an ordered list of contour segments (schema v4) with per-segment
-  core offsets and strips; the straight-joint trim is next
+  core offsets and strips; straight-joint extension and order trimming are in place, arc joints are
+  next
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat(param): trim band joints in application order`
 - `feat(model): band by contour segment in one order`
 - `fix(ui): commit corner fields while editing`
 - `fix(model): remove corner banding with its segment`
@@ -42,8 +44,7 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: straight-joint trim — the later band extends over the earlier one to its outer face and is
-   cut there; the earlier band is cut under it. Arcs and radii follow.
+1. Stage 3: arc and radius band joints — line-arc and arc-arc outer-face intersections.
 2. Stage 3: extend the union, connectivity and ring-tracing rules to shaped cores.
 3. Stage 4: banding on cutout edges and openings, using the same segment and inclusion rules.
 4. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
@@ -61,7 +62,8 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 ## Known debt
 
 - Adding new machining to a shaped panel is still rejected until the contour-aware cutout union lands.
-- Straight-joint trim is not implemented: a strip ends at its nominal segment endpoints, so a non-included adjacent band still leaves a step until the next stage.
+- Band joint extension and trimming cover straight line segments only; arc and radius joints keep butt joints.
+- Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt untrimmed instead of failing the build.
 - A legacy file can still carry a corner banding on a point corner; the card does not show it and it is removed when the corner next becomes a segment.
 - `regions_from_rects` is orthogonal-only: it normalizes rectangles and cannot trace arc boundaries; shaped cores need the contour tracer.
 - Blind cutouts that overlap any other cutout or cross the core edge are still rejected until the 3D edge-pocket stage.
