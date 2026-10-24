@@ -248,11 +248,7 @@ impl PanelCard {
     fn show_shape(&self, ui: &mut Ui, _session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
         ui.separator();
         ui.label(RichText::new("Outline").strong());
-        let locked = panel.has_banding() || !panel.machining().is_empty();
-        if locked {
-            ui.colored_label(Color32::LIGHT_RED, "Clear banding and machining before shaping the outline.");
-        }
-        ui.add_enabled_ui(!locked, |ui| {
+        ui.scope(|ui| {
             for corner in RectCorner::ALL {
                 let corner_id = corner.id();
                 let current = panel.corner_feature(corner_id);
@@ -421,16 +417,8 @@ impl PanelCard {
 
         ui.add_space(4.0);
         ui.label(RichText::new("Corner banding").strong());
-        let mut has_chamfer = false;
         for corner in RectCorner::ALL {
             let corner_id = corner.id();
-            let Some(feature) = panel.corner_feature(corner_id) else {
-                continue;
-            };
-            if !matches!(feature.feature(), CornerFeatureKind::Chamfer { .. }) {
-                continue;
-            }
-            has_chamfer = true;
             let band = panel.corner_banding_at(corner_id);
             ui.horizontal(|ui| {
                 ui.label(format!("Corner {}", corner.label()));
@@ -477,9 +465,6 @@ impl PanelCard {
                     }
                 }
             });
-        }
-        if !has_chamfer {
-            ui.label("Add a chamfer to band a corner.");
         }
     }
 

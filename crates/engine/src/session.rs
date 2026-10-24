@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn shaping_that_merges_incompatible_banding_is_rejected() {
+    fn shaping_that_merges_banded_paths_keeps_their_records() {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let band = PanelEdgeBandingSet {
@@ -744,11 +744,13 @@ mod tests {
         };
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.corner.set").expect("registered");
-        assert!(!spec.enabled(&session, &json_params(&set_corner)));
-        assert_eq!(
-            session.dispatch("panel.corner.set", &json_params(&set_corner)),
-            Err(CommandError::Model(ProjectError::IncompatiblePathBanding { panel: panel_id }))
-        );
+        assert!(spec.enabled(&session, &json_params(&set_corner)));
+        session.dispatch("panel.corner.set", &json_params(&set_corner)).expect("shape a banded panel");
+
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.has_contour_features());
+        assert!(panel.edge_banding().iter().any(|band| band.edge() == EdgeId::new(2).expect("edge")));
+        panel.geometry_with_fallbacks().expect("rounded banded geometry");
     }
 
     #[test]
@@ -793,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn corner_banding_requires_a_chamfer_and_blocks_removal() {
+    fn corner_banding_survives_shape_changes() {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let corner = RectCorner::TopRight.id();
@@ -809,9 +811,10 @@ mod tests {
             material: sample_edge_material_id(),
             included_in_size: false,
         };
-        assert_eq!(
-            session.dispatch("panel.corner_banding.set", &json_params(&set_band)),
-            Err(CommandError::Model(ProjectError::CornerBandingRequiresChamfer { panel: panel_id, corner }))
+        session.dispatch("panel.corner_banding.set", &json_params(&set_band)).expect("band a radius corner");
+        assert!(
+            session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some(),
+            "the record exists even when nothing is drawn"
         );
 
         let set_chamfer = PanelCornerSet {
@@ -822,22 +825,18 @@ mod tests {
                 outgoing: Length::from_millimetres(15).expect("outgoing"),
             },
         };
-        session.dispatch("panel.corner.set", &json_params(&set_chamfer)).expect("set chamfer");
-        session.dispatch("panel.corner_banding.set", &json_params(&set_band)).expect("band chamfer");
+        session.dispatch("panel.corner.set", &json_params(&set_chamfer)).expect("change to chamfer");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_some());
+
         let clear_corner = PanelCornerClear { panel: panel_id, corner };
-        assert_eq!(
-            session.dispatch("panel.corner.clear", &json_params(&clear_corner)),
-            Err(CommandError::Model(ProjectError::CornerFeatureHasBanding { panel: panel_id, corner }))
-        );
-        let change_to_radius = PanelCornerSet {
-            panel: panel_id,
-            corner,
-            feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(20).expect("radius") },
-        };
-        assert_eq!(
-            session.dispatch("panel.corner.set", &json_params(&change_to_radius)),
-            Err(CommandError::Model(ProjectError::CornerBandingRequiresChamfer { panel: panel_id, corner }))
-        );
+        session.dispatch("panel.corner.clear", &json_params(&clear_corner)).expect("clear the corner");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.corner_feature(corner).is_none());
+        assert!(panel.corner_banding_at(corner).is_some());
+
+        let clear_band = PanelCornerBandingClear { panel: panel_id, corner };
+        session.dispatch("panel.corner_banding.clear", &json_params(&clear_band)).expect("clear the band");
+        assert!(session.project().panel(panel_id).expect("panel").corner_banding_at(corner).is_none());
     }
 
     #[test]

@@ -16,6 +16,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0009](0009-contour-first-panel-model.md) | Contour-first panel geometry and banding paths | Accepted; core-local machining superseded by 0011 |
 | [0010](0010-analytic-line-arc-contours.md) | Analytic line and arc contours for panel offsets | Accepted |
 | [0011](0011-panel-local-machining.md) | Machining uses the nominal panel frame | Accepted |
+| [0012](0012-in-panel-cutout-union.md) | In-house panel cutout union | Accepted |
+| [0013](0013-geometry-edits-are-never-blocked.md) | Geometry edits are never blocked by banding or machining | Accepted |
 
 ## Format
 
