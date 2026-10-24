@@ -279,17 +279,9 @@ impl PanelCard {
                         });
                     match current.map(CornerFeature::feature) {
                         Some(CornerFeatureKind::Radius { radius }) => {
-                            let mut millimetres = radius.millimetres_f64();
-                            let response = ui.add(
-                                egui::DragValue::new(&mut millimetres)
-                                    .speed(0.5)
-                                    .range(0.1..=1_000.0)
-                                    .suffix(" mm")
-                                    .update_while_editing(true),
-                            );
-                            let entered = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                            if (response.drag_stopped() || response.lost_focus() || entered)
-                                && let Some(value) = positive_length(millimetres)
+                            let (committed, _) = millimetre_field(ui, radius, 0.1..=1_000.0);
+                            let value = committed.and_then(positive_length);
+                            if let Some(value) = value
                                 && value != radius
                             {
                                 actions.push(Action::SetCorner {
@@ -300,42 +292,22 @@ impl PanelCard {
                             }
                         }
                         Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => {
-                            let mut incoming_mm = incoming.millimetres_f64();
-                            let mut outgoing_mm = outgoing.millimetres_f64();
                             ui.label("in");
-                            let incoming_response = ui.add(
-                                egui::DragValue::new(&mut incoming_mm)
-                                    .speed(0.5)
-                                    .range(0.1..=1_000.0)
-                                    .suffix(" mm")
-                                    .update_while_editing(true),
-                            );
+                            let (incoming_committed, _) = millimetre_field(ui, incoming, 0.1..=1_000.0);
                             ui.label("out");
-                            let outgoing_response = ui.add(
-                                egui::DragValue::new(&mut outgoing_mm)
-                                    .speed(0.5)
-                                    .range(0.1..=1_000.0)
-                                    .suffix(" mm")
-                                    .update_while_editing(true),
-                            );
-                            let entered = (incoming_response.has_focus() || outgoing_response.has_focus())
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                            let committed = incoming_response.drag_stopped()
-                                || outgoing_response.drag_stopped()
-                                || incoming_response.lost_focus()
-                                || outgoing_response.lost_focus()
-                                || entered;
-                            if committed
-                                && let (Some(incoming_value), Some(outgoing_value)) =
-                                    (positive_length(incoming_mm), positive_length(outgoing_mm))
-                                && (incoming_value != incoming || outgoing_value != outgoing)
+                            let (outgoing_committed, _) = millimetre_field(ui, outgoing, 0.1..=1_000.0);
+                            let incoming_value = incoming_committed.and_then(positive_length);
+                            let outgoing_value = outgoing_committed.and_then(positive_length);
+                            if (incoming_value.is_some() || outgoing_value.is_some())
+                                && (incoming_value.unwrap_or(incoming) != incoming
+                                    || outgoing_value.unwrap_or(outgoing) != outgoing)
                             {
                                 actions.push(Action::SetCorner {
                                     panel: panel_id,
                                     corner: corner_id,
                                     feature: CornerFeatureKind::Chamfer {
-                                        incoming: incoming_value,
-                                        outgoing: outgoing_value,
+                                        incoming: incoming_value.unwrap_or(incoming),
+                                        outgoing: outgoing_value.unwrap_or(outgoing),
                                     },
                                 });
                             }
@@ -352,12 +324,9 @@ impl PanelCard {
                 let current = panel.edge_bow(edge_id);
                 ui.horizontal(|ui| {
                     ui.label(edge_label(edge_id.get()));
-                    let mut millimetres = current.map_or(0.0, |bow| bow.sagitta().millimetres_f64());
-                    let response = ui
-                        .add(egui::DragValue::new(&mut millimetres).speed(0.5).range(-1_000.0..=1_000.0).suffix(" mm"));
-                    if (response.drag_stopped() || response.lost_focus())
-                        && let Some(sagitta) = signed_length(millimetres)
-                    {
+                    let current_sagitta = current.map_or(Length::ZERO, |bow| bow.sagitta());
+                    let (committed, _) = millimetre_field(ui, current_sagitta, -1_000.0..=1_000.0);
+                    if let Some(sagitta) = committed.and_then(signed_length) {
                         if sagitta.is_zero() {
                             if current.is_some() {
                                 actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
@@ -554,6 +523,19 @@ fn corner_feature_for_mode(mode: CornerMode, current: Option<CornerFeature>) -> 
 
 fn default_feature_length() -> Length {
     Length::from_micrometres(10_000)
+}
+
+/// A millimetre value that lives in the document.
+///
+/// The widget keeps the text the user types until the edit ends: Enter, losing focus or the end of
+/// a drag. The value is read back from the document on every frame, so updating it on each
+/// keystroke would replace the typed text with the document value while the user is still typing.
+fn millimetre_field(ui: &mut Ui, value: Length, range: std::ops::RangeInclusive<f64>) -> (Option<f64>, egui::Response) {
+    let mut millimetres = value.millimetres_f64();
+    let response = ui
+        .add(egui::DragValue::new(&mut millimetres).speed(0.5).range(range).suffix(" mm").update_while_editing(false));
+    let committed = (response.drag_stopped() || response.lost_focus()).then_some(millimetres);
+    (committed, response)
 }
 
 fn positive_length(millimetres: f64) -> Option<Length> {
@@ -1043,5 +1025,140 @@ mod tests {
         assert_eq!(positive_length(0.0), None);
         assert_eq!(positive_length(-5.0), None);
         assert!(signed_length(-5.0).is_some());
+    }
+
+    fn shape_frame(
+        context: &mut egui::Context,
+        session: &Session,
+        panel_id: Id,
+        events: Vec<egui::Event>,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                if let Some(panel) = session.project().panel(panel_id) {
+                    PanelCard::default().show_shape(ui, session, panel_id, panel, &mut actions);
+                }
+            },
+        );
+        output.textures_delta.clear();
+        actions
+    }
+
+    fn key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    fn mm(millimetres: i64) -> Length {
+        Length::from_millimetres(millimetres).expect("millimetres")
+    }
+
+    fn first_corner() -> VertexId {
+        RectCorner::ALL.first().copied().expect("first corner").id()
+    }
+
+    /// Shapes every corner the same way, types `text` into one of the first corner's number
+    /// fields and ends the edit with `ending`.
+    ///
+    /// Focus moves with Tab: the first press takes the corner mode combo, the following presses
+    /// walk the number fields to its right. The typed text must survive until the edit ends, so
+    /// typing is asserted to dispatch nothing on its own.
+    fn typed_corner_field(
+        feature: CornerFeatureKind,
+        tabs: usize,
+        text: &str,
+        ending: Vec<egui::Event>,
+    ) -> Vec<Action> {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        for corner in RectCorner::ALL {
+            run_action(&mut session, &Action::SetCorner { panel: panel_id, corner: corner.id(), feature })
+                .expect("shape corner");
+        }
+
+        let mut context = egui::Context::default();
+        shape_frame(&mut context, &session, panel_id, Vec::new());
+        for _ in 0..tabs {
+            shape_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Tab)]);
+        }
+        shape_frame(&mut context, &session, panel_id, Vec::new());
+        let typed = shape_frame(&mut context, &session, panel_id, vec![egui::Event::Text(text.to_owned())]);
+        assert!(typed.is_empty(), "typing must not dispatch before the edit ends");
+        let mut actions = shape_frame(&mut context, &session, panel_id, ending);
+        // A focus change is processed at the end of the frame, so the commit can land in the next.
+        actions.extend(shape_frame(&mut context, &session, panel_id, Vec::new()));
+        actions
+    }
+
+    fn assert_corner_feature(actions: &[Action], expected: CornerFeatureKind) {
+        let corner = first_corner();
+        assert!(
+            actions.iter().any(|action| matches!(
+                action,
+                Action::SetCorner { corner: edited, feature, .. } if *edited == corner && *feature == expected
+            )),
+            "expected {expected:?} on corner {corner:?}, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_typed_radius_commits_on_enter() {
+        let actions = typed_corner_field(
+            CornerFeatureKind::Radius { radius: mm(20) },
+            2,
+            "12",
+            vec![key_event(egui::Key::Enter)],
+        );
+        assert_corner_feature(&actions, CornerFeatureKind::Radius { radius: mm(12) });
+    }
+
+    #[test]
+    fn a_typed_radius_commits_when_the_field_is_left() {
+        let actions =
+            typed_corner_field(CornerFeatureKind::Radius { radius: mm(20) }, 2, "12", vec![key_event(egui::Key::Tab)]);
+        assert_corner_feature(&actions, CornerFeatureKind::Radius { radius: mm(12) });
+    }
+
+    #[test]
+    fn a_typed_bowed_edge_commits_on_enter() {
+        let session = Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+        let mut context = egui::Context::default();
+        shape_frame(&mut context, &session, panel_id, Vec::new());
+        // The sample panel has no corner features, so four Tabs walk the corner menus and the
+        // fifth reaches the first bowed edge.
+        for _ in 0..5 {
+            shape_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Tab)]);
+        }
+        shape_frame(&mut context, &session, panel_id, Vec::new());
+        let typed = shape_frame(&mut context, &session, panel_id, vec![egui::Event::Text("7".to_owned())]);
+        assert!(typed.is_empty(), "typing must not dispatch before the edit ends");
+        let mut actions = shape_frame(&mut context, &session, panel_id, vec![key_event(egui::Key::Enter)]);
+        actions.extend(shape_frame(&mut context, &session, panel_id, Vec::new()));
+
+        let edge = RectEdge::Bottom.id();
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, Action::SetBow { edge: edited, sagitta, .. } if *edited == edge && *sagitta == mm(7))),
+            "typing 7 must commit a 7 mm bow on the bottom edge, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_typed_chamfer_side_commits_and_keeps_the_other_side() {
+        let actions = typed_corner_field(
+            CornerFeatureKind::Chamfer { incoming: mm(10), outgoing: mm(12) },
+            3,
+            "14",
+            vec![key_event(egui::Key::Enter)],
+        );
+        assert_corner_feature(&actions, CornerFeatureKind::Chamfer { incoming: mm(10), outgoing: mm(14) });
     }
 }

@@ -7,7 +7,7 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 - Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
 - Working on: stage 3 — banding is an ordered list of contour segments (schema v4) with per-segment
   core offsets and strips; straight-joint extension and order trimming are in place, arc joints are
-  next
+  next. The card's corner and bowed-edge number fields now keep typed text until the edit ends
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
@@ -15,7 +15,7 @@ Updated: 2026-10-24. Rewrite this file at the end of every task; never append a 
 
 - `feat(param): trim band joints in application order`
 - `feat(model): band by contour segment in one order`
-- `fix(ui): commit corner fields while editing`
+- `fix(ui): keep typed corner numbers until the edit ends`
 - `fix(model): remove corner banding with its segment`
 - `feat(model): let geometry edits ignore banding and machining`
 - `feat(geom): trace region rings from rectangles`
