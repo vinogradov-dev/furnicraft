@@ -268,12 +268,12 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 ## 9. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches and the one-component core invariant for rectangular panels (ADR 0012). Shaped cores and traced `Region` rings with holes are next.
+2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes for rectangular panels (ADR 0012). Shaped cores are next.
 3. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
 4. Edge banding milling: rounding the faces and corner.
 5. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
 no-division invariant — are recorded in ADR 0009. Corner features, bows, tangent paths, chamfer corner
-banding and shaped-panel band strips are implemented; the rectangular cutout union is implemented, and
-shaped-core rings plus cutout banding are staged next.
+banding and shaped-panel band strips are implemented; the rectangular cutout union and its `Region`
+ring tracing are implemented, and shaped-core rings plus cutout banding are staged next.

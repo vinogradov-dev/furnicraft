@@ -8,9 +8,10 @@
 //! The value type, its area and an even-odd containment test are in place, together with the exact
 //! orthogonal boolean for axis-aligned rectangles: [`union_rects`] merges overlapping cutouts,
 //! [`subtract_rects`] removes them from a rectangular core including boundary notches, and
-//! [`connected_count`] checks the one-component invariant. Cutouts are rectangles today, so this
-//! slice covers every v1 panel; shaped cores and traced rings with holes come next.
+//! [`regions_from_rects`] traces the resulting closed rings with holes. Cutouts are rectangles
+//! today, so this covers every v1 panel; shaped cores come next.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::DVec2;
@@ -21,8 +22,8 @@ const POINT_EPSILON: f64 = 1.0e-9;
 /// One material component in the plane: a closed outer ring and zero or more hole rings.
 ///
 /// Rings are validated on construction: every ring needs at least three finite points with no
-/// consecutive points closer than [`POINT_EPSILON`]. The rectangle boolean does not build a
-/// [`Region`] yet, so a hole is not checked against its outer ring here.
+/// consecutive points closer than [`POINT_EPSILON`]. Holes are not checked against the outer ring
+/// here; [`regions_from_rects`] produces consistent regions from the rectangle decomposition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {
     outer: Vec<DVec2>,
@@ -49,11 +50,11 @@ impl Region {
         &self.holes
     }
 
-    /// The material area: the outer ring's shoelace area minus every hole's area, in square
-    /// millimetres. The sign follows the ring orientations; callers turn a non-positive result
-    /// into a diagnostic, never a panic.
+    /// The material area: the outer ring's area minus every hole's area, in square millimetres.
+    /// Ring orientation does not matter; an invalid region whose holes exceed the outer ring
+    /// yields a non-positive value, which callers turn into a diagnostic, never a panic.
     pub fn area(&self) -> f64 {
-        ring_area(&self.outer) - self.holes.iter().map(|hole| ring_area(hole)).sum::<f64>()
+        ring_area(&self.outer).abs() - self.holes.iter().map(|hole| ring_area(hole).abs()).sum::<f64>()
     }
 
     /// Even-odd containment: a point is inside the material when it is inside the outer ring and in
@@ -349,6 +350,286 @@ pub fn connected_count(rects: &[Rect]) -> usize {
     group.iter().flatten().copied().collect::<std::collections::BTreeSet<_>>().len()
 }
 
+/// The material regions covered by axis-aligned rectangles, with holes.
+///
+/// Overlapping and touching input is normalized first, so callers may pass a raw cutout set or a
+/// [`union_rects`] result. Each returned [`Region`] has a counter-clockwise outer ring and
+/// clockwise hole rings, traced from the rectangle boundaries: a shared edge disappears, a boundary
+/// notch becomes part of the outer ring and a corner-only contact stays two regions.
+pub fn regions_from_rects(rects: &[Rect]) -> Vec<Region> {
+    let rects = union_rects(rects);
+    if rects.is_empty() {
+        return Vec::new();
+    }
+
+    let mut xs = Vec::new();
+    for rect in &rects {
+        xs.push(rect.min.x);
+        xs.push(rect.max.x);
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xs.dedup_by(|a, b| (*a - *b).abs() < POINT_EPSILON);
+
+    let mut slab_intervals: Vec<Vec<(f64, f64)>> = Vec::new();
+    for pair in xs.windows(2) {
+        let (x0, x1) = (pair[0], pair[1]);
+        let mut intervals: Vec<(f64, f64)> = rects
+            .iter()
+            .filter(|rect| rect.min.x < x1 - POINT_EPSILON && rect.max.x > x0 + POINT_EPSILON)
+            .map(|rect| (rect.min.y, rect.max.y))
+            .collect();
+        slab_intervals.push(merge_intervals(&mut intervals));
+    }
+
+    let mut edges = Vec::new();
+    let mut points = HashMap::new();
+
+    // A vertical boundary exists wherever the material on its two sides differs.
+    for (index, &x) in xs.iter().enumerate() {
+        let left: &[(f64, f64)] =
+            index.checked_sub(1).and_then(|previous| slab_intervals.get(previous)).map_or(&[], Vec::as_slice);
+        let right: &[(f64, f64)] = slab_intervals.get(index).map_or(&[], Vec::as_slice);
+        for (y0, y1) in difference_intervals(right, left) {
+            push_edge(&mut edges, &mut points, DVec2::new(x, y1), DVec2::new(x, y0));
+        }
+        for (y0, y1) in difference_intervals(left, right) {
+            push_edge(&mut edges, &mut points, DVec2::new(x, y0), DVec2::new(x, y1));
+        }
+    }
+
+    for (index, intervals) in slab_intervals.iter().enumerate() {
+        let (Some(&x0), Some(&x1)) = (xs.get(index), xs.get(index + 1)) else {
+            continue;
+        };
+        for &(y0, y1) in intervals {
+            push_edge(&mut edges, &mut points, DVec2::new(x0, y0), DVec2::new(x1, y0));
+            push_edge(&mut edges, &mut points, DVec2::new(x1, y1), DVec2::new(x0, y1));
+        }
+    }
+
+    let loops = trace_loops(&edges, &points);
+    regions_from_loops(loops)
+}
+
+/// One directed boundary edge, with the material on its left.
+#[derive(Clone, Copy)]
+struct Edge {
+    from: (i64, i64),
+    to: (i64, i64),
+    direction: u8,
+}
+
+/// Edge directions in counter-clockwise order.
+const EAST: u8 = 0;
+const NORTH: u8 = 1;
+const WEST: u8 = 2;
+const SOUTH: u8 = 3;
+
+fn push_edge(edges: &mut Vec<Edge>, points: &mut HashMap<(i64, i64), DVec2>, from: DVec2, to: DVec2) {
+    let Some(direction) = direction_between(from, to) else {
+        return;
+    };
+    let from_key = point_key(from);
+    let to_key = point_key(to);
+    points.entry(from_key).or_insert(from);
+    points.entry(to_key).or_insert(to);
+    edges.push(Edge { from: from_key, to: to_key, direction });
+}
+
+fn point_key(point: DVec2) -> (i64, i64) {
+    ((point.x / POINT_EPSILON).round() as i64, (point.y / POINT_EPSILON).round() as i64)
+}
+
+fn direction_between(from: DVec2, to: DVec2) -> Option<u8> {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    if dy.abs() <= POINT_EPSILON && dx > POINT_EPSILON {
+        Some(EAST)
+    } else if dx.abs() <= POINT_EPSILON && dy > POINT_EPSILON {
+        Some(NORTH)
+    } else if dy.abs() <= POINT_EPSILON && dx < -POINT_EPSILON {
+        Some(WEST)
+    } else if dx.abs() <= POINT_EPSILON && dy < -POINT_EPSILON {
+        Some(SOUTH)
+    } else {
+        None
+    }
+}
+
+/// The segments of `from` that `remove` does not cover.
+fn difference_intervals(from: &[(f64, f64)], remove: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut result = Vec::new();
+    for &(y0, y1) in from {
+        result.extend(subtract_intervals((y0, y1), remove.to_vec()));
+    }
+    result
+}
+
+/// Closes directed boundary edges into rings, keeping the material on the left.
+///
+/// The clockwise-next rule keeps a corner-only material contact on two loops. A walk that touches a
+/// vertex twice is split into simple rings afterwards, so corner-touching holes also stay separate.
+fn trace_loops(edges: &[Edge], points: &HashMap<(i64, i64), DVec2>) -> Vec<Vec<DVec2>> {
+    let mut outgoing: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (index, edge) in edges.iter().enumerate() {
+        outgoing.entry(edge.from).or_default().push(index);
+    }
+
+    let mut used = vec![false; edges.len()];
+    let mut loops = Vec::new();
+    for start in 0..edges.len() {
+        if used[start] {
+            continue;
+        }
+        let start_key = edges[start].from;
+        let mut path = vec![start_key];
+        let mut current = start;
+        used[current] = true;
+        let mut guard = 0usize;
+        loop {
+            let at = edges[current].to;
+            path.push(at);
+            if at == start_key {
+                break;
+            }
+            guard += 1;
+            if guard > edges.len() {
+                break;
+            }
+            let Some(next) = next_edge(at, edges[current].direction, &outgoing, edges, &used) else {
+                break;
+            };
+            used[next] = true;
+            current = next;
+        }
+        if path.last() == Some(&start_key) && path.len() >= 4 {
+            path.pop();
+            let ring: Vec<DVec2> = path.iter().filter_map(|key| points.get(key).copied()).collect();
+            for piece in split_self_touching(ring) {
+                if let Some(piece) = simplify_ring(&piece) {
+                    loops.push(piece);
+                }
+            }
+        }
+    }
+    loops
+}
+
+/// Splits a boundary walk that visits a vertex twice into simple rings.
+fn split_self_touching(ring: Vec<DVec2>) -> Vec<Vec<DVec2>> {
+    let mut pending = vec![ring];
+    let mut simple = Vec::new();
+    while let Some(ring) = pending.pop() {
+        let mut seen: HashMap<(i64, i64), usize> = HashMap::new();
+        let mut repeat = None;
+        for (index, point) in ring.iter().enumerate() {
+            if let Some(&first) = seen.get(&point_key(*point)) {
+                repeat = Some((first, index));
+                break;
+            }
+            seen.insert(point_key(*point), index);
+        }
+        let Some((first, second)) = repeat else {
+            simple.push(ring);
+            continue;
+        };
+        let cycle = ring[first..second].to_vec();
+        let mut rest = ring[..first].to_vec();
+        rest.extend_from_slice(&ring[second..]);
+        if cycle.len() >= 3 {
+            pending.push(cycle);
+        }
+        if rest.len() >= 3 {
+            pending.push(rest);
+        }
+    }
+    simple
+}
+
+fn next_edge(
+    at: (i64, i64),
+    incoming: u8,
+    outgoing: &HashMap<(i64, i64), Vec<usize>>,
+    edges: &[Edge],
+    used: &[bool],
+) -> Option<usize> {
+    let reverse = (incoming + 2) % 4;
+    let candidates = outgoing.get(&at)?;
+    for step in 1..=3 {
+        let wanted = (reverse + 4 - step) % 4;
+        if let Some(&edge) = candidates.iter().find(|&&index| !used[index] && edges[index].direction == wanted) {
+            return Some(edge);
+        }
+    }
+    None
+}
+
+fn simplify_ring(points: &[DVec2]) -> Option<Vec<DVec2>> {
+    let mut ring: Vec<DVec2> = Vec::new();
+    for &point in points {
+        let duplicate =
+            ring.last().is_some_and(|last| (*last - point).length_squared() <= POINT_EPSILON * POINT_EPSILON);
+        if !duplicate {
+            ring.push(point);
+        }
+    }
+    while ring.len() > 1 && (ring[0] - ring[ring.len() - 1]).length_squared() <= POINT_EPSILON * POINT_EPSILON {
+        ring.pop();
+    }
+    if ring.len() < 3 {
+        return None;
+    }
+    loop {
+        let mut removed = false;
+        for index in 0..ring.len() {
+            let previous = ring[(index + ring.len() - 1) % ring.len()];
+            let current = ring[index];
+            let next = ring[(index + 1) % ring.len()];
+            let straight_vertical = (previous.x - current.x).abs() < POINT_EPSILON
+                && (current.x - next.x).abs() < POINT_EPSILON
+                && (previous.y - current.y) * (current.y - next.y) > 0.0;
+            let straight_horizontal = (previous.y - current.y).abs() < POINT_EPSILON
+                && (current.y - next.y).abs() < POINT_EPSILON
+                && (previous.x - current.x) * (current.x - next.x) > 0.0;
+            if straight_vertical || straight_horizontal {
+                ring.remove(index);
+                removed = true;
+                break;
+            }
+        }
+        if !removed {
+            break;
+        }
+        if ring.len() < 3 {
+            return None;
+        }
+    }
+    Some(ring)
+}
+
+fn regions_from_loops(loops: Vec<Vec<DVec2>>) -> Vec<Region> {
+    let mut outers: Vec<(Vec<DVec2>, Vec<Vec<DVec2>>)> = Vec::new();
+    let mut holes: Vec<Vec<DVec2>> = Vec::new();
+    for ring in loops {
+        let area = ring_area(&ring);
+        if area > POINT_EPSILON {
+            outers.push((ring, Vec::new()));
+        } else if area < -POINT_EPSILON {
+            holes.push(ring);
+        }
+    }
+    for hole in holes {
+        let Some(&point) = hole.first() else {
+            continue;
+        };
+        let Some((_, region_holes)) = outers.iter_mut().find(|(outer, _)| ring_contains(outer, point)) else {
+            continue;
+        };
+        region_holes.push(hole);
+    }
+    outers.into_iter().filter_map(|(outer, holes)| Region::new(outer, holes).ok()).collect()
+}
+
 /// Distinct, sorted vertical slabs between every `x0` and `x1` in the input.
 fn slabs(ranges: impl Iterator<Item = (f64, f64)>) -> Vec<(f64, f64)> {
     let mut xs: Vec<f64> = Vec::new();
@@ -577,5 +858,128 @@ mod tests {
     fn material_sharing_an_edge_is_one_component() {
         let parts = vec![bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 0.0, 10.0, 10.0)];
         assert_eq!(connected_count(&parts), 1);
+    }
+
+    #[test]
+    fn a_single_rectangle_traces_one_ring() {
+        let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0)]);
+        assert_eq!(regions.len(), 1);
+        assert!(regions[0].holes().is_empty());
+        assert_eq!(regions[0].outer().len(), 4);
+        assert!((regions[0].area() - 100.0).abs() < 1.0e-9);
+        assert!(ring_area(regions[0].outer()) > 0.0);
+        assert!(regions[0].contains(DVec2::new(5.0, 5.0)));
+    }
+
+    #[test]
+    fn touching_rectangles_trace_one_outline() {
+        let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 0.0, 10.0, 10.0)]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].outer().len(), 4);
+        assert!((regions[0].area() - 200.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_partial_shared_edge_traces_a_step() {
+        let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 5.0, 10.0, 10.0)]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].outer().len(), 8);
+        assert!((regions[0].area() - 200.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn an_interior_cutout_traces_a_hole() {
+        let material = subtract_rects(bounds(0.0, 0.0, 100.0, 50.0), &[bounds(20.0, 10.0, 20.0, 10.0)]);
+        let regions = regions_from_rects(&material);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].holes().len(), 1);
+        assert!((regions[0].area() - 4800.0).abs() < 1.0e-9);
+        assert!(!regions[0].contains(DVec2::new(30.0, 15.0)));
+        assert!(regions[0].contains(DVec2::new(10.0, 10.0)));
+        assert!(ring_area(&regions[0].holes()[0]) < 0.0);
+    }
+
+    #[test]
+    fn two_interior_cutouts_trace_two_holes() {
+        let material = subtract_rects(
+            bounds(0.0, 0.0, 100.0, 50.0),
+            &[bounds(10.0, 10.0, 20.0, 20.0), bounds(50.0, 10.0, 20.0, 20.0)],
+        );
+        let regions = regions_from_rects(&material);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].holes().len(), 2);
+        assert!((regions[0].area() - 4200.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_boundary_notch_is_part_of_the_outer_ring() {
+        let material = subtract_rects(bounds(0.0, 0.0, 100.0, 50.0), &[bounds(30.0, 40.0, 40.0, 20.0)]);
+        let regions = regions_from_rects(&material);
+        assert_eq!(regions.len(), 1);
+        assert!(regions[0].holes().is_empty());
+        assert_eq!(regions[0].outer().len(), 8);
+        assert!((regions[0].area() - 4600.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_split_core_traces_two_regions() {
+        let material = subtract_rects(bounds(0.0, 0.0, 100.0, 50.0), &[bounds(0.0, 20.0, 100.0, 10.0)]);
+        let regions = regions_from_rects(&material);
+        assert_eq!(regions.len(), 2);
+        let total: f64 = regions.iter().map(Region::area).sum();
+        assert!((total - 4000.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn corner_only_contact_traces_two_regions() {
+        let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 10.0, 10.0, 10.0)]);
+        assert_eq!(regions.len(), 2);
+        let total: f64 = regions.iter().map(Region::area).sum();
+        assert!((total - 200.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn overlapping_rectangles_are_normalized_before_tracing() {
+        let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(5.0, 5.0, 10.0, 10.0)]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].outer().len(), 8);
+        assert!((regions[0].area() - 175.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn an_empty_rectangle_set_traces_no_regions() {
+        assert!(regions_from_rects(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_staircase_traces_one_ring() {
+        let regions = regions_from_rects(&[
+            bounds(0.0, 0.0, 10.0, 10.0),
+            bounds(10.0, 0.0, 10.0, 20.0),
+            bounds(20.0, 0.0, 10.0, 30.0),
+        ]);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].outer().len(), 8);
+        assert!((regions[0].area() - 600.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn corner_touching_cutouts_trace_two_holes() {
+        let material = subtract_rects(
+            bounds(0.0, 0.0, 100.0, 50.0),
+            &[bounds(10.0, 10.0, 10.0, 10.0), bounds(20.0, 20.0, 10.0, 10.0)],
+        );
+        let regions = regions_from_rects(&material);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].holes().len(), 2);
+        assert!((regions[0].area() - 4800.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn area_ignores_ring_orientation() {
+        let clockwise_outer =
+            vec![DVec2::new(0.0, 0.0), DVec2::new(0.0, 10.0), DVec2::new(10.0, 10.0), DVec2::new(10.0, 0.0)];
+        let region = Region::new(clockwise_outer, vec![rect(2.0, 2.0, 6.0, 6.0)]).expect("valid region");
+        assert!((region.area() - 64.0).abs() < 1.0e-9);
     }
 }
