@@ -19,11 +19,11 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Line, Segment};
+use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, ContourPath, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel,
-    PanelContourError, PanelGeometry, VertexId,
+    BandingSpec, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelContourError,
+    PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -260,51 +260,13 @@ where
 
 /// Builds the core outline of a shaped panel.
 ///
-/// Each path is offset inward when its band is included; paths meet at sharp joints with a straight
-/// butt connector. Unbanded and non-included paths stay on the nominal outline.
+/// Each nominal segment is offset inward when its own band is included; consecutive offsets are
+/// joined with a straight connector. Unbanded and non-included segments stay nominal.
 fn shaped_core_contour<F>(panel: &Panel, band_profile: &F) -> Result<Contour, ParamError>
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
-    let paths = panel.contour_paths()?;
-    if paths.len() == 1 && paths[0].is_closed() {
-        let path = &paths[0];
-        let distance = panel
-            .path_banding(path)
-            .filter(|spec| spec.included_in_size())
-            .map_or(0.0, |spec| band_profile(&spec).thickness().millimetres_f64());
-        return Ok(if distance > 0.0 { path.contour().offset(distance)? } else { path.contour().clone() });
-    }
-
-    let mut path_segments = Vec::with_capacity(paths.len());
-    let mut ends = Vec::with_capacity(paths.len());
-    for path in &paths {
-        let distance = panel
-            .path_banding(path)
-            .filter(|spec| spec.included_in_size())
-            .map_or(0.0, |spec| band_profile(&spec).thickness().millimetres_f64());
-        let offset = if distance > 0.0 { path.contour().offset(distance)? } else { path.contour().clone() };
-        let start = offset.start().ok_or(ContourError::Empty)?;
-        let end = offset.end().ok_or(ContourError::Empty)?;
-        path_segments.push(offset.segments().to_vec());
-        ends.push((start, end));
-    }
-    if ends.is_empty() {
-        return Err(ContourError::Empty.into());
-    }
-    let mut segments = Vec::new();
-    for index in 0..ends.len() {
-        let Some(path) = path_segments.get(index) else {
-            return Err(ContourError::Empty.into());
-        };
-        segments.extend_from_slice(path);
-        let end = ends.get(index).map(|(_, end)| *end).ok_or(ContourError::Empty)?;
-        let next = ends.get((index + 1) % ends.len()).map(|(start, _)| *start).ok_or(ContourError::Empty)?;
-        if end.distance(next) > 1.0e-6 {
-            segments.push(Segment::Line(Line::new(end, next)?));
-        }
-    }
-    Ok(Contour::new(segments, true)?)
+    Ok(panel.core_contour_with(|spec| band_profile(spec).thickness())?)
 }
 
 fn build_shaped_bands<F>(
@@ -317,39 +279,40 @@ where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
     let panel_thickness = geometry.thickness();
+    let segments = panel.nominal_segments()?;
     let mut parts = Vec::new();
-    for path in panel.contour_paths()? {
-        let Some(spec) = panel.path_banding(&path) else {
+    for source in panel.band_order() {
+        let Some(&(segment, _)) = segments.iter().find(|(_, candidate)| candidate == source) else {
             continue;
         };
-        let Some(source) = path_band_source(panel, &path) else {
+        let Some(spec) = panel.segment_banding(*source) else {
             continue;
         };
         let profile = band_profile(&spec);
-        let strip = band_strip_profile(&path, spec, profile)?;
+        let strip = band_strip_profile(&Contour::new(vec![segment], false)?, spec, profile)?;
         let visible_width = profile.width().min(panel_thickness).millimetres_f64();
         let panel_thickness_mm = panel_thickness.millimetres_f64();
         let z = (panel_thickness_mm - visible_width) * 0.5;
         let frame = Frame { origin: DVec3::new(0.0, 0.0, z), ..Frame::WORLD };
         let body = kernel.extrude(&strip, &frame, visible_width)?;
-        parts.push(BandPart { source, body });
+        parts.push(BandPart { source: band_source(*source), body });
     }
     Ok(parts)
 }
 
-fn path_band_source(panel: &Panel, path: &ContourPath) -> Option<BandSource> {
-    if let Some(corner) = path.lone_corner() {
-        return panel.corner_banding_at(corner).map(|_| BandSource::Corner(corner));
+fn band_source(source: SegmentSource) -> BandSource {
+    match source {
+        SegmentSource::Edge(edge) => BandSource::Edge(edge),
+        SegmentSource::Corner(corner) => BandSource::Corner(corner),
     }
-    path.edge_ids().next().map(BandSource::Edge)
 }
 
-fn band_strip_profile(path: &ContourPath, spec: BandingSpec, profile: EdgeBandProfile) -> Result<Profile, ParamError> {
+fn band_strip_profile(path: &Contour, spec: BandingSpec, profile: EdgeBandProfile) -> Result<Profile, ParamError> {
     let distance = profile.thickness().millimetres_f64();
     let (outer, inner) = if spec.included_in_size() {
-        (path.contour().clone(), path.contour().offset(distance)?)
+        (path.clone(), path.offset(distance)?)
     } else {
-        (path.contour().offset(-distance)?, path.contour().clone())
+        (path.offset(-distance)?, path.clone())
     };
     let outer_points = outer.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
     let inner_points = inner.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
@@ -776,14 +739,14 @@ mod tests {
     }
 
     #[test]
-    fn a_rounded_path_produces_one_band_strip() {
+    fn an_edge_band_produces_one_strip_on_its_segment() {
         let panel = panel_with_radius_and_band(false);
-        assert_eq!(panel.edge_banding().len(), 2, "the path copies its spec to both edges");
+        assert_eq!(panel.edge_banding().len(), 1);
         let mut kernel = RecordingKernel::default();
         let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
             .expect("rounded panel parts");
         assert_eq!(parts.bands().len(), 1);
-        assert_eq!(parts.bands()[0].source(), BandSource::Edge(RectEdge::Bottom.id()));
+        assert_eq!(parts.bands()[0].source(), BandSource::Edge(RectEdge::Right.id()));
     }
 
     #[test]

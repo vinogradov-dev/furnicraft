@@ -7,11 +7,12 @@
 use std::f64::consts::FRAC_PI_2;
 
 use furnicraft_geom::{Arc, Contour, ContourError, DEFAULT_TANGENT_TOLERANCE, DVec2, Line, Segment};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    BandingSpec, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Panel, PanelNominalSize, RectCorner, RectEdge,
-    VertexId,
+    BandingSpec, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel, PanelNominalSize, RectCorner,
+    RectEdge, VertexId,
 };
 
 /// Why a panel's nominal contour cannot be built.
@@ -47,7 +48,11 @@ pub enum PanelContourError {
 }
 
 /// Where one nominal contour segment comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The same value identifies a banded segment in [`Panel::band_order`], so it is serialized with the
+/// panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SegmentSource {
     /// A straight or bowed edge.
     Edge(EdgeId),
@@ -167,28 +172,120 @@ impl Panel {
         Ok(self.contour_paths()?.into_iter().find(|path| path.edge_ids().any(|candidate| candidate == edge)))
     }
 
-    /// Replaces banding on every edge of the path that contains `band.edge()`.
+    /// Adds or replaces banding on one edge segment.
     ///
-    /// The path keeps one material, thickness, width and inclusion flag. The path is moved to the
-    /// end of the application order as a unit.
+    /// A banding belongs to its segment; neighbouring segments of the same tangent path keep their
+    /// own records.
     pub fn apply_edge_banding(&mut self, band: EdgeBanding) -> Result<(), PanelContourError> {
         let edge = band.edge();
-        let path = self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
-        let edge_ids = path.edge_ids().collect::<Vec<_>>();
-        self.edge_banding.retain(|existing| !edge_ids.contains(&existing.edge()));
-        for edge_id in edge_ids {
-            self.edge_banding.push(band.clone().with_edge(edge_id));
-        }
+        self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
+        self.edge_banding.retain(|existing| existing.edge() != edge);
+        self.edge_banding.push(band);
         Ok(())
     }
 
-    /// Removes banding from every edge of the path that contains `edge`.
+    /// Removes banding from one edge segment.
     pub fn clear_edge_banding_path(&mut self, edge: EdgeId) -> Result<bool, PanelContourError> {
-        let path = self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
-        let edge_ids = path.edge_ids().collect::<Vec<_>>();
+        self.path_containing_edge(edge)?.ok_or(PanelContourError::UnsupportedEdge { edge })?;
         let before = self.edge_banding.len();
-        self.edge_banding.retain(|existing| !edge_ids.contains(&existing.edge()));
+        self.edge_banding.retain(|existing| existing.edge() != edge);
         Ok(self.edge_banding.len() != before)
+    }
+
+    /// The banding on one contour segment, if any.
+    pub fn segment_banding(&self, source: SegmentSource) -> Option<BandingSpec> {
+        match source {
+            SegmentSource::Edge(edge) => {
+                self.edge_banding.iter().find(|band| band.edge() == edge).map(EdgeBanding::spec)
+            }
+            SegmentSource::Corner(corner) => self.corner_banding_at(corner).map(|band| band.spec()),
+        }
+    }
+
+    /// The nominal segments in travel order, with their source.
+    pub fn nominal_segments(&self) -> Result<Vec<(Segment, SegmentSource)>, PanelContourError> {
+        self.nominal_segments_for(self.nominal_size())
+    }
+
+    /// The nominal segments for a candidate size, in travel order.
+    pub fn nominal_segments_for(
+        &self,
+        nominal_size: PanelNominalSize,
+    ) -> Result<Vec<(Segment, SegmentSource)>, PanelContourError> {
+        let mut segments = Vec::new();
+        for path in self.contour_paths_for(nominal_size)? {
+            for (segment, source) in path.contour().segments().iter().zip(path.sources()) {
+                segments.push((*segment, *source));
+            }
+        }
+        Ok(segments)
+    }
+
+    /// Builds the core outline with a per-segment offset for included banding.
+    ///
+    /// Every nominal segment is offset inward by its own included band thickness. Consecutive
+    /// offset segments that no longer share an endpoint are joined with a straight connector, so a
+    /// band on one segment does not move its neighbours.
+    pub fn core_contour_with<F>(&self, band_thickness: F) -> Result<Contour, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        self.core_contour_for_with(self.nominal_size(), band_thickness)
+    }
+
+    /// Builds the core outline for a candidate size and band thickness.
+    pub fn core_contour_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        band_thickness: F,
+    ) -> Result<Contour, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        let mut segments = Vec::new();
+        for (segment, source) in self.nominal_segments_for(nominal_size)? {
+            let distance = self
+                .segment_banding(source)
+                .filter(|spec| spec.included_in_size())
+                .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
+            segments.push(if distance > 0.0 { segment.offset(distance)? } else { segment });
+        }
+        join_segments(segments)
+    }
+
+    /// The bounds of the outer envelope with a per-segment outward offset for non-included banding.
+    pub fn outer_bounds_with<F>(&self, band_thickness: F) -> Result<(DVec2, DVec2), PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        self.outer_bounds_for_with(self.nominal_size(), band_thickness)
+    }
+
+    /// The outer envelope bounds for a candidate size and band thickness.
+    pub fn outer_bounds_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        band_thickness: F,
+    ) -> Result<(DVec2, DVec2), PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        let mut min = DVec2::splat(f64::INFINITY);
+        let mut max = DVec2::splat(f64::NEG_INFINITY);
+        for (segment, source) in self.nominal_segments_for(nominal_size)? {
+            let distance = self
+                .segment_banding(source)
+                .filter(|spec| !spec.included_in_size())
+                .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
+            let bound = if distance > 0.0 { segment.offset(-distance)? } else { segment };
+            let (segment_min, segment_max) = bound.bounds();
+            min = min.min(segment_min);
+            max = max.max(segment_max);
+        }
+        if !min.is_finite() || !max.is_finite() {
+            return Err(PanelContourError::InvalidBounds);
+        }
+        Ok((min, max))
     }
 
     /// The banding that currently covers a path, if any.
@@ -348,6 +445,30 @@ fn incoming_setback(feature: CornerFeatureKind) -> f64 {
     }
 }
 
+/// Closes per-segment offset segments into one contour, adding a straight connector at a step.
+fn join_segments(segments: Vec<Segment>) -> Result<Contour, PanelContourError> {
+    let Some(first) = segments.first().copied() else {
+        return Err(ContourError::Empty.into());
+    };
+    let mut joined = Vec::with_capacity(segments.len() + 4);
+    let mut previous_end: Option<DVec2> = None;
+    for segment in &segments {
+        if let Some(end) = previous_end
+            && end.distance(segment.start()) > 1.0e-6
+        {
+            joined.push(Segment::Line(Line::new(end, segment.start())?));
+        }
+        joined.push(*segment);
+        previous_end = Some(segment.end());
+    }
+    if let Some(end) = previous_end
+        && end.distance(first.start()) > 1.0e-6
+    {
+        joined.push(Segment::Line(Line::new(end, first.start())?));
+    }
+    Ok(Contour::new(joined, true)?)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -493,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn banding_a_rounded_path_updates_every_edge_in_it() {
+    fn banding_an_edge_keeps_the_rest_of_its_path_unbanded() {
         let mut panel = panel(100, 60);
         panel.corner_features.push(
             CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
@@ -504,10 +625,12 @@ mod tests {
             EdgeBanding::new(RectEdge::Right.id(), material, false, millimetres(2), millimetres(20)).expect("band");
         panel.apply_edge_banding(band).expect("apply band");
         let covered = panel.edge_banding().iter().map(EdgeBanding::edge).collect::<Vec<_>>();
-        assert_eq!(covered, vec![RectEdge::Right.id(), RectEdge::Top.id()]);
+        assert_eq!(covered, vec![RectEdge::Right.id()]);
         assert!(panel.edge_banding().iter().all(|band| band.material() == material));
 
-        panel.clear_edge_banding_path(RectEdge::Top.id()).expect("clear path");
+        assert!(!panel.clear_edge_banding_path(RectEdge::Top.id()).expect("clear an unbanded edge"));
+        assert_eq!(panel.edge_banding().len(), 1);
+        assert!(panel.clear_edge_banding_path(RectEdge::Right.id()).expect("clear the banded edge"));
         assert!(panel.edge_banding().is_empty());
     }
 

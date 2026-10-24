@@ -136,6 +136,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
   - the user sees a warning and can assign a material.
 - The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
 - Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
+- Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo
