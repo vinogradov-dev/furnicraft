@@ -20,6 +20,13 @@ const EPSILON: f64 = 1.0e-9;
 const JOIN_TOLERANCE: f64 = 1.0e-6;
 /// Default angular tolerance for a smooth joint, in radians.
 pub const DEFAULT_TANGENT_TOLERANCE: f64 = 1.0e-6;
+/// Largest sweep a caller may add when it extends an arc to a point, in radians.
+///
+/// The cap keeps an extension from wrapping around the supporting circle and finding a point on
+/// the opposite side.
+pub const MAX_ARC_EXTENSION: f64 = FRAC_PI_2;
+/// Tolerance for treating a point as lying on a supporting circle, in millimetres.
+const CIRCLE_TOLERANCE: f64 = 1.0e-6;
 /// Upper bound on the number of segments in one contour.
 const MAX_SEGMENTS: usize = 4096;
 /// Upper bound on samples generated for one arc.
@@ -187,6 +194,31 @@ impl Line {
         let parameter = (offset.x * other_direction.y - offset.y * other_direction.x) / denominator;
         let point = self.start + direction * parameter;
         point.is_finite().then_some(point)
+    }
+
+    /// The points where the supporting line meets an arc's supporting circle.
+    ///
+    /// The result is not restricted to either span: a call site that cuts a band against a
+    /// neighbouring face decides which candidate is acceptable. A tangent line returns one point
+    /// and a line that misses the circle returns none.
+    pub fn intersections_with_arc(self, arc: Arc) -> [Option<DVec2>; 2] {
+        let direction = self.end - self.start;
+        let length_squared = direction.length_squared();
+        if !length_squared.is_finite() || length_squared <= EPSILON * EPSILON {
+            return [None, None];
+        }
+        let to_center = arc.center() - self.start;
+        let foot = self.start + direction * (to_center.dot(direction) / length_squared);
+        let distance = (arc.center() - foot).length();
+        if !distance.is_finite() || distance > arc.radius() + CIRCLE_TOLERANCE {
+            return [None, None];
+        }
+        let half = (arc.radius() * arc.radius() - distance * distance).max(0.0).sqrt();
+        if half <= CIRCLE_TOLERANCE {
+            return [foot.is_finite().then_some(foot), None];
+        }
+        let unit = direction / length_squared.sqrt();
+        [Some(foot - unit * half), Some(foot + unit * half)]
     }
 }
 
@@ -362,6 +394,119 @@ impl Arc {
         }
         Self::new(self.center, radius, self.start_angle, self.sweep_angle)
     }
+
+    /// The points where the two supporting circles meet.
+    ///
+    /// Tangent circles return one point. Separated, nested and concentric circles return none.
+    pub fn intersections_with_arc(self, other: Self) -> [Option<DVec2>; 2] {
+        let between = other.center - self.center;
+        let distance = between.length();
+        if !distance.is_finite() || distance <= CIRCLE_TOLERANCE {
+            return [None, None];
+        }
+        if distance > self.radius + other.radius + CIRCLE_TOLERANCE
+            || distance < (self.radius - other.radius).abs() - CIRCLE_TOLERANCE
+        {
+            return [None, None];
+        }
+        let along = (self.radius * self.radius - other.radius * other.radius + distance * distance) / (2.0 * distance);
+        let base = self.center + between / distance * along;
+        let height_squared = self.radius * self.radius - along * along;
+        if !base.is_finite() || !height_squared.is_finite() {
+            return [None, None];
+        }
+        let height = height_squared.max(0.0).sqrt();
+        if height <= CIRCLE_TOLERANCE {
+            return [Some(base), None];
+        }
+        let normal = DVec2::new(-between.y, between.x) / distance;
+        [Some(base + normal * height), Some(base - normal * height)]
+    }
+
+    /// Whether a point lies on the supporting circle and inside the sweep.
+    ///
+    /// `tolerance` is a linear distance in millimetres; it is converted to angular slack at the
+    /// arc's radius so a point at an endpoint is accepted.
+    pub fn contains_point(self, point: DVec2, tolerance: f64) -> bool {
+        if !point.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+            return false;
+        }
+        let radial = point - self.center;
+        if (radial.length() - self.radius).abs() > tolerance {
+            return false;
+        }
+        let angle = radial.y.atan2(radial.x);
+        let delta = if self.sweep_angle > 0.0 {
+            positive_angle(angle - self.start_angle)
+        } else {
+            positive_angle(self.start_angle - angle)
+        };
+        delta <= self.sweep_angle.abs() + tolerance / self.radius + 1.0e-12
+    }
+
+    /// The angular distance from the start angle to `point` in the direction of travel.
+    ///
+    /// The result is in `0..TAU` and names a point on the supporting circle, not necessarily on
+    /// the sweep.
+    fn travel_delta(self, point: DVec2) -> Result<f64, ContourError> {
+        if !point.is_finite() {
+            return Err(ContourError::InvalidInput("arc point must be finite"));
+        }
+        let radial = point - self.center;
+        if (radial.length() - self.radius).abs() > CIRCLE_TOLERANCE {
+            return Err(ContourError::InvalidInput("point must lie on the arc's circle"));
+        }
+        let angle = radial.y.atan2(radial.x);
+        Ok(if self.sweep_angle > 0.0 {
+            positive_angle(angle - self.start_angle)
+        } else {
+            positive_angle(self.start_angle - angle)
+        })
+    }
+
+    /// Moves the arc's start to a point on its supporting circle, keeping the end fixed.
+    ///
+    /// A point inside the sweep trims the arc, a point up to [`MAX_ARC_EXTENSION`] behind the start
+    /// extends it, and a point past the end is rejected.
+    pub fn with_start_point(self, point: DVec2) -> Result<Self, ContourError> {
+        let ahead = self.travel_delta(point)?;
+        if ahead <= EPSILON || ahead >= TAU - EPSILON {
+            return Ok(self);
+        }
+        let sign = self.sweep_angle.signum();
+        if ahead <= self.sweep_angle.abs() + 1.0e-12 {
+            let sweep = self.sweep_angle.abs() - ahead;
+            if sweep <= EPSILON {
+                return Err(ContourError::InvalidSweep);
+            }
+            return Self::new(self.center, self.radius, self.start_angle + sign * ahead, sign * sweep);
+        }
+        let behind = TAU - ahead;
+        if behind > MAX_ARC_EXTENSION {
+            return Err(ContourError::InvalidSweep);
+        }
+        let sweep = self.sweep_angle.abs() + behind;
+        if sweep >= TAU - EPSILON {
+            return Err(ContourError::InvalidSweep);
+        }
+        Self::new(self.center, self.radius, self.start_angle - sign * behind, sign * sweep)
+    }
+
+    /// Moves the arc's end to a point on its supporting circle, keeping the start fixed.
+    ///
+    /// A point inside the sweep trims the arc, a point up to [`MAX_ARC_EXTENSION`] beyond the end
+    /// extends it, and a point behind the start is rejected.
+    pub fn with_end_point(self, point: DVec2) -> Result<Self, ContourError> {
+        let ahead = self.travel_delta(point)?;
+        if ahead <= EPSILON || ahead >= TAU - EPSILON {
+            return Err(ContourError::InvalidSweep);
+        }
+        let extension = ahead - self.sweep_angle.abs();
+        if extension > MAX_ARC_EXTENSION {
+            return Err(ContourError::InvalidSweep);
+        }
+        Self::new(self.center, self.radius, self.start_angle, self.sweep_angle.signum() * ahead)
+    }
 }
 
 /// One directed segment of a contour.
@@ -435,6 +580,48 @@ impl Segment {
         match self {
             Self::Line(line) => Ok(Self::Line(line.offset(distance)?)),
             Self::Arc(arc) => Ok(Self::Arc(arc.offset(distance)?)),
+        }
+    }
+
+    /// The points where two segments' supporting curves meet.
+    ///
+    /// A line pair returns its single infinite-line intersection, a line and a circle up to two
+    /// points, and two circles up to two points. The result is not restricted to either span.
+    pub fn intersections_with(self, other: Self) -> [Option<DVec2>; 2] {
+        match (self, other) {
+            (Self::Line(first), Self::Line(second)) => [first.intersection(second), None],
+            (Self::Line(line), Self::Arc(arc)) | (Self::Arc(arc), Self::Line(line)) => line.intersections_with_arc(arc),
+            (Self::Arc(first), Self::Arc(second)) => first.intersections_with_arc(second),
+        }
+    }
+
+    /// The sub-segment from `start` to `end`, in the segment's direction of travel.
+    ///
+    /// Both points must lie on the segment's supporting curve. For an arc this may trim or extend
+    /// the sweep within [`MAX_ARC_EXTENSION`].
+    pub fn trimmed(self, start: DVec2, end: DVec2) -> Result<Self, ContourError> {
+        match self {
+            Self::Line(_) => Ok(Self::Line(Line::new(start, end)?)),
+            Self::Arc(arc) => Ok(Self::Arc(arc.with_start_point(start)?.with_end_point(end)?)),
+        }
+    }
+
+    /// The segment with its start (`at_end = false`) or end fixed at `point`.
+    ///
+    /// The other endpoint is kept; an arc may be trimmed or extended within
+    /// [`MAX_ARC_EXTENSION`].
+    pub fn trimmed_to(self, point: DVec2, at_end: bool) -> Result<Self, ContourError> {
+        match self {
+            Self::Line(line) => {
+                if at_end {
+                    Ok(Self::Line(Line::new(line.start(), point)?))
+                } else {
+                    Ok(Self::Line(Line::new(point, line.end())?))
+                }
+            }
+            Self::Arc(arc) => {
+                Ok(Self::Arc(if at_end { arc.with_end_point(point)? } else { arc.with_start_point(point)? }))
+            }
         }
     }
 }
@@ -839,5 +1026,98 @@ mod tests {
         let (min, max) = outward.bounds();
         assert!((min.y + 10.0).abs() < 1e-9, "outward min {min:?}");
         assert!((max.y - 0.0).abs() < 1e-9, "outward max {max:?}");
+    }
+
+    #[test]
+    fn line_meets_a_circle_in_two_points_or_one() {
+        let circle = Arc::new(DVec2::ZERO, 5.0, 0.0, TAU).expect("circle");
+        let crossing = Line::new(point(-10.0, 0.0), point(10.0, 0.0)).expect("crossing");
+        let mut hits: Vec<_> = crossing.intersections_with_arc(circle).into_iter().flatten().collect();
+        hits.sort_by(|a, b| a.x.total_cmp(&b.x));
+        assert_eq!(hits.len(), 2);
+        assert!((hits[0] - point(-5.0, 0.0)).length() < 1e-9, "hits {hits:?}");
+        assert!((hits[1] - point(5.0, 0.0)).length() < 1e-9, "hits {hits:?}");
+
+        let tangent = Line::new(point(-10.0, 5.0), point(10.0, 5.0)).expect("tangent");
+        let hits: Vec<_> = tangent.intersections_with_arc(circle).into_iter().flatten().collect();
+        assert_eq!(hits.len(), 1);
+        assert!((hits[0] - point(0.0, 5.0)).length() < 1e-9);
+
+        let missing = Line::new(point(-10.0, 6.0), point(10.0, 6.0)).expect("missing");
+        assert!(missing.intersections_with_arc(circle).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn circles_meet_at_two_points_or_one() {
+        let first = Arc::new(DVec2::ZERO, 5.0, 0.0, TAU).expect("first");
+        let second = Arc::new(point(8.0, 0.0), 5.0, 0.0, TAU).expect("second");
+        let mut hits: Vec<_> = first.intersections_with_arc(second).into_iter().flatten().collect();
+        hits.sort_by(|a, b| a.y.total_cmp(&b.y));
+        assert_eq!(hits.len(), 2);
+        assert!((hits[0] - point(4.0, -3.0)).length() < 1e-9, "hits {hits:?}");
+        assert!((hits[1] - point(4.0, 3.0)).length() < 1e-9, "hits {hits:?}");
+
+        let tangent = Arc::new(point(10.0, 0.0), 5.0, 0.0, TAU).expect("tangent");
+        let hits: Vec<_> = first.intersections_with_arc(tangent).into_iter().flatten().collect();
+        assert_eq!(hits.len(), 1);
+        assert!((hits[0] - point(5.0, 0.0)).length() < 1e-9);
+
+        let apart = Arc::new(point(20.0, 0.0), 5.0, 0.0, TAU).expect("apart");
+        assert!(first.intersections_with_arc(apart).iter().all(Option::is_none));
+
+        let nested = Arc::new(DVec2::ZERO, 2.0, 0.0, TAU).expect("nested");
+        assert!(first.intersections_with_arc(nested).iter().all(Option::is_none));
+
+        let concentric = Arc::new(DVec2::ZERO, 7.0, 0.0, TAU).expect("concentric");
+        assert!(first.intersections_with_arc(concentric).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn arc_contains_point_checks_the_circle_and_the_sweep() {
+        let quarter = Arc::new(DVec2::ZERO, 10.0, 0.0, FRAC_PI_2).expect("quarter");
+        let middle = quarter.point_at(0.5).expect("midpoint");
+        assert!(quarter.contains_point(middle, 1e-6));
+        assert!(quarter.contains_point(quarter.end(), 1e-6));
+        assert!(!quarter.contains_point(point(-10.0, 0.0), 1e-6));
+        assert!(!quarter.contains_point(point(11.0, 0.0), 1e-6));
+        assert!(!quarter.contains_point(DVec2::new(f64::NAN, 0.0), 1e-6));
+    }
+
+    #[test]
+    fn arc_trims_and_extends_to_points_on_its_circle() {
+        let quarter = Arc::new(DVec2::ZERO, 10.0, 0.0, FRAC_PI_2).expect("quarter");
+        let on_circle = |angle: f64| point(10.0 * angle.cos(), 10.0 * angle.sin());
+
+        let trimmed = quarter.with_start_point(on_circle(PI / 6.0)).expect("trim the start");
+        assert!((trimmed.start_angle() - PI / 6.0).abs() < 1e-12);
+        assert!((trimmed.sweep_angle() - PI / 3.0).abs() < 1e-12);
+        assert!((trimmed.start() - on_circle(PI / 6.0)).length() < 1e-9);
+
+        let extended = quarter.with_end_point(on_circle(2.0 * PI / 3.0)).expect("extend the end");
+        assert!((extended.sweep_angle() - 2.0 * PI / 3.0).abs() < 1e-12);
+        assert!((extended.end() - on_circle(2.0 * PI / 3.0)).length() < 1e-9);
+
+        let extended = quarter.with_start_point(on_circle(-PI / 6.0)).expect("extend the start");
+        assert!((extended.start() - on_circle(-PI / 6.0)).length() < 1e-9);
+        assert!((extended.sweep_angle() - 2.0 * PI / 3.0).abs() < 1e-12);
+
+        assert!(matches!(quarter.with_end_point(on_circle(5.0 * PI / 3.0)), Err(ContourError::InvalidSweep)));
+        assert!(matches!(quarter.with_end_point(point(10.0, 1.0)), Err(ContourError::InvalidInput(_))));
+
+        let clockwise = Arc::new(DVec2::ZERO, 10.0, 0.0, -FRAC_PI_2).expect("clockwise quarter");
+        let extended = clockwise.with_end_point(on_circle(-3.0 * PI / 4.0)).expect("extend a clockwise arc");
+        assert!((extended.sweep_angle() + 3.0 * PI / 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn segment_intersections_dispatch_and_trim() {
+        let line = Segment::Line(Line::new(point(0.0, -10.0), point(0.0, 10.0)).expect("line"));
+        let arc = Segment::Arc(Arc::new(DVec2::ZERO, 5.0, 0.0, TAU).expect("circle"));
+        let hits: Vec<_> = line.intersections_with(arc).into_iter().flatten().collect();
+        assert_eq!(hits.len(), 2);
+
+        let trimmed = arc.trimmed(point(5.0, 0.0), point(0.0, 5.0)).expect("trim the circle");
+        assert!((trimmed.length() - 5.0 * FRAC_PI_2).abs() < 1e-9);
+        assert!(line.trimmed(point(0.0, -10.0), point(0.0, -10.0)).is_err());
     }
 }

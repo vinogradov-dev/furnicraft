@@ -56,7 +56,7 @@ A manufacturing feature on a panel: a drilled hole (diameter, depth, entry face)
 
 ### `EdgeBanding` (inside `Panel`)
 
-The banding applied to one edge: material, thickness, and any overhang/trim allowance. The edge is referenced by its stable id. Corners use the v1 butt-joint rule in `docs/decisions/0007-edge-banding-v1.md`; banding through contour radii and edge-banding milling remain later work.
+The banding applied to one segment of the panel contour: material, thickness, inclusion in size, and width. The segment is referenced by its stable id: one of the four nominal edges or a chamfer/radius corner segment. Segments are banded in an application order, and a later band is cut against the earlier one's outer face on straight and arc joints (`docs/decisions/0014-banding-belongs-to-segments.md`, 0015, 0016); edge-banding milling remains later work.
 
 ### `Hardware`
 

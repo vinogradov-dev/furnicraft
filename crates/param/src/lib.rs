@@ -19,7 +19,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Line, Segment};
+use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
     BandingSpec, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelContourError,
@@ -32,6 +32,10 @@ use thiserror::Error;
 const TOOL_OVERSHOOT_MM: f64 = 0.001;
 /// Chord tolerance used when an analytic contour becomes a kernel polyline.
 const CONTOUR_SAMPLE_TOLERANCE_MM: f64 = 0.05;
+/// Largest distance a band end may reach past its own segment, in millimetres.
+const MAX_JOINT_EXTENSION_MM: f64 = 50.0;
+/// Tolerance for two points at a joint that should coincide, in millimetres.
+const JOINT_TOLERANCE_MM: f64 = 1.0e-6;
 
 /// An error raised while evaluating a parametric feature.
 #[derive(Debug, Error)]
@@ -290,9 +294,21 @@ where
         let Some(spec) = panel.segment_banding(*source) else {
             continue;
         };
+        let Some((nominal, _)) = segments.get(segment_index).copied() else {
+            continue;
+        };
         let profile = band_profile(&spec);
-        let strip =
-            shaped_band_strip(panel, &segments, &core, segment_index, spec, profile, order_index, band_profile)?;
+        let strip = shaped_band_strip(
+            panel,
+            &segments,
+            &core,
+            segment_index,
+            nominal,
+            spec,
+            profile,
+            order_index,
+            band_profile,
+        )?;
         let visible_width = profile.width().min(panel_thickness).millimetres_f64();
         let panel_thickness_mm = panel_thickness.millimetres_f64();
         let z = (panel_thickness_mm - visible_width) * 0.5;
@@ -314,16 +330,16 @@ struct BandSolid {
 
 /// Builds one band strip.
 ///
-/// An included band fills the space between its nominal segment and its core segment, so the body
-/// is always cut back by the band's inner face. A non-included band lies outside the nominal
-/// outline and is cut flush with the neighbouring faces. A later band still reaches over an earlier
-/// neighbouring band's outer face at a sharp joint.
+/// A strip lies between two boundary segments: an included band between its nominal segment and
+/// the core offset, a non-included band between the outward offset and its nominal segment. Both
+/// ends are cut by a straight connector at the two boundary points.
 #[allow(clippy::too_many_arguments)]
 fn shaped_band_strip<F>(
     panel: &Panel,
     segments: &[(Segment, SegmentSource)],
     core: &[(Segment, SegmentSource)],
     segment_index: usize,
+    nominal: Segment,
     spec: BandingSpec,
     profile: EdgeBandProfile,
     order_index: usize,
@@ -332,190 +348,177 @@ fn shaped_band_strip<F>(
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
-    let nominal = segments[segment_index].0;
-    if spec.included_in_size()
-        && let Some((core_segment, _)) = core.get(segment_index)
-    {
-        if let (Segment::Line(line), Segment::Line(core_line)) = (nominal, *core_segment)
-            && let Some(strip) =
-                included_line_strip(panel, segments, segment_index, order_index, line, core_line, band_profile)
-        {
-            return Ok(strip);
-        }
-        return included_band_profile(nominal, *core_segment);
-    }
-    if let Segment::Line(line) = nominal
-        && let Some(strip) =
-            outside_line_strip(panel, segments, segment_index, profile, order_index, line, band_profile)
-    {
-        return Ok(strip);
-    }
-    band_strip_profile(&Contour::new(vec![nominal], false)?, spec, profile)
-}
-
-/// Fills the gap between a nominal straight segment and its mitred core segment.
-#[allow(clippy::too_many_arguments)]
-fn included_line_strip<F>(
-    panel: &Panel,
-    segments: &[(Segment, SegmentSource)],
-    segment_index: usize,
-    order_index: usize,
-    line: Line,
-    core_line: Line,
-    band_profile: &F,
-) -> Option<Profile>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    let start = included_end_points(panel, segments, segment_index, false, order_index, line, core_line, band_profile)?;
-    let end = included_end_points(panel, segments, segment_index, true, order_index, line, core_line, band_profile)?;
-    Profile::new(vec![start.0, end.0, end.1, start.1], Vec::new()).ok()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn included_end_points<F>(
-    panel: &Panel,
-    segments: &[(Segment, SegmentSource)],
-    segment_index: usize,
-    at_end: bool,
-    order_index: usize,
-    line: Line,
-    core_line: Line,
-    band_profile: &F,
-) -> Option<(DVec2, DVec2)>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    let (anchor, along) =
-        if at_end { (line.end(), line.end() - line.start()) } else { (line.start(), line.start() - line.end()) };
-    if let Some(face) = extension_face(panel, segments, segment_index, at_end, order_index, 0.0, band_profile)
-        && let Some(points) = extended_end_points(line, core_line, face, anchor, along)
-    {
-        return Some(points);
-    }
-    Some((anchor, if at_end { core_line.end() } else { core_line.start() }))
-}
-
-/// Builds a band that lies outside the nominal outline.
-#[allow(clippy::too_many_arguments)]
-fn outside_line_strip<F>(
-    panel: &Panel,
-    segments: &[(Segment, SegmentSource)],
-    segment_index: usize,
-    profile: EdgeBandProfile,
-    order_index: usize,
-    line: Line,
-    band_profile: &F,
-) -> Option<Profile>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
+    let included = spec.included_in_size();
     let thickness = profile.thickness().millimetres_f64();
-    let left = line.left_normal();
-    let outer = Line::new(line.start() - left * thickness, line.end() - left * thickness).ok()?;
-    let start =
-        outside_end_points(panel, segments, segment_index, false, order_index, thickness, outer, line, band_profile)?;
-    let end =
-        outside_end_points(panel, segments, segment_index, true, order_index, thickness, outer, line, band_profile)?;
-    Profile::new(vec![start.0, end.0, end.1, start.1], Vec::new()).ok()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn outside_end_points<F>(
-    panel: &Panel,
-    segments: &[(Segment, SegmentSource)],
-    segment_index: usize,
-    at_end: bool,
-    order_index: usize,
-    outward: f64,
-    outer: Line,
-    inner: Line,
-    band_profile: &F,
-) -> Option<(DVec2, DVec2)>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    let line = inner;
-    let (anchor, along) =
-        if at_end { (line.end(), line.end() - line.start()) } else { (line.start(), line.start() - line.end()) };
-    if let Some(face) = extension_face(panel, segments, segment_index, at_end, order_index, outward, band_profile)
-        && let Some(points) = extended_end_points(outer, inner, face, anchor, along)
-    {
-        return Some(points);
-    }
-    let adjacent_index = if at_end {
-        (segment_index + 1) % segments.len()
+    let (outer, inner) = if included {
+        let core_segment = core.get(segment_index).map(|(segment, _)| *segment);
+        (nominal, core_segment.ok_or(ParamError::Contour(PanelContourError::Geometry(ContourError::Degenerate)))?)
     } else {
-        (segment_index + segments.len() - 1) % segments.len()
+        (nominal.offset(-thickness)?, nominal)
     };
-    if let Segment::Line(adjacent) = segments[adjacent_index].0
-        && let (Some(outer_point), Some(inner_point)) = (outer.intersection(adjacent), inner.intersection(adjacent))
-    {
-        return Some((outer_point, inner_point));
-    }
-    Some((if at_end { outer.end() } else { outer.start() }, if at_end { inner.end() } else { inner.start() }))
+    let joint = BandJoint {
+        panel,
+        segments,
+        segment_index,
+        order_index,
+        included,
+        outward: if included { 0.0 } else { thickness },
+    };
+    let start = joint.end_points(nominal, false, outer, inner, band_profile);
+    let end = joint.end_points(nominal, true, outer, inner, band_profile);
+    let outer = outer.trimmed(start.0, end.0)?;
+    let inner = inner.trimmed(start.1, end.1)?;
+    let mut points = Contour::new(vec![outer], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let inner_points = Contour::new(vec![inner], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    points.extend(inner_points.into_iter().rev());
+    Ok(Profile::new(points, Vec::new())?)
 }
 
-/// The outer face of an earlier neighbouring band that a later band reaches over.
-#[allow(clippy::too_many_arguments)]
-fn extension_face<F>(
-    panel: &Panel,
-    segments: &[(Segment, SegmentSource)],
+/// What one band end needs to know about its neighbours.
+struct BandJoint<'a> {
+    panel: &'a Panel,
+    segments: &'a [(Segment, SegmentSource)],
     segment_index: usize,
-    at_end: bool,
     order_index: usize,
+    included: bool,
     outward: f64,
-    band_profile: &F,
-) -> Option<Line>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    if !joint_is_sharp(segments, segment_index, at_end) {
-        return None;
-    }
-    let count = segments.len();
-    let adjacent_index = if at_end { (segment_index + 1) % count } else { (segment_index + count - 1) % count };
-    let adjacent_source = segments[adjacent_index].1;
-    let adjacent_spec = panel.segment_banding(adjacent_source)?;
-    let adjacent_order = panel.band_order().iter().position(|candidate| *candidate == adjacent_source)?;
-    if adjacent_order >= order_index {
-        return None;
-    }
-    let adjacent_profile = band_profile(&adjacent_spec);
-    let adjacent_out =
-        if adjacent_spec.included_in_size() { 0.0 } else { adjacent_profile.thickness().millimetres_f64() };
-    if outward + 1.0e-9 >= adjacent_out {
-        return None;
-    }
-    let Segment::Line(adjacent_line) = segments[adjacent_index].0 else {
-        return None;
-    };
-    let adjacent_left = adjacent_line.left_normal();
-    Line::new(adjacent_line.start() - adjacent_left * adjacent_out, adjacent_line.end() - adjacent_left * adjacent_out)
-        .ok()
 }
 
-fn extended_end_points(outer: Line, inner: Line, face: Line, anchor: DVec2, along: DVec2) -> Option<(DVec2, DVec2)> {
-    let outer_point = outer.intersection(face)?;
-    let inner_point = inner.intersection(face)?;
-    let outer_beyond = (outer_point - anchor).dot(along);
-    let inner_beyond = (inner_point - anchor).dot(along);
-    if outer_beyond <= 1.0e-6 || inner_beyond <= 1.0e-6 {
+impl BandJoint<'_> {
+    /// The two cut points of one band end, on the outer and the inner boundary.
+    ///
+    /// A later band first tries to reach an earlier neighbour's outer face. An included band then
+    /// keeps a radial butt joint, while a non-included band is mitred against the adjacent nominal
+    /// segment. Without a usable mitre both boundaries keep their own endpoints.
+    fn end_points<F>(
+        &self,
+        nominal: Segment,
+        at_end: bool,
+        outer: Segment,
+        inner: Segment,
+        band_profile: &F,
+    ) -> (DVec2, DVec2)
+    where
+        F: Fn(&BandingSpec) -> EdgeBandProfile,
+    {
+        let anchor = if at_end { nominal.end() } else { nominal.start() };
+        if let Some(face) = self.extension_face(at_end, band_profile)
+            && let Some(points) = extended_end_points(outer, inner, face, anchor, at_end)
+        {
+            return points;
+        }
+        if self.included {
+            return (anchor, if at_end { inner.end() } else { inner.start() });
+        }
+        if let Some(adjacent) = self.adjacent(at_end)
+            && let Some(point) = mitre_point(outer, adjacent, anchor, at_end)
+        {
+            return (point, anchor);
+        }
+        (if at_end { outer.end() } else { outer.start() }, anchor)
+    }
+
+    /// The adjacent nominal segment, if the contour has one.
+    fn adjacent(&self, at_end: bool) -> Option<Segment> {
+        let index = neighbour_index(self.segments.len(), self.segment_index, at_end)?;
+        self.segments.get(index).map(|(segment, _)| *segment)
+    }
+
+    /// The outer face of an earlier neighbouring band that a later band reaches over.
+    fn extension_face<F>(&self, at_end: bool, band_profile: &F) -> Option<Segment>
+    where
+        F: Fn(&BandingSpec) -> EdgeBandProfile,
+    {
+        if !joint_is_sharp(self.segments, self.segment_index, at_end) {
+            return None;
+        }
+        let adjacent_index = neighbour_index(self.segments.len(), self.segment_index, at_end)?;
+        let adjacent_source = self.segments.get(adjacent_index)?.1;
+        let adjacent_spec = self.panel.segment_banding(adjacent_source)?;
+        let adjacent_order = self.panel.band_order().iter().position(|candidate| *candidate == adjacent_source)?;
+        if adjacent_order >= self.order_index {
+            return None;
+        }
+        let adjacent_profile = band_profile(&adjacent_spec);
+        let adjacent_out =
+            if adjacent_spec.included_in_size() { 0.0 } else { adjacent_profile.thickness().millimetres_f64() };
+        if self.outward + 1.0e-9 >= adjacent_out {
+            return None;
+        }
+        self.segments.get(adjacent_index)?.0.offset(-adjacent_out).ok()
+    }
+}
+
+fn neighbour_index(count: usize, index: usize, at_end: bool) -> Option<usize> {
+    if count < 2 {
         return None;
     }
-    if (outer_point - anchor).length() > 50.0 || (inner_point - anchor).length() > 50.0 {
-        return None;
-    }
+    Some(if at_end { (index + 1) % count } else { (index + count - 1) % count })
+}
+
+/// Cuts both boundaries of a band end at an earlier neighbouring band's outer face.
+fn extended_end_points(
+    outer: Segment,
+    inner: Segment,
+    face: Segment,
+    anchor: DVec2,
+    at_end: bool,
+) -> Option<(DVec2, DVec2)> {
+    let outer_point = forward_meeting(outer, face, anchor, at_end)?;
+    let inner_point = forward_meeting(inner, face, anchor, at_end)?;
     Some((outer_point, inner_point))
 }
 
-/// A band that follows an arc: the nominal curve and its offset bound the strip.
-fn included_band_profile(nominal: Segment, core: Segment) -> Result<Profile, ParamError> {
-    let outer = Contour::new(vec![nominal], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let inner = Contour::new(vec![core], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let mut points = outer;
-    points.extend(inner.iter().rev().copied());
-    Ok(Profile::new(points, Vec::new())?)
+/// The nearest intersection that extends a boundary beyond its own end.
+fn forward_meeting(boundary: Segment, face: Segment, anchor: DVec2, at_end: bool) -> Option<DVec2> {
+    boundary
+        .intersections_with(face)
+        .into_iter()
+        .flatten()
+        .filter(|point| face_covers(face, *point))
+        .filter(|point| (point - anchor).length() <= MAX_JOINT_EXTENSION_MM)
+        .filter(|point| extends(boundary, *point, at_end))
+        .min_by(|first, second| (first - anchor).length().total_cmp(&(second - anchor).length()))
+}
+
+/// The nearest intersection of a non-included band's outer boundary with the adjacent segment.
+fn mitre_point(outer: Segment, adjacent: Segment, anchor: DVec2, at_end: bool) -> Option<DVec2> {
+    outer
+        .intersections_with(adjacent)
+        .into_iter()
+        .flatten()
+        .filter(|point| face_covers(adjacent, *point))
+        .filter(|point| outer.trimmed_to(*point, at_end).is_ok())
+        .min_by(|first, second| (first - anchor).length().total_cmp(&(second - anchor).length()))
+}
+
+/// Whether a candidate point lies on the face's own span.
+///
+/// A line face is treated as its supporting line, as the joint rule has always done. An arc face is
+/// finite, so a point on the far side of its circle is rejected.
+fn face_covers(face: Segment, point: DVec2) -> bool {
+    match face {
+        Segment::Line(_) => true,
+        Segment::Arc(arc) => arc.contains_point(point, JOINT_TOLERANCE_MM),
+    }
+}
+
+/// Whether `point` lies beyond the boundary's own end, so a cut there lengthens the strip.
+fn extends(boundary: Segment, point: DVec2, at_end: bool) -> bool {
+    match boundary {
+        Segment::Line(line) => {
+            let (anchor, along) = if at_end {
+                (line.end(), line.end() - line.start())
+            } else {
+                (line.start(), line.start() - line.end())
+            };
+            (point - anchor).dot(along) > JOINT_TOLERANCE_MM
+        }
+        Segment::Arc(arc) => {
+            let extended = if at_end { arc.with_end_point(point) } else { arc.with_start_point(point) };
+            extended.is_ok_and(|segment| segment.sweep_angle().abs() > arc.sweep_angle().abs() + 1.0e-12)
+        }
+    }
 }
 
 fn joint_is_sharp(segments: &[(Segment, SegmentSource)], index: usize, at_end: bool) -> bool {
@@ -576,23 +579,6 @@ fn band_source(source: SegmentSource) -> BandSource {
         SegmentSource::Edge(edge) => BandSource::Edge(edge),
         SegmentSource::Corner(corner) => BandSource::Corner(corner),
     }
-}
-
-fn band_strip_profile(path: &Contour, spec: BandingSpec, profile: EdgeBandProfile) -> Result<Profile, ParamError> {
-    let distance = profile.thickness().millimetres_f64();
-    let (outer, inner) = if spec.included_in_size() {
-        (path.clone(), path.offset(distance)?)
-    } else {
-        (path.offset(-distance)?, path.clone())
-    };
-    let outer_points = outer.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let inner_points = inner.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    if path.is_closed() {
-        return Ok(Profile::new(outer_points, vec![inner_points])?);
-    }
-    let mut points = outer_points;
-    points.extend(inner_points.iter().rev().copied());
-    Ok(Profile::new(points, Vec::new())?)
 }
 
 struct BandRect {
@@ -673,7 +659,7 @@ fn build_cutout_tool(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_geom::DVec2;
+    use furnicraft_geom::{Arc, DVec2};
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
@@ -1023,6 +1009,62 @@ mod tests {
         project.panel(panel_id).expect("panel").clone()
     }
 
+    fn panel_with_bow_and_bands(sagitta: Length, bands: &[(RectEdge, bool, i64)]) -> Panel {
+        panel_with_bows_and_bands(&[(RectEdge::Bottom, sagitta)], bands)
+    }
+
+    fn panel_with_bows_and_bands(bows: &[(RectEdge, Length)], bands: &[(RectEdge, bool, i64)]) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        for (edge, sagitta) in bows {
+            project.set_edge_bow(panel_id, EdgeBow::new(edge.id(), *sagitta).expect("bow")).expect("set bow");
+        }
+        for (edge, included, thickness) in bands {
+            project
+                .set_edge_banding(
+                    panel_id,
+                    EdgeBanding::new(edge.id(), edge_material(), *included, millimetres(*thickness), millimetres(22))
+                        .expect("band"),
+                )
+                .expect("set banding");
+        }
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn panel_with_radius_corner_band(included: bool) -> Panel {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
+            .expect("add panel");
+        let corner = RectCorner::BottomRight.id();
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(corner, CornerFeatureKind::Radius { radius: millimetres(25) }).expect("radius"),
+            )
+            .expect("set radius");
+        project
+            .set_corner_banding(
+                panel_id,
+                CornerBanding::new(corner, edge_material(), included, millimetres(2), millimetres(22))
+                    .expect("corner band"),
+            )
+            .expect("band the radius");
+        project.panel(panel_id).expect("panel").clone()
+    }
+
+    fn nominal_arc(panel: &Panel, edge: RectEdge) -> Option<Arc> {
+        let path = panel.path_containing_edge(edge.id()).ok().flatten()?;
+        match path.contour().segments() {
+            [Segment::Arc(arc)] => Some(*arc),
+            _ => None,
+        }
+    }
+
     fn geometry(panel: &Panel) -> PanelGeometry {
         panel.geometry_with_fallbacks().expect("resolved panel geometry")
     }
@@ -1221,6 +1263,193 @@ mod tests {
         assert!((body_volume - nominal_volume).abs() < nominal_volume * 1.0e-3);
         assert!(band_volume > 0.0);
         kernel.clear();
+    }
+
+    #[test]
+    fn a_non_included_band_on_a_bowed_edge_is_mitred_against_its_neighbours() {
+        let panel = panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 2)]);
+        let mut kernel = RecordingKernel::default();
+        let parts =
+            build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec).expect("bowed band");
+        assert_eq!(parts.len(), 1);
+        let profile = kernel.profile.as_ref().expect("band profile");
+        let arc = nominal_arc(&panel, RectEdge::Bottom).expect("bottom bow");
+
+        let radius = arc.radius() + 2.0;
+        let outer_at = |x: f64| arc.center().y - (radius * radius - (x - arc.center().x) * (x - arc.center().x)).sqrt();
+        let start_y = outer_at(0.0);
+        let end_y = outer_at(700.0);
+        assert!(start_y < -2.0 && start_y > -2.1, "start y {start_y}");
+        assert!((start_y - end_y).abs() < 1.0e-9, "a symmetric bow has symmetric mitres: {start_y} vs {end_y}");
+        assert_profile_point(profile, 0.0, start_y);
+        assert_profile_point(profile, 700.0, end_y);
+        assert_profile_point(profile, 0.0, 0.0);
+        assert_profile_point(profile, 700.0, 0.0);
+    }
+
+    #[test]
+    fn an_included_band_reaches_an_earlier_band_outer_face_across_a_bowed_joint() {
+        let panel =
+            panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)]);
+        let mut kernel = RecordingKernel::default();
+        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+            .expect("bowed joint bands");
+        assert_eq!(parts.len(), 2);
+        let left = kernel.profile.as_ref().expect("left band profile");
+        let face = nominal_arc(&panel, RectEdge::Bottom).expect("bottom bow");
+        let face_radius = face.radius() + 10.0;
+
+        let mut mouth: Vec<DVec2> = left
+            .outer
+            .iter()
+            .copied()
+            .filter(|point| point.y < -1.0 && ((*point - face.center()).length() - face_radius).abs() < 1.0e-6)
+            .collect();
+        mouth.sort_by(|first, second| first.x.total_cmp(&second.x));
+        assert_eq!(mouth.len(), 2, "the left band did not reach the bottom band face: {:?}", left.outer);
+        assert!((mouth[0].x - 0.0).abs() < 1.0e-6, "outer boundary must stay nominal: {:?}", mouth[0]);
+        assert!((mouth[1].x - 2.0).abs() < 1.0e-6, "inner boundary must stay on the core: {:?}", mouth[1]);
+        assert!(mouth.iter().all(|point| point.y < -9.9), "the cut is not on the face: {mouth:?}");
+    }
+
+    #[test]
+    fn a_later_band_trimmed_off_the_earlier_one_keeps_the_total_volume() {
+        let bottom_band = panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 10)]);
+        let both_bands =
+            panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)]);
+        let mut kernel = TruckKernel::new();
+        let reference =
+            build_panel_parts_with(&mut kernel, &bottom_band, geometry(&bottom_band), EdgeBandProfile::from_spec)
+                .expect("reference parts");
+        let reference_volume = kernel.measure(reference.body()).expect("body measure").volume
+            + kernel.measure(reference.bands()[0].body()).expect("band measure").volume;
+
+        let parts = build_panel_parts_with(&mut kernel, &both_bands, geometry(&both_bands), EdgeBandProfile::from_spec)
+            .expect("both band parts");
+        let total = kernel.measure(parts.body()).expect("body measure").volume
+            + parts.bands().iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).sum::<f64>();
+        assert!(
+            (total - reference_volume).abs() < reference_volume * 1.0e-3,
+            "total {total} vs reference {reference_volume}: the later band changed the volume"
+        );
+        kernel.clear();
+    }
+
+    #[test]
+    fn an_included_band_reaches_an_earlier_band_outer_face_across_an_arc_joint() {
+        let panel = panel_with_bows_and_bands(
+            &[(RectEdge::Bottom, millimetres(10)), (RectEdge::Left, millimetres(10))],
+            &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)],
+        );
+        let mut kernel = RecordingKernel::default();
+        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+            .expect("arc joint bands");
+        assert_eq!(parts.len(), 2);
+        let left = kernel.profile.as_ref().expect("left band profile");
+        let face = nominal_arc(&panel, RectEdge::Bottom).expect("bottom bow");
+        let face_radius = face.radius() + 10.0;
+
+        let on_face: Vec<DVec2> = left
+            .outer
+            .iter()
+            .copied()
+            .filter(|point| ((*point - face.center()).length() - face_radius).abs() < 1.0e-6)
+            .collect();
+        assert_eq!(on_face.len(), 2, "the left band did not reach the bottom band face: {:?}", left.outer);
+        assert!(on_face.iter().all(|point| point.y < -1.0), "the cut stayed at the corner: {on_face:?}");
+    }
+
+    #[test]
+    fn included_bands_around_a_bowed_edge_rebuild_the_nominal_volume() {
+        let panel = panel_with_bow_and_bands(
+            millimetres(10),
+            &[
+                (RectEdge::Bottom, true, 2),
+                (RectEdge::Right, true, 2),
+                (RectEdge::Top, true, 2),
+                (RectEdge::Left, true, 2),
+            ],
+        );
+        let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
+        let mut kernel = TruckKernel::new();
+        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+            .expect("bowed panel parts");
+        let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
+        let band_volume: f64 =
+            parts.bands().iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).sum();
+        assert!(
+            (body_volume + band_volume - nominal_volume).abs() < nominal_volume * 1.0e-3,
+            "body {body_volume} + bands {band_volume} vs nominal {nominal_volume}"
+        );
+        kernel.clear();
+    }
+
+    #[test]
+    fn a_radius_corner_band_is_one_arc_strip() {
+        let included = panel_with_radius_corner_band(true);
+        let radius = 25.0;
+        let angle = std::f64::consts::FRAC_PI_2;
+        let nominal_volume = included.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
+        let mut kernel = TruckKernel::new();
+        let parts = build_panel_parts_with(&mut kernel, &included, geometry(&included), EdgeBandProfile::from_spec)
+            .expect("included radius band");
+        assert_eq!(parts.bands().len(), 1);
+        assert_eq!(parts.bands()[0].source(), BandSource::Corner(RectCorner::BottomRight.id()));
+        let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
+        let band_volume = kernel.measure(parts.bands()[0].body()).expect("band measure").volume;
+        assert!(
+            (body_volume + band_volume - nominal_volume).abs() < nominal_volume * 1.0e-3,
+            "body {body_volume} + band {band_volume} vs nominal {nominal_volume}"
+        );
+
+        let outside = panel_with_radius_corner_band(false);
+        let parts = build_panel_parts_with(&mut kernel, &outside, geometry(&outside), EdgeBandProfile::from_spec)
+            .expect("non-included radius band");
+        let band_volume = kernel.measure(parts.bands()[0].body()).expect("band measure").volume;
+        let expected_area = 0.5 * ((radius + 2.0) * (radius + 2.0) - radius * radius) * angle;
+        let expected = expected_area * 18.0;
+        assert!(
+            (band_volume - expected).abs() < expected * 0.02,
+            "radius band volume {band_volume}, expected {expected}"
+        );
+        kernel.clear();
+    }
+
+    #[test]
+    fn a_non_included_band_that_consumes_a_bow_radius_is_rejected() {
+        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel(
+                project.root().id(),
+                "Panel",
+                PanelNominalSize::new(millimetres(100), millimetres(60)).expect("size"),
+                None,
+                millimetres(18),
+                Placement::IDENTITY,
+            )
+            .expect("add panel");
+        project
+            .set_edge_bow(panel_id, EdgeBow::new(RectEdge::Bottom.id(), millimetres(-20)).expect("bow"))
+            .expect("set bow");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Bottom.id(), edge_material(), false, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("set banding");
+        let panel = project.panel(panel_id).expect("panel").clone();
+
+        let mut kernel = RecordingKernel::default();
+        let error = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &|_| {
+            EdgeBandProfile::new(millimetres(80), millimetres(22))
+        })
+        .expect_err("the outgoing offset consumes the bow radius");
+        assert!(
+            matches!(error, ParamError::ContourSampling(ContourError::CollapsedRadius)),
+            "unexpected error {error:?}"
+        );
     }
 
     #[test]
