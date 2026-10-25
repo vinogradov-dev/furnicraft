@@ -4,16 +4,23 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M5 — Editing, with the M4 panel-geometry refinement in flight
-- Working on: stage 3 — banding is an ordered list of contour segments (schema v4) with per-segment
-  core offsets and strips; joint extension and order trimming now work on straight and arc segments
-  alike (ADRs 0015, 0016). The card's corner and bowed-edge number fields keep typed text until the
-  edit ends
+- Milestone: M5 — Editing. The scene tree, node editing and grouping are done; the viewport is still
+  read-only.
+- Working on: selecting and placing parts. A panel is created at its parent's origin, selected at
+  once and edited through the inspector; the next steps are numeric placement fields, viewport
+  picking with a selection highlight, and the Blender-like axes and orientation widget.
+- Direction: manual furniture design comes first. Parametric cabinets and project save/load are
+  parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `docs: define the scene-tree authoring roadmap`
+- `feat(ui): add the scene tree with groups and node actions`
+- `feat(engine): add scene node commands`
+- `feat(model): edit, group and ungroup scene nodes`
+- `docs: record arc band joints`
 - `feat(param): trim arc band joints against their neighbours`
 - `feat(geom): intersect lines and arcs analytically`
 - `feat(param): trim band joints in application order`
@@ -33,7 +40,7 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 - `feat(ui): add the outliner and panel card`
 - `feat(units): parse millimetre text`
 - `feat(app): add the sample material catalogue`
-- `fix(engine): resolve panel geometry from the catalogue`
+- `feat(engine): resolve panel geometry from the catalogue`
 - `feat(engine): rename panels`
 - `feat(param): build edge bands and expose panel diagnostics`
 - `feat(engine): add catalogue-aware panel material commands`
@@ -47,39 +54,46 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Stage 3: extend the union, connectivity and ring-tracing rules to shaped cores.
-2. Stage 3: join per-segment core offsets at line-arc and arc-arc joints analytically, instead of the
-   straight connector and its zero-width slit.
-3. Stage 4: banding on cutout edges and openings, using the same segment and inclusion rules.
-4. Resume M5: viewport picking, synchronized selection and viewport move/rotate.
+1. Inspector: numeric local X/Y/Z placement fields dispatching `node.placement.set`, with typed text
+   that commits once and one undo entry per edit.
+2. Viewport: pick the node under the cursor and keep its highlight in sync with the scene-tree
+   selection.
+3. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
+   click-to-snap views.
+4. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
+5. Polish: rotation fields and a rotate gizmo, then multi-node placement.
 
 ## Open questions
 
-- An included band on one tangent segment now steps the core at the joint with its neighbour. Confirm
-  the step is acceptable in practice; if not, revisit before changing the core offsets.
-- At a sharp joint between two included paths with different thicknesses, the model uses butt connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
-- Stage 4 needs `Region` rings as segment paths; the conversion from traced polylines to `Contour` segments is not designed yet.
-- How a shaped core should carry a true notch on its curved outline is not designed; the shaped-core tracer must sample it without losing the band paths.
-- A band end may be extended by at most a quarter turn on an arc and `50 mm` from the nominal
-  endpoint. Confirm the caps hold for deep joints on a small radius.
-- Tangent tolerance remains `1e-6` radians and a `1e-6` mm connection gap.
+- Placement fields are local to the parent assembly; world coordinates are shown read-only. Confirm
+  whether the inspector should offer a world/local switch or a "place at world" entry instead.
+- Rotation waits for the translate gizmo: decide whether the inspector exposes Euler angles or a
+  quaternion and which one the gizmo writes.
+- The scene tree keeps its own multi-selection; the viewport has no picking yet, so the two are not
+  synchronised in both directions.
+- An included band on one tangent segment steps the core at the joint with its neighbour. Confirm the
+  step is acceptable in practice; if not, revisit before changing the core offsets.
+- At a sharp joint between two included paths with different thicknesses, the model uses butt
+  connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
-- Adding new machining to a shaped panel is still rejected until the contour-aware cutout union lands.
+- Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
+  deliberate deferral, not an oversight.
+- Parametric cabinets (dimensions driving panel sizes and placements) are out of the near-term plan.
+- The viewport has no picking, selection highlight or gizmos; the scene tree is the only way to
+  select a node.
+- Region rings are traced for rectangles only; a shaped core has no contour-aware cutout union, so
+  adding machining to a shaped panel is still rejected.
 - The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight
   connector; only the band strips are intersected analytically.
 - Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt untrimmed instead of failing the build.
 - A legacy file can still carry a corner banding on a point corner; the card does not show it and it is removed when the corner next becomes a segment.
-- `regions_from_rects` is orthogonal-only: it normalizes rectangles and cannot trace arc boundaries; shaped cores need the contour tracer.
 - Blind cutouts that overlap any other cutout or cross the core edge are still rejected until the 3D edge-pocket stage.
-- Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error. Stage 3's union layer should own the stronger check.
-- At a sharp joint where an included path meets an unbanded or non-included path, the butt connector keeps the adjacent nominal endpoint. The core bounds then include that corner and the core contour can contain a zero-width slit even though the body and band volumes are correct; stage 3 should replace the connector with the offset intersection.
+- Included offsets on a shaped path are checked only through the core extents; a hostile band thickness can still make the core contour self-intersect instead of returning a typed error.
 - `PanelGeometry` reports shaped core extents with a zero core origin; the body and cutout tools use nominal coordinates, but cutout validation on a shaped panel only sees the core bounding box.
 - The panel card does not edit cutouts yet.
-- The outliner is the only way to select a panel; the viewport has no picking or selection highlight.
 - Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks for some checks; rendering and diagnostics use the catalogue.
 - `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not implemented.
-- The app always loads `sample_session()`; there is no scene load/save path.
 - `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

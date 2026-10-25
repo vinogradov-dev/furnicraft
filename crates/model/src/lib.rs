@@ -256,6 +256,70 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
+    /// Finds a panel or nested assembly below the root.
+    ///
+    /// The root assembly is not a [`Node`]; use [`Project::assembly`] with the root id to reach it.
+    pub fn node(&self, id: Id) -> Option<&Node> {
+        find_node(&self.root, id)
+    }
+
+    /// The id of the assembly that directly owns `id`, or `None` for the root and unknown ids.
+    pub fn parent_of(&self, id: Id) -> Option<Id> {
+        find_parent(&self.root, id)
+    }
+
+    /// Whether the id names an assembly, including the root, or a panel.
+    pub fn contains_node(&self, id: Id) -> bool {
+        self.assembly(id).is_some() || self.panel(id).is_some()
+    }
+
+    /// Checks that `nodes` can be wrapped in one new assembly.
+    ///
+    /// Grouping needs at least two distinct non-root nodes that share one parent assembly, and the
+    /// new level must stay inside [`Project::MAX_ASSEMBLY_DEPTH`].
+    pub fn validate_group(&self, nodes: &[Id]) -> Result<(), ProjectError> {
+        self.group_parent(nodes).map(|_| ())
+    }
+
+    fn group_parent(&self, nodes: &[Id]) -> Result<(Id, u32), ProjectError> {
+        if nodes.len() < 2 {
+            return Err(ProjectError::TooFewNodes { minimum: 2, found: nodes.len() });
+        }
+        let mut seen = HashSet::new();
+        let mut parent = None;
+        for id in nodes {
+            let id = *id;
+            if !seen.insert(id.get()) {
+                return Err(ProjectError::DuplicateNode { id });
+            }
+            if id == self.root.id {
+                return Err(ProjectError::RootImmutable { id });
+            }
+            if self.node(id).is_none() {
+                return Err(ProjectError::NodeNotFound { id });
+            }
+            let node_parent = self.parent_of(id).ok_or(ProjectError::NodeNotFound { id })?;
+            match parent {
+                Some(expected) if expected != node_parent => return Err(ProjectError::NodesNotSiblings),
+                Some(_) => {}
+                None => parent = Some(node_parent),
+            }
+        }
+        let parent_id = parent.ok_or(ProjectError::TooFewNodes { minimum: 2, found: nodes.len() })?;
+        let (parent_depth, _) = find_assembly_with_depth(&self.root, parent_id, 1)
+            .ok_or(ProjectError::AssemblyNotFound { id: parent_id })?;
+        for id in nodes {
+            let node = self.node(*id).ok_or(ProjectError::NodeNotFound { id: *id })?;
+            let deepest = parent_depth
+                .checked_add(node_height(node))
+                .ok_or(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH })?;
+            if deepest > Project::MAX_ASSEMBLY_DEPTH {
+                return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
+            }
+        }
+        Ok((parent_id, parent_depth))
+    }
+
     /// Checks whether a panel can take a new nominal size without invalidating its machining.
     pub fn validate_panel_resize(&self, id: Id, nominal_size: PanelNominalSize) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
@@ -584,6 +648,156 @@ impl Project {
         Ok(id)
     }
 
+    /// Renames any node, including the root assembly, and bumps the revision once.
+    ///
+    /// Callers validate that the name is not blank; the model keeps user-visible text verbatim.
+    pub fn rename_node(&mut self, id: Id, name: impl Into<String>) -> Result<Revision, ProjectError> {
+        let name = name.into();
+        let next_revision = self.next_revision()?;
+        if id == self.root.id {
+            self.root.name = name;
+            self.revision = next_revision;
+            return Ok(next_revision);
+        }
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        node.set_name(name);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a panel's or nested assembly's placement and bumps the revision once.
+    ///
+    /// The root assembly defines the world frame and cannot be moved. The placement stays relative
+    /// to the parent assembly, so moving an assembly moves all of its leaves.
+    pub fn set_node_placement(&mut self, id: Id, placement: Placement) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        node.set_placement(placement);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes a panel or a nested assembly, with its children, and bumps the revision once.
+    ///
+    /// The root assembly cannot be removed. Removed ids are never reused.
+    pub fn remove_node(&mut self, id: Id) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        if self.node(id).is_none() {
+            return Err(ProjectError::NodeNotFound { id });
+        }
+        let next_revision = self.next_revision()?;
+        if !remove_child(&mut self.root, id) {
+            return Err(ProjectError::NodeNotFound { id });
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Deep-copies a panel or a nested assembly under the same parent and returns the copy's id.
+    ///
+    /// Every copied node receives a fresh id from the document allocator. The copy keeps its
+    /// placement and geometry; only the copied root's name gets a `copy` suffix. The new node is
+    /// inserted directly after the original.
+    pub fn duplicate_node(&mut self, id: Id) -> Result<Id, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let original = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
+        let parent_id = self.parent_of(id).ok_or(ProjectError::NodeNotFound { id })?;
+        let next_revision = self.next_revision()?;
+        let count = count_nodes(&original);
+        let ids = self.allocate_ids(count)?;
+        let mut copy = original;
+        let name = format!("{} copy", copy.name());
+        copy.set_name(name);
+        let new_id = assign_new_ids(&mut copy, &mut ids.into_iter())?;
+        let Some((_depth, parent)) = find_assembly_mut(&mut self.root, parent_id, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent_id });
+        };
+        let Some(index) = parent.children.iter().position(|child| child.id() == id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        parent.children.insert(index.saturating_add(1), copy);
+        self.revision = next_revision;
+        Ok(new_id)
+    }
+
+    /// Wraps sibling nodes in one new assembly and returns the new assembly id.
+    ///
+    /// All selected nodes stay in their existing order and keep their placements. The new assembly
+    /// has an identity placement relative to the shared parent, so no leaf moves in world space.
+    pub fn group_nodes(&mut self, nodes: &[Id], name: impl Into<String>) -> Result<Id, ProjectError> {
+        let (parent_id, _) = self.group_parent(nodes)?;
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let name = name.into();
+        let selected: HashSet<u64> = nodes.iter().map(|id| id.get()).collect();
+        let Some((_depth, parent)) = find_assembly_mut(&mut self.root, parent_id, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent_id });
+        };
+        let mut moved = Vec::new();
+        let mut rest = Vec::new();
+        let mut insert_at = None;
+        for child in parent.children.drain(..) {
+            if selected.contains(&child.id().get()) {
+                if insert_at.is_none() {
+                    insert_at = Some(rest.len());
+                }
+                moved.push(child);
+            } else {
+                rest.push(child);
+            }
+        }
+        let index = insert_at.unwrap_or(rest.len());
+        rest.insert(index, Node::Assembly(Assembly::new(id, name, Placement::IDENTITY, moved)));
+        parent.children = rest;
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Replaces an assembly with its children and bumps the revision once.
+    ///
+    /// The children keep their world transforms: each child placement is composed with the removed
+    /// assembly's placement. Panels are atomic leaves and cannot be ungrouped. The root assembly
+    /// cannot be ungrouped.
+    pub fn ungroup_assembly(&mut self, id: Id) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
+        let Node::Assembly(assembly) = node else {
+            return Err(ProjectError::NotAnAssembly { id });
+        };
+        let parent_id = self.parent_of(id).ok_or(ProjectError::NodeNotFound { id })?;
+        let next_revision = self.next_revision()?;
+        let mut children = Vec::with_capacity(assembly.children.len());
+        for mut child in assembly.children {
+            let placement = Placement::compose(assembly.placement, child.placement())
+                .map_err(|_| ProjectError::PlacementCompose { id })?;
+            child.set_placement(placement);
+            children.push(child);
+        }
+        let Some((_depth, parent)) = find_assembly_mut(&mut self.root, parent_id, 1) else {
+            return Err(ProjectError::AssemblyNotFound { id: parent_id });
+        };
+        let Some(index) = parent.children.iter().position(|child| child.id() == id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        parent.children.remove(index);
+        parent.children.splice(index..index, children);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Advances the revision by one and returns it.
     pub fn bump_revision(&mut self) -> Result<Revision, ProjectError> {
         let next = self.next_revision()?;
@@ -619,6 +833,23 @@ impl Project {
         let next = id.get().checked_add(1).ok_or(ProjectError::IdSpaceExhausted)?;
         self.next_id = Id::new(next).ok_or(ProjectError::IdSpaceExhausted)?;
         Ok(id)
+    }
+
+    /// Reserves `count` consecutive ids before any tree mutation starts.
+    ///
+    /// The allocator must still be able to produce the next id after the last reserved one, so a
+    /// full id space fails here instead of leaving a half-copied subtree behind.
+    fn allocate_ids(&mut self, count: u64) -> Result<Vec<Id>, ProjectError> {
+        let last = self.next_id.get().checked_add(count.saturating_sub(1)).ok_or(ProjectError::IdSpaceExhausted)?;
+        if last == u64::MAX {
+            return Err(ProjectError::IdSpaceExhausted);
+        }
+        let capacity = usize::try_from(count).map_err(|_| ProjectError::IdSpaceExhausted)?;
+        let mut ids = Vec::with_capacity(capacity);
+        for _ in 0..count {
+            ids.push(self.allocate_id()?);
+        }
+        Ok(ids)
     }
 }
 
@@ -723,6 +954,93 @@ fn find_panel_mut(assembly: &mut Assembly, id: Id, depth: u32) -> Option<(u32, &
         }
     }
     None
+}
+
+fn find_node(assembly: &Assembly, id: Id) -> Option<&Node> {
+    for child in &assembly.children {
+        if child.id() == id {
+            return Some(child);
+        }
+        if let Node::Assembly(child) = child
+            && let Some(found) = find_node(child, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_node_mut(assembly: &mut Assembly, id: Id) -> Option<&mut Node> {
+    for child in &mut assembly.children {
+        if child.id() == id {
+            return Some(child);
+        }
+        if let Node::Assembly(child) = child
+            && let Some(found) = find_node_mut(child, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_parent(assembly: &Assembly, id: Id) -> Option<Id> {
+    for child in &assembly.children {
+        if child.id() == id {
+            return Some(assembly.id);
+        }
+        if let Node::Assembly(child) = child
+            && let Some(found) = find_parent(child, id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn node_height(node: &Node) -> u32 {
+    match node {
+        Node::Panel(_) => 1,
+        Node::Assembly(assembly) => assembly.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
+    }
+}
+
+fn count_nodes(node: &Node) -> u64 {
+    match node {
+        Node::Panel(_) => 1,
+        Node::Assembly(assembly) => {
+            1u64.saturating_add(assembly.children.iter().map(count_nodes).fold(0, u64::saturating_add))
+        }
+    }
+}
+
+fn remove_child(assembly: &mut Assembly, id: Id) -> bool {
+    if let Some(index) = assembly.children.iter().position(|child| child.id() == id) {
+        assembly.children.remove(index);
+        return true;
+    }
+    for child in &mut assembly.children {
+        if let Node::Assembly(child) = child
+            && remove_child(child, id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn assign_new_ids(node: &mut Node, ids: &mut impl Iterator<Item = Id>) -> Result<Id, ProjectError> {
+    let id = ids.next().ok_or(ProjectError::IdSpaceExhausted)?;
+    match node {
+        Node::Panel(panel) => panel.id = id,
+        Node::Assembly(assembly) => {
+            assembly.id = id;
+            for child in &mut assembly.children {
+                assign_new_ids(child, ids)?;
+            }
+        }
+    }
+    Ok(id)
 }
 
 fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> {
@@ -926,6 +1244,47 @@ pub enum ProjectError {
     #[error("panel {id} not found")]
     PanelNotFound {
         /// The missing panel id.
+        id: Id,
+    },
+    /// The requested node is not in the tree, or it is the root assembly.
+    #[error("node {id} not found below the root")]
+    NodeNotFound {
+        /// The missing node id.
+        id: Id,
+    },
+    /// The root assembly cannot be deleted, moved, grouped or ungrouped.
+    #[error("root assembly {id} cannot be changed this way")]
+    RootImmutable {
+        /// The root assembly id.
+        id: Id,
+    },
+    /// Ungrouping was requested for a panel, which is an atomic leaf.
+    #[error("node {id} is not an assembly and cannot be ungrouped")]
+    NotAnAssembly {
+        /// The node that is not an assembly.
+        id: Id,
+    },
+    /// Grouping needs nodes that share one parent assembly.
+    #[error("nodes selected for grouping do not share one parent assembly")]
+    NodesNotSiblings,
+    /// The same node was listed more than once.
+    #[error("node {id} is selected more than once")]
+    DuplicateNode {
+        /// The repeated node id.
+        id: Id,
+    },
+    /// Grouping needs at least two nodes.
+    #[error("grouping needs at least {minimum} nodes, got {found}")]
+    TooFewNodes {
+        /// The smallest accepted selection.
+        minimum: u32,
+        /// The number of nodes supplied.
+        found: usize,
+    },
+    /// A placement could not be composed while an assembly was ungrouped.
+    #[error("assembly {id} has a placement that cannot be composed with a child")]
+    PlacementCompose {
+        /// The assembly whose placement could not be applied.
         id: Id,
     },
     /// A stored panel dimension is not usable.
@@ -1911,6 +2270,62 @@ impl From<Assembly> for Node {
 impl From<Panel> for Node {
     fn from(panel: Panel) -> Self {
         Self::Panel(panel)
+    }
+}
+
+impl Node {
+    /// The stable node id, shared by panels and assemblies.
+    pub const fn id(&self) -> Id {
+        match self {
+            Self::Assembly(assembly) => assembly.id,
+            Self::Panel(panel) => panel.id,
+        }
+    }
+
+    /// The user-visible node name.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Assembly(assembly) => &assembly.name,
+            Self::Panel(panel) => &panel.name,
+        }
+    }
+
+    /// The placement relative to the parent assembly.
+    pub const fn placement(&self) -> Placement {
+        match self {
+            Self::Assembly(assembly) => assembly.placement,
+            Self::Panel(panel) => panel.placement,
+        }
+    }
+
+    /// The nested assembly, or `None` for a panel.
+    pub const fn as_assembly(&self) -> Option<&Assembly> {
+        match self {
+            Self::Assembly(assembly) => Some(assembly),
+            Self::Panel(_) => None,
+        }
+    }
+
+    /// The panel, or `None` for an assembly.
+    pub const fn as_panel(&self) -> Option<&Panel> {
+        match self {
+            Self::Assembly(_) => None,
+            Self::Panel(panel) => Some(panel),
+        }
+    }
+
+    fn set_name(&mut self, name: String) {
+        match self {
+            Self::Assembly(assembly) => assembly.name = name,
+            Self::Panel(panel) => panel.name = name,
+        }
+    }
+
+    fn set_placement(&mut self, placement: Placement) {
+        match self {
+            Self::Assembly(assembly) => assembly.placement = placement,
+            Self::Panel(panel) => panel.placement = placement,
+        }
     }
 }
 
@@ -3896,5 +4311,177 @@ mod tests {
         assert_eq!(serde_json::to_string(&id).expect("serialize id"), "3");
         let decoded: EdgeId = serde_json::from_str("3").expect("deserialize id");
         assert_eq!(decoded, id);
+    }
+
+    #[test]
+    fn nodes_can_be_renamed_and_placed() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::from_rotation_z(0.5)).expect("placement");
+
+        assert_eq!(project.rename_node(panel, "Top").expect("rename panel").get(), 1);
+        assert_eq!(project.rename_node(drawer, "Drawer box").expect("rename assembly").get(), 2);
+        assert_eq!(project.rename_node(root, "Cabinet").expect("rename root").get(), 3);
+        assert_eq!(project.panel(panel).expect("panel").name(), "Top");
+        assert_eq!(project.assembly(drawer).expect("assembly").name(), "Drawer box");
+        assert_eq!(project.root().name(), "Cabinet");
+
+        assert_eq!(project.set_node_placement(panel, placement).expect("place panel").get(), 4);
+        assert_eq!(project.set_node_placement(drawer, placement).expect("place assembly").get(), 5);
+        assert_eq!(project.panel(panel).expect("panel").placement(), placement);
+        assert_eq!(project.assembly(drawer).expect("assembly").placement(), placement);
+
+        assert_eq!(project.set_node_placement(root, placement), Err(ProjectError::RootImmutable { id: root }));
+        assert_eq!(project.revision().get(), 5);
+    }
+
+    #[test]
+    fn removing_a_node_cascades_and_protects_the_root() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+        let next_id = project.next_id();
+
+        assert_eq!(project.remove_node(drawer).expect("remove assembly").get(), 1);
+        assert!(project.assembly(drawer).is_none());
+        assert!(project.panel(front).is_none());
+        assert!(project.panel(panel).is_some());
+        assert_eq!(project.root().children().len(), 1);
+        assert_eq!(project.next_id(), next_id);
+
+        assert_eq!(project.remove_node(root), Err(ProjectError::RootImmutable { id: root }));
+        assert_eq!(
+            project.remove_node(Id::new(999).expect("id")),
+            Err(ProjectError::NodeNotFound { id: Id::new(999).expect("id") })
+        );
+        assert_eq!(project.revision().get(), 1);
+    }
+
+    #[test]
+    fn duplicating_a_node_remaps_every_id() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+
+        let copy = project.duplicate_node(panel).expect("duplicate panel");
+        assert_eq!(copy, Id::new(5).expect("id"));
+        let copied_panel = project.panel(copy).expect("copied panel");
+        assert_eq!(copied_panel.name(), "Shelf copy");
+        assert_eq!(copied_panel.nominal_size(), project.panel(panel).expect("panel").nominal_size());
+        assert_eq!(project.root().children().len(), 3);
+
+        let copied_drawer = project.duplicate_node(drawer).expect("duplicate assembly");
+        assert_eq!(copied_drawer, Id::new(6).expect("id"));
+        let assembly = project.assembly(copied_drawer).expect("copied assembly");
+        assert_eq!(assembly.name(), "Drawer copy");
+        assert_eq!(assembly.children().len(), 1);
+        let copied_front = assembly.children().first().expect("copied child").id();
+        assert_ne!(copied_front, front);
+        assert_eq!(project.node(copied_front).expect("child").name(), "Front");
+        assert_eq!(project.parent_of(copied_front), Some(copied_drawer));
+        project.validate().expect("ids stay unique");
+        assert_eq!(project.root().id(), Id::new(1).expect("id"));
+        assert_eq!(
+            project.duplicate_node(project.root().id()),
+            Err(ProjectError::RootImmutable { id: project.root().id() })
+        );
+    }
+
+    #[test]
+    fn grouping_siblings_preserves_order_and_world_placements() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+        let panel_placement = Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("panel placement");
+        let drawer_placement =
+            Placement::new(DVec3::new(0.0, 20.0, 0.0), DQuat::from_rotation_z(0.25)).expect("drawer placement");
+        let front_placement = Placement::new(DVec3::new(5.0, 0.0, 0.0), DQuat::IDENTITY).expect("front placement");
+        project.set_node_placement(panel, panel_placement).expect("place panel");
+        project.set_node_placement(drawer, drawer_placement).expect("place drawer");
+        project.set_node_placement(front, front_placement).expect("place front");
+        let before = Placement::compose(drawer_placement, front_placement).expect("world before");
+        let next_id = project.next_id();
+        let revision = project.revision();
+
+        assert_eq!(project.group_nodes(&[panel, front], "Nested"), Err(ProjectError::NodesNotSiblings));
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+
+        let group = project.group_nodes(&[panel, drawer], "Group").expect("group siblings");
+        assert_eq!(group, Id::new(5).expect("id"));
+        assert_eq!(project.root().children().len(), 1);
+        assert_eq!(project.root().children().first().expect("group").id(), group);
+        let assembly = project.assembly(group).expect("group assembly");
+        assert_eq!(assembly.placement(), Placement::IDENTITY);
+        assert_eq!(assembly.children().len(), 2);
+        assert_eq!(assembly.children()[0].id(), panel);
+        assert_eq!(assembly.children()[1].id(), drawer);
+        assert_eq!(project.parent_of(panel), Some(group));
+        assert_eq!(project.parent_of(drawer), Some(group));
+        assert_eq!(project.panel(panel).expect("panel").placement(), panel_placement);
+        assert_eq!(project.assembly(drawer).expect("drawer").placement(), drawer_placement);
+        let after = Placement::compose(drawer_placement, front_placement).expect("world after");
+        let point = Placement::compose(Placement::IDENTITY, after).expect("root world");
+        let point = point.transform_point(DVec3::ZERO);
+        let expected = before.transform_point(DVec3::ZERO);
+        assert!((point - expected).length() < 1e-12, "point was {point:?}, expected {expected:?}");
+        assert_eq!(project.revision().get(), revision.get() + 1);
+    }
+
+    #[test]
+    fn grouping_rejects_duplicates_a_short_selection_and_the_root() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let next_id = project.next_id();
+        let revision = project.revision();
+
+        assert_eq!(project.group_nodes(&[panel], "Group"), Err(ProjectError::TooFewNodes { minimum: 2, found: 1 }));
+        assert_eq!(project.group_nodes(&[panel, panel], "Group"), Err(ProjectError::DuplicateNode { id: panel }));
+        assert_eq!(project.group_nodes(&[root, panel], "Group"), Err(ProjectError::RootImmutable { id: root }));
+        assert_eq!(project.group_nodes(&[root, root], "Group"), Err(ProjectError::RootImmutable { id: root }));
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+    }
+
+    #[test]
+    fn ungrouping_flattens_children_and_keeps_their_world_placements() {
+        let mut project = sample_project();
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+        let drawer_placement =
+            Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::from_rotation_z(0.5)).expect("drawer placement");
+        let front_placement =
+            Placement::new(DVec3::new(0.0, 5.0, 0.0), DQuat::from_rotation_x(0.25)).expect("front placement");
+        project.set_node_placement(drawer, drawer_placement).expect("place drawer");
+        project.set_node_placement(front, front_placement).expect("place front");
+        let world_before = Placement::compose(drawer_placement, front_placement).expect("world before");
+
+        assert_eq!(project.ungroup_assembly(drawer).expect("ungroup").get(), 3);
+        assert!(project.assembly(drawer).is_none());
+        assert_eq!(project.parent_of(front), Some(project.root().id()));
+        let expected = Placement::compose(drawer_placement, front_placement).expect("expected");
+        let actual = project.panel(front).expect("front").placement();
+        assert_eq!(actual, expected);
+        let point = actual.transform_point(DVec3::new(1.0, 2.0, 3.0));
+        let expected_point = world_before.transform_point(DVec3::new(1.0, 2.0, 3.0));
+        assert!((point - expected_point).length() < 1e-12, "point was {point:?}");
+        assert_eq!(project.root().children().len(), 2);
+
+        assert_eq!(
+            project.ungroup_assembly(Id::new(2).expect("panel id")),
+            Err(ProjectError::NotAnAssembly { id: Id::new(2).expect("panel id") })
+        );
+        assert_eq!(
+            project.ungroup_assembly(project.root().id()),
+            Err(ProjectError::RootImmutable { id: project.root().id() })
+        );
+        assert_eq!(project.revision().get(), 3);
     }
 }
