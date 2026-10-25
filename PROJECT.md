@@ -109,7 +109,7 @@ FurniCraft separates the model from the way it is viewed.
 - The document stores placements and, optionally, named views (camera bookmarks).
 - Camera, projection, grid, shading, selection and hover are session/view state; they are never document data.
 - A viewport is a UI adapter: it owns a camera, turns input into camera moves or commands, and draws a scene. Several viewports may show the same document.
-- Picking maps a screen position to a document `Id` (object, face, later edge); selection lives in the session.
+- Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); selection lives in the session or the UI. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md).
 - Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly.
 - Drawing views (projections, sections, details) are output, not interactive viewports, and arrive with the output milestone.
 
@@ -125,7 +125,7 @@ FurniCraft separates the model from the way it is viewed.
 | L2 | `furnicraft-param` | Compiles document features into kernel operations: dimensions, placements, panel machining | model, kernel, geom, units |
 | L3 | `furnicraft-mesh` | Evaluation cache: `(Revision, PartId)` to solid and triangle mesh; tessellation policy | model, param, kernel, geom, units |
 | L4 | `furnicraft-scene` | Renderer-agnostic frame description: drawables, world transforms, materials, selection highlight, camera, lights, grid | model, mesh, geom |
-| L5 | `furnicraft-render` | `wgpu` renderer: pipelines, buffers, depth, id-buffer picking, camera. No `egui`, no window creation | scene, geom, wgpu, bytemuck |
+| L5 | `furnicraft-render` | `wgpu` renderer: pipelines, buffers, depth, camera. No `egui`, no window creation | scene, geom, wgpu, bytemuck |
 | L6 | `furnicraft-engine` | `Session`: document, catalogue, derived panel diagnostics, selection, view state (viewports/cameras), undo/redo, dirty state; command registry | model, param, mesh, units |
 | L7 | `furnicraft-ui` | `egui` panels and viewport widgets: scene tree, inspector, input, gizmos; dispatches commands | engine, model, egui |
 | L8 | `apps/furnicraft` | Composition root: `eframe` window, input, `egui` ↔ `wgpu` paint callback, constructs `TruckKernel` and evaluates the sample document | ui, engine, render, scene, model, param, mesh, kernel, kernel-truck, geom, units, eframe |

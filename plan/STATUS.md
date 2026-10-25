@@ -4,10 +4,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M5 — Editing. The scene tree, node editing and grouping are done, and a node can be
-  placed by typing local coordinates; the viewport is still read-only.
-- Working on: viewport picking. The next task is to pick the node under the cursor and share that
-  selection with the scene tree, then add the Blender-like axes and the translate gizmo.
+- Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement and viewport
+  picking are done; the selected node is highlighted in the viewport.
+- Working on: the Blender-like axes. The next task is the Z axis, an origin cross and a corner
+  orientation widget with click-to-snap views, then the translate gizmo.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
@@ -15,6 +15,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record CPU ray picking and the viewport selection`
+- `feat(app): pick nodes in the viewport`
+- `feat(ui): expose viewport selection to the editor`
+- `feat(scene): ray-cast drawables and tint the selection`
 - `docs: document local placement editing`
 - `feat(ui): edit node placement in the inspector`
 - `feat(model): expose placement translation as exact lengths`
@@ -56,12 +60,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Viewport: pick the node under the cursor and keep its highlight in sync with the scene-tree
-   selection.
-2. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
+1. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
    click-to-snap views.
-3. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
-4. Polish: rotation fields and a rotate gizmo, then multi-node placement.
+2. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
+3. Polish: rotation fields and a rotate gizmo, then multi-node placement.
 
 ## Open questions
 
@@ -69,8 +71,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
   whether a read-only world readout earns its space.
 - Rotation waits for the translate gizmo: decide whether the inspector exposes Euler angles or a
   quaternion and which one the gizmo writes.
-- The scene tree keeps its own multi-selection; the viewport has no picking yet, so the two are not
-  synchronised in both directions.
+- The scene tree keeps a multi-selection, while a viewport click replaces it with one node. Confirm
+  whether viewport picking should extend a multi-selection with a modifier.
+- LMB click selects and LMB drag still orbits, so a sloppy click can orbit. Confirm whether orbit
+  should move to MMB only once the translate gizmo takes over LMB.
 - An included band on one tangent segment steps the core at the joint with its neighbour. Confirm the
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
@@ -82,8 +86,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 - Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
   deliberate deferral, not an oversight.
 - Parametric cabinets (dimensions driving panel sizes and placements) are out of the near-term plan.
-- The viewport has no picking, selection highlight or gizmos; the scene tree is the only way to
-  select a node.
+- The viewport has picking and a selection highlight, but no gizmos; moving still happens through
+  the inspector fields.
+- The selection highlight re-uploads every mesh when the selection changes; an incremental colour
+  update or a GPU id pass can replace it.
 - Region rings are traced for rectangles only; a shaped core has no contour-aware cutout union, so
   adding machining to a shaped panel is still rejected.
 - The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight
