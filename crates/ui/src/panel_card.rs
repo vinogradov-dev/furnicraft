@@ -19,6 +19,8 @@ use furnicraft_model::{
 use furnicraft_units::Length;
 use serde_json::Value;
 
+use crate::command::{dispatch as dispatch_command, json};
+
 /// Persistent state of the panel card.
 #[derive(Debug, Default)]
 pub(crate) struct PanelCard {
@@ -61,8 +63,6 @@ enum Action {
     ClearCorner { panel: Id, corner: VertexId },
     SetBow { panel: Id, edge: EdgeId, sagitta: Length },
     ClearBow { panel: Id, edge: EdgeId },
-    Undo,
-    Redo,
 }
 
 /// The three states of a corner in the outline editor.
@@ -86,19 +86,12 @@ impl CornerMode {
 }
 
 impl PanelCard {
-    /// Draws the card for the current selection and dispatches any accepted edits.
-    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, selected: &mut Option<Id>) {
-        if let Some(panel_id) = *selected
-            && session.project().panel(panel_id).is_none()
-        {
-            *selected = None;
-            self.draft = None;
-        }
-
-        let Some(panel_id) = *selected else {
+    /// Draws the card for the current panel and dispatches any accepted edits.
+    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, selected: Option<Id>) {
+        let Some(panel_id) = selected else {
             self.draft = None;
             self.error = None;
-            ui.label("Select a panel in the outliner.");
+            ui.label("Select a node in the scene tree.");
             return;
         };
 
@@ -109,27 +102,16 @@ impl PanelCard {
         let Some(panel) = session.project().panel(panel_id) else {
             self.draft = None;
             self.error = None;
-            ui.label("Select a panel in the outliner.");
+            ui.label("Select a node in the scene tree.");
             return;
         };
         let Some(draft) = self.draft.as_mut() else {
-            ui.label("Select a panel in the outliner.");
+            ui.label("Select a node in the scene tree.");
             return;
         };
 
         let mut actions = Vec::new();
         let mut errors = Vec::new();
-        ui.horizontal(|ui| {
-            if ui.add_enabled(session.can_undo(), egui::Button::new("Undo")).clicked() {
-                actions.push(Action::Undo);
-            }
-            if ui.add_enabled(session.can_redo(), egui::Button::new("Redo")).clicked() {
-                actions.push(Action::Redo);
-            }
-            if session.is_dirty() {
-                ui.label(RichText::new("Unsaved").italics());
-            }
-        });
         ui.separator();
 
         ui.label(RichText::new("Name").strong());
@@ -191,7 +173,7 @@ impl PanelCard {
                     self.error = Some(error);
                     break;
                 }
-                if matches!(action, Action::Rename { .. } | Action::Resize { .. } | Action::Undo | Action::Redo) {
+                if matches!(action, Action::Rename { .. } | Action::Resize { .. }) {
                     self.draft = None;
                 }
             }
@@ -478,17 +460,11 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
             let params = json(&PanelBowClear { panel: *panel, edge: *edge })?;
             dispatch(session, BOW_CLEAR_ID, &params)
         }
-        Action::Undo => session.undo().map_err(|error| error.to_string()),
-        Action::Redo => session.redo().map_err(|error| error.to_string()),
     }
 }
 
 fn dispatch(session: &mut Session, id: &str, params: &Value) -> Result<(), String> {
-    session.dispatch(id, params).map(|_| ()).map_err(|error| error.to_string())
-}
-
-fn json<T: serde::Serialize>(params: &T) -> Result<Value, String> {
-    serde_json::to_value(params).map_err(|error| format!("could not encode command parameters: {error}"))
+    dispatch_command(session, id, params).map(|_| ())
 }
 
 fn edge_label(edge: u32) -> &'static str {
@@ -889,7 +865,7 @@ mod tests {
             session.project().panel(panel_id).expect("panel").edge_banding().iter().any(|band| band.edge() == edge)
         );
 
-        run_action(&mut session, &Action::Undo).expect("undo");
+        session.undo().expect("undo");
         assert!(session.project().panel(panel_id).expect("panel").edge_banding().is_empty());
     }
 

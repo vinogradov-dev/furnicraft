@@ -153,12 +153,12 @@ impl FurniCraftApp {
         );
     }
 
-    fn outliner(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("outliner").resizable(true).default_size(220.0).min_size(160.0).show(ui, |ui| {
-            ui.heading("Outliner");
+    fn scene_tree(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::left("scene_tree").resizable(true).default_size(240.0).min_size(180.0).show(ui, |ui| {
+            ui.heading("Scene");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
-                self.editor.show_outliner(ui, &self.session);
+                self.editor.show_scene_tree(ui, &mut self.session);
             });
         });
     }
@@ -202,7 +202,7 @@ impl eframe::App for FurniCraftApp {
         if let Err(error) = self.sync_scene() {
             self.last_error = Some(error);
         }
-        self.outliner(ui);
+        self.scene_tree(ui);
         self.panel_card(ui);
         self.workspace(ui);
     }
