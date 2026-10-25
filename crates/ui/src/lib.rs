@@ -16,6 +16,7 @@
 mod assembly_card;
 mod command;
 mod panel_card;
+mod placement_card;
 mod scene_tree;
 
 use egui::{Color32, Ui};
@@ -30,6 +31,7 @@ use furnicraft_units::Length;
 use crate::assembly_card::AssemblyCard;
 use crate::command::{dispatch, json};
 use crate::panel_card::PanelCard;
+use crate::placement_card::PlacementCard;
 use crate::scene_tree::{Selection, TreeAction};
 
 /// Default length of a newly created panel, in millimetres.
@@ -43,6 +45,7 @@ pub struct Editor {
     selection: Selection,
     card: PanelCard,
     assembly_card: AssemblyCard,
+    placement_card: PlacementCard,
     error: Option<String>,
     initialized: bool,
 }
@@ -89,6 +92,9 @@ impl Editor {
             ui.label("Select a node in the scene tree.");
             return;
         };
+        if session.project().parent_of(primary).is_some() {
+            self.placement_card.show(ui, session, primary);
+        }
         if session.project().panel(primary).is_some() {
             self.card.show(ui, session, Some(primary));
         } else if session.project().assembly(primary).is_some() {
