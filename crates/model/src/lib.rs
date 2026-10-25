@@ -299,6 +299,63 @@ impl Project {
         self.assembly(id).is_some() || self.panel(id).is_some()
     }
 
+    /// The world placement of a node: every placement from the root down to it, composed.
+    ///
+    /// The root contributes its own placement, which is normally the identity. Returns `None` for
+    /// an unknown id or a tree deeper than [`Project::MAX_ASSEMBLY_DEPTH`].
+    pub fn world_placement(&self, id: Id) -> Option<Placement> {
+        fn walk(assembly: &Assembly, id: Id, parent: Placement, depth: u32) -> Option<Placement> {
+            if depth > Project::MAX_ASSEMBLY_DEPTH {
+                return None;
+            }
+            let world = Placement::compose(parent, assembly.placement()).ok()?;
+            if assembly.id == id {
+                return Some(world);
+            }
+            for child in &assembly.children {
+                match child {
+                    Node::Assembly(child) => {
+                        if let Some(found) = walk(child, id, world, depth.saturating_add(1)) {
+                            return Some(found);
+                        }
+                    }
+                    Node::Panel(panel) if panel.id() == id => {
+                        return Placement::compose(world, panel.placement()).ok();
+                    }
+                    Node::Panel(_) => {}
+                }
+            }
+            None
+        }
+        walk(&self.root, id, Placement::IDENTITY, 0)
+    }
+
+    /// The ids of the panels at or below `id`, in scene order.
+    ///
+    /// A panel yields itself; an assembly yields every panel in its subtree. Returns `None` for an
+    /// unknown id. The list is empty for an assembly with no panels.
+    pub fn panel_ids_under(&self, id: Id) -> Option<Vec<Id>> {
+        fn collect(assembly: &Assembly, ids: &mut Vec<Id>, depth: u32) {
+            if depth > Project::MAX_ASSEMBLY_DEPTH {
+                return;
+            }
+            for child in &assembly.children {
+                match child {
+                    Node::Panel(panel) => ids.push(panel.id()),
+                    Node::Assembly(child) => collect(child, ids, depth.saturating_add(1)),
+                }
+            }
+        }
+
+        if self.panel(id).is_some() {
+            return Some(vec![id]);
+        }
+        let assembly = self.assembly(id)?;
+        let mut ids = Vec::new();
+        collect(assembly, &mut ids, 0);
+        Some(ids)
+    }
+
     /// Checks that `nodes` can be wrapped in one new assembly.
     ///
     /// Grouping needs at least two distinct non-root nodes that share one parent assembly, and the
@@ -3153,6 +3210,42 @@ mod tests {
         let world = Placement::compose(parent, child).expect("world placement");
         let point = world.transform_point(DVec3::Y);
         assert!((point - DVec3::Z).length() < 1e-12, "point was {point:?}");
+    }
+
+    #[test]
+    fn world_placement_composes_the_chain_and_lists_panels() {
+        let mut project = sample_project();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let shelf = Id::new(2).expect("shelf id");
+        let root = project.root().id();
+
+        project
+            .set_node_placement(
+                drawer,
+                Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2))
+                    .expect("drawer placement"),
+            )
+            .expect("place drawer");
+        project
+            .set_node_placement(
+                front,
+                Placement::new(DVec3::new(1.0, 0.0, 0.0), DQuat::IDENTITY).expect("front placement"),
+            )
+            .expect("place front");
+
+        let world = project.world_placement(front).expect("front world placement");
+        let origin = world.transform_point(DVec3::ZERO);
+        assert!((origin - DVec3::new(10.0, 1.0, 0.0)).length() < 1.0e-12, "origin was {origin:?}");
+        let world = project.world_placement(drawer).expect("drawer world placement");
+        assert!((world.transform_point(DVec3::ZERO) - DVec3::new(10.0, 0.0, 0.0)).length() < 1.0e-12);
+        assert_eq!(project.world_placement(root), Some(Placement::IDENTITY));
+        assert_eq!(project.world_placement(Id::new(999).expect("id")), None);
+
+        assert_eq!(project.panel_ids_under(root), Some(vec![shelf, front]));
+        assert_eq!(project.panel_ids_under(drawer), Some(vec![front]));
+        assert_eq!(project.panel_ids_under(shelf), Some(vec![shelf]));
+        assert_eq!(project.panel_ids_under(Id::new(999).expect("id")), None);
     }
 
     #[test]
