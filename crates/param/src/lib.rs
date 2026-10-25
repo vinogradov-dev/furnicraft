@@ -663,7 +663,7 @@ mod tests {
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
-        Assembly, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Id, MaterialId,
+        CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Group, Id, MaterialId,
         PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
     };
     use furnicraft_units::Length;
@@ -729,7 +729,7 @@ mod tests {
     }
 
     fn panel_with_corner(kind: CornerFeatureKind) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -740,7 +740,7 @@ mod tests {
     }
 
     fn panel_with_radius_and_cutout(cutout: Option<CutoutShape>) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -759,7 +759,7 @@ mod tests {
     }
 
     fn panel_with_radius_and_band(included: bool) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -782,7 +782,7 @@ mod tests {
     }
 
     fn panel_with_bottom_band_and_chamfer_corner() -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -820,7 +820,7 @@ mod tests {
         right_included: bool,
         chamfer_included: Option<bool>,
     ) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -931,7 +931,7 @@ mod tests {
     }
 
     fn panel_with_chamfer_band(included: bool) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -958,7 +958,7 @@ mod tests {
     }
 
     fn panel_with_mixed_bands() -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -999,7 +999,7 @@ mod tests {
     }
 
     fn panel_with_bow(sagitta: Length) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1014,7 +1014,7 @@ mod tests {
     }
 
     fn panel_with_bows_and_bands(bows: &[(RectEdge, Length)], bands: &[(RectEdge, bool, i64)]) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1035,7 +1035,7 @@ mod tests {
     }
 
     fn panel_with_radius_corner_band(included: bool) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1075,7 +1075,7 @@ mod tests {
     }
 
     fn panel_with_cutout(shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     fn panel_with_cutouts(cutouts: &[(CutoutShape, CutoutDepth)]) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1101,7 +1101,7 @@ mod tests {
     }
 
     fn panel_with_bands(bands: &[(u32, bool)], band_width: Length) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1121,7 +1121,7 @@ mod tests {
     }
 
     fn panel_with_bands_and_cutout(bands: &[(u32, bool)], shape: CutoutShape) -> Panel {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn a_non_included_band_that_consumes_a_bow_radius_is_rejected() {
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(
@@ -1543,7 +1543,7 @@ mod tests {
     fn through_cutout_keeps_its_nominal_position_when_included_bands_move_the_core() {
         let mut kernel = TruckKernel::new();
         let shape = CutoutShape::Rectangle(cutout_rect(10, 10, 10, 10));
-        let root = Assembly::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let panel_id = project
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)

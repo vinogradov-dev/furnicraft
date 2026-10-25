@@ -187,9 +187,7 @@ impl TranslateGizmo {
         let Some(selected) = target.selected else {
             return Ok(None);
         };
-        let Some(origin_world) =
-            target.project.world_placement(selected).map(|placement| placement.transform_point(DVec3::ZERO))
-        else {
+        let Some(origin_world) = target.project.translation_pivot(selected) else {
             return Ok(None);
         };
         let Some(parent) = target.project.parent_of(selected) else {
@@ -250,9 +248,7 @@ impl TranslateGizmo {
             if target.project.parent_of(selected).is_none() {
                 return;
             }
-            let Some(origin) =
-                target.project.world_placement(selected).map(|placement| placement.transform_point(DVec3::ZERO))
-            else {
+            let Some(origin) = target.project.translation_pivot(selected) else {
                 return;
             };
             origin

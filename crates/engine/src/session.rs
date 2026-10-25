@@ -151,7 +151,7 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::node_cmds::{
-        AssemblyCreate, AssemblyRename, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeUngroup,
+        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
@@ -964,7 +964,7 @@ mod tests {
         let error = session.dispatch("panel.create", &params).expect_err("missing parent");
         assert!(matches!(
             error,
-            CommandError::Model(ProjectError::AssemblyNotFound { id }) if id == missing
+            CommandError::Model(ProjectError::ContainerNotFound { id }) if id == missing
         ));
         assert_eq!(session.project().root().children().len(), 2);
         assert_eq!(session.project().revision(), Revision::ZERO);
@@ -1042,8 +1042,8 @@ mod tests {
         session.redo().expect("redo create");
         assert!(session.project().assembly(assembly).is_some());
 
-        let rename = AssemblyRename { assembly, name: "Drawer box".to_owned() };
-        session.dispatch("assembly.rename", &json_params(&rename)).expect("rename assembly");
+        let rename = NodeRename { node: assembly, name: "Drawer box".to_owned() };
+        session.dispatch("node.rename", &json_params(&rename)).expect("rename assembly");
         assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
 
         let delete = NodeDelete { node: assembly };
@@ -1079,7 +1079,7 @@ mod tests {
 
         let ungroup = NodeUngroup { node: group_id };
         session.dispatch("node.ungroup", &json_params(&ungroup)).expect("ungroup");
-        assert!(session.project().assembly(group_id).is_none());
+        assert!(session.project().group(group_id).is_none());
         assert_eq!(session.project().parent_of(panel), Some(session.project().root().id()));
         assert_eq!(session.project().parent_of(drawer), Some(session.project().root().id()));
     }
@@ -1131,8 +1131,15 @@ mod tests {
         assert!(!group.enabled(&session, &json_params(&NodeGroup { nodes: vec![panel, panel], name: "G".to_owned() })));
 
         let ungroup = registry.get("node.ungroup").expect("registered");
-        assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));
+        let mut session = session;
+        let group_id = session
+            .dispatch("node.group", &json_params(&NodeGroup { nodes: vec![panel, drawer], name: "Group".to_owned() }))
+            .expect("group siblings")
+            .created_id()
+            .expect("group id");
+        assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: panel })));
+        assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: root })));
 
         assert!(!registry.get("node.group").expect("registered").enabled(&session, &Value::Null));

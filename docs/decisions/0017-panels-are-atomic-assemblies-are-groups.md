@@ -1,6 +1,6 @@
 # 0017. Panels are atomic leaves, assemblies are editable groups
 
-- Status: Accepted
+- Status: Superseded by 0021
 - Date: 2026-10-25
 
 ## Context

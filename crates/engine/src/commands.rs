@@ -85,7 +85,7 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CREATE,
     node_cmds::ASSEMBLY_CREATE,
     panel_cmds::RENAME,
-    node_cmds::ASSEMBLY_RENAME,
+    node_cmds::NODE_RENAME,
     panel_cmds::RESIZE,
     panel_cmds::MATERIAL_SET,
     panel_cmds::EDGE_BANDING_SET,
@@ -209,9 +209,9 @@ mod tests {
         let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
         assert_eq!(assembly_create.id(), "assembly.create");
         assert_eq!(assembly_create.label(), "Create assembly");
-        let assembly_rename = registry.get("assembly.rename").expect("assembly.rename is registered");
-        assert_eq!(assembly_rename.id(), "assembly.rename");
-        assert_eq!(assembly_rename.label(), "Rename assembly");
+        let node_rename = registry.get("node.rename").expect("node.rename is registered");
+        assert_eq!(node_rename.id(), "node.rename");
+        assert_eq!(node_rename.label(), "Rename");
         let delete = registry.get("node.delete").expect("node.delete is registered");
         assert_eq!(delete.id(), "node.delete");
         assert_eq!(delete.label(), "Delete");

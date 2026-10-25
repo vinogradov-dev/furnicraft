@@ -238,15 +238,15 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.corner.clear` — panel, corner `VertexId`. The corner becomes a point; its corner banding is removed with the segment.
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
 - `panel.bow.clear` — panel, edge `EdgeId`.
-- `assembly.create` — parent assembly, non-blank name, placement. Creates an empty editable group.
-- `assembly.rename` — assembly, non-blank name.
-- `node.delete` — panel or nested assembly. An assembly is removed with all of its children; the root is rejected.
-- `node.duplicate` — panel or nested assembly. The whole subtree receives fresh ids, keeps its placements and is inserted after the original.
-- `node.group` — two or more sibling nodes and a non-blank name. Wraps them in a new assembly with an identity placement; order and world transforms are preserved.
-- `node.ungroup` — an assembly. Replaces it with its children, composing each child placement with the removed assembly so nothing moves. Panels are atomic leaves and are rejected.
-- `node.placement.set` — panel or nested assembly, and a rigid placement relative to the parent. The root is rejected.
+- `assembly.create` — parent container, non-blank name, placement. Creates an empty assembly component.
+- `node.rename` — panel, group or assembly, and a non-blank name; the root group is included.
+- `node.delete` — panel, group or nested assembly. A container is removed with all of its children; the root is rejected.
+- `node.duplicate` — panel, group or nested assembly. The whole subtree receives fresh ids, keeps its placements and is inserted after the original.
+- `node.group` — two or more sibling nodes and a non-blank name. Wraps them in a new group with an identity placement; order and world transforms are preserved.
+- `node.ungroup` — a group. Replaces it with its children, composing each child placement with the removed group so nothing moves. Panels are atomic leaves and assemblies are components; both are rejected.
+- `node.placement.set` — panel, group or nested assembly, and a rigid placement relative to the parent. The root is rejected.
 
-A panel owns its cutouts, banding and machining; the scene tree never splits it into child nodes. Only assemblies can be grouped and ungrouped. Grouping is sibling-only: nodes under different parents need an explicit reparent operation, which is not part of this stage.
+A panel owns its cutouts, banding and machining; the scene tree never splits it into child nodes. Panels and assemblies can be grouped, but only groups can be ungrouped: an assembly is a furniture component with its own identity, and dismantling it is a separate operation. Grouping is sibling-only: nodes under different parents need an explicit reparent operation, which is not part of this stage.
 
 Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
 commands keep the root immutable and preserve world transforms when a group is created or flattened.

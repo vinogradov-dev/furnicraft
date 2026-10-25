@@ -13,8 +13,8 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Assembly, Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
-    Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
+    Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Group, Id, MaterialId, Node,
+    Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
 };
 use furnicraft_param::build_panel_parts_with;
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
@@ -82,11 +82,12 @@ pub struct EvaluatedScene {
 
 /// Builds the sample project shown by the viewport.
 ///
-/// Two panels demonstrate face shading and both through and blind cutouts. The sample is document
-/// data created once at startup; user edits will go through engine commands.
+/// Three panels demonstrate face shading, through and blind cutouts, and both container kinds: an
+/// assembly is a furniture component, a group is an organisational container. The sample is
+/// document data created once at startup; user edits will go through engine commands.
 pub fn sample_session() -> Result<Session, String> {
     let root_id = id(1)?;
-    let root = Assembly::new(root_id, "FurniCraft sample", Placement::IDENTITY, Vec::new());
+    let root = Group::new(root_id, "FurniCraft sample", Placement::IDENTITY, Vec::new());
     let mut project = Project::new(root).map_err(describe)?;
     let oak = material_id(SAMPLE_OAK_MATERIAL)?;
     let white = material_id(SAMPLE_WHITE_MATERIAL)?;
@@ -111,6 +112,14 @@ pub fn sample_session() -> Result<Session, String> {
         .map_err(describe)?;
     project.add_cutout(shelf, cutout(80, 60, 150, 100)?, CutoutDepth::Through, FaceSide::B).map_err(describe)?;
     add_band(&mut project, shelf, 4, true, white_edge)?;
+
+    project.group_nodes(&[back, shelf], "Loose parts").map_err(describe)?;
+
+    let drawer = project.add_assembly(root_id, "Drawer", Placement::IDENTITY).map_err(describe)?;
+    let front_offset = Placement::new(DVec3::new(0.0, 120.0, 40.0), DQuat::IDENTITY).map_err(describe)?;
+    project
+        .add_panel(drawer, "Drawer front", panel_nominal_size(500, 180)?, Some(white), thickness, front_offset)
+        .map_err(describe)?;
 
     project.validate().map_err(describe)?;
     Ok(Session::with_catalog(project, sample_catalog()?))
@@ -196,6 +205,10 @@ impl<'a> Evaluation<'a> {
                 Node::Assembly(assembly) => {
                     let world = Placement::compose(parent, assembly.placement()).map_err(describe)?;
                     self.collect(assembly.children(), world)?;
+                }
+                Node::Group(group) => {
+                    let world = Placement::compose(parent, group.placement()).map_err(describe)?;
+                    self.collect(group.children(), world)?;
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
             }
@@ -288,26 +301,51 @@ mod tests {
     use super::*;
     use furnicraft_model::Machining;
 
+    fn panels_in<'a>(children: &'a [Node], panels: &mut Vec<&'a Panel>) {
+        for child in children {
+            match child {
+                Node::Panel(panel) => panels.push(panel),
+                Node::Assembly(assembly) => panels_in(assembly.children(), panels),
+                Node::Group(group) => panels_in(group.children(), panels),
+            }
+        }
+    }
+
     #[test]
-    fn sample_document_has_two_panels_and_three_cutouts() {
+    fn sample_document_has_three_panels_and_three_cutouts() {
         let session = sample_session().expect("sample session");
         let project = session.project();
         project.validate().expect("valid sample document");
 
-        let mut panels = 0;
-        let mut cutouts = 0;
-        let mut bands = 0;
-        for child in project.root().children() {
-            if let Node::Panel(panel) = child {
-                panels += 1;
-                cutouts +=
-                    panel.machining().iter().filter(|machining| matches!(machining, Machining::Cutout(_))).count();
-                bands += panel.edge_banding().len();
-            }
-        }
-        assert_eq!(panels, 2);
+        let mut panels = Vec::new();
+        panels_in(project.root().children(), &mut panels);
+        let cutouts: usize = panels
+            .iter()
+            .map(|panel| panel.machining().iter().filter(|machining| matches!(machining, Machining::Cutout(_))).count())
+            .sum();
+        let bands: usize = panels.iter().map(|panel| panel.edge_banding().len()).sum();
+        assert_eq!(panels.len(), 3);
         assert_eq!(cutouts, 3);
         assert_eq!(bands, 3);
+    }
+
+    #[test]
+    fn sample_document_has_one_group_and_one_assembly() {
+        let session = sample_session().expect("sample session");
+        let project = session.project();
+        let root = project.root();
+        assert_eq!(root.children().len(), 2);
+        let mut groups = 0;
+        let mut assemblies = 0;
+        for child in root.children() {
+            match child {
+                Node::Group(_) => groups += 1,
+                Node::Assembly(_) => assemblies += 1,
+                Node::Panel(_) => {}
+            }
+        }
+        assert_eq!(groups, 1);
+        assert_eq!(assemblies, 1);
     }
 
     #[test]
@@ -315,19 +353,19 @@ mod tests {
         let session = sample_session().expect("sample session");
         let catalog = session.catalog();
         let mut panel_materials = Vec::new();
-        for child in session.project().root().children() {
-            if let Node::Panel(panel) = child {
-                let material = panel.material().expect("sample panel has a material");
-                let resolved = catalog.panel_material(material).expect("sample panel material resolves");
+        let mut panels = Vec::new();
+        panels_in(session.project().root().children(), &mut panels);
+        for panel in &panels {
+            let material = panel.material().expect("sample panel has a material");
+            let resolved = catalog.panel_material(material).expect("sample panel material resolves");
+            assert!(!resolved.name().is_empty());
+            panel_materials.push(material);
+            for band in panel.edge_banding() {
+                let resolved = catalog.edge_material(band.material()).expect("sample edge material resolves");
                 assert!(!resolved.name().is_empty());
-                panel_materials.push(material);
-                for band in panel.edge_banding() {
-                    let resolved = catalog.edge_material(band.material()).expect("sample edge material resolves");
-                    assert!(!resolved.name().is_empty());
-                }
             }
         }
-        assert_eq!(panel_materials.len(), 2);
+        assert_eq!(panel_materials.len(), 3);
         assert_ne!(panel_materials[0], panel_materials[1], "the two panels demonstrate different materials");
     }
 
@@ -350,16 +388,16 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
 
-        assert_eq!(evaluated.frame.drawables().len(), 5);
+        assert_eq!(evaluated.frame.drawables().len(), 6);
         let mut groups = std::collections::HashMap::new();
         for drawable in evaluated.frame.drawables() {
             assert!(!drawable.mesh.positions.is_empty());
             *groups.entry(drawable.id).or_insert(0) += 1;
         }
-        assert_eq!(groups.len(), 2, "two panels");
+        assert_eq!(groups.len(), 3, "three panels");
         let mut counts: Vec<_> = groups.values().copied().collect();
         counts.sort_unstable();
-        assert_eq!(counts, vec![2, 3], "body plus bands per panel");
+        assert_eq!(counts, vec![1, 2, 3], "body plus bands per panel");
         assert!(evaluated.bounds.center().is_some());
         assert!(home_camera(evaluated.bounds).is_ok());
         assert_eq!(kernel.body_count(), 0, "evaluation releases every kernel body");

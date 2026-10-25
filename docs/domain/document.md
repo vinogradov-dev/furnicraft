@@ -10,12 +10,13 @@ Related documents:
 Related decisions: [0005](../decisions/0005-material-catalogue.md),
 [0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
 [0007](../decisions/0007-edge-banding-v1.md),
-[0008](../decisions/0008-panel-diagnostics.md) and
-[0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
+[0008](../decisions/0008-panel-diagnostics.md),
+[0021](../decisions/0021-assemblies-are-components-groups-are-containers.md) and
+[0022](../decisions/0022-closed-containers-pick-as-one-object.md).
 
 ## 1. Terms
 
-- **Document** (scene) — a saved FurniCraft project: assembly tree, panels, their placements, machining and material references.
+- **Document** (scene) — a saved FurniCraft project: node tree, panels, their placements, machining and material references.
 - **Catalogue** — the external material collection; it is not part of the scene file.
 - **Fallback** — the last known value stored in the scene in case a material disappears from the catalogue.
 - **Diagnostic** — a computed panel or scene state that is not stored as data.
@@ -27,7 +28,7 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 - schema version;
 - revision;
 - id allocator;
-- assembly tree;
+- node tree (panels, assemblies and groups);
 - panels:
   - id;
   - name;
@@ -46,22 +47,27 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 
 `material_id` is optional: `None` means no material was assigned, while `Some(id)` that the catalogue cannot resolve is a missing material. `last_known_*` values are always stored as a cache for resilience when the catalogue is missing, not user-editable parameters. When the material is found, the catalogue is the source of truth and the fallback is refreshed on load.
 
-### 2.1. Nodes, panels and assemblies
+### 2.1. Nodes, panels, assemblies and groups
 
-The assembly tree stores two kinds of nodes. A **panel** is an atomic leaf: it owns its machining,
+The node tree stores three kinds of node. A **panel** is an atomic leaf: it owns its machining,
 banding and material references, is never shown with children, and cannot be ungrouped. An
-**assembly** is an editable group of panels and nested assemblies. A node id is unique across both
-kinds and is never reused after a delete or an undo.
+**assembly** is a meaningful furniture or industrial component (a cabinet, a drawer box, a runner, a
+hinge) and, from M6, carries a furniture type with type-specific properties and operations. A
+**group** is an organisational container with no furniture type; it only groups, moves, copies and
+deletes its children. A node id is unique across all three kinds and is never reused after a delete
+or an undo.
 
-A placement is always relative to the parent assembly. Grouping sibling nodes wraps them in a new
-assembly with an identity placement, so their world transforms stay the same; ungrouping composes
-each child with the removed assembly's placement for the same reason. The inspector edits the
-translation in millimetres in the parent frame and keeps the rotation, so a typed move never silently
-resets how a node is oriented. The viewport translate gizmo moves that same translation directly:
-the drag is a preview of the shifted frame, and one `node.placement.set` is dispatched on release, so
-the drag is one undo entry. The root assembly defines the world frame and cannot be deleted, moved,
-grouped or ungrouped. See
-[ADR 0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
+A placement is always relative to the parent container. Grouping sibling nodes wraps them in a new
+group with an identity placement, so their world transforms stay the same; ungrouping a group
+composes each child with the removed group's placement for the same reason. An assembly is not
+flattened by `node.ungroup`: dismantling a component is a separate operation with its own rules. The
+inspector edits the translation in millimetres in the parent frame and keeps the rotation, so a typed
+move never silently resets how a node is oriented. The viewport translate gizmo moves that same
+translation directly: the drag is a preview of the shifted frame, and one `node.placement.set` is
+dispatched on release, so the drag is one undo entry. The root group defines the world frame and
+cannot be deleted, moved, grouped or ungrouped. See
+[ADR 0021](../decisions/0021-assemblies-are-components-groups-are-containers.md) and
+[ADR 0022](../decisions/0022-closed-containers-pick-as-one-object.md).
 
 ## 3. What the scene file does not store
 
@@ -155,6 +161,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
 - Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
 - Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
+- Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as a group and every nested assembly keeps its kind.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo
