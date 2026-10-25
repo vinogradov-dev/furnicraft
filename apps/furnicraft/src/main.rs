@@ -165,7 +165,7 @@ impl FurniCraftApp {
 
     fn panel_card(&mut self, ui: &mut egui::Ui) {
         egui::Panel::right("panel_card").resizable(true).default_size(300.0).min_size(260.0).show(ui, |ui| {
-            ui.heading("Panel");
+            ui.heading("Inspector");
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.editor.show_card(ui, &mut self.session);

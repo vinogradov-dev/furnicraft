@@ -4,11 +4,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M5 — Editing. The scene tree, node editing and grouping are done; the viewport is still
-  read-only.
-- Working on: selecting and placing parts. A panel is created at its parent's origin, selected at
-  once and edited through the inspector; the next steps are numeric placement fields, viewport
-  picking with a selection highlight, and the Blender-like axes and orientation widget.
+- Milestone: M5 — Editing. The scene tree, node editing and grouping are done, and a node can be
+  placed by typing local coordinates; the viewport is still read-only.
+- Working on: viewport picking. The next task is to pick the node under the cursor and share that
+  selection with the scene tree, then add the Blender-like axes and the translate gizmo.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
@@ -16,6 +15,9 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: document local placement editing`
+- `feat(ui): edit node placement in the inspector`
+- `feat(model): expose placement translation as exact lengths`
 - `docs: define the scene-tree authoring roadmap`
 - `feat(ui): add the scene tree with groups and node actions`
 - `feat(engine): add scene node commands`
@@ -54,19 +56,17 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Inspector: numeric local X/Y/Z placement fields dispatching `node.placement.set`, with typed text
-   that commits once and one undo entry per edit.
-2. Viewport: pick the node under the cursor and keep its highlight in sync with the scene-tree
+1. Viewport: pick the node under the cursor and keep its highlight in sync with the scene-tree
    selection.
-3. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
+2. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
    click-to-snap views.
-4. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
-5. Polish: rotation fields and a rotate gizmo, then multi-node placement.
+3. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
+4. Polish: rotation fields and a rotate gizmo, then multi-node placement.
 
 ## Open questions
 
-- Placement fields are local to the parent assembly; world coordinates are shown read-only. Confirm
-  whether the inspector should offer a world/local switch or a "place at world" entry instead.
+- The inspector shows the parent name and local X/Y/Z; world coordinates are not shown yet. Confirm
+  whether a read-only world readout earns its space.
 - Rotation waits for the translate gizmo: decide whether the inspector exposes Euler angles or a
   quaternion and which one the gizmo writes.
 - The scene tree keeps its own multi-selection; the viewport has no picking yet, so the two are not
