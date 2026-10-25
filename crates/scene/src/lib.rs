@@ -16,7 +16,7 @@
 use std::f64::consts::{FRAC_PI_4, TAU};
 use std::sync::Arc;
 
-use furnicraft_geom::{DMat4, DVec3, MeshData};
+use furnicraft_geom::{DMat4, DVec2, DVec3, MeshData};
 use furnicraft_model::Id;
 use thiserror::Error;
 
@@ -29,6 +29,12 @@ pub const MIN_PITCH: f64 = -85.0 * std::f64::consts::PI / 180.0;
 
 /// Highest camera pitch, in radians.
 pub const MAX_PITCH: f64 = 85.0 * std::f64::consts::PI / 180.0;
+
+/// How far outside the viewport a pointer ray is still accepted, in normalized device coordinates.
+///
+/// A drag can leave the viewport, so a little beyond ±1 is valid. The limit keeps a hostile or
+/// accidental huge coordinate from turning the ray into an unusable vector.
+const NDC_LIMIT: f64 = 16.0;
 
 /// Closest camera distance from its target, in millimetres.
 pub const MIN_DISTANCE_MM: f64 = 10.0;
@@ -211,17 +217,37 @@ impl Camera {
 
     /// A world-space ray through normalized device coordinates.
     ///
-    /// `(-1, -1)` is the bottom-left corner of the viewport and `(1, 1)` the top-right. Non-finite
-    /// coordinates and a broken aspect ratio fall back to the centre ray. The direction is unit
-    /// length.
+    /// `(-1, -1)` is the bottom-left corner of the viewport and `(1, 1)` the top-right. Coordinates
+    /// just outside the viewport are valid, so a drag can leave the viewport; extreme values are
+    /// clamped to a sane range and non-finite coordinates fall back to the centre ray. The
+    /// direction is unit length.
     pub fn ray_ndc(self, ndc_x: f64, ndc_y: f64, aspect: f64) -> Ray {
-        let x = if ndc_x.is_finite() { ndc_x.clamp(-1.0, 1.0) } else { 0.0 };
-        let y = if ndc_y.is_finite() { ndc_y.clamp(-1.0, 1.0) } else { 0.0 };
+        let x = if ndc_x.is_finite() { ndc_x.clamp(-NDC_LIMIT, NDC_LIMIT) } else { 0.0 };
+        let y = if ndc_y.is_finite() { ndc_y.clamp(-NDC_LIMIT, NDC_LIMIT) } else { 0.0 };
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
         let half_height = (self.fov_y * 0.5).tan();
         let direction = self.forward() + self.right() * (x * half_height * aspect) + self.up() * (y * half_height);
         let origin = self.eye();
         Ray::new(origin, direction).unwrap_or(Ray { origin, direction: self.forward() })
+    }
+
+    /// Projects a world point to normalized device coordinates.
+    ///
+    /// `(-1, -1)` is the bottom-left corner of the viewport and `(1, 1)` the top-right. Returns
+    /// `None` for a non-finite point or a point at or behind the camera plane. A broken aspect
+    /// ratio is treated as 1.
+    pub fn project_ndc(self, point: DVec3, aspect: f64) -> Option<DVec2> {
+        if !point.is_finite() {
+            return None;
+        }
+        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let clip = self.view_projection(aspect) * point.extend(1.0);
+        if !clip.is_finite() || clip.w <= 1.0e-9 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        let ndc = DVec2::new(ndc.x, ndc.y);
+        ndc.is_finite().then_some(ndc)
     }
 
     /// Pans the target across the screen plane, in points.
@@ -295,6 +321,27 @@ impl Ray {
     /// The unit direction in world space.
     pub const fn direction(self) -> DVec3 {
         self.direction
+    }
+
+    /// The parameter along a line of the point closest to this ray.
+    ///
+    /// The line is `line_origin + parameter * line_direction`; the direction is normalized here.
+    /// Returns `None` for non-finite input, a zero direction or a ray parallel to the line, where
+    /// the closest point is not unique. This is the axis-drag primitive: the difference between two
+    /// parameters is how far the pointer moved along the axis.
+    pub fn closest_parameter_on_line(self, line_origin: DVec3, line_direction: DVec3) -> Option<f64> {
+        if !line_origin.is_finite() || !line_direction.is_finite() {
+            return None;
+        }
+        let line_direction = line_direction.try_normalize()?;
+        let offset = self.origin - line_origin;
+        let along = self.direction.dot(line_direction);
+        let denominator = 1.0 - along * along;
+        if denominator.abs() < 1.0e-9 {
+            return None;
+        }
+        let parameter = (line_direction.dot(offset) - along * self.direction.dot(offset)) / denominator;
+        parameter.is_finite().then_some(parameter)
     }
 }
 
@@ -454,6 +501,25 @@ impl SceneFrame {
         for (channel, tint) in drawable.color.iter_mut().zip(SELECTION_TINT) {
             let base = f64::from(*channel);
             *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+        }
+        frame
+    }
+
+    /// A copy of the frame with the given drawables shifted by a world-space translation.
+    ///
+    /// This is a drag preview: it moves the listed drawables without touching the document, so the
+    /// renderer can follow the pointer before one command commits the result. A non-finite delta
+    /// leaves the frame unchanged.
+    pub fn with_world_translation(&self, ids: &[Id], delta: DVec3) -> Self {
+        let mut frame = self.clone();
+        if ids.is_empty() || !delta.is_finite() {
+            return frame;
+        }
+        let translation = DMat4::from_translation(delta);
+        for drawable in &mut frame.drawables {
+            if ids.contains(&drawable.id) {
+                drawable.world_transform = translation * drawable.world_transform;
+            }
         }
         frame
     }
@@ -663,6 +729,63 @@ mod tests {
         let invalid = camera.ray_ndc(f64::NAN, f64::INFINITY, -1.0);
         assert_close(invalid.direction(), camera.forward());
         assert!(invalid.origin().is_finite());
+    }
+
+    #[test]
+    fn projection_and_ray_agree_inside_and_outside_the_viewport() {
+        let camera = Camera::default();
+        let aspect = 16.0 / 9.0;
+        let point = camera.target() + camera.right() * 100.0 + camera.up() * 50.0;
+        let ndc = camera.project_ndc(point, aspect).expect("point in front of the camera");
+        assert!(ndc.x > 0.0 && ndc.y > 0.0, "ndc was {ndc:?}");
+        let ray = camera.ray_ndc(ndc.x, ndc.y, aspect);
+        let to_point = (point - ray.origin()).try_normalize().expect("direction");
+        assert!(ray.direction().dot(to_point) > 1.0 - 1.0e-9);
+
+        let centre = camera.project_ndc(camera.target(), aspect).expect("target");
+        assert!(centre.length() < 1.0e-9, "centre was {centre:?}");
+
+        let behind = camera.eye() + (camera.eye() - camera.target());
+        assert!(camera.project_ndc(behind, aspect).is_none());
+        assert!(camera.project_ndc(DVec3::new(f64::NAN, 0.0, 0.0), aspect).is_none());
+
+        let inside = camera.ray_ndc(1.0, 0.0, aspect);
+        let outside = camera.ray_ndc(2.0, 0.0, aspect);
+        assert!(outside.direction().dot(camera.right()) > inside.direction().dot(camera.right()));
+        assert!(camera.ray_ndc(1.0e300, 0.0, aspect).direction().is_finite());
+    }
+
+    #[test]
+    fn ray_closest_point_on_an_axis_line_is_a_drag_parameter() {
+        let ray = Ray::new(DVec3::new(5.0, 10.0, 0.0), -DVec3::Y).expect("ray");
+        let parameter = ray.closest_parameter_on_line(DVec3::ZERO, DVec3::X).expect("line");
+        assert!((parameter - 5.0).abs() < 1.0e-12, "parameter was {parameter}");
+
+        let through_origin = Ray::new(DVec3::new(0.0, 1.0, 0.0), -DVec3::Y).expect("ray");
+        assert!(through_origin.closest_parameter_on_line(DVec3::ZERO, DVec3::X).expect("line").abs() < 1.0e-12);
+
+        let parallel = Ray::new(DVec3::ZERO, DVec3::X).expect("ray");
+        assert!(parallel.closest_parameter_on_line(DVec3::ZERO, DVec3::X).is_none());
+        assert!(ray.closest_parameter_on_line(DVec3::ZERO, DVec3::ZERO).is_none());
+        assert!(ray.closest_parameter_on_line(DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X).is_none());
+    }
+
+    #[test]
+    fn a_world_translation_preview_moves_only_the_listed_drawables() {
+        let moved = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(moved, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let translated = frame.with_world_translation(&[moved], DVec3::new(1.0, 2.0, 3.0));
+        let position = translated.drawables()[0].world_transform.transform_point3(DVec3::ZERO);
+        assert!((position - DVec3::new(1.0, 2.0, 3.0)).length() < 1.0e-12);
+        assert_eq!(translated.drawables()[1].world_transform, DMat4::IDENTITY);
+        assert_eq!(frame.drawables()[0].world_transform, DMat4::IDENTITY);
+
+        assert_eq!(frame.with_world_translation(&[], DVec3::X), frame);
+        assert_eq!(frame.with_world_translation(&[moved], DVec3::new(f64::NAN, 0.0, 0.0)), frame);
     }
 
     #[test]
