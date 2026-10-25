@@ -146,6 +146,32 @@ impl Placement {
     pub fn transform_vector(self, vector: DVec3) -> DVec3 {
         self.rotation * vector
     }
+
+    /// The translation as exact micrometre lengths, rounded to the nearest micrometre.
+    ///
+    /// This is the boundary conversion for editing a placement as integer lengths. It returns
+    /// `None` when a component is NaN, infinite or outside the range of [`Length`].
+    pub fn translation_lengths(self) -> Option<[Length; 3]> {
+        fn to_length(value: f64) -> Option<Length> {
+            if !value.is_finite() {
+                return None;
+            }
+            let micrometres = (value * 1_000.0).round();
+            if !(micrometres >= i64::MIN as f64 && micrometres < i64::MAX as f64) {
+                return None;
+            }
+            Some(Length::from_micrometres(micrometres as i64))
+        }
+        Some([to_length(self.translation.x)?, to_length(self.translation.y)?, to_length(self.translation.z)?])
+    }
+
+    /// Replaces the translation from exact lengths, keeping the rotation.
+    ///
+    /// This converts to millimetres at the geometry boundary; callers keep placement coordinates
+    /// as [`Length`] until this point.
+    pub fn with_translation(self, x: Length, y: Length, z: Length) -> Result<Self, PlacementError> {
+        Self::new(DVec3::new(x.millimetres_f64(), y.millimetres_f64(), z.millimetres_f64()), self.rotation)
+    }
 }
 
 /// Why a placement is not a valid rigid transform.
@@ -3160,6 +3186,33 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn placements_round_trip_through_exact_translation_lengths() {
+        let placement =
+            Placement::new(DVec3::new(-2.5, 0.001, 1200.0), DQuat::from_rotation_y(0.5)).expect("placement");
+        let [x, y, z] = placement.translation_lengths().expect("representable translation");
+        assert_eq!(x, Length::from_micrometres(-2_500));
+        assert_eq!(y, Length::from_micrometres(1));
+        assert_eq!(z, Length::from_micrometres(1_200_000));
+
+        let edited = placement.with_translation(x, y, z).expect("rebuild placement");
+        assert_eq!(edited, placement);
+        assert_eq!(edited.rotation(), placement.rotation());
+
+        let moved = placement
+            .with_translation(Length::from_millimetres(10).expect("length"), Length::ZERO, Length::ZERO)
+            .expect("move placement");
+        assert_eq!(moved.translation(), DVec3::new(10.0, 0.0, 0.0));
+        assert_eq!(moved.rotation(), placement.rotation());
+    }
+
+    #[test]
+    fn translation_lengths_reject_values_outside_the_editable_range() {
+        let huge = Placement::new(DVec3::new(1e300, 0.0, 0.0), DQuat::IDENTITY).expect("finite placement");
+        assert!(huge.translation_lengths().is_none());
+        assert!(Placement::IDENTITY.translation_lengths().is_some());
     }
 
     fn sample_nominal() -> PanelNominalSize {
