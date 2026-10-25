@@ -1249,6 +1249,7 @@ dependencies = [
  "furnicraft-ui",
  "furnicraft-units",
  "log",
+ "serde_json",
 ]
 
 [[package]]

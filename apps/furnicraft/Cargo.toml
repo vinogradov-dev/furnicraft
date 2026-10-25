@@ -22,4 +22,5 @@ furnicraft-render = { workspace = true }
 furnicraft-scene = { workspace = true }
 furnicraft-ui = { workspace = true }
 furnicraft-units = { workspace = true }
+serde_json = { workspace = true }
 log = { workspace = true }

@@ -16,11 +16,14 @@
 
 mod gizmo;
 mod scene_build;
+mod translate_gizmo;
 
 use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
-use furnicraft_engine::Session;
+use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID;
+use furnicraft_engine::{NodePlacementSet, Session};
+use furnicraft_geom::DVec3;
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_model::{Id, Revision};
 use furnicraft_render::ViewportRenderer;
@@ -28,6 +31,7 @@ use furnicraft_scene::{Camera, SceneFrame};
 use furnicraft_ui::Editor;
 
 use crate::scene_build::{evaluate, home_camera, sample_session};
+use crate::translate_gizmo::{Commit, TranslateGizmo};
 
 /// Orbit sensitivity in radians per point dragged.
 const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
@@ -45,7 +49,9 @@ struct FurniCraftApp {
     renderer: ViewportRenderer,
     render_state: egui_wgpu::RenderState,
     texture_id: egui::TextureId,
+    translate_gizmo: TranslateGizmo,
     highlighted: Option<Id>,
+    uploaded_preview: Option<(Id, DVec3)>,
     last_error: Option<String>,
 }
 
@@ -77,7 +83,9 @@ impl FurniCraftApp {
             renderer,
             render_state,
             texture_id,
+            translate_gizmo: TranslateGizmo::default(),
             highlighted: None,
+            uploaded_preview: None,
             last_error: None,
         })
     }
@@ -98,9 +106,40 @@ impl FurniCraftApp {
     fn upload_scene(&mut self) -> Result<(), String> {
         let selected = self.editor.selected_node();
         let frame = self.scene.with_selection_highlight(selected);
+        let frame = match self.translate_gizmo.preview() {
+            Some((panels, delta)) if delta != DVec3::ZERO => frame.with_world_translation(panels, delta),
+            _ => frame,
+        };
         self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
         self.highlighted = selected;
+        self.uploaded_preview = self.preview_key();
         Ok(())
+    }
+
+    /// The preview currently shown by the renderer, ignoring a zero delta.
+    fn preview_key(&self) -> Option<(Id, DVec3)> {
+        self.translate_gizmo.preview_key().filter(|(_, delta)| *delta != DVec3::ZERO)
+    }
+
+    /// Re-uploads the scene when the drag preview moved to a new position.
+    ///
+    /// A finished or cancelled drag also lands here with no preview, which restores the base
+    /// upload. The key comparison keeps a still pointer from rebuilding the geometry every frame.
+    fn sync_preview(&mut self) -> Result<(), String> {
+        if self.preview_key() == self.uploaded_preview {
+            return Ok(());
+        }
+        self.upload_scene()
+    }
+
+    /// Dispatches one `node.placement.set` for a finished drag and rebuilds the scene.
+    fn apply_gizmo_commit(&mut self, commit: Commit) -> Result<(), String> {
+        let params = serde_json::to_value(NodePlacementSet { node: commit.node, placement: commit.placement })
+            .map_err(|error| format!("could not encode the placement: {error}"))?;
+        self.session.dispatch(NODE_PLACEMENT_SET_ID, &params).map_err(|error| error.to_string())?;
+        // The preview already showed the new position; rebuilding here keeps the document, the
+        // scene and the inspector in agreement without waiting a frame.
+        self.sync_scene()
     }
 
     fn reset_view(&mut self) {
@@ -134,7 +173,25 @@ impl FurniCraftApp {
             );
         }
 
-        if response.hovered() {
+        let pointer_over_widget =
+            response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
+        let selected = self.editor.selected_node();
+        let target = translate_gizmo::Target { camera: self.scene.camera, project: self.session.project(), selected };
+        match self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget) {
+            Ok(Some(commit)) => {
+                if let Err(error) = self.apply_gizmo_commit(commit) {
+                    self.last_error = Some(error);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.last_error = Some(error),
+        }
+        if let Err(error) = self.sync_preview() {
+            self.last_error = Some(error);
+        }
+        let dragging = self.translate_gizmo.is_dragging();
+
+        if response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 self.scene.camera.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
@@ -142,17 +199,19 @@ impl FurniCraftApp {
         }
 
         let drag = response.drag_delta();
-        if response.dragged_by(egui::PointerButton::Primary) {
+        // An axis drag owns the pointer; rotating the camera mid-drag would move the axis under the
+        // pointer and change the drag parameter under the user's hand.
+        if !dragging && response.dragged_by(egui::PointerButton::Primary) {
             self.scene
                 .camera
                 .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
-        } else if response.dragged_by(egui::PointerButton::Middle)
-            || response.dragged_by(egui::PointerButton::Secondary)
+        } else if !dragging
+            && (response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary))
         {
             self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
         }
 
-        if response.dragged() {
+        if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -163,6 +222,7 @@ impl FurniCraftApp {
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         if response.clicked()
             && !pointer_over_gizmo
+            && !self.translate_gizmo.consumed_click()
             && let Some(pointer) = response.interact_pointer_pos()
             && rect.width() > 0.0
             && rect.height() > 0.0
@@ -183,6 +243,11 @@ impl FurniCraftApp {
             rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
+        );
+        self.translate_gizmo.paint(
+            ui,
+            rect,
+            translate_gizmo::Target { camera: self.scene.camera, project: self.session.project(), selected },
         );
         if let Some(direction) = gizmo::show(ui, rect, self.scene.camera) {
             self.scene.camera.look_from(direction);
