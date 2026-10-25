@@ -61,6 +61,18 @@ impl Editor {
         self.selection.primary()
     }
 
+    /// Replaces the selection with one node, or clears it for `None`.
+    ///
+    /// The viewport calls this with the result of picking. A deliberate selection also counts as
+    /// the first show, so the tree does not replace it with the first panel afterwards.
+    pub fn select_node(&mut self, node: Option<Id>) {
+        self.initialized = true;
+        match node {
+            Some(node) => self.selection.replace(node),
+            None => self.selection.clear(),
+        }
+    }
+
     /// Draws the scene tree and dispatches the tree actions.
     pub fn show_scene_tree(&mut self, ui: &mut Ui, session: &mut Session) {
         self.selection.retain_existing(session.project());
@@ -189,4 +201,22 @@ fn default_panel_size() -> Result<PanelNominalSize, String> {
     let width =
         Length::from_millimetres(NEW_PANEL_WIDTH_MM).ok_or_else(|| "default panel width is out of range".to_owned())?;
     PanelNominalSize::new(length, width).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn picking_replaces_the_tree_selection_and_an_empty_click_clears_it() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.selected_node(), None);
+        let node = Id::new(2).expect("id");
+        editor.select_node(Some(node));
+        assert_eq!(editor.selected_node(), Some(node));
+        editor.select_node(None);
+        assert_eq!(editor.selected_node(), None);
+    }
 }

@@ -38,6 +38,11 @@ impl Selection {
         self.ids.push(id);
     }
 
+    /// Empties the selection.
+    pub(crate) fn clear(&mut self) {
+        self.ids.clear();
+    }
+
     /// Adds the node to the selection, or removes it when it is already selected.
     pub(crate) fn toggle(&mut self, id: Id) {
         if let Some(index) = self.ids.iter().position(|selected| *selected == id) {
@@ -320,6 +325,10 @@ mod tests {
 
         selection.replace(first);
         assert_eq!(selection.ids(), &[first]);
+
+        selection.clear();
+        assert_eq!(selection.primary(), None);
+        assert!(selection.ids().is_empty());
     }
 
     #[test]
