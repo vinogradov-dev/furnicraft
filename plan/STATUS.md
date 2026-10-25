@@ -4,10 +4,11 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement and viewport
-  picking are done; the selected node is highlighted in the viewport.
-- Working on: the Blender-like axes. The next task is the Z axis, an origin cross and a corner
-  orientation widget with click-to-snap views, then the translate gizmo.
+- Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
+  picking and the Blender-like axes are done; the selected node is highlighted in the viewport and
+  the corner widget snaps the camera.
+- Working on: viewport move. The next task is a translate gizmo on the selection, dispatching the
+  same placement command as the inspector fields.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
@@ -15,6 +16,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record the view axes and the orientation widget`
+- `feat(app): add the corner orientation widget`
+- `feat(render): draw the Z axis line`
+- `feat(scene): add the Z axis and snap views`
 - `docs: record CPU ray picking and the viewport selection`
 - `feat(app): pick nodes in the viewport`
 - `feat(ui): expose viewport selection to the editor`
@@ -60,12 +65,16 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Axes: add the Z axis to the floor grid, an origin cross and a corner orientation widget with
-   click-to-snap views.
-2. Viewport move: a translate gizmo on the selection, dispatching the same placement command.
-3. Polish: rotation fields and a rotate gizmo, then multi-node placement.
+1. Viewport move: a translate gizmo on the selection, dispatching `node.placement.set` so the
+   inspector and the viewport share one command and one undo entry.
+2. Polish: rotation fields and a rotate gizmo, then multi-node placement.
 
 ## Open questions
+
+- Top and bottom views stop five degrees short of the pole to keep the up vector defined. Confirm
+  that a near-plan view is enough until an orthographic projection mode exists.
+- The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
+  shortcuts before the list grows.
 
 - The inspector shows the parent name and local X/Y/Z; world coordinates are not shown yet. Confirm
   whether a read-only world readout earns its space.
@@ -88,6 +97,8 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 - Parametric cabinets (dimensions driving panel sizes and placements) are out of the near-term plan.
 - The viewport has picking and a selection highlight, but no gizmos; moving still happens through
   the inspector fields.
+- The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
+  menu fallback for the six views yet.
 - The selection highlight re-uploads every mesh when the selection changes; an incremental colour
   update or a GPU id pass can replace it.
 - Region rings are traced for rectangles only; a shaped core has no contour-aware cutout union, so

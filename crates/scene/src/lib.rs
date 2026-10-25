@@ -237,6 +237,24 @@ impl Camera {
         self.target += (-self.right() * delta_x + self.up() * delta_y) * world_per_point;
     }
 
+    /// Points the camera at its target from the given world direction.
+    ///
+    /// `direction` is the offset from the target to the eye, not the viewing direction. A zero or
+    /// non-finite direction leaves the camera unchanged. Pitch is clamped to the camera limits, so
+    /// top and bottom views stop five degrees short of the pole and keep a defined up vector.
+    pub fn look_from(&mut self, direction: DVec3) {
+        if !direction.is_finite() {
+            return;
+        }
+        let Some(direction) = direction.try_normalize() else {
+            return;
+        };
+        if direction.x.hypot(direction.y) > 1.0e-9 {
+            self.yaw = direction.y.atan2(direction.x).rem_euclid(TAU);
+        }
+        self.pitch = direction.z.clamp(MIN_PITCH.sin(), MAX_PITCH.sin()).asin();
+    }
+
     /// Scales the orbit distance by `factor`.
     ///
     /// A factor below one moves closer; values outside the supported range are clamped and invalid
@@ -299,6 +317,10 @@ pub struct Grid {
     pub axis_x_color: [f32; 4],
     /// Colour of the world Y axis, in gamma space.
     pub axis_y_color: [f32; 4],
+    /// Colour of the world Z axis, in gamma space.
+    pub axis_z_color: [f32; 4],
+    /// Height of the Z axis line above the floor, in millimetres.
+    pub axis_height_mm: f64,
 }
 
 impl Default for Grid {
@@ -311,6 +333,8 @@ impl Default for Grid {
             major_color: [0.42, 0.45, 0.50, 1.0],
             axis_x_color: [0.72, 0.28, 0.28, 1.0],
             axis_y_color: [0.28, 0.62, 0.34, 1.0],
+            axis_z_color: [0.30, 0.45, 0.82, 1.0],
+            axis_height_mm: 1000.0,
         }
     }
 }
@@ -571,6 +595,32 @@ mod tests {
         assert!(moved.dot(camera.right()) < 0.0, "dragging right moves the target left");
         camera.pan_pixels(f64::INFINITY, 0.0, 800.0);
         assert!(camera.target().is_finite());
+    }
+
+    #[test]
+    fn look_from_snaps_to_axis_views_and_keeps_the_target() {
+        let default = Camera::default();
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::X);
+        let offset = camera.eye() - camera.target();
+        assert!((offset.try_normalize().expect("eye offset") - DVec3::X).length() < 1.0e-9);
+        assert!(camera.forward().dot(-DVec3::X) > 1.0 - 1.0e-9);
+        assert_eq!(camera.target(), default.target());
+        assert_eq!(camera.distance(), default.distance());
+
+        camera.look_from(-DVec3::Y);
+        let offset = camera.eye() - camera.target();
+        assert!((offset.try_normalize().expect("eye offset") - -DVec3::Y).length() < 1.0e-9);
+
+        camera.look_from(DVec3::Z);
+        assert_eq!(camera.pitch(), MAX_PITCH);
+        let yaw = camera.yaw();
+        camera.look_from(DVec3::ZERO);
+        assert_eq!(camera.yaw(), yaw);
+        assert_eq!(camera.pitch(), MAX_PITCH);
+        camera.look_from(DVec3::new(f64::NAN, 0.0, 0.0));
+        assert_eq!(camera.yaw(), yaw);
+        assert_eq!(camera.pitch(), MAX_PITCH);
     }
 
     #[test]
