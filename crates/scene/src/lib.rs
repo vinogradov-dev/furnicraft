@@ -209,6 +209,21 @@ impl Camera {
         self.pitch = (self.pitch + delta_pitch).clamp(MIN_PITCH, MAX_PITCH);
     }
 
+    /// A world-space ray through normalized device coordinates.
+    ///
+    /// `(-1, -1)` is the bottom-left corner of the viewport and `(1, 1)` the top-right. Non-finite
+    /// coordinates and a broken aspect ratio fall back to the centre ray. The direction is unit
+    /// length.
+    pub fn ray_ndc(self, ndc_x: f64, ndc_y: f64, aspect: f64) -> Ray {
+        let x = if ndc_x.is_finite() { ndc_x.clamp(-1.0, 1.0) } else { 0.0 };
+        let y = if ndc_y.is_finite() { ndc_y.clamp(-1.0, 1.0) } else { 0.0 };
+        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        let half_height = (self.fov_y * 0.5).tan();
+        let direction = self.forward() + self.right() * (x * half_height * aspect) + self.up() * (y * half_height);
+        let origin = self.eye();
+        Ray::new(origin, direction).unwrap_or(Ray { origin, direction: self.forward() })
+    }
+
     /// Pans the target across the screen plane, in points.
     ///
     /// The world distance per point is measured at the target, so the scene follows the pointer.
@@ -231,6 +246,37 @@ impl Camera {
             return;
         }
         self.distance = (self.distance * factor).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
+    }
+}
+
+/// A world-space ray used for picking.
+///
+/// The direction is unit length. Construction returns `None` for non-finite input or a zero
+/// direction, so a ray that reaches the scene is always usable.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    origin: DVec3,
+    direction: DVec3,
+}
+
+impl Ray {
+    /// Creates a ray, normalising the direction.
+    pub fn new(origin: DVec3, direction: DVec3) -> Option<Self> {
+        if !origin.is_finite() || !direction.is_finite() {
+            return None;
+        }
+        let direction = direction.try_normalize()?;
+        Some(Self { origin, direction })
+    }
+
+    /// The ray start point in world space.
+    pub const fn origin(self) -> DVec3 {
+        self.origin
+    }
+
+    /// The unit direction in world space.
+    pub const fn direction(self) -> DVec3 {
+        self.direction
     }
 }
 
@@ -350,6 +396,104 @@ impl SceneFrame {
     pub fn drawables(&self) -> &[Drawable] {
         &self.drawables
     }
+
+    /// The document id of the nearest drawable hit by `ray`.
+    ///
+    /// Only triangles are tested, so a malformed mesh or a drawable that misses the ray is skipped.
+    /// Picking returns a document id, never a mesh index or a pointer: the caller can select it or
+    /// send it to a command.
+    pub fn pick(&self, ray: Ray) -> Option<Id> {
+        let mut nearest: Option<(f64, Id)> = None;
+        for drawable in &self.drawables {
+            let Some(distance) = ray_hit_drawable(ray, drawable) else {
+                continue;
+            };
+            if nearest.is_none_or(|(best, _)| distance < best) {
+                nearest = Some((distance, drawable.id));
+            }
+        }
+        nearest.map(|(_, id)| id)
+    }
+
+    /// A copy of the frame with the selected drawable tinted for picking feedback.
+    ///
+    /// The base frame keeps its material colours, so clearing the selection restores them without
+    /// rebuilding meshes.
+    pub fn with_selection_highlight(&self, selected: Option<Id>) -> Self {
+        let mut frame = self.clone();
+        let Some(selected) = selected else {
+            return frame;
+        };
+        let Some(drawable) = frame.drawables.iter_mut().find(|drawable| drawable.id == selected) else {
+            return frame;
+        };
+        for (channel, tint) in drawable.color.iter_mut().zip(SELECTION_TINT) {
+            let base = f64::from(*channel);
+            *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+        }
+        frame
+    }
+}
+
+/// Linear RGB colour mixed into the selected drawable.
+const SELECTION_TINT: [f64; 3] = [1.0, 0.55, 0.15];
+
+/// Fraction of [`SELECTION_TINT`] mixed into the base colour.
+const SELECTION_MIX: f64 = 0.35;
+
+fn ray_hit_drawable(ray: Ray, drawable: &Drawable) -> Option<f64> {
+    let mesh = &drawable.mesh;
+    let mut nearest = f64::INFINITY;
+    for triangle in mesh.indices.as_chunks::<3>().0 {
+        let [i0, i1, i2] = *triangle;
+        let (Some(v0), Some(v1), Some(v2)) = (
+            world_vertex(mesh, i0, drawable.world_transform),
+            world_vertex(mesh, i1, drawable.world_transform),
+            world_vertex(mesh, i2, drawable.world_transform),
+        ) else {
+            continue;
+        };
+        if let Some(distance) = ray_triangle(ray, v0, v1, v2)
+            && distance < nearest
+        {
+            nearest = distance;
+        }
+    }
+    nearest.is_finite().then_some(nearest)
+}
+
+fn world_vertex(mesh: &MeshData, index: u32, transform: DMat4) -> Option<DVec3> {
+    let position = mesh.positions.get(index as usize)?;
+    let local = DVec3::new(f64::from(position[0]), f64::from(position[1]), f64::from(position[2]));
+    if !local.is_finite() {
+        return None;
+    }
+    let world = transform.transform_point3(local);
+    world.is_finite().then_some(world)
+}
+
+/// Möller–Trumbore intersection; returns the positive distance along the ray.
+fn ray_triangle(ray: Ray, v0: DVec3, v1: DVec3, v2: DVec3) -> Option<f64> {
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let p = ray.direction.cross(edge2);
+    let determinant = edge1.dot(p);
+    if determinant.abs() < 1.0e-12 {
+        return None;
+    }
+    let inverse = 1.0 / determinant;
+    let offset = ray.origin - v0;
+    let u = offset.dot(p) * inverse;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = offset.cross(edge1);
+    let v = ray.direction.dot(q) * inverse;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let distance = edge2.dot(q) * inverse;
+    (distance > 0.0).then_some(distance)
 }
 
 #[cfg(test)]
@@ -449,5 +593,84 @@ mod tests {
         frame.push(Drawable::new(id, mesh, DMat4::IDENTITY, [1.0; 4]));
         assert_eq!(frame.drawables().len(), 1);
         assert_eq!(frame.drawables()[0].id, id);
+    }
+
+    fn quad_mesh() -> Arc<MeshData> {
+        Arc::new(MeshData {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: Vec::new(),
+            indices: vec![0, 1, 2, 0, 2, 3],
+        })
+    }
+
+    #[test]
+    fn the_centre_ray_looks_where_the_camera_does() {
+        let camera = Camera::default();
+        let ray = camera.ray_ndc(0.0, 0.0, 16.0 / 9.0);
+        assert_close(ray.origin(), camera.eye());
+        assert_close(ray.direction(), camera.forward());
+
+        let invalid = camera.ray_ndc(f64::NAN, f64::INFINITY, -1.0);
+        assert_close(invalid.direction(), camera.forward());
+        assert!(invalid.origin().is_finite());
+    }
+
+    #[test]
+    fn picking_returns_the_nearest_document_id() {
+        let near = Id::new(2).expect("id");
+        let far = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(near, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        frame.push(Drawable::new(far, quad_mesh(), DMat4::from_translation(DVec3::new(0.0, 0.0, 1.0)), [1.0; 4]));
+
+        let from_above = Ray::new(DVec3::new(0.5, 0.5, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(from_above), Some(far));
+        let from_below = Ray::new(DVec3::new(0.5, 0.5, -10.0), DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(from_below), Some(near));
+
+        let miss = Ray::new(DVec3::new(2.0, 2.0, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(miss), None);
+    }
+
+    #[test]
+    fn picking_follows_the_world_transform() {
+        let id = Id::new(4).expect("id");
+        let mut frame = SceneFrame::default();
+        let transform = DMat4::from_translation(DVec3::new(10.0, 0.0, 0.0));
+        frame.push(Drawable::new(id, quad_mesh(), transform, [1.0; 4]));
+
+        let hit = Ray::new(DVec3::new(10.5, 0.5, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(hit), Some(id));
+        let original_position = Ray::new(DVec3::new(0.5, 0.5, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(original_position), None);
+    }
+
+    #[test]
+    fn malformed_meshes_are_skipped_instead_of_panicking() {
+        let id = Id::new(5).expect("id");
+        let mesh =
+            Arc::new(MeshData { positions: vec![[0.0; 3]], normals: Vec::new(), indices: vec![0, 1, 2, 0, 0, 0] });
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(id, mesh, DMat4::IDENTITY, [1.0; 4]));
+        let ray = Ray::new(DVec3::new(0.0, 0.0, 1.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(ray), None);
+    }
+
+    #[test]
+    fn selection_highlight_tints_only_the_selected_drawable() {
+        let selected = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(selected, quad_mesh(), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0]));
+        frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0]));
+
+        let highlighted = frame.with_selection_highlight(Some(selected));
+        assert_ne!(highlighted.drawables()[0].color, frame.drawables()[0].color);
+        assert_eq!(highlighted.drawables()[1].color, frame.drawables()[1].color);
+        assert_eq!(frame.drawables()[0].color, [0.5, 0.5, 0.5, 1.0]);
+
+        assert_eq!(frame.with_selection_highlight(None), frame);
+        let missing = Id::new(99).expect("id");
+        assert_eq!(frame.with_selection_highlight(Some(missing)), frame);
     }
 }

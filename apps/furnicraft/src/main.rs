@@ -21,7 +21,7 @@ use eframe::egui_wgpu;
 use eframe::wgpu;
 use furnicraft_engine::Session;
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_model::Revision;
+use furnicraft_model::{Id, Revision};
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
 use furnicraft_ui::Editor;
@@ -44,6 +44,7 @@ struct FurniCraftApp {
     renderer: ViewportRenderer,
     render_state: egui_wgpu::RenderState,
     texture_id: egui::TextureId,
+    highlighted: Option<Id>,
     last_error: Option<String>,
 }
 
@@ -75,6 +76,7 @@ impl FurniCraftApp {
             renderer,
             render_state,
             texture_id,
+            highlighted: None,
             last_error: None,
         })
     }
@@ -87,9 +89,16 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         scene.camera = self.scene.camera;
-        self.renderer.upload(&self.render_state.device, &scene).map_err(|error| error.to_string())?;
         self.scene = scene;
         self.scene_revision = revision;
+        self.upload_scene()
+    }
+
+    fn upload_scene(&mut self) -> Result<(), String> {
+        let selected = self.editor.selected_node();
+        let frame = self.scene.with_selection_highlight(selected);
+        self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
+        self.highlighted = selected;
         Ok(())
     }
 
@@ -144,6 +153,21 @@ impl FurniCraftApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
 
+        if response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+            && rect.width() > 0.0
+            && rect.height() > 0.0
+        {
+            let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
+            let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
+            let ray = self.scene.camera.ray_ndc(ndc_x, ndc_y, f64::from(rect.width() / rect.height()));
+            let picked = self.scene.pick(ray);
+            self.editor.select_node(picked);
+            if let Err(error) = self.upload_scene() {
+                self.last_error = Some(error);
+            }
+        }
+
         self.renderer.render(&self.render_state.device, &self.render_state.queue, &self.scene);
         ui.painter().with_clip_rect(rect).image(
             self.texture_id,
@@ -182,7 +206,7 @@ impl FurniCraftApp {
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                ui.label("LMB orbit  ·  MMB/RMB pan  ·  wheel zoom");
+                ui.label("LMB select / drag orbit  ·  MMB/RMB pan  ·  wheel zoom");
                 if let Some(error) = &self.last_error {
                     ui.separator();
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -200,6 +224,11 @@ impl FurniCraftApp {
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Err(error) = self.sync_scene() {
+            self.last_error = Some(error);
+        }
+        if self.editor.selected_node() != self.highlighted
+            && let Err(error) = self.upload_scene()
+        {
             self.last_error = Some(error);
         }
         self.scene_tree(ui);
