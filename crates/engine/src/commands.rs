@@ -4,6 +4,7 @@ use furnicraft_model::{Catalog, Id, MaterialId, Project, ProjectError};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::node_cmds;
 use crate::panel_cmds;
 use crate::session::Session;
 
@@ -82,7 +83,9 @@ impl CommandSpec {
 /// The commands compiled into this build.
 static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CREATE,
+    node_cmds::ASSEMBLY_CREATE,
     panel_cmds::RENAME,
+    node_cmds::ASSEMBLY_RENAME,
     panel_cmds::RESIZE,
     panel_cmds::MATERIAL_SET,
     panel_cmds::EDGE_BANDING_SET,
@@ -94,6 +97,11 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::BOW_SET,
     panel_cmds::BOW_CLEAR,
     panel_cmds::CUTOUT_CREATE,
+    node_cmds::NODE_DELETE,
+    node_cmds::NODE_DUPLICATE,
+    node_cmds::NODE_GROUP,
+    node_cmds::NODE_UNGROUP,
+    node_cmds::NODE_PLACEMENT_SET,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -198,7 +206,28 @@ mod tests {
         let cutout = registry.get("cutout.create").expect("cutout.create is registered");
         assert_eq!(cutout.id(), "cutout.create");
         assert_eq!(cutout.label(), "Create cutout");
+        let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
+        assert_eq!(assembly_create.id(), "assembly.create");
+        assert_eq!(assembly_create.label(), "Create assembly");
+        let assembly_rename = registry.get("assembly.rename").expect("assembly.rename is registered");
+        assert_eq!(assembly_rename.id(), "assembly.rename");
+        assert_eq!(assembly_rename.label(), "Rename assembly");
+        let delete = registry.get("node.delete").expect("node.delete is registered");
+        assert_eq!(delete.id(), "node.delete");
+        assert_eq!(delete.label(), "Delete");
+        let duplicate = registry.get("node.duplicate").expect("node.duplicate is registered");
+        assert_eq!(duplicate.id(), "node.duplicate");
+        assert_eq!(duplicate.label(), "Duplicate");
+        let group = registry.get("node.group").expect("node.group is registered");
+        assert_eq!(group.id(), "node.group");
+        assert_eq!(group.label(), "Group");
+        let ungroup = registry.get("node.ungroup").expect("node.ungroup is registered");
+        assert_eq!(ungroup.id(), "node.ungroup");
+        assert_eq!(ungroup.label(), "Ungroup");
+        let placement = registry.get("node.placement.set").expect("node.placement.set is registered");
+        assert_eq!(placement.id(), "node.placement.set");
+        assert_eq!(placement.label(), "Place");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 13);
+        assert_eq!(registry.specs().len(), 20);
     }
 }

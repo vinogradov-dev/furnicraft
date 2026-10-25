@@ -150,6 +150,9 @@ mod tests {
     };
     use furnicraft_units::Length;
 
+    use crate::node_cmds::{
+        AssemblyCreate, AssemblyRename, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeUngroup,
+    };
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
         PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
@@ -1022,5 +1025,116 @@ mod tests {
         let mut object = value.as_object().cloned().expect("params are an object");
         object.insert("extra".to_owned(), Value::Null);
         assert!(serde_json::from_value::<PanelCreate>(Value::Object(object)).is_err());
+    }
+
+    #[test]
+    fn assembly_create_rename_and_delete_are_single_undo_steps() {
+        let mut session = sample_session();
+        let root = session.project().root().id();
+        let create = AssemblyCreate { parent: root, name: "Box".to_owned(), placement: Placement::IDENTITY };
+        let outcome = session.dispatch("assembly.create", &json_params(&create)).expect("create assembly");
+        let assembly = outcome.created_id().expect("created id");
+        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Box");
+        assert_eq!(session.project().root().children().len(), 3);
+
+        session.undo().expect("undo create");
+        assert!(session.project().assembly(assembly).is_none());
+        session.redo().expect("redo create");
+        assert!(session.project().assembly(assembly).is_some());
+
+        let rename = AssemblyRename { assembly, name: "Drawer box".to_owned() };
+        session.dispatch("assembly.rename", &json_params(&rename)).expect("rename assembly");
+        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
+
+        let delete = NodeDelete { node: assembly };
+        session.dispatch("node.delete", &json_params(&delete)).expect("delete assembly");
+        assert!(session.project().assembly(assembly).is_none());
+        session.undo().expect("undo delete");
+        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
+    }
+
+    #[test]
+    fn duplicate_group_and_ungroup_dispatch_through_the_engine() {
+        let mut session = sample_session();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+
+        let duplicate = NodeDuplicate { node: panel };
+        let copy = session
+            .dispatch("node.duplicate", &json_params(&duplicate))
+            .expect("duplicate panel")
+            .created_id()
+            .expect("copy id");
+        assert_ne!(copy, panel);
+        assert_eq!(session.project().panel(copy).expect("copy").name(), "Shelf copy");
+
+        let group = NodeGroup { nodes: vec![panel, drawer], name: "Cabinet".to_owned() };
+        let group_id = session
+            .dispatch("node.group", &json_params(&group))
+            .expect("group siblings")
+            .created_id()
+            .expect("group id");
+        assert_eq!(session.project().parent_of(panel), Some(group_id));
+        assert_eq!(session.project().parent_of(drawer), Some(group_id));
+
+        let ungroup = NodeUngroup { node: group_id };
+        session.dispatch("node.ungroup", &json_params(&ungroup)).expect("ungroup");
+        assert!(session.project().assembly(group_id).is_none());
+        assert_eq!(session.project().parent_of(panel), Some(session.project().root().id()));
+        assert_eq!(session.project().parent_of(drawer), Some(session.project().root().id()));
+    }
+
+    #[test]
+    fn node_placement_changes_only_the_target_and_keeps_history() {
+        let mut session = sample_session();
+        let panel = Id::new(2).expect("panel id");
+        let placement: Placement = serde_json::from_value(
+            serde_json::json!({"translation": [10.0, 20.0, 30.0], "rotation": [0.0, 0.0, 0.0, 1.0]}),
+        )
+        .expect("placement");
+        let request = NodePlacementSet { node: panel, placement };
+        session.dispatch("node.placement.set", &json_params(&request)).expect("place panel");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), placement);
+        session.undo().expect("undo placement");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
+    }
+
+    #[test]
+    fn node_command_enabled_checks_reject_invalid_selections() {
+        let session = sample_session();
+        let registry = CommandRegistry::new();
+        let root = session.project().root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+
+        let create = registry.get("assembly.create").expect("registered");
+        assert!(create.enabled(
+            &session,
+            &json_params(&AssemblyCreate { parent: root, name: "Box".to_owned(), placement: Placement::IDENTITY })
+        ));
+        assert!(!create.enabled(
+            &session,
+            &json_params(&AssemblyCreate {
+                parent: Id::new(999).expect("id"),
+                name: "Box".to_owned(),
+                placement: Placement::IDENTITY,
+            })
+        ));
+
+        let delete = registry.get("node.delete").expect("registered");
+        assert!(delete.enabled(&session, &json_params(&NodeDelete { node: panel })));
+        assert!(!delete.enabled(&session, &json_params(&NodeDelete { node: root })));
+
+        let group = registry.get("node.group").expect("registered");
+        assert!(group.enabled(&session, &json_params(&NodeGroup { nodes: vec![panel, drawer], name: "G".to_owned() })));
+        assert!(!group.enabled(&session, &json_params(&NodeGroup { nodes: vec![panel], name: "G".to_owned() })));
+        assert!(!group.enabled(&session, &json_params(&NodeGroup { nodes: vec![panel, panel], name: "G".to_owned() })));
+
+        let ungroup = registry.get("node.ungroup").expect("registered");
+        assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));
+        assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: panel })));
+        assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: root })));
+
+        assert!(!registry.get("node.group").expect("registered").enabled(&session, &Value::Null));
     }
 }

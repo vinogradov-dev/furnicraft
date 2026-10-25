@@ -16,12 +16,16 @@
 
 mod commands;
 mod diagnostics;
+pub mod node_cmds;
 pub mod panel_cmds;
 mod resolve;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
+pub use node_cmds::{
+    AssemblyCreate, AssemblyRename, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeUngroup,
+};
 pub use panel_cmds::{
     CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
     PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
