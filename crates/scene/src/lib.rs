@@ -486,21 +486,24 @@ impl SceneFrame {
         nearest.map(|(_, id)| id)
     }
 
-    /// A copy of the frame with the selected drawable tinted for picking feedback.
+    /// A copy of the frame with every selected drawable tinted for picking feedback.
     ///
     /// The base frame keeps its material colours, so clearing the selection restores them without
-    /// rebuilding meshes.
-    pub fn with_selection_highlight(&self, selected: Option<Id>) -> Self {
+    /// rebuilding meshes. Passing the panels below a selected container highlights the container as
+    /// one object.
+    pub fn with_selection_highlight(&self, selected: &[Id]) -> Self {
         let mut frame = self.clone();
-        let Some(selected) = selected else {
+        if selected.is_empty() {
             return frame;
-        };
-        let Some(drawable) = frame.drawables.iter_mut().find(|drawable| drawable.id == selected) else {
-            return frame;
-        };
-        for (channel, tint) in drawable.color.iter_mut().zip(SELECTION_TINT) {
-            let base = f64::from(*channel);
-            *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+        }
+        for drawable in &mut frame.drawables {
+            if !selected.contains(&drawable.id) {
+                continue;
+            }
+            for (channel, tint) in drawable.color.iter_mut().zip(SELECTION_TINT) {
+                let base = f64::from(*channel);
+                *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+            }
         }
         frame
     }
@@ -830,20 +833,23 @@ mod tests {
     }
 
     #[test]
-    fn selection_highlight_tints_only_the_selected_drawable() {
+    fn selection_highlight_tints_every_selected_drawable() {
         let selected = Id::new(2).expect("id");
+        let also_selected = Id::new(4).expect("id");
         let other = Id::new(3).expect("id");
         let mut frame = SceneFrame::default();
         frame.push(Drawable::new(selected, quad_mesh(), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0]));
         frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0]));
+        frame.push(Drawable::new(also_selected, quad_mesh(), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0]));
 
-        let highlighted = frame.with_selection_highlight(Some(selected));
+        let highlighted = frame.with_selection_highlight(&[selected, also_selected]);
         assert_ne!(highlighted.drawables()[0].color, frame.drawables()[0].color);
+        assert_ne!(highlighted.drawables()[2].color, frame.drawables()[2].color);
         assert_eq!(highlighted.drawables()[1].color, frame.drawables()[1].color);
         assert_eq!(frame.drawables()[0].color, [0.5, 0.5, 0.5, 1.0]);
 
-        assert_eq!(frame.with_selection_highlight(None), frame);
+        assert_eq!(frame.with_selection_highlight(&[]), frame);
         let missing = Id::new(99).expect("id");
-        assert_eq!(frame.with_selection_highlight(Some(missing)), frame);
+        assert_eq!(frame.with_selection_highlight(&[missing]), frame);
     }
 }

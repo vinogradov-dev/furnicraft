@@ -13,11 +13,13 @@
     clippy::unreachable
 )]
 
-mod assembly_card;
 mod command;
+mod container_card;
 mod panel_card;
 mod placement_card;
 mod scene_tree;
+
+use std::collections::HashSet;
 
 use egui::{Color32, Ui};
 use furnicraft_engine::node_cmds::{
@@ -25,11 +27,11 @@ use furnicraft_engine::node_cmds::{
 };
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::{AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup, PanelCreate, Session};
-use furnicraft_model::{Id, PanelNominalSize, Placement};
+use furnicraft_model::{Id, PanelNominalSize, Placement, Project};
 use furnicraft_units::Length;
 
-use crate::assembly_card::AssemblyCard;
 use crate::command::{dispatch, json};
+use crate::container_card::ContainerCard;
 use crate::panel_card::PanelCard;
 use crate::placement_card::PlacementCard;
 use crate::scene_tree::{Selection, TreeAction};
@@ -43,8 +45,9 @@ const NEW_PANEL_WIDTH_MM: i64 = 400;
 #[derive(Debug, Default)]
 pub struct Editor {
     selection: Selection,
+    open: HashSet<Id>,
     card: PanelCard,
-    assembly_card: AssemblyCard,
+    container_card: ContainerCard,
     placement_card: PlacementCard,
     error: Option<String>,
     initialized: bool,
@@ -63,8 +66,8 @@ impl Editor {
 
     /// Replaces the selection with one node, or clears it for `None`.
     ///
-    /// The viewport calls this with the result of picking. A deliberate selection also counts as
-    /// the first show, so the tree does not replace it with the first panel afterwards.
+    /// A deliberate selection also counts as the first show, so the tree does not replace it with
+    /// the first panel afterwards.
     pub fn select_node(&mut self, node: Option<Id>) {
         self.initialized = true;
         match node {
@@ -73,9 +76,79 @@ impl Editor {
         }
     }
 
+    /// Selects the result of a viewport click on `hit`.
+    ///
+    /// The viewport returns the panel under the pointer; a closed container above it is selected
+    /// instead, so a click picks the cabinet rather than one of its boards. A click outside the
+    /// scene clears the selection.
+    pub fn select_viewport_hit(&mut self, project: &Project, hit: Option<Id>) {
+        self.initialized = true;
+        match hit.and_then(|hit| resolve_viewport_pick(project, &self.open, hit)) {
+            Some(node) => self.selection.replace(node),
+            None => self.selection.clear(),
+        }
+    }
+
+    /// Enters one level below the picked node: opens it and selects the child that owns `hit`.
+    ///
+    /// A double-click on a closed container reveals its contents; double-clicking a panel has no
+    /// effect because a panel has no children.
+    pub fn enter_viewport_level(&mut self, project: &Project, hit: Option<Id>) {
+        let Some(hit) = hit else {
+            return;
+        };
+        self.initialized = true;
+        let Some(selected) = resolve_viewport_pick(project, &self.open, hit) else {
+            return;
+        };
+        self.selection.replace(selected);
+        if !project.is_container(selected) {
+            return;
+        }
+        self.open.insert(selected);
+        if let Some(child) = child_containing(project, selected, hit) {
+            self.selection.replace(child);
+        }
+    }
+
+    /// Closes one level and returns the selection to the container that owns it.
+    ///
+    /// The current node closes when it is an open container; otherwise the nearest open ancestor
+    /// closes. With no open ancestor this does nothing.
+    pub fn exit_level(&mut self, project: &Project) {
+        let Some(selected) = self.selection.primary() else {
+            return;
+        };
+        if project.is_container(selected) && self.open.remove(&selected) {
+            if let Some(parent) = project.parent_of(selected)
+                && parent != project.root().id()
+            {
+                self.selection.replace(parent);
+            }
+            return;
+        }
+        let mut node = selected;
+        while let Some(parent) = project.parent_of(node) {
+            if parent == project.root().id() {
+                break;
+            }
+            if self.open.remove(&parent) {
+                self.selection.replace(parent);
+                return;
+            }
+            node = parent;
+        }
+    }
+
+    /// Drops open flags for nodes that no longer exist or no longer own children.
+    fn retain_open(&mut self, project: &Project) {
+        self.open.retain(|id| project.is_container(*id));
+    }
+
     /// Draws the scene tree and dispatches the tree actions.
     pub fn show_scene_tree(&mut self, ui: &mut Ui, session: &mut Session) {
         self.selection.retain_existing(session.project());
+        self.retain_open(session.project());
         if !self.initialized {
             self.selection.select_first_panel(session.project());
             self.initialized = true;
@@ -109,8 +182,8 @@ impl Editor {
         }
         if session.project().panel(primary).is_some() {
             self.card.show(ui, session, Some(primary));
-        } else if session.project().assembly(primary).is_some() {
-            self.assembly_card.show(ui, session, primary);
+        } else if session.project().is_container(primary) {
+            self.container_card.show(ui, session, primary);
         } else {
             ui.label("Select a node in the scene tree.");
         }
@@ -175,10 +248,12 @@ impl Editor {
             TreeAction::Undo => {
                 session.undo().map_err(|error| error.to_string())?;
                 self.selection.retain_existing(session.project());
+                self.retain_open(session.project());
             }
             TreeAction::Redo => {
                 session.redo().map_err(|error| error.to_string())?;
                 self.selection.retain_existing(session.project());
+                self.retain_open(session.project());
             }
         }
         Ok(())
@@ -186,6 +261,7 @@ impl Editor {
 
     fn after_node_removed(&mut self, session: &Session, parent: Option<Id>) {
         self.selection.retain_existing(session.project());
+        self.retain_open(session.project());
         if self.selection.primary().is_none()
             && let Some(parent) = parent
             && session.project().contains_node(parent)
@@ -193,6 +269,44 @@ impl Editor {
             self.selection.replace(parent);
         }
     }
+}
+
+/// The node a viewport click should select: the outermost closed container above the hit panel.
+///
+/// Walking up stops at the nearest open container, so an open level exposes its children. The root
+/// is not a selectable node; a top-level panel or container is selected directly.
+fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Option<Id> {
+    if !project.contains_node(hit) {
+        return None;
+    }
+    if project.is_container(hit) {
+        return Some(hit);
+    }
+    let root = project.root().id();
+    let mut node = hit;
+    while let Some(parent) = project.parent_of(node) {
+        if parent == root || open.contains(&parent) {
+            break;
+        }
+        node = parent;
+    }
+    Some(node)
+}
+
+/// The direct child of `container` whose subtree contains `node`.
+fn child_containing(project: &Project, container: Id, node: Id) -> Option<Id> {
+    if node == container {
+        return None;
+    }
+    let mut current = node;
+    for _ in 0..Project::MAX_ASSEMBLY_DEPTH {
+        let parent = project.parent_of(current)?;
+        if parent == container {
+            return Some(current);
+        }
+        current = parent;
+    }
+    None
 }
 
 fn default_panel_size() -> Result<PanelNominalSize, String> {
@@ -209,6 +323,8 @@ mod tests {
 
     use super::*;
 
+    use furnicraft_testkit::sample_project;
+
     #[test]
     fn picking_replaces_the_tree_selection_and_an_empty_click_clears_it() {
         let mut editor = Editor::new();
@@ -218,5 +334,85 @@ mod tests {
         assert_eq!(editor.selected_node(), Some(node));
         editor.select_node(None);
         assert_eq!(editor.selected_node(), None);
+    }
+
+    fn grouped_project() -> (Project, Id, Id, Id) {
+        let mut project = sample_project();
+        let shelf = Id::new(2).expect("shelf id");
+        let drawer = Id::new(3).expect("drawer id");
+        let group = project.group_nodes(&[shelf, drawer], "Group").expect("group siblings");
+        (project, group, drawer, Id::new(4).expect("front id"))
+    }
+
+    #[test]
+    fn a_viewport_click_selects_the_outermost_closed_container() {
+        let (project, group, _drawer, front) = grouped_project();
+        let mut editor = Editor::new();
+
+        editor.select_viewport_hit(&project, Some(front));
+        assert_eq!(editor.selected_node(), Some(group));
+        assert!(!editor.open.contains(&group));
+
+        let mut project = project;
+        let extra = project
+            .add_panel(
+                project.root().id(),
+                "Top",
+                default_panel_size().expect("size"),
+                None,
+                Length::from_millimetres(18).expect("thickness"),
+                Placement::IDENTITY,
+            )
+            .expect("add top panel");
+        editor.select_viewport_hit(&project, Some(extra));
+        assert_eq!(editor.selected_node(), Some(extra));
+
+        editor.select_viewport_hit(&project, None);
+        assert_eq!(editor.selected_node(), None);
+
+        editor.select_viewport_hit(&project, Some(Id::new(999).expect("id")));
+        assert_eq!(editor.selected_node(), None);
+    }
+
+    #[test]
+    fn double_click_enters_one_level_and_reveals_the_child_under_the_pointer() {
+        let (project, group, drawer, front) = grouped_project();
+        let mut editor = Editor::new();
+
+        editor.enter_viewport_level(&project, Some(front));
+        assert_eq!(editor.selected_node(), Some(drawer));
+        assert!(editor.open.contains(&group));
+
+        editor.enter_viewport_level(&project, Some(front));
+        assert_eq!(editor.selected_node(), Some(front));
+        assert!(editor.open.contains(&drawer));
+
+        editor.enter_viewport_level(&project, Some(front));
+        assert_eq!(editor.selected_node(), Some(front), "a panel has no level to enter");
+    }
+
+    #[test]
+    fn escape_closes_one_level_and_returns_to_the_parent_container() {
+        let (project, group, drawer, front) = grouped_project();
+        let mut editor = Editor::new();
+
+        editor.exit_level(&project);
+        assert_eq!(editor.selected_node(), None, "nothing is open yet");
+
+        editor.enter_viewport_level(&project, Some(front));
+        editor.enter_viewport_level(&project, Some(front));
+        assert_eq!(editor.selected_node(), Some(front));
+
+        editor.exit_level(&project);
+        assert_eq!(editor.selected_node(), Some(drawer));
+        assert!(!editor.open.contains(&drawer));
+        assert!(editor.open.contains(&group));
+
+        editor.exit_level(&project);
+        assert_eq!(editor.selected_node(), Some(group));
+        assert!(!editor.open.contains(&group));
+
+        editor.exit_level(&project);
+        assert_eq!(editor.selected_node(), Some(group), "the top level stays selected");
     }
 }

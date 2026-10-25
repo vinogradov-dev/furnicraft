@@ -1,8 +1,10 @@
 //! Commands that create, rename, place, copy, group and remove scene nodes.
 //!
 //! A panel is an atomic leaf: it owns its geometry and machining and is never split into child
-//! nodes. An assembly is an editable group; these commands wrap siblings into a new assembly and
-//! flatten an assembly back into its parent without moving any leaf in world space.
+//! nodes. An assembly is a meaningful furniture component. A group is an organisational container
+//! with no furniture type. These commands wrap siblings into a new group and flatten a group back
+//! into its parent without moving any leaf in world space; an assembly is dismantled by a separate
+//! operation, not by `node.ungroup`.
 
 use furnicraft_model::{Catalog, Id, Placement, Project, ProjectError};
 use serde::{Deserialize, Serialize};
@@ -21,11 +23,11 @@ pub const ASSEMBLY_CREATE_LABEL: &str = "Create assembly";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssemblyCreate {
-    /// Id of the assembly that receives the new group.
+    /// Id of the container that receives the new assembly.
     pub parent: Id,
     /// User-visible assembly name; it must contain a non-whitespace character.
     pub name: String,
-    /// Placement relative to the parent assembly.
+    /// Placement relative to the parent container.
     pub placement: Placement,
 }
 
@@ -37,7 +39,7 @@ fn assembly_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<AssemblyCreate>(params, ASSEMBLY_CREATE_ID) else {
         return false;
     };
-    valid_name(&params.name) && session.project().assembly(params.parent).is_some()
+    valid_name(&params.name) && session.project().is_container(params.parent)
 }
 
 fn assembly_create_run(
@@ -51,44 +53,40 @@ fn assembly_create_run(
     Ok(CommandOutcome::created(id))
 }
 
-/// Stable id of the assembly rename command.
-pub const ASSEMBLY_RENAME_ID: &str = "assembly.rename";
+/// Stable id of the node rename command.
+pub const NODE_RENAME_ID: &str = "node.rename";
 
-/// User-facing label of the assembly rename command.
-pub const ASSEMBLY_RENAME_LABEL: &str = "Rename assembly";
+/// User-facing label of the node rename command.
+pub const NODE_RENAME_LABEL: &str = "Rename";
 
-/// Parameters for `assembly.rename`.
+/// Parameters for `node.rename`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AssemblyRename {
-    /// Id of the assembly to rename.
-    pub assembly: Id,
+pub struct NodeRename {
+    /// Panel, group or assembly to rename.
+    pub node: Id,
     /// New user-visible name; it must contain a non-whitespace character.
     pub name: String,
 }
 
-/// The `assembly.rename` command.
-pub(crate) const ASSEMBLY_RENAME: CommandSpec =
-    CommandSpec::new(ASSEMBLY_RENAME_ID, ASSEMBLY_RENAME_LABEL, assembly_rename_enabled, assembly_rename_run);
+/// The `node.rename` command.
+pub(crate) const NODE_RENAME: CommandSpec =
+    CommandSpec::new(NODE_RENAME_ID, NODE_RENAME_LABEL, node_rename_enabled, node_rename_run);
 
-fn assembly_rename_enabled(session: &Session, params: &Value) -> bool {
-    let Ok(params) = parse::<AssemblyRename>(params, ASSEMBLY_RENAME_ID) else {
+fn node_rename_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodeRename>(params, NODE_RENAME_ID) else {
         return false;
     };
-    valid_name(&params.name) && session.project().assembly(params.assembly).is_some()
+    valid_name(&params.name) && session.project().contains_node(params.node)
 }
 
-fn assembly_rename_run(
-    project: &mut Project,
-    _catalog: &Catalog,
-    params: &Value,
-) -> Result<CommandOutcome, CommandError> {
-    let params = parse::<AssemblyRename>(params, ASSEMBLY_RENAME_ID)?;
-    validate_name(&params.name, ASSEMBLY_RENAME_ID)?;
-    if project.assembly(params.assembly).is_none() {
-        return Err(ProjectError::AssemblyNotFound { id: params.assembly }.into());
+fn node_rename_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodeRename>(params, NODE_RENAME_ID)?;
+    validate_name(&params.name, NODE_RENAME_ID)?;
+    if !project.contains_node(params.node) {
+        return Err(ProjectError::NodeNotFound { id: params.node }.into());
     }
-    project.rename_node(params.assembly, params.name)?;
+    project.rename_node(params.node, params.name)?;
     Ok(CommandOutcome::changed())
 }
 
@@ -102,7 +100,7 @@ pub const NODE_DELETE_LABEL: &str = "Delete";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDelete {
-    /// Panel or nested assembly to remove with all of its children.
+    /// Panel, group or nested assembly to remove with all of its children.
     pub node: Id,
 }
 
@@ -133,7 +131,7 @@ pub const NODE_DUPLICATE_LABEL: &str = "Duplicate";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDuplicate {
-    /// Panel or nested assembly to copy deeply.
+    /// Panel, group or nested assembly to copy deeply.
     pub node: Id,
 }
 
@@ -168,9 +166,9 @@ pub const NODE_GROUP_LABEL: &str = "Group";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeGroup {
-    /// Sibling panels and/or nested assemblies to wrap in a new assembly.
+    /// Sibling nodes to wrap in a new group.
     pub nodes: Vec<Id>,
-    /// User-visible name of the new assembly.
+    /// User-visible name of the new group.
     pub name: String,
 }
 
@@ -202,7 +200,7 @@ pub const NODE_UNGROUP_LABEL: &str = "Ungroup";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeUngroup {
-    /// Assembly to flatten into its parent.
+    /// Group to flatten into its parent.
     pub node: Id,
 }
 
@@ -215,12 +213,12 @@ fn node_ungroup_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     let project = session.project();
-    project.assembly(params.node).is_some() && params.node != project.root().id()
+    project.group(params.node).is_some() && params.node != project.root().id()
 }
 
 fn node_ungroup_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodeUngroup>(params, NODE_UNGROUP_ID)?;
-    project.ungroup_assembly(params.node)?;
+    project.ungroup_group(params.node)?;
     Ok(CommandOutcome::changed())
 }
 
@@ -234,7 +232,7 @@ pub const NODE_PLACEMENT_SET_LABEL: &str = "Place";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePlacementSet {
-    /// Panel or nested assembly to place relative to its parent.
+    /// Panel, group or nested assembly to place relative to its parent.
     pub node: Id,
     /// The new rigid placement.
     pub placement: Placement,

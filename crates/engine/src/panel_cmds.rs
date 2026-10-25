@@ -21,7 +21,7 @@ pub const CREATE_LABEL: &str = "Create panel";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelCreate {
-    /// Id of the assembly that receives the panel.
+    /// Id of the container that receives the panel.
     pub parent: Id,
     /// User-visible panel name; it must contain a non-whitespace character.
     pub name: String,
@@ -29,7 +29,7 @@ pub struct PanelCreate {
     pub nominal_size: PanelNominalSize,
     /// Panel-body material from the session catalogue.
     pub material: MaterialId,
-    /// Placement relative to the parent assembly.
+    /// Placement relative to the parent container.
     pub placement: Placement,
 }
 
@@ -58,7 +58,7 @@ fn create_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     params.validate_name().is_ok()
-        && session.project().assembly(params.parent).is_some()
+        && session.project().is_container(params.parent)
         && session.catalog().panel_material(params.material).is_some()
 }
 

@@ -12,7 +12,7 @@
 )]
 
 use furnicraft_model::{
-    Assembly, Catalog, EdgeBandingMaterial, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
+    Assembly, Catalog, EdgeBandingMaterial, Group, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
     Placement, Project,
 };
 use furnicraft_units::Length;
@@ -191,6 +191,6 @@ pub fn sample_project() -> Project {
     .expect("sample front is valid");
     let drawer = Assembly::new(Id::new(3).expect("non-zero id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
     let root =
-        Assembly::new(Id::new(1).expect("non-zero id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
+        Group::new(Id::new(1).expect("non-zero id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
     Project::new(root).expect("sample project is valid")
 }

@@ -66,7 +66,7 @@ Every user-visible change to the document is a command in `furnicraft-engine`: a
 
 ### 4.2 Data is data
 
-The document is plain serializable data with stable ids. It does not know about the GPU, the UI, the undo stack or file formats. Rendering reads the document; it never owns it. If a value can be derived (a mesh, a bounding box, a parts list), derive it in a lower-layer function and cache it by revision instead of storing it in the model. The document stores placements and the assembly tree; cameras, viewports, grids and selection are view state, not document data.
+The document is plain serializable data with stable ids. It does not know about the GPU, the UI, the undo stack or file formats. Rendering reads the document; it never owns it. If a value can be derived (a mesh, a bounding box, a parts list), derive it in a lower-layer function and cache it by revision instead of storing it in the model. The document stores placements and the node tree; cameras, viewports, grids, selection and per-node open state are view state, not document data.
 
 ### 4.3 Units are explicit
 
@@ -79,7 +79,7 @@ A furniture project is the user's work; a crash must never be the answer to bad 
 - Non-test code never panics: no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`. Return the crate's error type and propagate with `?`; use `ok_or(..)?`, `let .. else { return Err(..) }` and `unwrap_or*` where a fallback is truly correct.
 - Input-derived numbers are hostile: use `get()` instead of `[i]`/`[a..b]` for indices that come from files, parameters or arithmetic on them; use `checked_*`/`saturating_*` for lengths and counts; guard division by zero and NaN/inf casts; cap allocations sized by input.
 - Validate before allocating. A panel of 10 km or a 4-billion-facet mesh is a `Result::Err`, not an OOM.
-- Bound recursion and nesting (assembly trees, future expressions) with depth limits or seen-sets.
+- Bound recursion and nesting (group and assembly trees, future expressions) with depth limits or seen-sets.
 - Every crate denies the panic lints at the crate root, and the workspace forbids `unsafe`. Do not add `unsafe` anywhere; if some platform API truly demands it, stop and ask the owner first.
 
 ### 4.5 No format assumptions
@@ -104,11 +104,11 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 
 ### 4.9 Do not invent the domain
 
-`Panel`, `Assembly`, `Hardware`, `Dimension` and `Material` are described in words in `PROJECT.md`. Their exact fields, coordinate conventions and invariants are designed in M1 (see "Open model questions" in `PROJECT.md`). Do not guess a schema while scaffolding, and do not extend it silently: propose the change, then implement it after approval.
+`Panel`, `Assembly`, `Group`, `Hardware`, `Dimension` and `Material` are described in words in `PROJECT.md`. Their exact fields, coordinate conventions and invariants are designed in M1 (see "Open model questions" in `PROJECT.md`). Do not guess a schema while scaffolding, and do not extend it silently: propose the change, then implement it after approval.
 
 ### 4.10 Space and views
 
-- The document stores model-space data: the assembly tree, placements, geometry features and materials. It never stores a camera, a viewport, a selection or a hover highlight.
+- The document stores model-space data: the node tree, placements, geometry features and materials. It never stores a camera, a viewport, a selection, a hover highlight or a node's open state.
 - A `Placement` is a rigid transform relative to the parent frame. World transforms are composed from the root; scale and shear are not placements.
 - View state (camera, projection, grid, shading, selection, hover) lives in the session or the shell. Named views are the only optional exception and are presentation metadata.
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene. Picking returns document `Id`s, never mesh indices or pointers.

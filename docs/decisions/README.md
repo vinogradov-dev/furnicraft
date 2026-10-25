@@ -21,10 +21,12 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0014](0014-banding-belongs-to-segments.md) | Banding belongs to one contour segment | Accepted |
 | [0015](0015-band-joint-trim.md) | Band joints extend and trim in application order | Accepted; arc scope extended by 0016 |
 | [0016](0016-arc-band-joints.md) | Arc band joints use the same rules as straight ones | Accepted |
-| [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Accepted |
+| [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Superseded by 0021 |
 | [0018](0018-picking-ray-casts-the-scene.md) | Picking ray-casts the scene description and returns document ids | Accepted |
 | [0019](0019-standard-views-from-a-corner-widget.md) | Standard views come from a projected corner orientation widget | Accepted |
 | [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) | The translate gizmo previews a frame and commits one placement | Accepted |
+| [0021](0021-assemblies-are-components-groups-are-containers.md) | Assemblies are components, groups are containers | Accepted; supersedes 0017 |
+| [0022](0022-closed-containers-pick-as-one-object.md) | A closed container picks as one object | Accepted |
 
 ## Format
 

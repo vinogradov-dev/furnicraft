@@ -105,7 +105,8 @@ impl FurniCraftApp {
 
     fn upload_scene(&mut self) -> Result<(), String> {
         let selected = self.editor.selected_node();
-        let frame = self.scene.with_selection_highlight(selected);
+        let panels = selected.and_then(|id| self.session.project().panel_ids_under(id)).unwrap_or_default();
+        let frame = self.scene.with_selection_highlight(&panels);
         let frame = match self.translate_gizmo.preview() {
             Some((panels, delta)) if delta != DVec3::ZERO => frame.with_world_translation(panels, delta),
             _ => frame,
@@ -220,7 +221,7 @@ impl FurniCraftApp {
         let pointer_over_gizmo = response
             .interact_pointer_pos()
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
-        if response.clicked()
+        if (response.clicked() || response.double_clicked())
             && !pointer_over_gizmo
             && !self.translate_gizmo.consumed_click()
             && let Some(pointer) = response.interact_pointer_pos()
@@ -230,8 +231,12 @@ impl FurniCraftApp {
             let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
             let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
             let ray = self.scene.camera.ray_ndc(ndc_x, ndc_y, f64::from(rect.width() / rect.height()));
-            let picked = self.scene.pick(ray);
-            self.editor.select_node(picked);
+            let hit = self.scene.pick(ray);
+            if response.double_clicked() {
+                self.editor.enter_viewport_level(self.session.project(), hit);
+            } else {
+                self.editor.select_viewport_hit(self.session.project(), hit);
+            }
             if let Err(error) = self.upload_scene() {
                 self.last_error = Some(error);
             }
@@ -283,7 +288,7 @@ impl FurniCraftApp {
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                ui.label("LMB select / drag orbit  ·  MMB/RMB pan  ·  wheel zoom");
+                ui.label("LMB select / drag orbit  ·  double-click enter  ·  Esc leave  ·  MMB/RMB pan  ·  wheel zoom");
                 if let Some(error) = &self.last_error {
                     ui.separator();
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -302,6 +307,16 @@ impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Err(error) = self.sync_scene() {
             self.last_error = Some(error);
+        }
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        if escape && !self.translate_gizmo.is_dragging() && !ui.ctx().text_edit_focused() {
+            let before = self.editor.selected_node();
+            self.editor.exit_level(self.session.project());
+            if self.editor.selected_node() != before
+                && let Err(error) = self.upload_scene()
+            {
+                self.last_error = Some(error);
+            }
         }
         if self.editor.selected_node() != self.highlighted
             && let Err(error) = self.upload_scene()
