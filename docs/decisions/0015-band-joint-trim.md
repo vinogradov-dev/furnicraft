@@ -21,7 +21,8 @@ Band strips are built in `band_order`. At a sharp joint between a later band and
   slightly taller tool (`0.001 mm` overshoot on both faces) so it does not depend on coplanar faces.
   If the kernel finds no solid, the earlier band is rebuilt untrimmed instead of dropping the build.
 - Only straight line segments are extended and intersected for now. Arc and radius joints keep their
-  butt joints until line-arc and arc-arc intersections are designed.
+  butt joints until line-arc and arc-arc intersections are designed. (Superseded by
+  [0016](0016-arc-band-joints.md): arc joints now follow the same rule.)
 - The nominal segment endpoints still bound each strip; the extension is capped at `50 mm` so hostile
   shallow geometry cannot produce an unbounded sliver.
 

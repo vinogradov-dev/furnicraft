@@ -183,11 +183,11 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 - **Right angle, 90°.** Rectangular bands keep the v1 rectangle order. On a shaped panel the later band is extended over the earlier one to its outer face and cut there; the overlap is removed from the earlier band by a 3D subtraction.
 - **Chamfer.** The chamfer is its own segment with its own record. The adjacent edges keep their bandings. A later chamfer band whose outer face sits closer to the panel than an earlier band's is extended to that band's outer face and cut; when the chamfer is earlier, the later band is cut over it.
-- **Radius.** The radius is its own segment with its own record. Adjacent segments are not forced to share one record, so their strips meet at the tangent points. Tangent and arc joints keep butt joints until line-arc and arc-arc intersections are designed.
+- **Radius.** The radius is its own segment with its own record. Adjacent segments are not forced to share one record. At a sharp joint with a radius the same order rule applies: the boundaries are intersected with the neighbouring face analytically (line-arc or arc-arc), and a point is accepted only if it lies on that face's own sweep. An arc may be extended by at most a quarter turn. An included band without an earlier face still meets its neighbour radially at the nominal endpoint.
 - **Stage 2b.** One strip is built per banded segment. An included segment offsets the core and a
   non-included segment extends the outer envelope. Machining on a shaped panel is subtracted from the
   shaped body in 3D; adding new machining still waits for the contour-aware cutout union.
-- **Single banded edge at a corner.** With no earlier adjacent band the strip ends flush with the core side face. With an earlier adjacent band on a straight joint it is extended to that band's outer face and trimmed.
+- **Single banded edge at a corner.** With no earlier adjacent band the strip ends flush with the core side face. With an earlier adjacent band it is extended to that band's outer face along its own supporting curve — line or arc — and trimmed there.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
 ### 5.5. Inclusion in size
@@ -249,6 +249,7 @@ At minimum:
 - an included bottom or left band moves the core inward and leaves the nominal envelope unchanged;
 - banding order and corner coverage by the later band at a right angle;
 - a later band at a straight joint is extended to an earlier band's outer face and cut there;
+- a band on a bowed edge is mitred against its straight neighbours, and a later band reaches an earlier band's face across an arc-to-arc joint;
 - overlapping bands are trimmed so the later band stays visible;
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
@@ -270,11 +271,14 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
 2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes for rectangular panels (ADR 0012). Shaped cores are next.
-3. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
-4. Edge banding milling: rounding the faces and corner.
-5. Whether the card should show core and overall size separately from the nominal size.
+3. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
+4. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
+5. Edge banding milling: rounding the faces and corner.
+6. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
-no-division invariant — are recorded in ADR 0009. Corner features, bows, tangent paths, chamfer corner
-banding and shaped-panel band strips are implemented; the rectangular cutout union and its `Region`
-ring tracing are implemented, and shaped-core rings plus cutout banding are staged next.
+no-division invariant — are recorded in ADR 0009; segment banding in ADR 0014, and band joints on
+straight and arc segments in ADRs 0015 and 0016. Corner features, bows, tangent paths, chamfer corner
+banding, shaped-panel band strips and analytic arc band joints are implemented; the rectangular cutout
+union and its `Region` ring tracing are implemented, and shaped-core rings plus cutout banding are
+staged next.
