@@ -14,6 +14,7 @@
     clippy::unreachable
 )]
 
+mod gizmo;
 mod scene_build;
 
 use eframe::egui;
@@ -107,14 +108,18 @@ impl FurniCraftApp {
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui) {
-        let available = ui.available_size();
-        if available.x < 1.0 || available.y < 1.0 {
+        // The toolbar can be wider than the panel in a narrow window; egui then reports the
+        // overflowing width as available. Intersecting with the clip rect keeps the viewport and
+        // its orientation widget inside the central panel.
+        let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        if available.width() < 1.0 || available.height() < 1.0 {
             return;
         }
-        let (rect, response) = ui.allocate_exact_size(available, egui::Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
         if !ui.is_rect_visible(rect) {
             return;
         }
+        let gizmo_rect = gizmo::widget_rect(rect);
 
         let points_per_pixel = ui.ctx().pixels_per_point();
         let width = (rect.width() * points_per_pixel).round().max(1.0) as u32;
@@ -153,7 +158,11 @@ impl FurniCraftApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
 
+        let pointer_over_gizmo = response
+            .interact_pointer_pos()
+            .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         if response.clicked()
+            && !pointer_over_gizmo
             && let Some(pointer) = response.interact_pointer_pos()
             && rect.width() > 0.0
             && rect.height() > 0.0
@@ -175,6 +184,9 @@ impl FurniCraftApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+        if let Some(direction) = gizmo::show(ui, rect, self.scene.camera) {
+            self.scene.camera.look_from(direction);
+        }
     }
 
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
@@ -200,7 +212,7 @@ impl FurniCraftApp {
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut reset = false;
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
                 reset = ui.button("Frame all  (F)").clicked();
