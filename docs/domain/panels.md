@@ -35,7 +35,7 @@ Panel material and edge-banding material are described in [Materials and catalog
 2. In the scene, a panel is a group of drawables: the body and the bandings. Every part of the group has the same `panel.id()`.
 3. The group cannot be broken into body and banding. No command deletes, hides or transforms only the body or only a banding.
 4. Selection, highlighting, deletion, hiding and movement apply to the whole panel. Picking returns `panel.id()`, never a mesh index or an individual banding.
-5. The outliner may later show child rows "body" and "banding 1…4", but they are not separate editable objects.
+5. The scene tree may later show child rows "body" and "banding 1…4", but they are not separate editable objects.
 6. Bandings are stored in application order. The order belongs to the panel.
 
 ## 3. Local coordinate system
@@ -238,8 +238,18 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.corner.clear` — panel, corner `VertexId`. The corner becomes a point; its corner banding is removed with the segment.
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
 - `panel.bow.clear` — panel, edge `EdgeId`.
+- `assembly.create` — parent assembly, non-blank name, placement. Creates an empty editable group.
+- `assembly.rename` — assembly, non-blank name.
+- `node.delete` — panel or nested assembly. An assembly is removed with all of its children; the root is rejected.
+- `node.duplicate` — panel or nested assembly. The whole subtree receives fresh ids, keeps its placements and is inserted after the original.
+- `node.group` — two or more sibling nodes and a non-blank name. Wraps them in a new assembly with an identity placement; order and world transforms are preserved.
+- `node.ungroup` — an assembly. Replaces it with its children, composing each child placement with the removed assembly so nothing moves. Panels are atomic leaves and are rejected.
+- `node.placement.set` — panel or nested assembly, and a rigid placement relative to the parent. The root is rejected.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged.
+A panel owns its cutouts, banding and machining; the scene tree never splits it into child nodes. Only assemblies can be grouped and ungrouped. Grouping is sibling-only: nodes under different parents need an explicit reparent operation, which is not part of this stage.
+
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
+commands keep the root immutable and preserve world transforms when a group is created or flattened.
 
 ## 8. Panel tests
 
@@ -247,6 +257,8 @@ At minimum:
 
 - the 720 × 500 size table for every inclusion combination;
 - an included bottom or left band moves the core inward and leaves the nominal envelope unchanged;
+- a panel cannot be ungrouped, while an assembly can; grouping two siblings preserves their order and world placements, and ungrouping restores the original world transforms;
+- deleting a nested assembly removes its descendants, and duplicating a subtree remaps every id;
 - banding order and corner coverage by the later band at a right angle;
 - a later band at a straight joint is extended to an earlier band's outer face and cut there;
 - a band on a bowed edge is mitred against its straight neighbours, and a later band reaches an earlier band's face across an arc-to-arc joint;

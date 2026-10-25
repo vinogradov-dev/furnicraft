@@ -21,6 +21,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0014](0014-banding-belongs-to-segments.md) | Banding belongs to one contour segment | Accepted |
 | [0015](0015-band-joint-trim.md) | Band joints extend and trim in application order | Accepted; arc scope extended by 0016 |
 | [0016](0016-arc-band-joints.md) | Arc band joints use the same rules as straight ones | Accepted |
+| [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Accepted |
 
 ## Format
 

@@ -9,8 +9,9 @@ Related documents:
 
 Related decisions: [0005](../decisions/0005-material-catalogue.md),
 [0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
-[0007](../decisions/0007-edge-banding-v1.md) and
-[0008](../decisions/0008-panel-diagnostics.md).
+[0007](../decisions/0007-edge-banding-v1.md),
+[0008](../decisions/0008-panel-diagnostics.md) and
+[0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
 
 ## 1. Terms
 
@@ -44,6 +45,19 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
   - `last_known_width`.
 
 `material_id` is optional: `None` means no material was assigned, while `Some(id)` that the catalogue cannot resolve is a missing material. `last_known_*` values are always stored as a cache for resilience when the catalogue is missing, not user-editable parameters. When the material is found, the catalogue is the source of truth and the fallback is refreshed on load.
+
+### 2.1. Nodes, panels and assemblies
+
+The assembly tree stores two kinds of nodes. A **panel** is an atomic leaf: it owns its machining,
+banding and material references, is never shown with children, and cannot be ungrouped. An
+**assembly** is an editable group of panels and nested assemblies. A node id is unique across both
+kinds and is never reused after a delete or an undo.
+
+A placement is always relative to the parent assembly. Grouping sibling nodes wraps them in a new
+assembly with an identity placement, so their world transforms stay the same; ungrouping composes
+each child with the removed assembly's placement for the same reason. The root assembly defines the
+world frame and cannot be deleted, moved, grouped or ungrouped. See
+[ADR 0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
 
 ## 3. What the scene file does not store
 
