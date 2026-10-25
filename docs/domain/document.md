@@ -55,8 +55,10 @@ kinds and is never reused after a delete or an undo.
 
 A placement is always relative to the parent assembly. Grouping sibling nodes wraps them in a new
 assembly with an identity placement, so their world transforms stay the same; ungrouping composes
-each child with the removed assembly's placement for the same reason. The root assembly defines the
-world frame and cannot be deleted, moved, grouped or ungrouped. See
+each child with the removed assembly's placement for the same reason. The inspector edits the
+translation in millimetres in the parent frame and keeps the rotation, so a typed move never silently
+resets how a node is oriented. The root assembly defines the world frame and cannot be deleted, moved,
+grouped or ungrouped. See
 [ADR 0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
 
 ## 3. What the scene file does not store
