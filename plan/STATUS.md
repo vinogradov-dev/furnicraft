@@ -5,10 +5,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
-  picking and the Blender-like axes are done; the selected node is highlighted in the viewport and
-  the corner widget snaps the camera.
-- Working on: viewport move. The next task is a translate gizmo on the selection, dispatching the
-  same placement command as the inspector fields.
+  picking, the Blender-like axes and the translate gizmo are done; the selected node is highlighted,
+  the corner widget snaps the camera and the gizmo moves the selection in world axes.
+- Working on: rotation. The next task is rotation fields in the inspector and a rotate gizmo, then
+  multi-node placement.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
@@ -16,6 +16,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record the translate gizmo`
+- `feat(app): move the selection with a translate gizmo`
+- `feat(scene): project, drag along an axis and preview a translation`
+- `feat(model): resolve world placements and collect panels under a node`
 - `docs: record the view axes and the orientation widget`
 - `feat(app): add the corner orientation widget`
 - `feat(render): draw the Z axis line`
@@ -65,9 +69,9 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Viewport move: a translate gizmo on the selection, dispatching `node.placement.set` so the
-   inspector and the viewport share one command and one undo entry.
-2. Polish: rotation fields and a rotate gizmo, then multi-node placement.
+1. Rotation: fields in the inspector and a rotate gizmo, both preserving translation and each
+   committing one placement command on release.
+2. Multi-node placement: move the whole selection with one command and one undo entry.
 
 ## Open questions
 
@@ -75,15 +79,16 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
   that a near-plan view is enough until an orthographic projection mode exists.
 - The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
   shortcuts before the list grows.
-
+- The gizmo sits at the node's local origin, which for a panel is its minimum corner. Confirm whether
+  a handle set at the visual bounds centre is worth the extra derivation.
 - The inspector shows the parent name and local X/Y/Z; world coordinates are not shown yet. Confirm
   whether a read-only world readout earns its space.
-- Rotation waits for the translate gizmo: decide whether the inspector exposes Euler angles or a
-  quaternion and which one the gizmo writes.
+- Rotation representation is still open: decide whether the inspector exposes Euler angles or a
+  quaternion and which one the rotate gizmo writes.
 - The scene tree keeps a multi-selection, while a viewport click replaces it with one node. Confirm
   whether viewport picking should extend a multi-selection with a modifier.
-- LMB click selects and LMB drag still orbits, so a sloppy click can orbit. Confirm whether orbit
-  should move to MMB only once the translate gizmo takes over LMB.
+- A primary drag still orbits the camera unless it starts on a gizmo handle. Confirm that orbit
+  should move to MMB only once rotation handles make LMB busier.
 - An included band on one tangent segment steps the core at the joint with its neighbour. Confirm the
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
@@ -95,8 +100,10 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 - Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
   deliberate deferral, not an oversight.
 - Parametric cabinets (dimensions driving panel sizes and placements) are out of the near-term plan.
-- The viewport has picking and a selection highlight, but no gizmos; moving still happens through
-  the inspector fields.
+- The viewport has picking, a selection highlight and a translate gizmo; rotation has no typed or
+  direct editor yet, so a loaded placement keeps the rotation it arrived with.
+- The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
+  transform buffer per drawable can replace the full upload when a large cabinet makes it visible.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
   menu fallback for the six views yet.
 - The selection highlight re-uploads every mesh when the selection changes; an incremental colour

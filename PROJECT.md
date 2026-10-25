@@ -111,7 +111,7 @@ FurniCraft separates the model from the way it is viewed.
 - A viewport is a UI adapter: it owns a camera, turns input into camera moves or commands, and draws a scene. Several viewports may show the same document.
 - Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); selection lives in the session or the UI. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md).
 - The floor grid has X, Y and a short Z axis at the origin, and a corner orientation widget shows the six world directions. Clicking one snaps the camera to look from that side; clicking the current side flips to the opposite. Both are view state. See [ADR 0019](docs/decisions/0019-standard-views-from-a-corner-widget.md).
-- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly.
+- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly. The viewport translate gizmo previews a moved frame during a drag and dispatches one `node.placement.set` on release, so the drag is one undo entry. See [ADR 0020](docs/decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md).
 - Drawing views (projections, sections, details) are output, not interactive viewports, and arrive with the output milestone.
 
 ## Crate map

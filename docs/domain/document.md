@@ -57,7 +57,9 @@ A placement is always relative to the parent assembly. Grouping sibling nodes wr
 assembly with an identity placement, so their world transforms stay the same; ungrouping composes
 each child with the removed assembly's placement for the same reason. The inspector edits the
 translation in millimetres in the parent frame and keeps the rotation, so a typed move never silently
-resets how a node is oriented. The root assembly defines the world frame and cannot be deleted, moved,
+resets how a node is oriented. The viewport translate gizmo moves that same translation directly:
+the drag is a preview of the shifted frame, and one `node.placement.set` is dispatched on release, so
+the drag is one undo entry. The root assembly defines the world frame and cannot be deleted, moved,
 grouped or ungrouped. See
 [ADR 0017](../decisions/0017-panels-are-atomic-assemblies-are-groups.md).
 
