@@ -23,6 +23,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0016](0016-arc-band-joints.md) | Arc band joints use the same rules as straight ones | Accepted |
 | [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Accepted |
 | [0018](0018-picking-ray-casts-the-scene.md) | Picking ray-casts the scene description and returns document ids | Accepted |
+| [0019](0019-standard-views-from-a-corner-widget.md) | Standard views come from a projected corner orientation widget | Accepted |
 
 ## Format
 
