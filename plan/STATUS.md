@@ -5,11 +5,12 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 ## Where we are
 
 - Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
-  picking, the orientation widget and the translate gizmo are done. Assemblies and groups are now
-  separate container kinds: a viewport click selects a closed container as one object, double-click
-  enters one level and Escape leaves one level.
-- Working on: rotation. The next task is rotation fields in the inspector and a rotate gizmo, then
-  multi-node placement.
+  picking, the orientation widget, the translate gizmo and rotation editing are done. Rotation is
+  edited as intrinsic XYZ Euler angles in the inspector and by a rotate gizmo in the viewport; both
+  write the stored unit quaternion. Assemblies and groups are separate container kinds: a viewport
+  click selects a closed container as one object, double-click enters one level and Escape leaves one
+  level.
+- Working on: the next task is multi-node placement, then the assembly dissolve operation.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
 - Gate: `cargo xtask ci` — green
@@ -18,6 +19,12 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record the rotation representation and gizmo`
+- `feat(app): rotate the selection with a rotate gizmo`
+- `feat(scene): preview a world rotation`
+- `feat(ui): edit rotation in the placement card`
+- `feat(model): present placement rotation as XYZ Euler angles`
+- `feat(units): add degrees for human-readable angles`
 - `feat: split assemblies from groups and pick closed containers`
 - `docs: record the translate gizmo`
 - `feat(app): move the selection with a translate gizmo`
@@ -71,10 +78,8 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Rotation: fields in the inspector and a rotate gizmo, both preserving translation and each
-   committing one placement command on release.
-2. Multi-node placement: move the whole selection with one command and one undo entry.
-3. Dissolve assembly: the separate operation that dismantles a component, once furniture types give
+1. Multi-node placement: move the whole selection with one command and one undo entry.
+2. Dissolve assembly: the separate operation that dismantles a component, once furniture types give
    it type-specific rules.
 
 ## Open questions
@@ -84,12 +89,12 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 - The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
   shortcuts before the list grows.
 - The translate gizmo pivots a panel at its local origin and a container at the minimum corner of
-  its descendants' world AABB. Confirm whether a container pivot at the bounding-box centre is worth
-  the extra derivation once rotation handles arrive.
-- The inspector shows the parent name and local X/Y/Z; world coordinates are not shown yet. Confirm
-  whether a read-only world readout earns its space.
-- Rotation representation is still open: decide whether the inspector exposes Euler angles or a
-  quaternion and which one the rotate gizmo writes.
+  its descendants' world AABB, while the rotate gizmo always pivots at the node's world origin.
+  Confirm whether both should move to a bounding-box centre pivot.
+- The inspector shows the parent name, local X/Y/Z and intrinsic XYZ Euler angles; world coordinates
+  are not shown yet. Confirm whether a read-only world readout earns its space.
+- Around Y = ±90° the Euler fields are gimbal-locked: editing X or Z moves the other angle. Confirm
+  whether the card should show a gimbal warning or switch to a quaternion readout there.
 - Double-click enters one container level and Escape leaves it. Confirm whether the tree should also
   show and toggle that open state, or stay an always-expanded explicit path.
 - Open containers are view state and reset when the session starts. Confirm that this is preferable
@@ -109,8 +114,8 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 - Parametric cabinets (dimensions driving panel sizes and placements) are out of the near-term plan.
 - Assemblies have no dissolve operation yet: `node.ungroup` only flattens groups, and dismantling a
   component needs the type-specific rules that arrive with M6.
-- The viewport has picking, a selection highlight and a translate gizmo; rotation has no typed or
-  direct editor yet, so a loaded placement keeps the rotation it arrived with.
+- The gizmos do not snap: translate and rotate angles are free, and snapping is not implemented yet.
+- Move and Rotate each act on one selected node; a multi-selection has no combined placement command.
 - The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
   transform buffer per drawable can replace the full upload when a large cabinet makes it visible.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
