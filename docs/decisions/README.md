@@ -27,6 +27,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) | The translate gizmo previews a frame and commits one placement | Accepted |
 | [0021](0021-assemblies-are-components-groups-are-containers.md) | Assemblies are components, groups are containers | Accepted; supersedes 0017 |
 | [0022](0022-closed-containers-pick-as-one-object.md) | A closed container picks as one object | Accepted |
+| [0023](0023-fasad-furniture-and-standard-views.md) | Fasad furniture and standard views | Accepted |
+| [0024](0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md) | Rotation is a quaternion shown as intrinsic XYZ Euler angles | Accepted |
 
 ## Format
 
@@ -47,4 +49,3 @@ What it buys, what it costs, and the condition under which it should be revisite
 ```
 
 The code and `AGENTS.md` stay the authority for rules; a record keeps the reason.
-| [0023](0023-fasad-furniture-and-standard-views.md) | Standard views from the furniture facade and updated lighting |
