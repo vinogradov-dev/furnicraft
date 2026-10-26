@@ -525,7 +525,7 @@ fn grid_vertices(grid: &Grid) -> Vec<MeshVertex> {
     let divisions = ((requested_extent / spacing).floor() as i64).clamp(0, MAX_GRID_DIVISIONS);
     let extent = divisions as f64 * spacing;
     let major_every = i64::from(grid.major_every.max(1));
-    let mut vertices = Vec::with_capacity((2 * divisions as usize + 1) * 4 + 2);
+    let mut vertices = Vec::with_capacity((2 * divisions as usize + 1) * 4);
 
     for step in -divisions..=divisions {
         let offset = step as f64 * spacing;
@@ -549,17 +549,6 @@ fn grid_vertices(grid: &Grid) -> Vec<MeshVertex> {
         push_line(&mut vertices, [offset, -extent, 0.02], [offset, extent, 0.02], y_color);
     }
 
-    // The Z axis shares the origin with the X and Y grid axes, so the three lines form the origin
-    // cross. Its height is independent of the floor extent: a grid-sized pole would dominate the
-    // view.
-    let height = if grid.axis_height_mm.is_finite() {
-        grid.axis_height_mm.clamp(0.0, furnicraft_scene::MAX_DISTANCE_MM)
-    } else {
-        0.0
-    };
-    if height > 0.0 {
-        push_line(&mut vertices, [0.0, 0.0, 0.02], [0.0, 0.0, height], sanitize_color(grid.axis_z_color));
-    }
     vertices
 }
 
@@ -651,7 +640,7 @@ mod tests {
         let grid = Grid { spacing_mm: 100.0, extent_mm: 200.0, major_every: 2, ..Grid::default() };
         let vertices = grid_vertices(&grid);
 
-        assert_eq!(vertices.len(), 5 * 4 + 2, "five lines in each direction and the Z axis");
+        assert_eq!(vertices.len(), 5 * 4, "five lines in each direction");
         // Five offsets from -200 to 200; at offset zero the X line starts at vertex 8 and the
         // Y line at vertex 10.
         assert_eq!(vertices[8].color, grid.axis_x_color);
@@ -659,27 +648,12 @@ mod tests {
         assert_eq!(vertices[0].color, grid.major_color);
         assert_eq!(vertices[4].color, grid.minor_color);
         assert!(vertices.iter().all(|vertex| vertex.position[2] > 0.0));
-
-        assert_eq!(vertices[20].color, grid.axis_z_color);
-        assert_eq!(vertices[20].position, [0.0, 0.0, 0.02]);
-        assert_eq!(vertices[21].position, [0.0, 0.0, grid.axis_height_mm as f32]);
-    }
-
-    #[test]
-    fn a_hostile_axis_height_draws_no_z_line() {
-        let grid = Grid { axis_height_mm: f64::NAN, ..Grid::default() };
-        let vertices = grid_vertices(&grid);
-        assert!(vertices.iter().all(|vertex| vertex.color != grid.axis_z_color));
-
-        let grid = Grid { axis_height_mm: -5.0, ..Grid::default() };
-        let vertices = grid_vertices(&grid);
-        assert!(vertices.iter().all(|vertex| vertex.color != grid.axis_z_color));
     }
 
     #[test]
     fn grid_values_are_clamped_to_a_bounded_line_count() {
         let grid = Grid { spacing_mm: 1.0, extent_mm: f64::MAX, major_every: 1, ..Grid::default() };
         let vertices = grid_vertices(&grid);
-        assert_eq!(vertices.len(), (2 * MAX_GRID_DIVISIONS as usize + 1) * 4 + 2);
+        assert_eq!(vertices.len(), (2 * MAX_GRID_DIVISIONS as usize + 1) * 4);
     }
 }

@@ -1,11 +1,11 @@
 # Status
 
-Updated: 2026-10-25. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-26. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
 - Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
-  picking, the Blender-like axes and the translate gizmo are done. Assemblies and groups are now
+  picking, the orientation widget and the translate gizmo are done. Assemblies and groups are now
   separate container kinds: a viewport click selects a closed container as one object, double-click
   enters one level and Escape leaves one level.
 - Working on: rotation. The next task is rotation fields in the inspector and a rotate gizmo, then
@@ -25,8 +25,7 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
 - `feat(model): resolve world placements and collect panels under a node`
 - `docs: record the view axes and the orientation widget`
 - `feat(app): add the corner orientation widget`
-- `feat(render): draw the Z axis line`
-- `feat(scene): add the Z axis and snap views`
+- `feat(app): rework orientation widget, viewport mouse controls and default camera/light`
 - `docs: record CPU ray picking and the viewport selection`
 - `feat(app): pick nodes in the viewport`
 - `feat(ui): expose viewport selection to the editor`
@@ -95,8 +94,8 @@ Updated: 2026-10-25. Rewrite this file at the end of every task; never append a 
   show and toggle that open state, or stay an always-expanded explicit path.
 - Open containers are view state and reset when the session starts. Confirm that this is preferable
   to persisting them with the workspace.
-- A primary drag still orbits the camera unless it starts on a gizmo handle. Confirm that orbit
-  should move to MMB only once rotation handles make LMB busier.
+- Orbit is now on MMB (Shift+MMB pan, Ctrl+MMB zoom), LMB is selection. Confirm the wheel should
+  remain a zoom duplicate of Ctrl+MMB.
 - An included band on one tangent segment steps the core at the joint with its neighbour. Confirm the
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
