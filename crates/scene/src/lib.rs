@@ -16,7 +16,7 @@
 use std::f64::consts::{FRAC_PI_4, FRAC_PI_8, PI, TAU};
 use std::sync::Arc;
 
-use furnicraft_geom::{DMat4, DVec2, DVec3, MeshData};
+use furnicraft_geom::{DMat4, DQuat, DVec2, DVec3, MeshData};
 use furnicraft_model::Id;
 use thiserror::Error;
 
@@ -520,6 +520,25 @@ impl SceneFrame {
         }
         frame
     }
+
+    /// A copy of the frame with the given drawables rotated about a world-space pivot.
+    ///
+    /// This is a drag preview: it turns the listed drawables without touching the document, so the
+    /// renderer can follow the pointer before one command commits the result. The rotation must be a
+    /// finite unit quaternion and the pivot finite; anything else leaves the frame unchanged.
+    pub fn with_world_rotation(&self, ids: &[Id], pivot: DVec3, rotation: DQuat) -> Self {
+        let mut frame = self.clone();
+        if ids.is_empty() || !pivot.is_finite() || !rotation.is_finite() || (rotation.length() - 1.0).abs() > 1.0e-9 {
+            return frame;
+        }
+        let about_pivot = DMat4::from_translation(pivot) * DMat4::from_quat(rotation) * DMat4::from_translation(-pivot);
+        for drawable in &mut frame.drawables {
+            if ids.contains(&drawable.id) {
+                drawable.world_transform = about_pivot * drawable.world_transform;
+            }
+        }
+        frame
+    }
 }
 
 /// Linear RGB colour mixed into the selected drawable.
@@ -783,6 +802,35 @@ mod tests {
 
         assert_eq!(frame.with_world_translation(&[], DVec3::X), frame);
         assert_eq!(frame.with_world_translation(&[moved], DVec3::new(f64::NAN, 0.0, 0.0)), frame);
+    }
+
+    #[test]
+    fn a_world_rotation_preview_turns_only_the_listed_drawables_about_the_pivot() {
+        let turned = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        let offset = DMat4::from_translation(DVec3::new(2.0, 0.0, 0.0));
+        frame.push(Drawable::new(turned, quad_mesh(), offset, [1.0; 4]));
+        frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let quarter_turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let rotated = frame.with_world_rotation(&[turned], DVec3::new(1.0, 0.0, 0.0), quarter_turn);
+        let position = rotated.drawables()[0].world_transform.transform_point3(DVec3::ZERO);
+        assert!((position - DVec3::new(1.0, 1.0, 0.0)).length() < 1.0e-12, "position was {position:?}");
+        assert_eq!(rotated.drawables()[1].world_transform, DMat4::IDENTITY);
+        assert_eq!(frame.drawables()[0].world_transform, offset);
+    }
+
+    #[test]
+    fn a_world_rotation_preview_rejects_empty_ids_and_bad_input() {
+        let turned = Id::new(2).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(turned, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let quarter_turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        assert_eq!(frame.with_world_rotation(&[], DVec3::ZERO, quarter_turn), frame);
+        assert_eq!(frame.with_world_rotation(&[turned], DVec3::new(f64::NAN, 0.0, 0.0), quarter_turn), frame);
+        assert_eq!(frame.with_world_rotation(&[turned], DVec3::ZERO, DQuat::from_xyzw(2.0, 0.0, 0.0, 0.0)), frame);
     }
 
     #[test]
