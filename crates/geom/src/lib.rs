@@ -1,6 +1,6 @@
 //! Geometry foundation shared by every FurniCraft crate.
 //!
-//! Vectors and matrices are `glam` types re-exported here; FurniCraft-specific shapes
+//! Vectors, matrices and Euler orders are `glam` types re-exported here; FurniCraft-specific shapes
 //! (frames, bounds, meshes) live in this crate. Physical values are millimetres at this
 //! boundary; the document keeps `furnicraft_units::Length` (micrometres).
 #![forbid(unsafe_code)]
@@ -17,7 +17,7 @@ pub mod contour;
 pub mod region;
 
 pub use contour::{Arc, Contour, ContourError, DEFAULT_TANGENT_TOLERANCE, Line, Segment};
-pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4};
+pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4, EulerRot};
 pub use region::{
     Rect, RectError, Region, RegionError, connected_count, regions_from_rects, subtract_rects, total_area, union_rects,
 };
