@@ -11,8 +11,12 @@
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Response, Shape, Stroke, Ui, Vec2};
 use furnicraft_geom::{DQuat, DVec3};
-use furnicraft_model::{Id, Placement, Project};
+use furnicraft_model::{Id, Placement};
 use furnicraft_scene::{Camera, MAX_DISTANCE_MM};
+
+use crate::gizmo_math::{
+    ACTIVE_COLOR, Axis, PlacementCommit, Preview, PreviewKey, Target, ray_to, screen_direction, screen_point,
+};
 
 /// Length of an axis handle, in points.
 const HANDLE_LENGTH: f32 = 84.0;
@@ -25,50 +29,6 @@ const ORIGIN_DEAD_ZONE: f32 = 10.0;
 
 /// Axes closer than this to the view direction are not drawn.
 const VIEW_ALIGNMENT_LIMIT: f64 = 0.985;
-
-/// Gamma-space colours for the three handles.
-const X_COLOR: Color32 = Color32::from_rgb(232, 80, 80);
-const Y_COLOR: Color32 = Color32::from_rgb(92, 204, 116);
-const Z_COLOR: Color32 = Color32::from_rgb(92, 140, 255);
-
-/// Colour of the axis under the pointer or being dragged.
-const ACTIVE_COLOR: Color32 = Color32::from_rgb(255, 220, 96);
-
-/// One world axis of the gizmo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Axis {
-    X,
-    Y,
-    Z,
-}
-
-impl Axis {
-    const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
-
-    fn direction(self) -> DVec3 {
-        match self {
-            Self::X => DVec3::X,
-            Self::Y => DVec3::Y,
-            Self::Z => DVec3::Z,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::X => "X",
-            Self::Y => "Y",
-            Self::Z => "Z",
-        }
-    }
-
-    fn color(self) -> Color32 {
-        match self {
-            Self::X => X_COLOR,
-            Self::Y => Y_COLOR,
-            Self::Z => Z_COLOR,
-        }
-    }
-}
 
 /// A projected handle: the axis, its screen-space tip and its unit screen direction.
 #[derive(Clone, Copy, Debug)]
@@ -91,32 +51,12 @@ struct Drag {
     delta: DVec3,
 }
 
-/// The placement a finished drag asks the shell to dispatch.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Commit {
-    /// The node whose placement changed.
-    pub(crate) node: Id,
-    /// The new placement relative to its parent.
-    pub(crate) placement: Placement,
-}
-
 /// Persistent state of the translate gizmo.
 #[derive(Debug, Default)]
 pub(crate) struct TranslateGizmo {
     drag: Option<Drag>,
     hover: Option<Axis>,
     consumed_click: bool,
-}
-
-/// What the gizmo points at in one frame.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Target<'a> {
-    /// The camera that projects the handles.
-    pub(crate) camera: Camera,
-    /// The document whose node is being placed.
-    pub(crate) project: &'a Project,
-    /// The selected node, if any.
-    pub(crate) selected: Option<Id>,
 }
 
 impl TranslateGizmo {
@@ -130,14 +70,25 @@ impl TranslateGizmo {
         self.consumed_click
     }
 
-    /// The panel ids and world delta the renderer should preview, if a drag is active.
-    pub(crate) fn preview(&self) -> Option<(&[Id], DVec3)> {
-        self.drag.as_ref().map(|drag| (drag.panels.as_slice(), drag.delta))
+    /// The panel ids and world delta the renderer should preview, if a drag moved something.
+    pub(crate) fn preview(&self) -> Option<Preview<'_>> {
+        let drag = self.drag.as_ref()?;
+        if drag.delta == DVec3::ZERO {
+            return None;
+        }
+        Some(Preview::Translation { panels: &drag.panels, delta: drag.delta })
     }
 
     /// The preview identity used to avoid re-uploading an unchanged drag.
-    pub(crate) fn preview_key(&self) -> Option<(Id, DVec3)> {
-        self.drag.as_ref().map(|drag| (drag.node, drag.delta))
+    pub(crate) fn preview_key(&self) -> Option<PreviewKey> {
+        let drag = self.drag.as_ref()?;
+        if drag.delta == DVec3::ZERO {
+            return None;
+        }
+        Some(PreviewKey::Translation {
+            node: drag.node,
+            delta: [drag.delta.x.to_bits(), drag.delta.y.to_bits(), drag.delta.z.to_bits()],
+        })
     }
 
     /// Starts, continues or finishes a drag and returns a placement to dispatch on release.
@@ -152,7 +103,7 @@ impl TranslateGizmo {
         viewport: egui::Rect,
         target: Target<'_>,
         pointer_over_widget: bool,
-    ) -> Result<Option<Commit>, String> {
+    ) -> Result<Option<PlacementCommit>, String> {
         self.consumed_click = false;
         if let Some(mut drag) = self.drag.take() {
             let (pointer, down, escape) = ui.input(|input| {
@@ -338,49 +289,16 @@ fn handles(camera: Camera, viewport: egui::Rect, origin_world: DVec3, origin: Po
         let Some(end) = screen_point(camera, viewport, origin_world + axis.direction() * step) else {
             continue;
         };
-        let delta = end - origin;
-        if delta.length() < 0.5 {
+        let Some(direction) = screen_direction(end - origin) else {
             continue;
-        }
-        let direction = delta.normalized();
+        };
         handles.push(Handle { axis, tip: origin + direction * HANDLE_LENGTH, direction });
     }
     handles
 }
 
-/// The world point under a viewport position.
-fn ray_to(pointer: Pos2, viewport: egui::Rect, camera: Camera) -> furnicraft_scene::Ray {
-    let (x, y) = normalized_pointer(pointer, viewport);
-    camera.ray_ndc(x, y, aspect(viewport))
-}
-
-/// A world point in viewport points, or `None` when it is behind the camera.
-fn screen_point(camera: Camera, viewport: egui::Rect, point: DVec3) -> Option<Pos2> {
-    let ndc = camera.project_ndc(point, aspect(viewport))?;
-    let x = viewport.left() + (ndc.x as f32 + 1.0) * 0.5 * viewport.width();
-    let y = viewport.top() + (1.0 - ndc.y as f32) * 0.5 * viewport.height();
-    (x.is_finite() && y.is_finite()).then_some(Pos2::new(x, y))
-}
-
-fn normalized_pointer(pointer: Pos2, viewport: egui::Rect) -> (f64, f64) {
-    let width = f64::from(viewport.width());
-    let height = f64::from(viewport.height());
-    if width <= 0.0 || height <= 0.0 {
-        return (0.0, 0.0);
-    }
-    let x = (f64::from(pointer.x - viewport.left()) / width) * 2.0 - 1.0;
-    let y = 1.0 - (f64::from(pointer.y - viewport.top()) / height) * 2.0;
-    (x, y)
-}
-
-fn aspect(viewport: egui::Rect) -> f64 {
-    let width = f64::from(viewport.width());
-    let height = f64::from(viewport.height());
-    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 { width / height } else { 1.0 }
-}
-
 /// The placement to dispatch at the end of a drag, or `None` when nothing moved.
-fn commit_placement(drag: &Drag) -> Result<Option<Commit>, String> {
+fn commit_placement(drag: &Drag) -> Result<Option<PlacementCommit>, String> {
     if drag.delta == DVec3::ZERO {
         return Ok(None);
     }
@@ -394,7 +312,7 @@ fn commit_placement(drag: &Drag) -> Result<Option<Commit>, String> {
         .translation_lengths()
         .ok_or_else(|| "the drag moved the node outside the editable millimetre range".to_owned())?;
     let placement = placement.with_translation(x, y, z).map_err(|error| error.to_string())?;
-    if placement == drag.start_local { Ok(None) } else { Ok(Some(Commit { node: drag.node, placement })) }
+    if placement == drag.start_local { Ok(None) } else { Ok(Some(PlacementCommit { node: drag.node, placement })) }
 }
 
 #[cfg(test)]

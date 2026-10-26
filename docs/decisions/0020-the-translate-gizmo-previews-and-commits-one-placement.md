@@ -51,5 +51,6 @@ the document or the evaluated meshes.
   drawable is the next optimization if it shows.
 - Handles sit at the node's local origin, which for a panel is its minimum corner rather than its
   visual centre. A bounds-centred handle set can be added without changing the commit path.
-- The rotation representation is still open; a rotate gizmo will reuse this preview-and-commit
-  shape and write one command on release.
+- The rotation representation is fixed by [0024](0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md):
+  the document keeps the quaternion, the inspector shows intrinsic XYZ Euler angles, and the rotate
+  gizmo reuses this preview-and-commit shape.

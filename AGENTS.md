@@ -43,7 +43,7 @@ crates/param           L2  document features -> kernel calls
 crates/kernel-truck    L2  geometry kernel adapter implemented with truck
 crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tessellation
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials
-crates/units, geom     L0  lengths (micrometres), vectors, frames, bounds, meshes
+crates/units, geom     L0  lengths (micrometres), angles (millidegrees), vectors, frames, bounds, meshes
 crates/testkit         dev-only test helpers (may depend on anything)
 xtask                  workspace checks; not part of the product
 ```
@@ -71,6 +71,8 @@ The document is plain serializable data with stable ids. It does not know about 
 ### 4.3 Units are explicit
 
 Physical sizes are `furnicraft_units::Length`: integer **micrometres**. No bare `f64`/`f32` millimetres, centimetres or "units" in `model`, `param`, `mesh` inputs or command parameters. Floating point exists only at the geometry and rendering boundary (`furnicraft-geom`, `furnicraft-kernel`, `furnicraft-kernel-truck`, `furnicraft-render`); `param` converts `Length` to kernel millimetres at that edge. Formatting for humans and parsing from text go through `furnicraft-units`.
+
+Angles shown to the user are `furnicraft_units::Degrees`: integer **millidegrees**. A placement stores a unit quaternion as its only rotation; Euler angles are a presentation derived on read and never serialized. The inspector shows intrinsic XYZ Euler angles in degrees, and the rotate gizmo writes the quaternion directly (ADR 0024). Angle formatting and parsing go through `furnicraft-units`.
 
 ### 4.4 Never crash
 
@@ -110,6 +112,7 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 
 - The document stores model-space data: the node tree, placements, geometry features and materials. It never stores a camera, a viewport, a selection, a hover highlight or a node's open state.
 - A `Placement` is a rigid transform relative to the parent frame. World transforms are composed from the root; scale and shear are not placements.
+- A placement stores a unit quaternion. The inspector presents it as intrinsic XYZ Euler angles in degrees (ADR 0024); the rotate gizmo writes the quaternion directly and post-multiplies a local-axis turn so translation is preserved. Move/Rotate mode is view state.
 - View state (camera, projection, grid, shading, selection, hover) lives in the session or the shell. Named views are the only optional exception and are presentation metadata.
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene. Picking returns document `Id`s, never mesh indices or pointers.
 - A panel's local frame has its zero at the minimum corner; faces are `A` (at `z = thickness`) and `B` (at `z = 0`), vertices run counter-clockwise from the zero corner, and edge `i` joins vertex `i` to `i + 1`. Vertex and edge ids are stable and never reused; their numbers are labels, not keys. Machining is stored in panel-local coordinates; an edge reference is a topology reference, not a second coordinate system.

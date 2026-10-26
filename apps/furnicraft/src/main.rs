@@ -15,6 +15,8 @@
 )]
 
 mod gizmo;
+mod gizmo_math;
+mod rotate_gizmo;
 mod scene_build;
 mod translate_gizmo;
 
@@ -23,21 +25,31 @@ use eframe::egui_wgpu;
 use eframe::wgpu;
 use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID;
 use furnicraft_engine::{NodePlacementSet, Session};
-use furnicraft_geom::DVec3;
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_model::{Id, Revision};
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
 use furnicraft_ui::Editor;
 
+use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
+use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{evaluate, home_camera, sample_session};
-use crate::translate_gizmo::{Commit, TranslateGizmo};
+use crate::translate_gizmo::TranslateGizmo;
 
 /// Orbit sensitivity in radians per point dragged.
 const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
 
 /// Zoom sensitivity per scroll point.
 const ZOOM_PER_SCROLL_POINT: f64 = 0.004;
+
+/// Which transform gizmo the viewport shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransformMode {
+    /// Three world-axis arrows move the selection.
+    Move,
+    /// Three local-axis rings turn the selection about its origin.
+    Rotate,
+}
 
 struct FurniCraftApp {
     session: Session,
@@ -50,8 +62,10 @@ struct FurniCraftApp {
     render_state: egui_wgpu::RenderState,
     texture_id: egui::TextureId,
     translate_gizmo: TranslateGizmo,
+    rotate_gizmo: RotateGizmo,
+    mode: TransformMode,
     highlighted: Option<Id>,
-    uploaded_preview: Option<(Id, DVec3)>,
+    uploaded_preview: Option<PreviewKey>,
     last_error: Option<String>,
 }
 
@@ -84,6 +98,8 @@ impl FurniCraftApp {
             render_state,
             texture_id,
             translate_gizmo: TranslateGizmo::default(),
+            rotate_gizmo: RotateGizmo::default(),
+            mode: TransformMode::Move,
             highlighted: None,
             uploaded_preview: None,
             last_error: None,
@@ -107,9 +123,10 @@ impl FurniCraftApp {
         let selected = self.editor.selected_node();
         let panels = selected.and_then(|id| self.session.project().panel_ids_under(id)).unwrap_or_default();
         let frame = self.scene.with_selection_highlight(&panels);
-        let frame = match self.translate_gizmo.preview() {
-            Some((panels, delta)) if delta != DVec3::ZERO => frame.with_world_translation(panels, delta),
-            _ => frame,
+        let frame = match self.preview() {
+            Some(Preview::Translation { panels, delta }) => frame.with_world_translation(panels, delta),
+            Some(Preview::Rotation { panels, pivot, rotation }) => frame.with_world_rotation(panels, pivot, rotation),
+            None => frame,
         };
         self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
         self.highlighted = selected;
@@ -117,9 +134,20 @@ impl FurniCraftApp {
         Ok(())
     }
 
-    /// The preview currently shown by the renderer, ignoring a zero delta.
-    fn preview_key(&self) -> Option<(Id, DVec3)> {
-        self.translate_gizmo.preview_key().filter(|(_, delta)| *delta != DVec3::ZERO)
+    /// The scene change the active gizmo is previewing.
+    fn preview(&self) -> Option<Preview<'_>> {
+        match self.mode {
+            TransformMode::Move => self.translate_gizmo.preview(),
+            TransformMode::Rotate => self.rotate_gizmo.preview(),
+        }
+    }
+
+    /// The preview currently shown by the renderer.
+    fn preview_key(&self) -> Option<PreviewKey> {
+        match self.mode {
+            TransformMode::Move => self.translate_gizmo.preview_key(),
+            TransformMode::Rotate => self.rotate_gizmo.preview_key(),
+        }
     }
 
     /// Re-uploads the scene when the drag preview moved to a new position.
@@ -134,7 +162,7 @@ impl FurniCraftApp {
     }
 
     /// Dispatches one `node.placement.set` for a finished drag and rebuilds the scene.
-    fn apply_gizmo_commit(&mut self, commit: Commit) -> Result<(), String> {
+    fn apply_gizmo_commit(&mut self, commit: PlacementCommit) -> Result<(), String> {
         let params = serde_json::to_value(NodePlacementSet { node: commit.node, placement: commit.placement })
             .map_err(|error| format!("could not encode the placement: {error}"))?;
         self.session.dispatch(NODE_PLACEMENT_SET_ID, &params).map_err(|error| error.to_string())?;
@@ -176,9 +204,16 @@ impl FurniCraftApp {
 
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
-        let selected = self.editor.selected_node();
-        let target = translate_gizmo::Target { camera: self.scene.camera, project: self.session.project(), selected };
-        match self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget) {
+        let target = gizmo_math::Target {
+            camera: self.scene.camera,
+            project: self.session.project(),
+            selected: self.editor.selected_node(),
+        };
+        let update = match self.mode {
+            TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+            TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+        };
+        match update {
             Ok(Some(commit)) => {
                 if let Err(error) = self.apply_gizmo_commit(commit) {
                     self.last_error = Some(error);
@@ -190,7 +225,11 @@ impl FurniCraftApp {
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
         }
-        let dragging = self.translate_gizmo.is_dragging();
+        let dragging = self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging();
+        let consumed_click = match self.mode {
+            TransformMode::Move => self.translate_gizmo.consumed_click(),
+            TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
+        };
 
         if response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
@@ -229,7 +268,7 @@ impl FurniCraftApp {
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         if (response.clicked() || response.double_clicked())
             && !pointer_over_gizmo
-            && !self.translate_gizmo.consumed_click()
+            && !consumed_click
             && let Some(pointer) = response.interact_pointer_pos()
             && rect.width() > 0.0
             && rect.height() > 0.0
@@ -255,11 +294,15 @@ impl FurniCraftApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        self.translate_gizmo.paint(
-            ui,
-            rect,
-            translate_gizmo::Target { camera: self.scene.camera, project: self.session.project(), selected },
-        );
+        let paint_target = gizmo_math::Target {
+            camera: self.scene.camera,
+            project: self.session.project(),
+            selected: self.editor.selected_node(),
+        };
+        match self.mode {
+            TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
+            TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
+        }
         if let Some(direction) = gizmo::show(ui, rect, self.scene.camera) {
             self.scene.camera.look_from(direction);
         }
@@ -294,6 +337,10 @@ impl FurniCraftApp {
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
+                ui.label("Gizmo");
+                ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
+                ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
+                ui.separator();
                 ui.label("LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom");
                 if let Some(error) = &self.last_error {
                     ui.separator();
@@ -315,7 +362,11 @@ impl eframe::App for FurniCraftApp {
             self.last_error = Some(error);
         }
         let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        if escape && !self.translate_gizmo.is_dragging() && !ui.ctx().text_edit_focused() {
+        if escape
+            && !self.translate_gizmo.is_dragging()
+            && !self.rotate_gizmo.is_dragging()
+            && !ui.ctx().text_edit_focused()
+        {
             let before = self.editor.selected_node();
             self.editor.exit_level(self.session.project());
             if self.editor.selected_node() != before

@@ -21,8 +21,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU64;
 
-use furnicraft_geom::{DQuat, DVec2, DVec3, Rect, regions_from_rects, subtract_rects};
-use furnicraft_units::Length;
+use furnicraft_geom::{DQuat, DVec2, DVec3, EulerRot, Rect, regions_from_rects, subtract_rects};
+use furnicraft_units::{Degrees, Length};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 
@@ -85,6 +85,38 @@ impl Revision {
     pub fn checked_next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
+}
+
+/// Intrinsic XYZ Euler angles in degrees, the inspector's view of a placement rotation.
+///
+/// The document stores a unit quaternion; Euler angles are derived on read and never serialized.
+/// Each angle is in millidegrees, so text entered in the inspector round-trips exactly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EulerAngles {
+    /// Rotation about the local X axis, in degrees.
+    pub x: Degrees,
+    /// Rotation about the local Y axis, in degrees.
+    pub y: Degrees,
+    /// Rotation about the local Z axis, in degrees.
+    pub z: Degrees,
+}
+
+impl EulerAngles {
+    /// The axis order used by [`Placement::rotation_euler`] and [`Placement::with_rotation_euler`].
+    pub const ORDER_LABEL: &'static str = "XYZ";
+
+    /// Wraps each angle into `(-180°, 180°]`, the principal range the inspector displays.
+    ///
+    /// A full turn about one axis is the identity, so wrapping each angle does not change the
+    /// rotation the triple describes.
+    pub fn wrapped(self) -> Self {
+        Self { x: wrap_degrees(self.x), y: wrap_degrees(self.y), z: wrap_degrees(self.z) }
+    }
+}
+
+fn wrap_degrees(degrees: Degrees) -> Degrees {
+    let wrapped = degrees.millidegrees().rem_euclid(360_000);
+    Degrees::from_millidegrees(if wrapped > 180_000 { wrapped - 360_000 } else { wrapped })
 }
 
 /// A rigid placement relative to a parent frame.
@@ -171,6 +203,41 @@ impl Placement {
     /// as [`Length`] until this point.
     pub fn with_translation(self, x: Length, y: Length, z: Length) -> Result<Self, PlacementError> {
         Self::new(DVec3::new(x.millimetres_f64(), y.millimetres_f64(), z.millimetres_f64()), self.rotation)
+    }
+
+    /// The rotation as intrinsic XYZ Euler angles, rounded to the nearest millidegree.
+    ///
+    /// Euler angles are a presentation of the stored unit quaternion; the quaternion remains the
+    /// source of truth. At Y = ±90° the X and Z angles are not unique.
+    pub fn rotation_euler(self) -> EulerAngles {
+        let (x, y, z) = self.rotation.to_euler(EulerRot::XYZ);
+        EulerAngles {
+            x: Degrees::from_radians(x).unwrap_or_default(),
+            y: Degrees::from_radians(y).unwrap_or_default(),
+            z: Degrees::from_radians(z).unwrap_or_default(),
+        }
+        .wrapped()
+    }
+
+    /// Replaces the rotation from intrinsic XYZ Euler angles, keeping the translation.
+    ///
+    /// The quaternion is re-derived from the angles, so values finer than a millidegree are lost;
+    /// this is the write side of the inspector. The angles are wrapped to `(-180°, 180°]` first.
+    pub fn with_rotation_euler(self, angles: EulerAngles) -> Result<Self, PlacementError> {
+        let angles = angles.wrapped();
+        let rotation =
+            DQuat::from_euler(EulerRot::XYZ, angles.x.radians_f64(), angles.y.radians_f64(), angles.z.radians_f64())
+                .normalize();
+        Self::new(self.translation, rotation)
+    }
+
+    /// Whether two placements describe the same rigid transform.
+    ///
+    /// Quaternions `q` and `-q` are the same rotation, so a sign-only difference is not a change.
+    /// The translation must match exactly; the rotation tolerance is well below the inspector's
+    /// millidegree display precision.
+    pub fn same_transform(self, other: Self) -> bool {
+        self.translation == other.translation && self.rotation.dot(other.rotation).abs() >= 1.0 - 1.0e-12
     }
 }
 
@@ -3629,6 +3696,92 @@ mod tests {
         let huge = Placement::new(DVec3::new(1e300, 0.0, 0.0), DQuat::IDENTITY).expect("finite placement");
         assert!(huge.translation_lengths().is_none());
         assert!(Placement::IDENTITY.translation_lengths().is_some());
+    }
+
+    #[test]
+    fn identity_rotation_has_zero_euler_angles() {
+        let angles = Placement::IDENTITY.rotation_euler();
+        assert_eq!(angles, EulerAngles::default());
+        assert_eq!(angles.x, Degrees::ZERO);
+        assert_eq!(angles.y, Degrees::ZERO);
+        assert_eq!(angles.z, Degrees::ZERO);
+    }
+
+    #[test]
+    fn euler_angles_use_intrinsic_xyz_order() {
+        let rotation = DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)
+            * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_4)
+            * DQuat::from_rotation_z(std::f64::consts::FRAC_PI_8);
+        let placement = Placement::new(DVec3::ZERO, rotation).expect("placement");
+        let angles = placement.rotation_euler();
+        assert_eq!(angles.x, Degrees::from_millidegrees(90_000));
+        assert_eq!(angles.y, Degrees::from_millidegrees(45_000));
+        assert_eq!(angles.z, Degrees::from_millidegrees(22_500));
+    }
+
+    #[test]
+    fn euler_angles_round_trip_and_preserve_translation() {
+        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        let angles = placement.rotation_euler();
+        let rebuilt = placement.with_rotation_euler(angles).expect("rebuild rotation");
+        assert_eq!(rebuilt.translation(), placement.translation());
+        assert!(rebuilt.rotation().dot(placement.rotation()).abs() > 1.0 - 1.0e-9);
+
+        let turned = placement
+            .with_rotation_euler(EulerAngles {
+                x: Degrees::from_millidegrees(30_000),
+                y: Degrees::from_millidegrees(-15_500),
+                z: Degrees::from_millidegrees(90_000),
+            })
+            .expect("turn placement");
+        assert_eq!(turned.translation(), placement.translation());
+        assert!((turned.rotation().length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn euler_angles_at_gimbal_lock_recompose_the_same_rotation() {
+        let rotation = DQuat::from_rotation_x(0.4)
+            * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2)
+            * DQuat::from_rotation_z(0.7);
+        let placement = Placement::new(DVec3::ZERO, rotation).expect("placement");
+        let angles = placement.rotation_euler();
+        let rebuilt = placement.with_rotation_euler(angles).expect("rebuild rotation");
+        assert!(rebuilt.rotation().dot(placement.rotation()).abs() > 1.0 - 1.0e-9);
+    }
+
+    #[test]
+    fn euler_angles_wrap_full_turns_into_the_principal_range() {
+        let full_turn = EulerAngles {
+            x: Degrees::from_millidegrees(360_000),
+            y: Degrees::from_millidegrees(-360_000),
+            z: Degrees::from_millidegrees(720_000),
+        };
+        assert_eq!(full_turn.wrapped(), EulerAngles::default());
+        let placement = Placement::IDENTITY.with_rotation_euler(full_turn).expect("wrap placement");
+        assert!(placement.same_transform(Placement::IDENTITY));
+
+        let wrapped = EulerAngles {
+            x: Degrees::from_millidegrees(540_000),
+            y: Degrees::from_millidegrees(-181_000),
+            z: Degrees::from_millidegrees(180_000),
+        }
+        .wrapped();
+        assert_eq!(wrapped.x, Degrees::from_millidegrees(180_000));
+        assert_eq!(wrapped.y, Degrees::from_millidegrees(179_000));
+        assert_eq!(wrapped.z, Degrees::from_millidegrees(180_000));
+    }
+
+    #[test]
+    fn same_transform_ignores_the_quaternion_sign_and_rejects_real_changes() {
+        let rotation = DQuat::from_rotation_z(0.3);
+        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), rotation).expect("placement");
+        let flipped = Placement::new(DVec3::new(1.0, 2.0, 3.0), -rotation).expect("flipped placement");
+        assert!(placement.same_transform(flipped));
+
+        let moved = Placement::new(DVec3::new(1.0, 2.0, 4.0), rotation).expect("moved placement");
+        assert!(!placement.same_transform(moved));
+        let turned = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.31)).expect("turned placement");
+        assert!(!placement.same_transform(turned));
     }
 
     fn sample_nominal() -> PanelNominalSize {

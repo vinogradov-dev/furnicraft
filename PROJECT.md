@@ -34,7 +34,7 @@ The tree has two container kinds besides the panel. An **assembly** is a meaning
 
 ### `Placement`
 
-A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the node tree to produce world transforms. The document stores placements; it never stores a camera or a viewport. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently.
+A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the node tree to produce world transforms. The document stores placements; it never stores a camera or a viewport. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently. The inspector presents that quaternion as intrinsic XYZ Euler angles in degrees, while the rotate gizmo writes the quaternion directly. See [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md).
 
 ### Commands
 
@@ -111,14 +111,14 @@ FurniCraft separates the model from the way it is viewed.
 - A viewport is a UI adapter: it owns a camera, turns input into camera moves or commands, and draws a scene. Several viewports may show the same document.
 - Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); selection lives in the session or the UI. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md).
 - The floor grid has X, Y and a short Z axis at the origin, and a corner orientation widget shows the six world directions. Clicking one snaps the camera to look from that side; clicking the current side flips to the opposite. Both are view state. See [ADR 0019](docs/decisions/0019-standard-views-from-a-corner-widget.md).
-- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly. The viewport translate gizmo previews a moved frame during a drag and dispatches one `node.placement.set` on release, so the drag is one undo entry. See [ADR 0020](docs/decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md).
+- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly. The viewport translate gizmo previews a moved frame during a drag and dispatches one `node.placement.set` on release, so the drag is one undo entry. The rotate gizmo turns the selection about its local axes and node origin in the same way; Move and Rotate are one active mode at a time, which is view state. See [ADR 0020](docs/decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md) and [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md).
 - Drawing views (projections, sections, details) are output, not interactive viewports, and arrive with the output milestone.
 
 ## Crate map
 
 | Layer | Crate | Responsibility | Depends on |
 |---|---|---|---|
-| L0 | `furnicraft-units` | `Length` in micrometres, thickness helpers, parsing and formatting in mm | serde |
+| L0 | `furnicraft-units` | `Length` in micrometres and `Degrees` in millidegrees, thickness helpers, parsing and formatting in mm and degrees | serde |
 | L0 | `furnicraft-geom` | `glam` re-exports, `Frame`, indexed `MeshData`; bounds and planes as features need them | glam, serde |
 | L1 | `furnicraft-kernel` | Geometry kernel **port**: `Profile`, opaque `BodyId`, extrusion (linear sweep), booleans, tessellation, measures. No third-party kernel types | geom, thiserror |
 | L1 | `furnicraft-model` | Document data: `Project`, `Assembly`, `Placement`, `Panel`, `Material`, `Hardware`, `Dimension`, `Id`, `Revision`; invariants and typed errors | units, geom, serde |
