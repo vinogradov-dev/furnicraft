@@ -4,11 +4,18 @@
 //! like the axes in the scene instead of a fixed diagram. Clicking one snaps the camera to look at
 //! its target from that direction; clicking the direction the camera already looks from flips to
 //! the opposite side, so the centre ball remains useful in a top or bottom view.
-
 use eframe::egui;
-use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2};
 use furnicraft_geom::DVec3;
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH};
+
+/// Whether a direction should have a line connector to the center in the corner widget.
+///
+/// Only the positive axes (+X, +Y, +Z) get a connector line; negative directions draw an
+/// unfilled outline instead.
+fn has_connector(direction: DVec3) -> bool {
+    direction.x > 0.0 || direction.y > 0.0 || direction.z > 0.0
+}
 
 /// Width and height of the widget, in points.
 pub(crate) const SIZE: f32 = 104.0;
@@ -43,13 +50,16 @@ pub(crate) fn widget_rect(viewport: Rect) -> Option<Rect> {
 pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera) -> Option<DVec3> {
     let rect = widget_rect(viewport)?;
     let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, 10.0, Color32::from_rgba_unmultiplied(18, 20, 24, 170));
-    painter.rect_stroke(rect, 10.0, Stroke::new(1.0, Color32::from_gray(64)), StrokeKind::Inside);
 
     let center = rect.center();
     let forward = camera.forward();
     let right = camera.right();
     let up = camera.up();
+
+    let pointer_over_widget = ui.input(|input| input.pointer.hover_pos().is_some_and(|pointer| rect.contains(pointer)));
+    if pointer_over_widget {
+        painter.circle_filled(center, SIZE * 0.42, Color32::from_rgba_unmultiplied(30, 32, 38, 96));
+    }
 
     let directions = [
         (DVec3::X, X_COLOR, "X"),
@@ -75,13 +85,21 @@ pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera) -> Option<DVec3> {
         let tone = 0.45 + 0.55 * front;
         let position = center + offset;
         let ball = color.gamma_multiply(tone);
-        painter.line_segment([center, position], Stroke::new(1.5, ball.gamma_multiply(0.8)));
-        painter.circle_filled(position, DOT_RADIUS, ball);
+        let positive = has_connector(direction);
+        if positive {
+            painter.line_segment([center, position], Stroke::new(1.5, ball.gamma_multiply(0.8)));
+            painter.circle_filled(position, DOT_RADIUS, ball);
+        } else {
+            painter.circle_stroke(position, DOT_RADIUS, Stroke::new(1.0, ball));
+        }
 
         let hit = Rect::from_center_size(position, Vec2::splat(HIT_SIZE));
         let response = ui.interact(hit, ui.scope_id().with(("orientation_axis", label)), Sense::click());
-        let text_color = if response.hovered() { Color32::WHITE } else { Color32::from_gray(235).gamma_multiply(tone) };
-        painter.text(position, Align2::CENTER_CENTER, label, FontId::proportional(8.5), text_color);
+        let hovered = response.hovered();
+        if positive || hovered {
+            let text_color = if hovered { Color32::WHITE } else { Color32::from_gray(235).gamma_multiply(tone) };
+            painter.text(position, Align2::CENTER_CENTER, label, FontId::proportional(8.5), text_color);
+        }
         if response.clicked() {
             snapped = Some(snap_direction(direction, camera));
         }
@@ -145,5 +163,16 @@ mod tests {
         camera.look_from(DVec3::X);
         assert_eq!(snap_direction(DVec3::X, camera), -DVec3::X);
         assert_ne!(snap_direction(DVec3::Y, camera), -DVec3::Y);
+    }
+
+    #[test]
+    fn has_connector_tests() {
+        assert!(has_connector(DVec3::X));
+        assert!(has_connector(DVec3::Y));
+        assert!(has_connector(DVec3::Z));
+        assert!(!has_connector(-DVec3::X));
+        assert!(!has_connector(-DVec3::Y));
+        assert!(!has_connector(-DVec3::Z));
+        assert!(!has_connector(DVec3::ZERO));
     }
 }

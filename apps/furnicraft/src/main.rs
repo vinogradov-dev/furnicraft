@@ -202,20 +202,26 @@ impl FurniCraftApp {
         let drag = response.drag_delta();
         // An axis drag owns the pointer; rotating the camera mid-drag would move the axis under the
         // pointer and change the drag parameter under the user's hand.
-        if !dragging && response.dragged_by(egui::PointerButton::Primary) {
-            self.scene
-                .camera
-                .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
-        } else if !dragging
-            && (response.dragged_by(egui::PointerButton::Middle) || response.dragged_by(egui::PointerButton::Secondary))
-        {
+        if !dragging && response.dragged_by(egui::PointerButton::Middle) {
+            let modifiers = ui.input(|input| input.modifiers);
+            if modifiers.shift {
+                self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
+            } else if modifiers.ctrl {
+                let factor = (-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp();
+                self.scene.camera.zoom(factor);
+            } else {
+                self.scene
+                    .camera
+                    .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
+            }
+        } else if !dragging && response.dragged_by(egui::PointerButton::Secondary) {
             self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
         }
 
         if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        } else if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         }
 
         let pointer_over_gizmo = response
@@ -288,7 +294,7 @@ impl FurniCraftApp {
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                ui.label("LMB select / drag orbit  ·  double-click enter  ·  Esc leave  ·  MMB/RMB pan  ·  wheel zoom");
+                ui.label("LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom");
                 if let Some(error) = &self.last_error {
                     ui.separator();
                     ui.colored_label(egui::Color32::LIGHT_RED, error);

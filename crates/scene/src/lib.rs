@@ -13,7 +13,7 @@
     clippy::unreachable
 )]
 
-use std::f64::consts::{FRAC_PI_4, TAU};
+use std::f64::consts::{FRAC_PI_4, FRAC_PI_8, PI, TAU};
 use std::sync::Arc;
 
 use furnicraft_geom::{DMat4, DVec2, DVec3, MeshData};
@@ -21,14 +21,14 @@ use furnicraft_model::Id;
 use thiserror::Error;
 
 /// The default vertical field of view, in radians (45 degrees).
-pub const DEFAULT_FOV_Y: f64 = std::f64::consts::FRAC_PI_4;
+pub const DEFAULT_FOV_Y: f64 = FRAC_PI_4;
 
 /// Lowest camera pitch, in radians. The camera never reaches the poles, so the up vector stays
 /// well-defined.
-pub const MIN_PITCH: f64 = -85.0 * std::f64::consts::PI / 180.0;
+pub const MIN_PITCH: f64 = -85.0 * PI / 180.0;
 
 /// Highest camera pitch, in radians.
-pub const MAX_PITCH: f64 = 85.0 * std::f64::consts::PI / 180.0;
+pub const MAX_PITCH: f64 = 85.0 * PI / 180.0;
 
 /// How far outside the viewport a pointer ray is still accepted, in normalized device coordinates.
 ///
@@ -76,8 +76,8 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             target: DVec3::ZERO,
-            yaw: -FRAC_PI_4,
-            pitch: 30.0 * std::f64::consts::PI / 180.0,
+            yaw: 2.8 * FRAC_PI_8,
+            pitch: 30.0 * PI / 180.0,
             distance: 1200.0,
             fov_y: DEFAULT_FOV_Y,
             near: 1.0,
@@ -364,10 +364,6 @@ pub struct Grid {
     pub axis_x_color: [f32; 4],
     /// Colour of the world Y axis, in gamma space.
     pub axis_y_color: [f32; 4],
-    /// Colour of the world Z axis, in gamma space.
-    pub axis_z_color: [f32; 4],
-    /// Height of the Z axis line above the floor, in millimetres.
-    pub axis_height_mm: f64,
 }
 
 impl Default for Grid {
@@ -380,8 +376,6 @@ impl Default for Grid {
             major_color: [0.42, 0.45, 0.50, 1.0],
             axis_x_color: [0.72, 0.28, 0.28, 1.0],
             axis_y_color: [0.28, 0.62, 0.34, 1.0],
-            axis_z_color: [0.30, 0.45, 0.82, 1.0],
-            axis_height_mm: 1000.0,
         }
     }
 }
@@ -400,7 +394,7 @@ pub struct Lighting {
 impl Default for Lighting {
     fn default() -> Self {
         Self {
-            key_direction: DVec3::new(0.35, -0.55, 0.75).try_normalize().unwrap_or(DVec3::Z),
+            key_direction: DVec3::new(-0.35, 0.55, 0.75).try_normalize().unwrap_or(DVec3::Z),
             key_color: [1.0, 0.97, 0.92],
             ambient: 0.32,
         }

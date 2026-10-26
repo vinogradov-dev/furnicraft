@@ -47,3 +47,4 @@ What it buys, what it costs, and the condition under which it should be revisite
 ```
 
 The code and `AGENTS.md` stay the authority for rules; a record keeps the reason.
+| [0023](0023-fasad-furniture-and-standard-views.md) | Standard views from the furniture facade and updated lighting |
