@@ -23,8 +23,8 @@ mod translate_gizmo;
 use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
-use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID;
-use furnicraft_engine::{NodePlacementSet, Session};
+use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
+use furnicraft_engine::{NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_model::{Id, Revision};
 use furnicraft_render::ViewportRenderer;
@@ -64,7 +64,7 @@ struct FurniCraftApp {
     translate_gizmo: TranslateGizmo,
     rotate_gizmo: RotateGizmo,
     mode: TransformMode,
-    highlighted: Option<Id>,
+    highlighted: Vec<Id>,
     uploaded_preview: Option<PreviewKey>,
     last_error: Option<String>,
 }
@@ -100,7 +100,7 @@ impl FurniCraftApp {
             translate_gizmo: TranslateGizmo::default(),
             rotate_gizmo: RotateGizmo::default(),
             mode: TransformMode::Move,
-            highlighted: None,
+            highlighted: Vec::new(),
             uploaded_preview: None,
             last_error: None,
         })
@@ -120,8 +120,11 @@ impl FurniCraftApp {
     }
 
     fn upload_scene(&mut self) -> Result<(), String> {
-        let selected = self.editor.selected_node();
-        let panels = selected.and_then(|id| self.session.project().panel_ids_under(id)).unwrap_or_default();
+        let selection = self.editor.selected_nodes();
+        let mut panels = Vec::new();
+        for node in self.session.project().top_most_nodes(selection) {
+            panels.extend(self.session.project().panel_ids_under(node).unwrap_or_default());
+        }
         let frame = self.scene.with_selection_highlight(&panels);
         let frame = match self.preview() {
             Some(Preview::Translation { panels, delta }) => frame.with_world_translation(panels, delta),
@@ -129,7 +132,8 @@ impl FurniCraftApp {
             None => frame,
         };
         self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
-        self.highlighted = selected;
+        self.highlighted.clear();
+        self.highlighted.extend_from_slice(selection);
         self.uploaded_preview = self.preview_key();
         Ok(())
     }
@@ -161,11 +165,18 @@ impl FurniCraftApp {
         self.upload_scene()
     }
 
-    /// Dispatches one `node.placement.set` for a finished drag and rebuilds the scene.
+    /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
     fn apply_gizmo_commit(&mut self, commit: PlacementCommit) -> Result<(), String> {
-        let params = serde_json::to_value(NodePlacementSet { node: commit.node, placement: commit.placement })
-            .map_err(|error| format!("could not encode the placement: {error}"))?;
-        self.session.dispatch(NODE_PLACEMENT_SET_ID, &params).map_err(|error| error.to_string())?;
+        let request = NodePlacementSetMany {
+            placements: commit
+                .changes
+                .iter()
+                .map(|change| NodePlacement { node: change.node, placement: change.placement })
+                .collect(),
+        };
+        let params =
+            serde_json::to_value(request).map_err(|error| format!("could not encode the placement batch: {error}"))?;
+        self.session.dispatch(NODE_PLACEMENT_SET_MANY_ID, &params).map_err(|error| error.to_string())?;
         // The preview already showed the new position; rebuilding here keeps the document, the
         // scene and the inspector in agreement without waiting a frame.
         self.sync_scene()
@@ -207,7 +218,7 @@ impl FurniCraftApp {
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
-            selected: self.editor.selected_node(),
+            selection: self.editor.selected_nodes(),
         };
         let update = match self.mode {
             TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
@@ -297,7 +308,7 @@ impl FurniCraftApp {
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
-            selected: self.editor.selected_node(),
+            selection: self.editor.selected_nodes(),
         };
         match self.mode {
             TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
@@ -367,15 +378,15 @@ impl eframe::App for FurniCraftApp {
             && !self.rotate_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
-            let before = self.editor.selected_node();
+            let before = self.editor.selected_nodes().to_vec();
             self.editor.exit_level(self.session.project());
-            if self.editor.selected_node() != before
+            if self.editor.selected_nodes() != before.as_slice()
                 && let Err(error) = self.upload_scene()
             {
                 self.last_error = Some(error);
             }
         }
-        if self.editor.selected_node() != self.highlighted
+        if self.editor.selected_nodes() != self.highlighted
             && let Err(error) = self.upload_scene()
         {
             self.last_error = Some(error);

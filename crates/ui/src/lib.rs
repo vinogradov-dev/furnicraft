@@ -68,6 +68,14 @@ impl Editor {
         self.selection.primary()
     }
 
+    /// Every selected node in selection order, oldest first; the last one is the primary.
+    ///
+    /// Multi-selection is view state, so a gizmo drag moves all of these nodes as one document
+    /// change while the inspector keeps showing the primary.
+    pub fn selected_nodes(&self) -> &[Id] {
+        self.selection.ids()
+    }
+
     /// Replaces the selection with one node, or clears it for `None`.
     ///
     /// A deliberate selection also counts as the first show, so the tree does not replace it with
@@ -334,11 +342,14 @@ mod tests {
     fn picking_replaces_the_tree_selection_and_an_empty_click_clears_it() {
         let mut editor = Editor::new();
         assert_eq!(editor.selected_node(), None);
+        assert!(editor.selected_nodes().is_empty());
         let node = Id::new(2).expect("id");
         editor.select_node(Some(node));
         assert_eq!(editor.selected_node(), Some(node));
+        assert_eq!(editor.selected_nodes(), [node], "the primary is the only selected node");
         editor.select_node(None);
         assert_eq!(editor.selected_node(), None);
+        assert!(editor.selected_nodes().is_empty());
     }
 
     fn grouped_project() -> (Project, Id, Id, Id) {

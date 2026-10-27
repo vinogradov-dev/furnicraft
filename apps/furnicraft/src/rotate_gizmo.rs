@@ -1,12 +1,12 @@
 //! The viewport rotate gizmo.
 //!
-//! Three rings are aligned with the world X, Y and Z axes and are projected over the selected node's
-//! manipulation pivot. A drag never mutates the document: it turns a preview of the selected panels
-//! about that pivot, and the release dispatches one `node.placement.set`. Because the rings are
-//! world-aligned, the preview turn is applied on the left of the node's world rotation; the commit
-//! converts it into the parent frame and pre-multiplies it onto the stored local quaternion. When
-//! the pivot is not the node's origin the translation is adjusted too, so the ring centre stays a
-//! fixed point of the object.
+//! Three rings are aligned with the world X, Y and Z axes and are projected over the selection's
+//! manipulation pivot, the stored pivot of its primary node. A drag never mutates the document: it
+//! turns a preview of every selected panel about that pivot, and the release dispatches one
+//! `node.placement.set_many`. Because the rings are world-aligned, the preview turn is applied on
+//! the left of each node's world rotation; the commit converts it into that node's parent frame and
+//! pre-multiplies it onto the stored local quaternion. When the pivot is not the node's origin the
+//! translation is adjusted too, so the ring centre stays a fixed point of the whole selection.
 //!
 //! Rings keep a roughly constant screen radius. A ring seen edge-on is not drawn: its plane is
 //! nearly parallel to the view direction, the pointer cannot define an angle on it and a drag would
@@ -15,12 +15,12 @@
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Response, Stroke, Ui};
 use furnicraft_geom::{DQuat, DVec3};
-use furnicraft_model::{Id, Placement};
+use furnicraft_model::Id;
 use furnicraft_scene::Camera;
 
 use crate::gizmo_math::{
-    ACTIVE_COLOR, Axis, PlacementCommit, Preview, PreviewKey, Target, distance_to_segment, ray_plane, ray_to,
-    screen_point,
+    ACTIVE_COLOR, Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_rotation, distance_to_segment,
+    ray_plane, ray_to, screen_point,
 };
 
 /// Radius of a ring relative to the camera distance.
@@ -41,10 +41,8 @@ struct Drag {
     node: Id,
     axis: Axis,
     panels: Vec<Id>,
+    targets: Vec<MoveTarget>,
     pivot: DVec3,
-    pivot_local: DVec3,
-    start_local: Placement,
-    parent_rotation: DQuat,
     previous_angle: f64,
     angle: f64,
 }
@@ -123,7 +121,8 @@ impl RotateGizmo {
             }
             if !down {
                 self.consumed_click = true;
-                let commit = commit_rotation(&drag)?;
+                let turn = DQuat::from_axis_angle(drag.axis.direction(), drag.angle);
+                let commit = commit_rotation(&drag.targets, drag.pivot, turn)?;
                 return Ok(commit);
             }
             self.drag = Some(drag);
@@ -134,7 +133,7 @@ impl RotateGizmo {
         if pointer_over_widget {
             return Ok(None);
         }
-        let Some(pivot) = target_rings(target) else {
+        let Some(pivot) = target.anchor_pivot() else {
             return Ok(None);
         };
         let Some(pointer) = response.hover_pos() else {
@@ -152,33 +151,17 @@ impl RotateGizmo {
         let Some(start_angle) = pointer_angle(pointer, viewport, target.camera, pivot, axis_world) else {
             return Ok(None);
         };
-        let Some(selected) = target.selected else {
-            return Ok(None);
-        };
-        let Some(start_local) = target.project.node(selected).map(|node| node.placement()) else {
-            return Ok(None);
-        };
-        let Some(pivot_local) = target.project.pivot_local(selected) else {
-            return Ok(None);
-        };
-        let Some(parent) = target.project.parent_of(selected) else {
-            return Ok(None);
-        };
-        let Some(parent_rotation) = target.project.world_placement(parent).map(Placement::rotation) else {
-            return Ok(None);
-        };
-        let Some(panels) = target.project.panel_ids_under(selected) else {
+        let targets = target.move_targets();
+        let Some(anchor) = targets.last() else {
             return Ok(None);
         };
 
         self.drag = Some(Drag {
-            node: selected,
+            node: anchor.node,
             axis,
-            panels,
+            panels: target.panels(),
+            targets,
             pivot,
-            pivot_local,
-            start_local,
-            parent_rotation,
             previous_angle: start_angle,
             angle: 0.0,
         });
@@ -191,7 +174,7 @@ impl RotateGizmo {
 
     /// Draws the rings over the viewport.
     pub(crate) fn paint(&self, ui: &Ui, viewport: egui::Rect, target: Target<'_>) {
-        let Some(pivot) = target_rings(target) else {
+        let Some(pivot) = target.anchor_pivot() else {
             return;
         };
         let Some(origin) = screen_point(target.camera, viewport, pivot) else {
@@ -234,17 +217,6 @@ impl RotateGizmo {
             }
         }
     }
-}
-
-/// The world pivot of the node the rings belong to, if it has a placement to edit.
-///
-/// The rings are deliberately world-aligned: they do not follow the node's rotation, so a turn is
-/// always about a world X, Y or Z axis and the ring centre is the stored pivot.
-fn target_rings(target: Target<'_>) -> Option<DVec3> {
-    let selected = target.selected?;
-    // The root defines the world frame and has no placement to edit.
-    target.project.parent_of(selected)?;
-    target.project.pivot_world(selected)
 }
 
 /// A stable orthonormal basis for the plane perpendicular to `normal`.
@@ -317,54 +289,13 @@ fn wrap_angle(angle: f64) -> f64 {
     if wrapped > std::f64::consts::PI { wrapped - std::f64::consts::TAU } else { wrapped }
 }
 
-/// The placement to dispatch at the end of a drag, or `None` when nothing turned.
-fn commit_rotation(drag: &Drag) -> Result<Option<PlacementCommit>, String> {
-    if drag.angle == 0.0 {
-        return Ok(None);
-    }
-    if !drag.angle.is_finite() {
-        return Err("the drag produced a non-finite rotation".to_owned());
-    }
-    // The preview turns the node about a world axis. Convert that world turn into the parent frame
-    // so it can be pre-multiplied onto the stored local rotation.
-    let delta_world = DQuat::from_axis_angle(drag.axis.direction(), drag.angle);
-    let delta_parent = (drag.parent_rotation.inverse() * delta_world * drag.parent_rotation).normalize();
-    if !delta_parent.is_finite() {
-        return Err("the drag produced a non-finite rotation".to_owned());
-    }
-    let start_rotation = drag.start_local.rotation();
-    let rotation = (delta_parent * start_rotation).normalize();
-    if !rotation.is_finite() {
-        return Err("the drag produced a non-finite rotation".to_owned());
-    }
-    let placement = if drag.pivot_local == DVec3::ZERO {
-        // A zero pivot keeps the stored translation exact.
-        Placement::new(drag.start_local.translation(), rotation).map_err(|error| error.to_string())?
-    } else {
-        // Keep the pivot fixed in the parent frame and round the new translation to micrometres.
-        let pivot_parent = drag.start_local.transform_point(drag.pivot_local);
-        let translation = pivot_parent + delta_parent * (drag.start_local.translation() - pivot_parent);
-        if !translation.is_finite() {
-            return Err("the drag moved the node to a non-finite position".to_owned());
-        }
-        let placement = Placement::new(translation, rotation).map_err(|error| error.to_string())?;
-        let [x, y, z] = placement
-            .translation_lengths()
-            .ok_or_else(|| "the drag moved the node outside the editable millimetre range".to_owned())?;
-        placement.with_translation(x, y, z).map_err(|error| error.to_string())?
-    };
-    if placement.same_transform(drag.start_local) {
-        Ok(None)
-    } else {
-        Ok(Some(PlacementCommit { node: drag.node, placement }))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+
+    use furnicraft_model::Placement;
 
     use super::*;
 
@@ -372,15 +303,21 @@ mod tests {
         egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 600.0))
     }
 
+    fn move_target(node: u64, start_local: Placement, parent: Placement, pivot_local: DVec3) -> MoveTarget {
+        MoveTarget { node: Id::new(node).expect("id"), start_local, parent, pivot_local }
+    }
+
+    fn world_pivot(target: &MoveTarget) -> DVec3 {
+        target.parent.transform_point(target.start_local.transform_point(target.pivot_local))
+    }
+
     fn drag(axis: Axis, angle: f64) -> Drag {
         Drag {
             node: Id::new(2).expect("id"),
             axis,
             panels: Vec::new(),
+            targets: Vec::new(),
             pivot: DVec3::ZERO,
-            pivot_local: DVec3::ZERO,
-            start_local: Placement::IDENTITY,
-            parent_rotation: DQuat::IDENTITY,
             previous_angle: 0.0,
             angle,
         }
@@ -389,31 +326,35 @@ mod tests {
     #[test]
     fn a_quarter_turn_premultiplies_the_world_turn_onto_the_local_frame() {
         let start = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(FRAC_PI_4)).expect("placement");
-        let drag = Drag { start_local: start, ..drag(Axis::Y, FRAC_PI_2) };
-        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
-        assert_eq!(commit.placement.translation(), start.translation());
-        let expected = (DQuat::from_axis_angle(Axis::Y.direction(), FRAC_PI_2) * start.rotation()).normalize();
-        assert!(commit.placement.rotation().dot(expected).abs() > 1.0 - 1.0e-12);
+        let target = move_target(2, start, Placement::IDENTITY, DVec3::ZERO);
+        let turn = DQuat::from_axis_angle(Axis::Y.direction(), FRAC_PI_2);
+        let commit = commit_rotation(&[target], world_pivot(&target), turn).expect("valid rotation").expect("a turn");
+        assert_eq!(commit.changes.len(), 1);
+        let change = commit.changes[0];
+        assert_eq!(change.placement.translation(), start.translation());
+        let expected = (turn * start.rotation()).normalize();
+        assert!(change.placement.rotation().dot(expected).abs() > 1.0 - 1.0e-12);
     }
 
     #[test]
     fn a_turn_is_expressed_in_the_parent_frame() {
-        let parent_rotation = DQuat::from_rotation_z(FRAC_PI_4);
+        let parent = Placement::new(DVec3::ZERO, DQuat::from_rotation_z(FRAC_PI_4)).expect("placement");
         let start = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::from_rotation_z(0.2)).expect("placement");
-        let pivot_local = DVec3::new(1.0, 2.0, 3.0);
+        let target = move_target(2, start, parent, DVec3::new(1.0, 2.0, 3.0));
         let angle = FRAC_PI_2;
-        let drag = Drag { start_local: start, pivot_local, parent_rotation, ..drag(Axis::Y, angle) };
-        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
+        let turn = DQuat::from_axis_angle(Axis::Y.direction(), angle);
+        let commit = commit_rotation(&[target], world_pivot(&target), turn).expect("valid rotation").expect("a turn");
+        let change = commit.changes[0];
 
         // In world space the preview and the commit must be the same left-multiplied turn.
-        let world_before = parent_rotation * start.rotation();
-        let world_after = parent_rotation * commit.placement.rotation();
-        let expected = DQuat::from_axis_angle(Axis::Y.direction(), angle) * world_before;
+        let world_before = parent.rotation() * start.rotation();
+        let world_after = parent.rotation() * change.placement.rotation();
+        let expected = turn * world_before;
         assert!(world_after.dot(expected).abs() > 1.0 - 1.0e-12, "world rotations diverged");
 
         // The pivot is fixed in the parent frame and therefore in world space too.
-        let pivot_before = start.transform_point(pivot_local);
-        let pivot_after = commit.placement.transform_point(pivot_local);
+        let pivot_before = start.transform_point(target.pivot_local);
+        let pivot_after = change.placement.transform_point(target.pivot_local);
         assert!(
             (pivot_before - pivot_after).length() < 2.0e-3,
             "pivot moved from {pivot_before:?} to {pivot_after:?} by more than the micrometre rounding"
@@ -422,23 +363,31 @@ mod tests {
 
     #[test]
     fn a_zero_or_full_turn_dispatches_nothing() {
-        assert_eq!(commit_rotation(&drag(Axis::X, 0.0)).expect("no error"), None);
-        assert_eq!(commit_rotation(&drag(Axis::X, std::f64::consts::TAU)).expect("no error"), None);
-        assert_eq!(commit_rotation(&drag(Axis::X, -std::f64::consts::TAU)).expect("no error"), None);
+        let target = move_target(2, Placement::IDENTITY, Placement::IDENTITY, DVec3::ZERO);
+        let pivot = world_pivot(&target);
+        for angle in [0.0, std::f64::consts::TAU, -std::f64::consts::TAU] {
+            let turn = DQuat::from_axis_angle(Axis::X.direction(), angle);
+            assert_eq!(commit_rotation(&[target], pivot, turn).expect("no error"), None);
+        }
+        assert_eq!(
+            commit_rotation(&[], pivot, DQuat::from_axis_angle(Axis::X.direction(), 0.5)).expect("no error"),
+            None
+        );
     }
 
     #[test]
     fn a_turn_about_a_non_zero_pivot_keeps_that_point_fixed() {
         let start = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("placement");
-        let pivot_local = DVec3::new(1.0, 2.0, 3.0);
-        let drag = Drag { start_local: start, pivot_local, ..drag(Axis::Z, FRAC_PI_2) };
-        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
+        let target = move_target(2, start, Placement::IDENTITY, DVec3::new(1.0, 2.0, 3.0));
+        let turn = DQuat::from_axis_angle(Axis::Z.direction(), FRAC_PI_2);
+        let commit = commit_rotation(&[target], world_pivot(&target), turn).expect("valid rotation").expect("a turn");
+        let change = commit.changes[0];
 
-        let before = start.transform_point(pivot_local);
-        let after = commit.placement.transform_point(pivot_local);
+        let before = start.transform_point(target.pivot_local);
+        let after = change.placement.transform_point(target.pivot_local);
         assert!((before - after).length() < 1.0e-9, "pivot moved from {before:?} to {after:?}");
         assert!(
-            (commit.placement.translation() - start.translation()).length() > 1.0,
+            (change.placement.translation() - start.translation()).length() > 1.0,
             "a turn about a corner must adjust the translation"
         );
     }
@@ -446,9 +395,32 @@ mod tests {
     #[test]
     fn a_zero_pivot_preserves_the_translation_bit_for_bit() {
         let start = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(FRAC_PI_4)).expect("placement");
-        let drag = Drag { start_local: start, ..drag(Axis::Y, FRAC_PI_2) };
-        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
-        assert_eq!(commit.placement.translation(), start.translation());
+        let target = move_target(2, start, Placement::IDENTITY, DVec3::ZERO);
+        let turn = DQuat::from_axis_angle(Axis::Y.direction(), FRAC_PI_2);
+        let commit = commit_rotation(&[target], world_pivot(&target), turn).expect("valid rotation").expect("a turn");
+        assert_eq!(commit.changes[0].placement.translation(), start.translation());
+    }
+
+    #[test]
+    fn a_multi_selection_turns_every_node_about_the_anchor_pivot() {
+        let first = Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let anchor = Placement::new(DVec3::new(0.0, 200.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let targets = [
+            move_target(2, first, Placement::IDENTITY, DVec3::ZERO),
+            move_target(3, anchor, Placement::IDENTITY, DVec3::new(0.0, 10.0, 0.0)),
+        ];
+        let pivot = world_pivot(&targets[1]);
+        assert_eq!(pivot, DVec3::new(0.0, 210.0, 0.0));
+        let turn = DQuat::from_axis_angle(Axis::Z.direction(), FRAC_PI_2);
+        let commit = commit_rotation(&targets, pivot, turn).expect("valid rotation").expect("a turn");
+        assert_eq!(commit.changes.len(), 2);
+
+        // The anchor's stored pivot stays where it was; the other node orbits the same point.
+        let anchor_after = commit.changes[1].placement.transform_point(targets[1].pivot_local);
+        assert!((anchor_after - pivot).length() < 1.0e-9, "anchor pivot moved to {anchor_after:?}");
+        let first_after = commit.changes[0].placement.translation();
+        let expected = pivot + turn * (first.translation() - pivot);
+        assert!((first_after - expected).length() < 1.0e-6, "first moved to {first_after:?}");
     }
 
     #[test]

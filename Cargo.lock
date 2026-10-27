@@ -1246,6 +1246,7 @@ dependencies = [
  "furnicraft-param",
  "furnicraft-render",
  "furnicraft-scene",
+ "furnicraft-testkit",
  "furnicraft-ui",
  "furnicraft-units",
  "log",
