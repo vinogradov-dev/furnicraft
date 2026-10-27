@@ -23,9 +23,9 @@ The user needs both behaviours without a modal tool switching the meaning of eve
 - A click in the scene tree always selects the exact node; the tree is the explicit path to a panel
   or a nested container regardless of the viewport's open state.
 - Every panel below the selected node is highlighted, so a selected container reads as one object.
-- The manipulation pivot is the minimum corner of the node's local bounds: the panel's local origin,
-  the minimum of the descendant panel boxes in a container's frame, or the node origin for an empty
-  container. Both gizmos use it; see [0025](0025-one-manipulation-pivot.md).
+- The manipulation pivot is stored per node in its own frame. It starts at the panel's local origin,
+  at the centre of the descendant panel boxes for a new container, or at the node origin for an empty
+  container. Both gizmos use it; see [0026](0026-the-manipulation-pivot-is-stored-node-data.md).
 
 ## Consequences
 

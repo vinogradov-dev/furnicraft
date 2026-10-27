@@ -7,11 +7,15 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 - Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
   picking, the orientation widget, the translate gizmo and rotation editing are done. Rotation is
   edited as intrinsic XYZ Euler angles in the inspector and by a rotate gizmo in the viewport; both
-  write the stored unit quaternion. Both gizmos use one pivot: the first corner of the node's local
-  bounds, so a panel and a container move and turn about the same predictable point. Assemblies and groups are separate container kinds: a viewport
-  click selects a closed container as one object, double-click enters one level and Escape leaves one
-  level. The inspector groups its properties into collapsible sections; the fold state is egui view
-  state only and every section starts open.
+  write the stored unit quaternion. The rotate rings are world X/Y/Z aligned and do not turn with the
+  object. Both gizmos use one stored pivot in the node's own frame: a panel starts at its local zero,
+  a container created with children at the centre of its local panel bounds, an empty container at
+  its origin, and the root is always zero. The pivot is editable with `node.pivot.set` /
+  `node.pivot.center` and the inspector's X/Y/Z fields plus Center; resizing or reparenting never
+  moves it. Assemblies and groups are separate container kinds: a viewport click selects a closed
+  container as one object, double-click enters one level and Escape leaves one level. The inspector
+  groups its properties into collapsible sections; the fold state is egui view state only and every
+  section starts open.
 - Working on: the next task is multi-node placement, then the assembly dissolve operation.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
@@ -21,6 +25,11 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record the stored pivot and world-aligned rotate rings`
+- `feat(app): rotate with world-aligned rings about the stored pivot`
+- `feat(ui): edit the node pivot in the inspector`
+- `feat(engine): add pivot commands`
+- `feat(model): store and edit the manipulation pivot`
 - `docs: record the shared manipulation pivot`
 - `feat(app): pivot both gizmos at the first corner of the local bounds`
 - `feat(model): expose the manipulation pivot in local and world space`
@@ -118,6 +127,8 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 - Assemblies have no dissolve operation yet: `node.ungroup` only flattens groups, and dismantling a
   component needs the type-specific rules that arrive with M6.
 - The gizmos do not snap: translate and rotate angles are free, and snapping is not implemented yet.
+- The rotate rings are world-aligned only; a local-axis mode is not implemented.
+- The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.
 - Move and Rotate each act on one selected node; a multi-selection has no combined placement command.
 - The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
   transform buffer per drawable can replace the full upload when a large cabinet makes it visible.

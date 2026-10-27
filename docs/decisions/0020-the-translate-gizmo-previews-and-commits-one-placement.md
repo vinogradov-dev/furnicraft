@@ -25,7 +25,7 @@ the document or the evaluated meshes.
 - The shell owns a screen-space translate gizmo in `apps/furnicraft/src/translate_gizmo.rs`. It
   projects three world-axis handles from the selected node's manipulation pivot, keeps them at a
   constant screen length, and paints them over the viewport image. It changes only shell state. The
-  pivot is settled by [0025](0025-one-manipulation-pivot.md).
+  pivot is settled by [0026](0026-the-manipulation-pivot-is-stored-node-data.md).
 - An axis whose world direction is within about ten degrees of the view direction has no handle:
   its projected direction is unstable and the drag would be unusable.
 - A press on a handle starts a drag. The drag parameter is the closest point between the pointer ray
@@ -50,9 +50,9 @@ the document or the evaluated meshes.
 - A preview upload rebuilds the drawable vertices for the whole frame on each pointer move. That is
   acceptable for the sample scene but not for a large cabinet; an incremental transform buffer per
   drawable is the next optimization if it shows.
-- Handles sit at the manipulation pivot: for a panel its minimum corner, for a container the first
-  corner of its local bounds ([0025](0025-one-manipulation-pivot.md)). The commit path does not
-  depend on the pivot.
+- Handles sit at the manipulation pivot: for a panel its stored local pivot, for a container the
+  centre of its local bounds by default ([0026](0026-the-manipulation-pivot-is-stored-node-data.md)).
+  The commit path does not depend on the pivot.
 - The rotation representation is fixed by [0024](0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md):
   the document keeps the quaternion, the inspector shows intrinsic XYZ Euler angles, and the rotate
   gizmo reuses this preview-and-commit shape.

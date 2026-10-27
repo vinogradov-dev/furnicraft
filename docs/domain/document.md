@@ -29,6 +29,7 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 - revision;
 - id allocator;
 - node tree (panels, assemblies and groups);
+- each node's manipulation pivot, in its own frame;
 - panels:
   - id;
   - name;
@@ -64,15 +65,20 @@ flattened by `node.ungroup`: dismantling a component is a separate operation wit
 inspector edits the translation in millimetres in the parent frame and the rotation as intrinsic XYZ
 Euler angles in degrees; the document stores the unit quaternion, so editing one half never resets
 the other. The viewport translate gizmo moves that same translation directly and the rotate gizmo
-turns the node about its local axes; both use one pivot, the minimum corner of the node's local
-bounds. Each drag previews the frame and one `node.placement.set` is dispatched on release, so the
-drag is one undo entry. Move and Rotate are one active gizmo at a time. The root group defines the
-world frame and cannot be deleted, moved, grouped or ungrouped. See
+turns the node about world X, Y and Z axes; both use one stored pivot, expressed in the node's own
+frame. A panel starts with its pivot at the local zero, a container created with children starts at
+the centre of its local panel bounds, an empty container at its own origin, and the root always has a
+zero pivot and cannot be edited. The pivot does not move when the geometry changes; `node.pivot.set`
+and `node.pivot.center` are the only ways to move it, and the inspector exposes X/Y/Z and Center.
+Each drag previews the frame and one `node.placement.set` is dispatched on release, so the drag is
+one undo entry. Move and Rotate are one active gizmo at a time. The root group defines the world frame
+and cannot be deleted, moved, grouped or ungrouped. See
 [ADR 0020](../decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md),
 [ADR 0021](../decisions/0021-assemblies-are-components-groups-are-containers.md),
 [ADR 0022](../decisions/0022-closed-containers-pick-as-one-object.md),
-[ADR 0024](../decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md) and
-[ADR 0025](../decisions/0025-one-manipulation-pivot.md).
+[ADR 0024](../decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md),
+[ADR 0026](../decisions/0026-the-manipulation-pivot-is-stored-node-data.md) and
+[ADR 0027](../decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md).
 
 ## 3. What the scene file does not store
 
@@ -167,6 +173,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
 - Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
 - Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as a group and every nested assembly keeps its kind.
+- Version 6 stores the manipulation pivot on every node as three micrometre lengths. A version 5 or older file materializes the default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo
