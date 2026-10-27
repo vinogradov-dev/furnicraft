@@ -7,7 +7,8 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 - Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
   picking, the orientation widget, the translate gizmo and rotation editing are done. Rotation is
   edited as intrinsic XYZ Euler angles in the inspector and by a rotate gizmo in the viewport; both
-  write the stored unit quaternion. Assemblies and groups are separate container kinds: a viewport
+  write the stored unit quaternion. Both gizmos use one pivot: the first corner of the node's local
+  bounds, so a panel and a container move and turn about the same predictable point. Assemblies and groups are separate container kinds: a viewport
   click selects a closed container as one object, double-click enters one level and Escape leaves one
   level. The inspector groups its properties into collapsible sections; the fold state is egui view
   state only and every section starts open.
@@ -20,6 +21,9 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record the shared manipulation pivot`
+- `feat(app): pivot both gizmos at the first corner of the local bounds`
+- `feat(model): expose the manipulation pivot in local and world space`
 - `feat(ui): group inspector properties into collapsible sections`
 - `docs: record the rotation representation and gizmo`
 - `feat(app): rotate the selection with a rotate gizmo`
@@ -90,9 +94,6 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
   that a near-plan view is enough until an orthographic projection mode exists.
 - The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
   shortcuts before the list grows.
-- The translate gizmo pivots a panel at its local origin and a container at the minimum corner of
-  its descendants' world AABB, while the rotate gizmo always pivots at the node's world origin.
-  Confirm whether both should move to a bounding-box centre pivot.
 - The inspector shows the parent name, local X/Y/Z and intrinsic XYZ Euler angles; world coordinates
   are not shown yet. Confirm whether a read-only world readout earns its space.
 - Around Y = ±90° the Euler fields are gimbal-locked: editing X or Z moves the other angle. Confirm
