@@ -1,11 +1,12 @@
 //! The viewport rotate gizmo.
 //!
-//! Three rings follow the selected node's local axes and are projected over its manipulation pivot,
-//! the first corner of its local bounds. A drag never mutates the document: it turns a preview of the
-//! selected panels about that pivot, and the release dispatches one `node.placement.set`. The turn is
-//! post-multiplied onto the stored local rotation; when the pivot is not the node's origin the
-//! translation is adjusted too, so the ring centre stays a fixed point of the object. For a panel,
-//! whose pivot is its origin, the translation is preserved bit-for-bit.
+//! Three rings are aligned with the world X, Y and Z axes and are projected over the selected node's
+//! manipulation pivot. A drag never mutates the document: it turns a preview of the selected panels
+//! about that pivot, and the release dispatches one `node.placement.set`. Because the rings are
+//! world-aligned, the preview turn is applied on the left of the node's world rotation; the commit
+//! converts it into the parent frame and pre-multiplies it onto the stored local quaternion. When
+//! the pivot is not the node's origin the translation is adjusted too, so the ring centre stays a
+//! fixed point of the object.
 //!
 //! Rings keep a roughly constant screen radius. A ring seen edge-on is not drawn: its plane is
 //! nearly parallel to the view direction, the pointer cannot define an angle on it and a drag would
@@ -42,8 +43,8 @@ struct Drag {
     panels: Vec<Id>,
     pivot: DVec3,
     pivot_local: DVec3,
-    axis_world: DVec3,
     start_local: Placement,
+    parent_rotation: DQuat,
     previous_angle: f64,
     angle: f64,
 }
@@ -76,7 +77,7 @@ impl RotateGizmo {
         Some(Preview::Rotation {
             panels: &drag.panels,
             pivot: drag.pivot,
-            rotation: DQuat::from_axis_angle(drag.axis_world, drag.angle),
+            rotation: DQuat::from_axis_angle(drag.axis.direction(), drag.angle),
         })
     }
 
@@ -112,7 +113,7 @@ impl RotateGizmo {
                 return Ok(None);
             }
             if let Some(pointer) = pointer
-                && let Some(angle) = pointer_angle(pointer, viewport, target.camera, drag.pivot, drag.axis_world)
+                && let Some(angle) = pointer_angle(pointer, viewport, target.camera, drag.pivot, drag.axis.direction())
             {
                 let step = wrap_angle(angle - drag.previous_angle);
                 if step.is_finite() {
@@ -133,13 +134,13 @@ impl RotateGizmo {
         if pointer_over_widget {
             return Ok(None);
         }
-        let Some((pivot, world_rotation)) = target_rings(target) else {
+        let Some(pivot) = target_rings(target) else {
             return Ok(None);
         };
         let Some(pointer) = response.hover_pos() else {
             return Ok(None);
         };
-        let Some(axis) = hit_ring(target.camera, viewport, pivot, world_rotation, pointer) else {
+        let Some(axis) = hit_ring(target.camera, viewport, pivot, pointer) else {
             return Ok(None);
         };
         self.hover = Some(axis);
@@ -147,9 +148,7 @@ impl RotateGizmo {
             return Ok(None);
         }
 
-        let Some(axis_world) = ring_axis(world_rotation, axis) else {
-            return Ok(None);
-        };
+        let axis_world = axis.direction();
         let Some(start_angle) = pointer_angle(pointer, viewport, target.camera, pivot, axis_world) else {
             return Ok(None);
         };
@@ -162,6 +161,12 @@ impl RotateGizmo {
         let Some(pivot_local) = target.project.pivot_local(selected) else {
             return Ok(None);
         };
+        let Some(parent) = target.project.parent_of(selected) else {
+            return Ok(None);
+        };
+        let Some(parent_rotation) = target.project.world_placement(parent).map(Placement::rotation) else {
+            return Ok(None);
+        };
         let Some(panels) = target.project.panel_ids_under(selected) else {
             return Ok(None);
         };
@@ -172,8 +177,8 @@ impl RotateGizmo {
             panels,
             pivot,
             pivot_local,
-            axis_world,
             start_local,
+            parent_rotation,
             previous_angle: start_angle,
             angle: 0.0,
         });
@@ -186,7 +191,7 @@ impl RotateGizmo {
 
     /// Draws the rings over the viewport.
     pub(crate) fn paint(&self, ui: &Ui, viewport: egui::Rect, target: Target<'_>) {
-        let Some((pivot, world_rotation)) = target_rings(target) else {
+        let Some(pivot) = target_rings(target) else {
             return;
         };
         let Some(origin) = screen_point(target.camera, viewport, pivot) else {
@@ -201,9 +206,7 @@ impl RotateGizmo {
         painter.circle_filled(origin, 3.0, center_tone);
 
         for axis in Axis::ALL {
-            let Some(axis_world) = ring_axis(world_rotation, axis) else {
-                continue;
-            };
+            let axis_world = axis.direction();
             if axis_world.dot(target.camera.forward()).abs() < EDGE_ON_LIMIT {
                 continue;
             }
@@ -233,19 +236,15 @@ impl RotateGizmo {
     }
 }
 
-/// The world pivot and rotation of the node the rings belong to, if it has a placement to edit.
-fn target_rings(target: Target<'_>) -> Option<(DVec3, DQuat)> {
+/// The world pivot of the node the rings belong to, if it has a placement to edit.
+///
+/// The rings are deliberately world-aligned: they do not follow the node's rotation, so a turn is
+/// always about a world X, Y or Z axis and the ring centre is the stored pivot.
+fn target_rings(target: Target<'_>) -> Option<DVec3> {
     let selected = target.selected?;
     // The root defines the world frame and has no placement to edit.
     target.project.parent_of(selected)?;
-    let world = target.project.world_placement(selected)?;
-    let pivot = target.project.pivot_world(selected)?;
-    Some((pivot, world.rotation()))
-}
-
-/// A local axis of the node expressed in world space.
-fn ring_axis(world_rotation: DQuat, axis: Axis) -> Option<DVec3> {
-    (world_rotation * axis.direction()).try_normalize()
+    target.project.pivot_world(selected)
 }
 
 /// A stable orthonormal basis for the plane perpendicular to `normal`.
@@ -279,13 +278,11 @@ fn ring_screen_points(
 }
 
 /// The ring whose projected outline is nearest to `pointer`.
-fn hit_ring(camera: Camera, viewport: egui::Rect, pivot: DVec3, world_rotation: DQuat, pointer: Pos2) -> Option<Axis> {
+fn hit_ring(camera: Camera, viewport: egui::Rect, pivot: DVec3, pointer: Pos2) -> Option<Axis> {
     let radius = world_radius(camera);
     let mut best: Option<(f32, Axis)> = None;
     for axis in Axis::ALL {
-        let Some(axis_world) = ring_axis(world_rotation, axis) else {
-            continue;
-        };
+        let axis_world = axis.direction();
         if axis_world.dot(camera.forward()).abs() < EDGE_ON_LIMIT {
             continue;
         }
@@ -328,20 +325,25 @@ fn commit_rotation(drag: &Drag) -> Result<Option<PlacementCommit>, String> {
     if !drag.angle.is_finite() {
         return Err("the drag produced a non-finite rotation".to_owned());
     }
-    let delta = DQuat::from_axis_angle(drag.axis.direction(), drag.angle);
+    // The preview turns the node about a world axis. Convert that world turn into the parent frame
+    // so it can be pre-multiplied onto the stored local rotation.
+    let delta_world = DQuat::from_axis_angle(drag.axis.direction(), drag.angle);
+    let delta_parent = (drag.parent_rotation.inverse() * delta_world * drag.parent_rotation).normalize();
+    if !delta_parent.is_finite() {
+        return Err("the drag produced a non-finite rotation".to_owned());
+    }
     let start_rotation = drag.start_local.rotation();
-    let rotation = (start_rotation * delta).normalize();
+    let rotation = (delta_parent * start_rotation).normalize();
     if !rotation.is_finite() {
         return Err("the drag produced a non-finite rotation".to_owned());
     }
     let placement = if drag.pivot_local == DVec3::ZERO {
-        // A panel turns about its own origin, so its translation is already exact.
+        // A zero pivot keeps the stored translation exact.
         Placement::new(drag.start_local.translation(), rotation).map_err(|error| error.to_string())?
     } else {
         // Keep the pivot fixed in the parent frame and round the new translation to micrometres.
         let pivot_parent = drag.start_local.transform_point(drag.pivot_local);
-        let turned = start_rotation * delta * start_rotation.inverse();
-        let translation = pivot_parent + turned * (drag.start_local.translation() - pivot_parent);
+        let translation = pivot_parent + delta_parent * (drag.start_local.translation() - pivot_parent);
         if !translation.is_finite() {
             return Err("the drag moved the node to a non-finite position".to_owned());
         }
@@ -377,21 +379,45 @@ mod tests {
             panels: Vec::new(),
             pivot: DVec3::ZERO,
             pivot_local: DVec3::ZERO,
-            axis_world: axis.direction(),
             start_local: Placement::IDENTITY,
+            parent_rotation: DQuat::IDENTITY,
             previous_angle: 0.0,
             angle,
         }
     }
 
     #[test]
-    fn a_quarter_turn_posts_the_rotation_onto_the_local_frame() {
+    fn a_quarter_turn_premultiplies_the_world_turn_onto_the_local_frame() {
         let start = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(FRAC_PI_4)).expect("placement");
         let drag = Drag { start_local: start, ..drag(Axis::Y, FRAC_PI_2) };
         let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
         assert_eq!(commit.placement.translation(), start.translation());
-        let expected = (start.rotation() * DQuat::from_rotation_y(FRAC_PI_2)).normalize();
+        let expected = (DQuat::from_axis_angle(Axis::Y.direction(), FRAC_PI_2) * start.rotation()).normalize();
         assert!(commit.placement.rotation().dot(expected).abs() > 1.0 - 1.0e-12);
+    }
+
+    #[test]
+    fn a_turn_is_expressed_in_the_parent_frame() {
+        let parent_rotation = DQuat::from_rotation_z(FRAC_PI_4);
+        let start = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::from_rotation_z(0.2)).expect("placement");
+        let pivot_local = DVec3::new(1.0, 2.0, 3.0);
+        let angle = FRAC_PI_2;
+        let drag = Drag { start_local: start, pivot_local, parent_rotation, ..drag(Axis::Y, angle) };
+        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
+
+        // In world space the preview and the commit must be the same left-multiplied turn.
+        let world_before = parent_rotation * start.rotation();
+        let world_after = parent_rotation * commit.placement.rotation();
+        let expected = DQuat::from_axis_angle(Axis::Y.direction(), angle) * world_before;
+        assert!(world_after.dot(expected).abs() > 1.0 - 1.0e-12, "world rotations diverged");
+
+        // The pivot is fixed in the parent frame and therefore in world space too.
+        let pivot_before = start.transform_point(pivot_local);
+        let pivot_after = commit.placement.transform_point(pivot_local);
+        assert!(
+            (pivot_before - pivot_after).length() < 2.0e-3,
+            "pivot moved from {pivot_before:?} to {pivot_after:?} by more than the micrometre rounding"
+        );
     }
 
     #[test]
@@ -438,36 +464,6 @@ mod tests {
     }
 
     #[test]
-    fn wrap_angle_crosses_the_seam_without_a_full_turn_jump() {
-        assert!((wrap_angle(std::f64::consts::PI + 0.1) - (-std::f64::consts::PI + 0.1)).abs() < 1.0e-12);
-        assert!((wrap_angle(0.3) - 0.3).abs() < 1.0e-12);
-        assert!((wrap_angle(-0.3) + 0.3).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn the_default_view_shows_three_rings_and_an_edge_on_ring_is_hidden() {
-        let camera = Camera::default();
-        let rotation = DQuat::IDENTITY;
-        let pivot = camera.target();
-        let mut visible = 0;
-        for axis in Axis::ALL {
-            let axis_world = ring_axis(rotation, axis).expect("axis");
-            if axis_world.dot(camera.forward()).abs() >= EDGE_ON_LIMIT {
-                visible += 1;
-                assert!(ring_screen_points(camera, viewport(), pivot, axis_world, world_radius(camera)).is_some());
-            }
-        }
-        assert_eq!(visible, 3, "the default isometric view should show all rings");
-
-        let mut top = Camera::default();
-        top.look_from(DVec3::Z);
-        let z = ring_axis(rotation, Axis::Z).expect("axis");
-        assert!(z.dot(top.forward()).abs() >= EDGE_ON_LIMIT);
-        let x = ring_axis(rotation, Axis::X).expect("axis");
-        assert!(x.dot(top.forward()).abs() < EDGE_ON_LIMIT, "the X ring is edge-on from above");
-    }
-
-    #[test]
     fn the_pointer_angle_is_measured_on_the_ring_plane() {
         let camera = Camera::default();
         let pivot = camera.target();
@@ -483,14 +479,43 @@ mod tests {
     }
 
     #[test]
-    fn a_pointer_on_a_projected_ring_hits_that_ring() {
+    fn wrap_angle_crosses_the_seam_without_a_full_turn_jump() {
+        assert!((wrap_angle(std::f64::consts::PI + 0.1) - (-std::f64::consts::PI + 0.1)).abs() < 1.0e-12);
+        assert!((wrap_angle(0.3) - 0.3).abs() < 1.0e-12);
+        assert!((wrap_angle(-0.3) + 0.3).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn the_default_view_shows_three_world_aligned_rings_and_hides_an_edge_on_one() {
+        let camera = Camera::default();
+        let pivot = camera.target();
+        let mut visible = 0;
+        for axis in Axis::ALL {
+            let axis_world = axis.direction();
+            if axis_world.dot(camera.forward()).abs() >= EDGE_ON_LIMIT {
+                visible += 1;
+                assert!(ring_screen_points(camera, viewport(), pivot, axis_world, world_radius(camera)).is_some());
+            }
+        }
+        assert_eq!(visible, 3, "the default isometric view should show all rings");
+
+        let mut top = Camera::default();
+        top.look_from(DVec3::Z);
+        let z = Axis::Z.direction();
+        assert!(z.dot(top.forward()).abs() >= EDGE_ON_LIMIT);
+        let x = Axis::X.direction();
+        assert!(x.dot(top.forward()).abs() < EDGE_ON_LIMIT, "the X ring is edge-on from above");
+    }
+
+    #[test]
+    fn a_pointer_on_a_projected_ring_hits_that_world_axis() {
         let camera = Camera::default();
         let pivot = camera.target();
         let radius = world_radius(camera);
-        let axis_world = ring_axis(DQuat::IDENTITY, Axis::Z).expect("axis");
+        let axis_world = Axis::Z.direction();
         let points = ring_screen_points(camera, viewport(), pivot, axis_world, radius).expect("ring");
         let pointer = points[1];
-        assert_eq!(hit_ring(camera, viewport(), pivot, DQuat::IDENTITY, pointer), Some(Axis::Z));
-        assert_eq!(hit_ring(camera, viewport(), pivot, DQuat::IDENTITY, Pos2::new(790.0, 590.0)), None);
+        assert_eq!(hit_ring(camera, viewport(), pivot, pointer), Some(Axis::Z));
+        assert_eq!(hit_ring(camera, viewport(), pivot, Pos2::new(790.0, 590.0)), None);
     }
 }

@@ -23,7 +23,10 @@ mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
-pub use node_cmds::{AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeRename, NodeUngroup};
+pub use node_cmds::{
+    AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacementSet, NodeRename,
+    NodeUngroup,
+};
 pub use panel_cmds::{
     CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
     PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,

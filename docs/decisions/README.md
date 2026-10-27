@@ -29,7 +29,9 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0022](0022-closed-containers-pick-as-one-object.md) | A closed container picks as one object | Accepted |
 | [0023](0023-fasad-furniture-and-standard-views.md) | Fasad furniture and standard views | Accepted |
 | [0024](0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md) | Rotation is a quaternion shown as intrinsic XYZ Euler angles | Accepted |
-| [0025](0025-one-manipulation-pivot.md) | Move and Rotate share one pivot at the first corner of the local bounds | Accepted |
+| [0025](0025-one-manipulation-pivot.md) | Move and Rotate share one pivot at the first corner of the local bounds | Superseded by 0026 |
+| [0026](0026-the-manipulation-pivot-is-stored-node-data.md) | The manipulation pivot is stored, editable node data | Accepted; supersedes 0025 |
+| [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) | The rotate gizmo uses world-aligned rings | Accepted |
 
 ## Format
 

@@ -1,6 +1,6 @@
 # 0025. Move and Rotate share one pivot at the first corner of the local bounds
 
-- Status: Accepted
+- Status: Superseded by 0026
 - Date: 2026-10-27
 
 ## Context

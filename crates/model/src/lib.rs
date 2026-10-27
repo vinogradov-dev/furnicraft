@@ -184,17 +184,7 @@ impl Placement {
     /// This is the boundary conversion for editing a placement as integer lengths. It returns
     /// `None` when a component is NaN, infinite or outside the range of [`Length`].
     pub fn translation_lengths(self) -> Option<[Length; 3]> {
-        fn to_length(value: f64) -> Option<Length> {
-            if !value.is_finite() {
-                return None;
-            }
-            let micrometres = (value * 1_000.0).round();
-            if !(micrometres >= i64::MIN as f64 && micrometres < i64::MAX as f64) {
-                return None;
-            }
-            Some(Length::from_micrometres(micrometres as i64))
-        }
-        Some([to_length(self.translation.x)?, to_length(self.translation.y)?, to_length(self.translation.z)?])
+        lengths_from_millimetres(self.translation)
     }
 
     /// Replaces the translation from exact lengths, keeping the rotation.
@@ -238,6 +228,64 @@ impl Placement {
     /// millidegree display precision.
     pub fn same_transform(self, other: Self) -> bool {
         self.translation == other.translation && self.rotation.dot(other.rotation).abs() >= 1.0 - 1.0e-12
+    }
+}
+
+/// Rounds a millimetre point to exact micrometre lengths.
+///
+/// Returns `None` when a component is NaN, infinite or outside the range of [`Length`]. This is the
+/// geometry-boundary conversion used by placement and pivot editing.
+fn lengths_from_millimetres(point: DVec3) -> Option<[Length; 3]> {
+    fn to_length(value: f64) -> Option<Length> {
+        if !value.is_finite() {
+            return None;
+        }
+        let micrometres = (value * 1_000.0).round();
+        if !(micrometres >= i64::MIN as f64 && micrometres < i64::MAX as f64) {
+            return None;
+        }
+        Some(Length::from_micrometres(micrometres as i64))
+    }
+    Some([to_length(point.x)?, to_length(point.y)?, to_length(point.z)?])
+}
+
+/// The manipulation pivot of a node, in that node's local frame.
+///
+/// The pivot is stored document data rather than a value derived from the current geometry: it is
+/// created once with a sensible default, then moves and turns with the node and survives resizing,
+/// adding or removing children, and save/load. Coordinates are integer micrometres like every other
+/// persisted length; [`Pivot::to_local`] is the geometry-boundary view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Pivot([Length; 3]);
+
+impl Pivot {
+    /// The local origin.
+    pub const ZERO: Self = Self([Length::ZERO; 3]);
+
+    /// Builds a pivot from exact micrometre lengths.
+    pub const fn new(x: Length, y: Length, z: Length) -> Self {
+        Self([x, y, z])
+    }
+
+    /// Rounds a millimetre point into a pivot, or `None` when it is not representable.
+    pub fn from_local(point: DVec3) -> Option<Self> {
+        Some(Self(lengths_from_millimetres(point)?))
+    }
+
+    /// The three components in micrometres.
+    pub const fn components(self) -> [Length; 3] {
+        self.0
+    }
+
+    /// The pivot in millimetres for geometry and rendering.
+    pub fn to_local(self) -> DVec3 {
+        DVec3::new(self.0[0].millimetres_f64(), self.0[1].millimetres_f64(), self.0[2].millimetres_f64())
+    }
+
+    /// Whether the pivot is the node's local origin.
+    pub const fn is_zero(self) -> bool {
+        self.0[0].is_zero() && self.0[1].is_zero() && self.0[2].is_zero()
     }
 }
 
@@ -307,16 +355,22 @@ impl Project {
     /// The schema version written by this build.
     ///
     /// Version 3 moved panel-owned machining from core-local to nominal panel-local coordinates.
-    /// Version 5 splits assembly components from organisational groups.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+    /// Version 5 splits assembly components from organisational groups. Version 6 stores the
+    /// manipulation pivot on every node.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 6;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
 
     /// Creates a project from a root group and validates its tree.
+    ///
+    /// The root defines the world frame, so its pivot is forced to zero even if the supplied group
+    /// was built with children.
     pub fn new(root: Group) -> Result<Self, ProjectError> {
         let max_id = scan_tree(&root)?;
         let next_id = next_id_after(max_id)?;
+        let mut root = root;
+        root.pivot = Pivot::ZERO;
         Ok(Self { schema_version: Self::CURRENT_SCHEMA_VERSION, revision: Revision::ZERO, next_id, root })
     }
 
@@ -447,19 +501,26 @@ impl Project {
         Some(ids)
     }
 
-    /// The manipulation pivot in the node's own frame.
+    /// The stored manipulation pivot of a node, in its own frame.
     ///
-    /// A panel's pivot is its local zero at the minimum corner of the nominal rectangle. A container's
-    /// pivot is the minimum corner of the local axis-aligned box around the nominal boxes of the panels
-    /// below it. An empty container falls back to its own origin. Because the result is expressed in
-    /// the node's frame, the pivot moves and turns with the node instead of being recomputed from a
-    /// world-axis-aligned box after every edit.
-    pub fn pivot_local(&self, id: Id) -> Option<DVec3> {
-        if self.panel(id).is_some() {
-            return Some(DVec3::ZERO);
+    /// A panel keeps its local zero, the minimum corner of its nominal rectangle, until the user
+    /// moves the pivot; a container created with children starts at the centre of their local
+    /// bounding box and an empty container starts at its own origin. The root is not selectable and
+    /// always has a zero pivot. Returns `None` for an unknown id.
+    pub fn pivot(&self, id: Id) -> Option<Pivot> {
+        if id == self.root.id {
+            return Some(self.root.pivot);
         }
-        let (_, container) = find_container(&self.root, id, 0)?;
-        Some(panel_corner_min(container.children(), Placement::IDENTITY, 0).unwrap_or(DVec3::ZERO))
+        match self.node(id)? {
+            Node::Panel(panel) => Some(panel.pivot),
+            Node::Assembly(assembly) => Some(assembly.pivot),
+            Node::Group(group) => Some(group.pivot),
+        }
+    }
+
+    /// The manipulation pivot in the node's own frame, as millimetres for gizmos.
+    pub fn pivot_local(&self, id: Id) -> Option<DVec3> {
+        Some(self.pivot(id)?.to_local())
     }
 
     /// The manipulation pivot in world space: [`Self::pivot_local`] through the node's world placement.
@@ -469,6 +530,60 @@ impl Project {
     pub fn pivot_world(&self, id: Id) -> Option<DVec3> {
         let local = self.pivot_local(id)?;
         Some(self.world_placement(id)?.transform_point(local))
+    }
+
+    /// The centre of the node's local axis-aligned bounding box, in its own frame.
+    ///
+    /// A panel's box is its nominal rectangle times its last known thickness. A container's box is
+    /// the union of the nominal panel boxes below it, each transformed by its placement relative to
+    /// the container. A container with no panels has no bounds and returns `None`.
+    pub fn bounds_center_local(&self, id: Id) -> Option<DVec3> {
+        if let Some(panel) = self.panel(id) {
+            let size = panel.nominal_size();
+            let half = DVec3::new(
+                size.length().millimetres_f64(),
+                size.width().millimetres_f64(),
+                panel.last_known_thickness().millimetres_f64(),
+            ) * 0.5;
+            return Some(half);
+        }
+        let (_, container) = find_container(&self.root, id, 0)?;
+        let (min, max) = panel_bounds(container.children(), Placement::IDENTITY, 0)?;
+        Some((min + max) * 0.5)
+    }
+
+    /// Moves a node's pivot within its own frame and bumps the revision once.
+    ///
+    /// The pivot is authored data: changing it never moves the node, and changing the geometry never
+    /// moves it. The root defines the world frame and has no pivot to edit.
+    pub fn set_node_pivot(&mut self, id: Id, pivot: Pivot) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        match node {
+            Node::Panel(panel) => panel.pivot = pivot,
+            Node::Assembly(assembly) => assembly.pivot = pivot,
+            Node::Group(group) => group.pivot = pivot,
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Sets a node's pivot to the centre of its local bounds and bumps the revision once.
+    ///
+    /// A container with no panels has no bounds and is centred at its own origin. Returns
+    /// [`ProjectError::RootImmutable`] for the root.
+    pub fn center_node_pivot(&mut self, id: Id) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let center = self.bounds_center_local(id).unwrap_or(DVec3::ZERO);
+        let pivot = Pivot::from_local(center).unwrap_or(Pivot::ZERO);
+        self.set_node_pivot(id, pivot)
     }
 
     /// The container with the given id, including the root group.
@@ -1313,16 +1428,25 @@ fn find_parent(root: &Group, id: Id) -> Option<Id> {
     walk(&root.children, id, root.id)
 }
 
-/// The minimum corner of the nominal panel boxes below `children`, in their parent's frame.
+/// The local axis-aligned bounding box of the nominal panel boxes below `children`.
 ///
-/// Returns `None` when the subtree holds no panel or no finite corner. The walk starts from an
-/// identity parent, so each child's own placement is relative to the frame being measured and no
-/// world lookup is needed per panel.
-fn panel_corner_min(children: &[Node], parent: Placement, depth: u32) -> Option<DVec3> {
+/// Returns `(min, max)` in the frame of the container that owns `children`, or `None` when the
+/// subtree holds no panel or no finite corner. The walk starts from an identity parent, so each
+/// child's own placement is relative to the frame being measured and no world lookup is needed per
+/// panel.
+fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> Option<(DVec3, DVec3)> {
     if depth > Project::MAX_ASSEMBLY_DEPTH {
         return None;
     }
-    let mut min: Option<DVec3> = None;
+    let mut bounds: Option<(DVec3, DVec3)> = None;
+    let mut include = |point: DVec3| {
+        if point.is_finite() {
+            bounds = Some(match bounds {
+                Some((min, max)) => (min.min(point), max.max(point)),
+                None => (point, point),
+            });
+        }
+    };
     for child in children {
         let Ok(relative) = Placement::compose(parent, child.placement()) else {
             continue;
@@ -1336,27 +1460,34 @@ fn panel_corner_min(children: &[Node], parent: Placement, depth: u32) -> Option<
                 for x in [0.0, length] {
                     for y in [0.0, width] {
                         for z in [0.0, thickness] {
-                            let point = relative.transform_point(DVec3::new(x, y, z));
-                            if point.is_finite() {
-                                min = Some(min.map_or(point, |current| current.min(point)));
-                            }
+                            include(relative.transform_point(DVec3::new(x, y, z)));
                         }
                     }
                 }
             }
             Node::Assembly(assembly) => {
-                if let Some(found) = panel_corner_min(&assembly.children, relative, depth.saturating_add(1)) {
-                    min = Some(min.map_or(found, |current| current.min(found)));
+                if let Some((min, max)) = panel_bounds(&assembly.children, relative, depth.saturating_add(1)) {
+                    include(min);
+                    include(max);
                 }
             }
             Node::Group(group) => {
-                if let Some(found) = panel_corner_min(&group.children, relative, depth.saturating_add(1)) {
-                    min = Some(min.map_or(found, |current| current.min(found)));
+                if let Some((min, max)) = panel_bounds(&group.children, relative, depth.saturating_add(1)) {
+                    include(min);
+                    include(max);
                 }
             }
         }
     }
-    min
+    bounds
+}
+
+/// The default pivot of a container: the centre of the local panel bounds, or the origin.
+fn default_container_pivot(children: &[Node]) -> Pivot {
+    let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
+        return Pivot::ZERO;
+    };
+    Pivot::from_local((min + max) * 0.5).unwrap_or(Pivot::ZERO)
 }
 
 fn node_height(node: &Node) -> u32 {
@@ -1827,6 +1958,13 @@ impl TryFrom<ProjectWire> for Project {
         if wire.schema_version <= 2 {
             migrate_machining_to_nominal(&mut root, 1)?;
         }
+        if wire.schema_version <= 5 {
+            // Before schema 6 the pivot was derived from the current tree. Materialize the new
+            // default once so it stays stable: panels keep the local origin, non-empty containers
+            // start at the centre of their local panel bounds.
+            migrate_container_pivots(&mut root, 1)?;
+        }
+        root.pivot = Pivot::ZERO;
         let max_id = scan_tree(&root)?;
         let next_id = match wire.next_id {
             Some(next_id) if next_id.get() <= max_id => {
@@ -1864,6 +2002,33 @@ fn migrate_machining_to_nominal(root: &mut Group, depth: u32) -> Result<(), Proj
     walk(&mut root.children, depth.saturating_add(1))
 }
 
+/// Materializes the default pivot on containers saved before schema 6.
+///
+/// Panels keep their zero default from [`PanelWire`]. The walk is bounded by the same depth limit
+/// as the document tree.
+fn migrate_container_pivots(root: &mut Group, depth: u32) -> Result<(), ProjectError> {
+    fn walk(children: &mut [Node], depth: u32) -> Result<(), ProjectError> {
+        if depth > Project::MAX_ASSEMBLY_DEPTH {
+            return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
+        }
+        for child in children {
+            match child {
+                Node::Assembly(assembly) => {
+                    assembly.pivot = default_container_pivot(&assembly.children);
+                    walk(&mut assembly.children, depth.saturating_add(1))?;
+                }
+                Node::Group(group) => {
+                    group.pivot = default_container_pivot(&group.children);
+                    walk(&mut group.children, depth.saturating_add(1))?;
+                }
+                Node::Panel(_) => {}
+            }
+        }
+        Ok(())
+    }
+    walk(&mut root.children, depth.saturating_add(1))
+}
+
 /// A node in the product tree.
 ///
 /// An assembly is a meaningful furniture or industrial component: a cabinet, a drawer box, a
@@ -1876,13 +2041,20 @@ pub struct Assembly {
     id: Id,
     name: String,
     placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
     children: Vec<Node>,
 }
 
 impl Assembly {
     /// Creates an assembly. Global id uniqueness is checked by [`Project::validate`].
+    ///
+    /// A non-empty assembly starts with its pivot at the centre of its local panel bounds, so a
+    /// component created from a selection is grabbed at its visual centre. An empty assembly starts
+    /// at its own origin.
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        Self { id, name: name.into(), placement, children }
+        let pivot = default_container_pivot(&children);
+        Self { id, name: name.into(), placement, pivot, children }
     }
 
     /// The stable assembly id.
@@ -1898,6 +2070,11 @@ impl Assembly {
     /// The placement relative to the parent frame.
     pub const fn placement(&self) -> Placement {
         self.placement
+    }
+
+    /// The manipulation pivot in the assembly's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
     }
 
     /// The panels, groups and nested assemblies in this assembly.
@@ -1917,13 +2094,20 @@ pub struct Group {
     id: Id,
     name: String,
     placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
     children: Vec<Node>,
 }
 
 impl Group {
     /// Creates a group. Global id uniqueness is checked by [`Project::validate`].
+    ///
+    /// A non-empty group starts with its pivot at the centre of its local panel bounds; an empty
+    /// group starts at its own origin. The root group has its pivot forced back to zero by
+    /// [`Project::new`].
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        Self { id, name: name.into(), placement, children }
+        let pivot = default_container_pivot(&children);
+        Self { id, name: name.into(), placement, pivot, children }
     }
 
     /// The stable group id.
@@ -1939,6 +2123,11 @@ impl Group {
     /// The placement relative to the parent frame.
     pub const fn placement(&self) -> Placement {
         self.placement
+    }
+
+    /// The manipulation pivot in the group's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
     }
 
     /// The panels, assemblies and nested groups in this group.
@@ -1962,6 +2151,7 @@ pub struct Panel {
     material: Option<MaterialId>,
     last_known_thickness: Length,
     placement: Placement,
+    pivot: Pivot,
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
     corner_banding: Vec<CornerBanding>,
@@ -1999,6 +2189,7 @@ impl Panel {
             material,
             last_known_thickness,
             placement,
+            pivot: Pivot::ZERO,
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
@@ -2051,6 +2242,11 @@ impl Panel {
     /// The placement relative to the parent frame, anchored at the nominal minimum corner.
     pub const fn placement(&self) -> Placement {
         self.placement
+    }
+
+    /// The manipulation pivot in the panel-local frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
     }
 
     /// Machining owned by this panel, in nominal panel-local coordinates.
@@ -2391,6 +2587,8 @@ struct PanelWire {
     last_known_thickness: Option<Length>,
     placement: Placement,
     #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
     machining: Vec<Machining>,
     #[serde(default)]
     edge_banding: Vec<EdgeBanding>,
@@ -2444,6 +2642,7 @@ impl TryFrom<PanelWire> for Panel {
         validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
         validate_corner_banding(&wire.corner_banding)?;
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
+        panel.pivot = wire.pivot;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
         panel.corner_banding = wire.corner_banding;
@@ -3630,12 +3829,25 @@ mod tests {
     }
 
     #[test]
-    fn pivots_use_the_first_corner_of_the_local_bounds() {
+    fn default_pivots_are_stored_and_keep_their_meaning() {
         let mut project = sample_project();
         let shelf = Id::new(2).expect("shelf id");
         let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
         let root = project.root().id();
+
+        // A panel starts at its local zero; a container built with children starts at the centre of
+        // their local bounding box; the root is always zero.
+        assert_eq!(project.pivot(shelf), Some(Pivot::ZERO));
+        assert_eq!(
+            project.pivot(drawer),
+            Some(Pivot::new(
+                Length::from_micrometres(350_000),
+                Length::from_micrometres(250_000),
+                Length::from_micrometres(9_000),
+            ))
+        );
+        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
+
         project
             .set_node_placement(
                 shelf,
@@ -3648,19 +3860,14 @@ mod tests {
                 Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
             )
             .expect("place drawer");
-        project
-            .set_node_placement(
-                front,
-                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("front placement"),
-            )
-            .expect("place front");
 
+        // Placing a node changes only its world pivot, never the stored local one.
         assert_eq!(project.pivot_local(shelf), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(1.0, 2.0, 3.0)));
-        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(11.0, 22.0, 33.0)));
-        assert_eq!(project.pivot_local(root), Some(DVec3::new(11.0, 22.0, 33.0)));
-        assert_eq!(project.pivot_world(root), Some(DVec3::new(11.0, 22.0, 33.0)));
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
+        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(360.0, 270.0, 39.0)));
+        assert_eq!(project.pivot_local(root), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_world(root), Some(DVec3::ZERO));
 
         let empty_placement = Placement::new(DVec3::new(-5.0, 7.0, 9.0), DQuat::IDENTITY).expect("empty placement");
         let empty = project.add_assembly(root, "Empty", empty_placement).expect("add empty assembly");
@@ -3674,20 +3881,13 @@ mod tests {
     fn a_container_pivot_is_local_and_turns_with_the_container() {
         let mut project = sample_project();
         let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
         project
             .set_node_placement(
                 drawer,
                 Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
             )
             .expect("place drawer");
-        project
-            .set_node_placement(
-                front,
-                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("front placement"),
-            )
-            .expect("place front");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
 
         let turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
         project
@@ -3698,9 +3898,53 @@ mod tests {
             .expect("turn drawer");
 
         let local = project.pivot_local(drawer).expect("local pivot");
-        assert!((local - DVec3::new(1.0, 2.0, 3.0)).length() < 1.0e-12, "the local pivot must not jump, was {local:?}");
+        assert!(
+            (local - DVec3::new(350.0, 250.0, 9.0)).length() < 1.0e-12,
+            "the local pivot must not jump, was {local:?}"
+        );
         let world = project.pivot_world(drawer).expect("world pivot");
-        assert!((world - DVec3::new(8.0, 21.0, 33.0)).length() < 1.0e-12, "world pivot was {world:?}");
+        assert!((world - DVec3::new(-240.0, 370.0, 39.0)).length() < 1.0e-12, "world pivot was {world:?}");
+    }
+
+    #[test]
+    fn pivots_are_authored_once_and_survive_later_edits() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+
+        // Centring uses the panel's own local box.
+        project.center_node_pivot(front).expect("centre front");
+        assert_eq!(project.pivot_local(front), Some(DVec3::new(350.0, 250.0, 9.0)));
+
+        // Centring a container uses the union of its panels, including their child placements.
+        project
+            .set_node_placement(
+                front,
+                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("front placement"),
+            )
+            .expect("place front");
+        project.center_node_pivot(drawer).expect("centre drawer");
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(351.0, 252.0, 12.0)));
+
+        // Moving or resizing geometry does not move the stored pivot.
+        let pivot = project.pivot(drawer);
+        project
+            .set_node_placement(
+                drawer,
+                Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
+            )
+            .expect("place drawer");
+        project
+            .set_panel_nominal_size(front, PanelNominalSize::new(millimetres(900), millimetres(600)).expect("size"))
+            .expect("resize front");
+        assert_eq!(project.pivot(drawer), pivot);
+
+        // An explicit zero is a real value, and the root has no editable pivot.
+        project.set_node_pivot(drawer, Pivot::ZERO).expect("clear the pivot");
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
+        assert!(matches!(project.set_node_pivot(root, Pivot::ZERO), Err(ProjectError::RootImmutable { .. })));
+        assert!(matches!(project.center_node_pivot(root), Err(ProjectError::RootImmutable { .. })));
     }
 
     #[test]
@@ -4678,7 +4922,7 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":5", "\"schema_version\":6", 1);
+        let newer = text.replacen("\"schema_version\":6", "\"schema_version\":7", 1);
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 
@@ -4747,6 +4991,17 @@ mod tests {
         assert!(project.assembly(root).is_none());
         assert!(project.assembly(drawer).is_some());
         assert_eq!(project.parent_of(drawer), Some(root));
+        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
+        assert_eq!(
+            project.pivot(drawer),
+            Some(Pivot::new(
+                Length::from_micrometres(250_000),
+                Length::from_micrometres(100_000),
+                Length::from_micrometres(9_000),
+            )),
+            "an older file materializes the centred container default"
+        );
+        assert_eq!(project.pivot(Id::new(3).expect("panel id")), Some(Pivot::ZERO));
         assert!(project.validate().is_ok());
     }
 

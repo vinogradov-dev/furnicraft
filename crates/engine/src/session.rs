@@ -139,7 +139,7 @@ mod tests {
 
     use furnicraft_model::{
         Catalog, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, Id, Machining,
-        PanelMaterial, Placement, ProjectError, RectCorner, RectEdge, Revision, VertexId,
+        PanelMaterial, Pivot, Placement, ProjectError, RectCorner, RectEdge, Revision, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -151,7 +151,8 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::node_cmds::{
-        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePlacementSet, NodeRename, NodeUngroup,
+        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacementSet,
+        NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
@@ -1143,5 +1144,57 @@ mod tests {
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: root })));
 
         assert!(!registry.get("node.group").expect("registered").enabled(&session, &Value::Null));
+    }
+
+    #[test]
+    fn pivot_commands_edit_one_value_and_one_undo_entry() {
+        let mut session = sample_session();
+        let drawer = Id::new(3).expect("drawer id");
+        let root = session.project().root().id();
+        let pivot = Pivot::new(
+            Length::from_micrometres(1_500),
+            Length::from_micrometres(-2_500),
+            Length::from_micrometres(3_000),
+        );
+
+        session.dispatch("node.pivot.set", &json_params(&NodePivotSet { node: drawer, pivot })).expect("set pivot");
+        assert_eq!(session.project().pivot(drawer), Some(pivot));
+        assert!(session.can_undo());
+
+        session.dispatch("node.pivot.center", &json_params(&NodePivotCenter { node: drawer })).expect("center pivot");
+        assert_eq!(
+            session.project().pivot(drawer),
+            Some(Pivot::new(
+                Length::from_micrometres(350_000),
+                Length::from_micrometres(250_000),
+                Length::from_micrometres(9_000),
+            ))
+        );
+
+        session.undo().expect("undo centring");
+        assert_eq!(session.project().pivot(drawer), Some(pivot));
+        session.undo().expect("undo set");
+        assert_eq!(
+            session.project().pivot(drawer),
+            Some(Pivot::new(
+                Length::from_micrometres(350_000),
+                Length::from_micrometres(250_000),
+                Length::from_micrometres(9_000),
+            ))
+        );
+        assert!(!session.can_undo(), "each pivot edit is exactly one undo entry");
+
+        let registry = CommandRegistry::new();
+        let set = registry.get("node.pivot.set").expect("registered");
+        let center = registry.get("node.pivot.center").expect("registered");
+        assert!(set.enabled(&session, &json_params(&NodePivotSet { node: drawer, pivot })));
+        assert!(!set.enabled(&session, &json_params(&NodePivotSet { node: root, pivot })));
+        assert!(center.enabled(&session, &json_params(&NodePivotCenter { node: drawer })));
+        assert!(!center.enabled(&session, &json_params(&NodePivotCenter { node: root })));
+
+        let error = session
+            .dispatch("node.pivot.set", &json_params(&NodePivotSet { node: root, pivot }))
+            .expect_err("the root has no pivot");
+        assert!(matches!(error, CommandError::Model(ProjectError::RootImmutable { .. })));
     }
 }

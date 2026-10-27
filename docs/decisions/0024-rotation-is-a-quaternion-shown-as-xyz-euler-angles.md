@@ -1,6 +1,6 @@
 # 0024. Rotation is a quaternion shown as intrinsic XYZ Euler angles
 
-- Status: Accepted; pivot and its translation rule narrowed by 0025
+- Status: Accepted; pivot rule superseded by 0025 and 0026; ring axes and post-multiply superseded by 0027
 - Date: 2026-10-26
 
 ## Context
@@ -62,6 +62,9 @@ translation instead; [0025](0025-one-manipulation-pivot.md) settles that point.
 
 - [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) established the
   preview-and-commit shape this gizmo reuses; its open rotation note is resolved here.
+- [0026](0026-the-manipulation-pivot-is-stored-node-data.md) replaces the derived pivot.
+- [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) replaces the local rings and the
+  post-multiplied turn.
 - [0003](0003-length-is-integer-micrometres.md) is the same argument for lengths.
 - `crates/model` (`EulerAngles`, `Placement::rotation_euler`), `crates/units` (`Degrees`),
   `crates/ui/src/placement_card.rs`, `apps/furnicraft/src/rotate_gizmo.rs`.
