@@ -29,6 +29,7 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record order versions as numbered folders` (ADR 0032)
 - `docs: record the assistant architecture` (ADRs 0028–0031, `AGENTS.md` §4.11, `PROJECT.md`)
 - `docs: record the stored pivot and world-aligned rotate rings`
 - `feat(app): rotate with world-aligned rings about the stored pivot`
@@ -106,7 +107,7 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Open questions
 
-- How an order pins the project content it was issued from (snapshot copy, content hash, revisions).
+- Folder naming, version statuses and the draft-to-production transition in the order registry.
 - What API the material and order programs expose locally (CLI, socket, HTTP), and whether they ship
   with FurniCraft or stay external.
 - Where the workshop profile lives: project, application settings or the resource system.

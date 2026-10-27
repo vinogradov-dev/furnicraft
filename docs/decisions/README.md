@@ -36,6 +36,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0029](0029-view-state-belongs-to-the-session.md) | View state belongs to the session | Accepted |
 | [0030](0030-construction-knowledge-is-code.md) | Construction knowledge is code, not prose | Accepted |
 | [0031](0031-external-resources-keep-their-own-system-of-record.md) | External resources keep their own system of record | Accepted |
+| [0032](0032-an-order-keeps-its-versions-as-folders.md) | An order keeps its versions as numbered folders | Accepted |
 
 ## Format
 

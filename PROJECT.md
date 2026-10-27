@@ -137,15 +137,15 @@ before.
   catalogue shown to the model is generated from that registry (ADR 0030).
 - The material catalogue and the order registry are separate programs with their own databases and
   APIs. Faber uses the same API as their interfaces, never the database. An order is the project
-  file, its records and the files produced for it; external side effects such as ordering materials
-  require a person's confirmation (ADR 0031).
+  file, its records and the files produced for it; every version is a numbered folder holding the
+  complete file set, and only one is sent to production (ADR 0032). External side effects such as
+  ordering materials require a person's confirmation (ADR 0031).
 - View state — selection, open containers and cameras — belongs to the session, so every client
   shares the user's context (ADR 0029).
 
-Open questions: how an order pins the project content it was issued from; what API the material and
-order programs expose locally and whether they ship with FurniCraft; where the workshop profile
-lives; whether reference retrieval (catalogues, norms, past jobs) is needed and in what form; voice
-input and output.
+Open questions: what API the material and order programs expose locally and whether they ship with
+FurniCraft; where the workshop profile lives; whether reference retrieval (catalogues, norms, past
+jobs) is needed and in what form; voice input and output.
 
 The assistant adds `furnicraft-agent` between `engine` and `ui`, a model adapter and resource
 adapters at the composition boundary, and a project store for save and load. They enter the crate map

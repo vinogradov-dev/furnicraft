@@ -26,8 +26,8 @@ several systems are involved.
   material records. The order registry owns orders; the editor owns the project file.
 - **An order is a bundle**: the project file, the database records and the files on disk. It must
   pin the project content it was issued from, so a later edit cannot silently change what was sent
-  to production; how the pin is represented — snapshot copy, content hash or revisions — is decided
-  with the order schema.
+  to production. [0032](0032-an-order-keeps-its-versions-as-folders.md) decides the form: each
+  version is a numbered folder holding the complete file set.
 - **Multi-system operations are sagas.** Validate, act, record, and compensate on failure; steps are
   idempotent and every external call is audited. There are no distributed transactions, and no
   silent divergence: an unavailable resource produces a typed error the assistant must report.
