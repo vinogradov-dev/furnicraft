@@ -447,47 +447,28 @@ impl Project {
         Some(ids)
     }
 
-    /// The world point that best represents a node for direct manipulation.
+    /// The manipulation pivot in the node's own frame.
     ///
-    /// A panel pivots at its local origin. A container pivots at the minimum corner of the world
-    /// axis-aligned box around its descendant panels, so a cabinet turns around a corner of its
-    /// visible geometry. An empty container pivots at its own origin.
-    pub fn translation_pivot(&self, id: Id) -> Option<DVec3> {
-        if let Some(panel) = self.panel(id) {
-            let world = self.world_placement(panel.id)?;
-            return Some(world.transform_point(DVec3::ZERO));
+    /// A panel's pivot is its local zero at the minimum corner of the nominal rectangle. A container's
+    /// pivot is the minimum corner of the local axis-aligned box around the nominal boxes of the panels
+    /// below it. An empty container falls back to its own origin. Because the result is expressed in
+    /// the node's frame, the pivot moves and turns with the node instead of being recomputed from a
+    /// world-axis-aligned box after every edit.
+    pub fn pivot_local(&self, id: Id) -> Option<DVec3> {
+        if self.panel(id).is_some() {
+            return Some(DVec3::ZERO);
         }
-        let panels = self.panel_ids_under(id)?;
-        let mut min = DVec3::splat(f64::INFINITY);
-        let mut found = false;
-        for panel_id in panels {
-            let Some(panel) = self.panel(panel_id) else {
-                continue;
-            };
-            let Some(world) = self.world_placement(panel_id) else {
-                continue;
-            };
-            let size = panel.nominal_size();
-            let length = size.length().millimetres_f64();
-            let width = size.width().millimetres_f64();
-            let thickness = panel.last_known_thickness().millimetres_f64();
-            for x in [0.0, length] {
-                for y in [0.0, width] {
-                    for z in [0.0, thickness] {
-                        let point = world.transform_point(DVec3::new(x, y, z));
-                        if point.is_finite() {
-                            min = min.min(point);
-                            found = true;
-                        }
-                    }
-                }
-            }
-        }
-        if found {
-            return Some(min);
-        }
-        let world = self.world_placement(id)?;
-        Some(world.transform_point(DVec3::ZERO))
+        let (_, container) = find_container(&self.root, id, 0)?;
+        Some(panel_corner_min(container.children(), Placement::IDENTITY, 0).unwrap_or(DVec3::ZERO))
+    }
+
+    /// The manipulation pivot in world space: [`Self::pivot_local`] through the node's world placement.
+    ///
+    /// Both the translate and the rotate gizmo draw and rotate around this point. Returns `None` for
+    /// an unknown id.
+    pub fn pivot_world(&self, id: Id) -> Option<DVec3> {
+        let local = self.pivot_local(id)?;
+        Some(self.world_placement(id)?.transform_point(local))
     }
 
     /// The container with the given id, including the root group.
@@ -1330,6 +1311,52 @@ fn find_parent(root: &Group, id: Id) -> Option<Id> {
         None
     }
     walk(&root.children, id, root.id)
+}
+
+/// The minimum corner of the nominal panel boxes below `children`, in their parent's frame.
+///
+/// Returns `None` when the subtree holds no panel or no finite corner. The walk starts from an
+/// identity parent, so each child's own placement is relative to the frame being measured and no
+/// world lookup is needed per panel.
+fn panel_corner_min(children: &[Node], parent: Placement, depth: u32) -> Option<DVec3> {
+    if depth > Project::MAX_ASSEMBLY_DEPTH {
+        return None;
+    }
+    let mut min: Option<DVec3> = None;
+    for child in children {
+        let Ok(relative) = Placement::compose(parent, child.placement()) else {
+            continue;
+        };
+        match child {
+            Node::Panel(panel) => {
+                let size = panel.nominal_size();
+                let length = size.length().millimetres_f64();
+                let width = size.width().millimetres_f64();
+                let thickness = panel.last_known_thickness().millimetres_f64();
+                for x in [0.0, length] {
+                    for y in [0.0, width] {
+                        for z in [0.0, thickness] {
+                            let point = relative.transform_point(DVec3::new(x, y, z));
+                            if point.is_finite() {
+                                min = Some(min.map_or(point, |current| current.min(point)));
+                            }
+                        }
+                    }
+                }
+            }
+            Node::Assembly(assembly) => {
+                if let Some(found) = panel_corner_min(&assembly.children, relative, depth.saturating_add(1)) {
+                    min = Some(min.map_or(found, |current| current.min(found)));
+                }
+            }
+            Node::Group(group) => {
+                if let Some(found) = panel_corner_min(&group.children, relative, depth.saturating_add(1)) {
+                    min = Some(min.map_or(found, |current| current.min(found)));
+                }
+            }
+        }
+    }
+    min
 }
 
 fn node_height(node: &Node) -> u32 {
@@ -3603,7 +3630,7 @@ mod tests {
     }
 
     #[test]
-    fn translation_pivots_use_the_local_origin_or_the_panel_bounds() {
+    fn pivots_use_the_first_corner_of_the_local_bounds() {
         let mut project = sample_project();
         let shelf = Id::new(2).expect("shelf id");
         let drawer = Id::new(3).expect("drawer id");
@@ -3628,14 +3655,52 @@ mod tests {
             )
             .expect("place front");
 
-        assert_eq!(project.translation_pivot(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
-        assert_eq!(project.translation_pivot(drawer), Some(DVec3::new(11.0, 22.0, 33.0)));
-        assert_eq!(project.translation_pivot(root), Some(DVec3::new(11.0, 22.0, 33.0)));
+        assert_eq!(project.pivot_local(shelf), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_world(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(11.0, 22.0, 33.0)));
+        assert_eq!(project.pivot_local(root), Some(DVec3::new(11.0, 22.0, 33.0)));
+        assert_eq!(project.pivot_world(root), Some(DVec3::new(11.0, 22.0, 33.0)));
 
         let empty_placement = Placement::new(DVec3::new(-5.0, 7.0, 9.0), DQuat::IDENTITY).expect("empty placement");
         let empty = project.add_assembly(root, "Empty", empty_placement).expect("add empty assembly");
-        assert_eq!(project.translation_pivot(empty), Some(DVec3::new(-5.0, 7.0, 9.0)));
-        assert_eq!(project.translation_pivot(Id::new(999).expect("id")), None);
+        assert_eq!(project.pivot_local(empty), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_world(empty), Some(DVec3::new(-5.0, 7.0, 9.0)));
+        assert_eq!(project.pivot_local(Id::new(999).expect("id")), None);
+        assert_eq!(project.pivot_world(Id::new(999).expect("id")), None);
+    }
+
+    #[test]
+    fn a_container_pivot_is_local_and_turns_with_the_container() {
+        let mut project = sample_project();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        project
+            .set_node_placement(
+                drawer,
+                Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
+            )
+            .expect("place drawer");
+        project
+            .set_node_placement(
+                front,
+                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("front placement"),
+            )
+            .expect("place front");
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(1.0, 2.0, 3.0)));
+
+        let turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        project
+            .set_node_placement(
+                drawer,
+                Placement::new(DVec3::new(10.0, 20.0, 30.0), turn).expect("turned drawer placement"),
+            )
+            .expect("turn drawer");
+
+        let local = project.pivot_local(drawer).expect("local pivot");
+        assert!((local - DVec3::new(1.0, 2.0, 3.0)).length() < 1.0e-12, "the local pivot must not jump, was {local:?}");
+        let world = project.pivot_world(drawer).expect("world pivot");
+        assert!((world - DVec3::new(8.0, 21.0, 33.0)).length() < 1.0e-12, "world pivot was {world:?}");
     }
 
     #[test]

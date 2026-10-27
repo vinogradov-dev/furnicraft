@@ -64,14 +64,15 @@ flattened by `node.ungroup`: dismantling a component is a separate operation wit
 inspector edits the translation in millimetres in the parent frame and the rotation as intrinsic XYZ
 Euler angles in degrees; the document stores the unit quaternion, so editing one half never resets
 the other. The viewport translate gizmo moves that same translation directly and the rotate gizmo
-turns the node about its local axes and world origin; each drag previews the frame and one
-`node.placement.set` is dispatched on release, so the drag is one undo entry. Move and Rotate are one
-active gizmo at a time. The root group defines the world frame and cannot be deleted, moved, grouped
-or ungrouped. See
+turns the node about its local axes; both use one pivot, the minimum corner of the node's local
+bounds. Each drag previews the frame and one `node.placement.set` is dispatched on release, so the
+drag is one undo entry. Move and Rotate are one active gizmo at a time. The root group defines the
+world frame and cannot be deleted, moved, grouped or ungrouped. See
 [ADR 0020](../decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md),
 [ADR 0021](../decisions/0021-assemblies-are-components-groups-are-containers.md),
-[ADR 0022](../decisions/0022-closed-containers-pick-as-one-object.md) and
-[ADR 0024](../decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md).
+[ADR 0022](../decisions/0022-closed-containers-pick-as-one-object.md),
+[ADR 0024](../decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md) and
+[ADR 0025](../decisions/0025-one-manipulation-pivot.md).
 
 ## 3. What the scene file does not store
 

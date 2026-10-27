@@ -1,9 +1,10 @@
 //! The viewport translate gizmo.
 //!
-//! Three world-axis handles are projected over the selected node. A drag never mutates the
-//! document: it moves a preview of the selected panels, and the release dispatches one
-//! `node.placement.set`. The world-space delta is converted into the parent frame and rounded to
-//! micrometres, so the inspector and the document agree after the drag.
+//! Three world-axis handles are projected over the selected node's manipulation pivot, the first
+//! corner of its local bounds. A drag never mutates the document: it moves a preview of the selected
+//! panels, and the release dispatches one `node.placement.set`. The world-space delta is converted
+//! into the parent frame and rounded to micrometres, so the inspector and the document agree after
+//! the drag.
 //!
 //! Handles keep a constant screen length. An axis within about ten degrees of the view direction is
 //! not drawn: its projected direction is unstable and a pointer drag would move it by metres.
@@ -138,7 +139,7 @@ impl TranslateGizmo {
         let Some(selected) = target.selected else {
             return Ok(None);
         };
-        let Some(origin_world) = target.project.translation_pivot(selected) else {
+        let Some(origin_world) = target.project.pivot_world(selected) else {
             return Ok(None);
         };
         let Some(parent) = target.project.parent_of(selected) else {
@@ -199,7 +200,7 @@ impl TranslateGizmo {
             if target.project.parent_of(selected).is_none() {
                 return;
             }
-            let Some(origin) = target.project.translation_pivot(selected) else {
+            let Some(origin) = target.project.pivot_world(selected) else {
                 return;
             };
             origin

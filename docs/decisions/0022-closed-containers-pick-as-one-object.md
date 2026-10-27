@@ -23,8 +23,9 @@ The user needs both behaviours without a modal tool switching the meaning of eve
 - A click in the scene tree always selects the exact node; the tree is the explicit path to a panel
   or a nested container regardless of the viewport's open state.
 - Every panel below the selected node is highlighted, so a selected container reads as one object.
-- The translate-gizmo pivot is the panel's local origin for a panel, the minimum corner of the
-  descendant panels' local AABB for a container, and the node origin for an empty container.
+- The manipulation pivot is the minimum corner of the node's local bounds: the panel's local origin,
+  the minimum of the descendant panel boxes in a container's frame, or the node origin for an empty
+  container. Both gizmos use it; see [0025](0025-one-manipulation-pivot.md).
 
 ## Consequences
 
