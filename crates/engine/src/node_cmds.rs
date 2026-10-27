@@ -6,7 +6,7 @@
 //! into its parent without moving any leaf in world space; an assembly is dismantled by a separate
 //! operation, not by `node.ungroup`.
 
-use furnicraft_model::{Catalog, Id, Placement, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -260,6 +260,78 @@ fn node_placement_set_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePlacementSet>(params, NODE_PLACEMENT_SET_ID)?;
     project.set_node_placement(params.node, params.placement)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the pivot edit command.
+pub const NODE_PIVOT_SET_ID: &str = "node.pivot.set";
+
+/// User-facing label of the pivot edit command.
+pub const NODE_PIVOT_SET_LABEL: &str = "Set pivot";
+
+/// Parameters for `node.pivot.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePivotSet {
+    /// Panel, group or nested assembly whose pivot moves.
+    pub node: Id,
+    /// The new pivot in the node's own frame, in exact micrometres.
+    pub pivot: Pivot,
+}
+
+/// The `node.pivot.set` command.
+pub(crate) const NODE_PIVOT_SET: CommandSpec =
+    CommandSpec::new(NODE_PIVOT_SET_ID, NODE_PIVOT_SET_LABEL, node_pivot_set_enabled, node_pivot_set_run);
+
+fn node_pivot_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePivotSet>(params, NODE_PIVOT_SET_ID) else {
+        return false;
+    };
+    session.project().node(params.node).is_some()
+}
+
+fn node_pivot_set_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePivotSet>(params, NODE_PIVOT_SET_ID)?;
+    project.set_node_pivot(params.node, params.pivot)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the pivot centring command.
+pub const NODE_PIVOT_CENTER_ID: &str = "node.pivot.center";
+
+/// User-facing label of the pivot centring command.
+pub const NODE_PIVOT_CENTER_LABEL: &str = "Center pivot";
+
+/// Parameters for `node.pivot.center`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePivotCenter {
+    /// Panel, group or nested assembly whose pivot moves to its local bounds centre.
+    pub node: Id,
+}
+
+/// The `node.pivot.center` command.
+pub(crate) const NODE_PIVOT_CENTER: CommandSpec =
+    CommandSpec::new(NODE_PIVOT_CENTER_ID, NODE_PIVOT_CENTER_LABEL, node_pivot_center_enabled, node_pivot_center_run);
+
+fn node_pivot_center_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePivotCenter>(params, NODE_PIVOT_CENTER_ID) else {
+        return false;
+    };
+    session.project().node(params.node).is_some()
+}
+
+fn node_pivot_center_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePivotCenter>(params, NODE_PIVOT_CENTER_ID)?;
+    project.center_node_pivot(params.node)?;
     Ok(CommandOutcome::changed())
 }
 
