@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-26. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-27. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
@@ -9,7 +9,8 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
   edited as intrinsic XYZ Euler angles in the inspector and by a rotate gizmo in the viewport; both
   write the stored unit quaternion. Assemblies and groups are separate container kinds: a viewport
   click selects a closed container as one object, double-click enters one level and Escape leaves one
-  level.
+  level. The inspector groups its properties into collapsible sections; the fold state is egui view
+  state only and every section starts open.
 - Working on: the next task is multi-node placement, then the assembly dissolve operation.
 - Direction: manual furniture design comes first. Parametric cabinets and project save/load are
   parked at the end of the roadmap; until save/load lands the scene lives only in the session.
@@ -19,6 +20,7 @@ Updated: 2026-10-26. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(ui): group inspector properties into collapsible sections`
 - `docs: record the rotation representation and gizmo`
 - `feat(app): rotate the selection with a rotate gizmo`
 - `feat(scene): preview a world rotation`
