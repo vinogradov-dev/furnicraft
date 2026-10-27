@@ -3,7 +3,7 @@
 //! The card renders session state and turns edits into engine commands. Text fields commit on Enter,
 //! on losing focus or through an explicit button; combo boxes and checkboxes dispatch immediately.
 
-use egui::{Color32, ComboBox, RichText, TextEdit, Ui};
+use egui::{Color32, ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
     BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
     EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
@@ -20,6 +20,7 @@ use furnicraft_units::Length;
 use serde_json::Value;
 
 use crate::command::{dispatch as dispatch_command, json};
+use crate::section::section;
 
 /// Persistent state of the panel card.
 #[derive(Debug, Default)]
@@ -114,48 +115,68 @@ impl PanelCard {
         let mut errors = Vec::new();
         ui.separator();
 
-        ui.label(RichText::new("Name").strong());
-        ui.horizontal(|ui| {
-            let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-            let clicked = ui.button("Rename").clicked();
-            if response.lost_focus() || clicked {
-                let name = draft.name.trim();
-                if name.is_empty() {
-                    errors.push("Panel name must not be empty.".to_owned());
-                } else if name != panel.name() {
-                    actions.push(Action::Rename { panel: panel_id, name: name.to_owned() });
+        section(ui, "panel.name", "Name", true, |ui| {
+            ui.horizontal(|ui| {
+                let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
+                let clicked = ui.button("Rename").clicked();
+                if response.lost_focus() || clicked {
+                    let name = draft.name.trim();
+                    if name.is_empty() {
+                        errors.push("Panel name must not be empty.".to_owned());
+                    } else if name != panel.name() {
+                        actions.push(Action::Rename { panel: panel_id, name: name.to_owned() });
+                    }
                 }
-            }
+            });
         });
 
-        ui.label(RichText::new("Nominal size").strong());
-        ui.horizontal(|ui| {
-            ui.label("Length");
-            let length_response = ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
-            ui.label("Width");
-            let width_response = ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
-            let clicked = ui.button("Apply size").clicked();
-            if length_response.lost_focus() || width_response.lost_focus() || clicked {
-                match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
-                    (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
-                        Ok(nominal_size) if nominal_size != panel.nominal_size() => {
-                            actions.push(Action::Resize { panel: panel_id, nominal_size });
+        section(ui, "panel.dimensions", "Dimensions", true, |ui| {
+            section(ui, "panel.dimensions.nominal_size", "Nominal size", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Length");
+                    let length_response =
+                        ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
+                    ui.label("Width");
+                    let width_response =
+                        ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
+                    let clicked = ui.button("Apply size").clicked();
+                    if length_response.lost_focus() || width_response.lost_focus() || clicked {
+                        match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
+                            (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
+                                Ok(nominal_size) if nominal_size != panel.nominal_size() => {
+                                    actions.push(Action::Resize { panel: panel_id, nominal_size });
+                                }
+                                Ok(_) => {}
+                                Err(error) => errors.push(error.to_string()),
+                            },
+                            (Err(error), _) => errors.push(format!("Length: {error}")),
+                            (_, Err(error)) => errors.push(format!("Width: {error}")),
                         }
-                        Ok(_) => {}
-                        Err(error) => errors.push(error.to_string()),
-                    },
-                    (Err(error), _) => errors.push(format!("Length: {error}")),
-                    (_, Err(error)) => errors.push(format!("Width: {error}")),
-                }
-            }
+                    }
+                });
+            });
+
+            section(ui, "panel.dimensions.resolved", "Resolved", true, |ui| {
+                show_resolved(ui, session, panel_id);
+            });
         });
 
         ui.separator();
-        self.show_material(ui, session, panel_id, panel.material(), &mut actions);
-        self.show_shape(ui, session, panel_id, panel, &mut actions);
-        self.show_geometry(ui, session, panel_id);
-        self.show_bands(ui, session, panel_id, panel, &mut actions);
-        self.show_diagnostics(ui, session, panel_id);
+        section(ui, "panel.material", "Material", true, |ui| {
+            self.show_material(ui, session, panel_id, panel.material(), &mut actions);
+        });
+        ui.separator();
+        section(ui, "panel.shape", "Shape", true, |ui| {
+            self.show_shape(ui, panel_id, panel, &mut actions);
+        });
+        ui.separator();
+        section(ui, "panel.banding", "Banding", true, |ui| {
+            self.show_bands(ui, session, panel_id, panel, &mut actions);
+        });
+        ui.separator();
+        section(ui, "panel.diagnostics", "Diagnostics", true, |ui| {
+            self.show_diagnostics(ui, session, panel_id);
+        });
 
         if let Some(error) = &self.error {
             ui.separator();
@@ -189,7 +210,6 @@ impl PanelCard {
         current: Option<MaterialId>,
         actions: &mut Vec<Action>,
     ) {
-        ui.label(RichText::new("Material").strong());
         if let Some(material) = current
             && session.catalog().panel_material(material).is_none()
         {
@@ -212,123 +232,108 @@ impl PanelCard {
         });
     }
 
-    fn show_geometry(&self, ui: &mut Ui, session: &Session, panel_id: Id) {
-        ui.separator();
-        ui.label(RichText::new("Resolved").strong());
-        match session.panel_geometry(panel_id) {
-            Ok(geometry) => {
-                ui.label(format!("Thickness  {}", geometry.thickness()));
-                ui.label(format!("Core  {} × {}", geometry.core_length(), geometry.core_width()));
-                ui.label(format!("Overall  {} × {}", geometry.overall_length(), geometry.overall_width()));
-            }
-            Err(error) => {
-                ui.colored_label(Color32::LIGHT_RED, format!("Geometry: {error}"));
-            }
-        }
-    }
-
-    fn show_shape(&self, ui: &mut Ui, _session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
-        ui.separator();
-        ui.label(RichText::new("Outline").strong());
-        ui.scope(|ui| {
-            for corner in RectCorner::ALL {
-                let corner_id = corner.id();
-                let current = panel.corner_feature(corner_id);
-                let mode = current.map_or(CornerMode::None, |feature| match feature.feature() {
-                    CornerFeatureKind::Radius { .. } => CornerMode::Radius,
-                    CornerFeatureKind::Chamfer { .. } => CornerMode::Chamfer,
-                });
-                ui.horizontal(|ui| {
-                    ui.label(format!("Corner {}", corner.label()));
-                    let mut selected = mode;
-                    ComboBox::from_id_salt(("corner_mode", panel_id.get(), corner_id.get()))
-                        .selected_text(mode.label())
-                        .show_ui(ui, |ui| {
-                            for option in CornerMode::ALL {
-                                if ui.selectable_label(selected == option, option.label()).clicked()
-                                    && selected != option
-                                {
-                                    selected = option;
-                                    if option == CornerMode::None {
-                                        if current.is_some() {
-                                            actions.push(Action::ClearCorner { panel: panel_id, corner: corner_id });
-                                        }
-                                    } else if let Some(feature) = corner_feature_for_mode(option, current) {
-                                        actions.push(Action::SetCorner { panel: panel_id, corner: corner_id, feature });
-                                    }
-                                }
-                            }
-                        });
-                    match current.map(CornerFeature::feature) {
-                        Some(CornerFeatureKind::Radius { radius }) => {
-                            let (committed, _) = millimetre_field(ui, radius, 0.1..=1_000.0);
-                            let value = committed.and_then(positive_length);
-                            if let Some(value) = value
-                                && value != radius
-                            {
-                                actions.push(Action::SetCorner {
-                                    panel: panel_id,
-                                    corner: corner_id,
-                                    feature: CornerFeatureKind::Radius { radius: value },
-                                });
-                            }
-                        }
-                        Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => {
-                            ui.label("in");
-                            let (incoming_committed, _) = millimetre_field(ui, incoming, 0.1..=1_000.0);
-                            ui.label("out");
-                            let (outgoing_committed, _) = millimetre_field(ui, outgoing, 0.1..=1_000.0);
-                            let incoming_value = incoming_committed.and_then(positive_length);
-                            let outgoing_value = outgoing_committed.and_then(positive_length);
-                            if (incoming_value.is_some() || outgoing_value.is_some())
-                                && (incoming_value.unwrap_or(incoming) != incoming
-                                    || outgoing_value.unwrap_or(outgoing) != outgoing)
-                            {
-                                actions.push(Action::SetCorner {
-                                    panel: panel_id,
-                                    corner: corner_id,
-                                    feature: CornerFeatureKind::Chamfer {
-                                        incoming: incoming_value.unwrap_or(incoming),
-                                        outgoing: outgoing_value.unwrap_or(outgoing),
-                                    },
-                                });
-                            }
-                        }
-                        None => {}
-                    }
-                });
-            }
-
-            ui.separator();
-            ui.label(RichText::new("Bowed edges").strong());
-            for edge in RectEdge::ALL {
-                let edge_id = edge.id();
-                let current = panel.edge_bow(edge_id);
-                ui.horizontal(|ui| {
-                    ui.label(edge_label(edge_id.get()));
-                    let current_sagitta = current.map_or(Length::ZERO, |bow| bow.sagitta());
-                    let (committed, _) = millimetre_field(ui, current_sagitta, -1_000.0..=1_000.0);
-                    if let Some(sagitta) = committed.and_then(signed_length) {
-                        if sagitta.is_zero() {
-                            if current.is_some() {
-                                actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
-                            }
-                        } else if current.is_none_or(|bow| bow.sagitta() != sagitta) {
-                            actions.push(Action::SetBow { panel: panel_id, edge: edge_id, sagitta });
-                        }
-                    }
-                    if current.is_some() && ui.button("Clear").clicked() {
-                        actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
-                    }
-                });
-            }
+    fn show_shape(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        section(ui, "panel.shape.outline", "Outline", true, |ui| {
+            self.show_outline(ui, panel_id, panel, actions);
+        });
+        section(ui, "panel.shape.bowed_edges", "Bowed edges", true, |ui| {
+            self.show_bowed_edges(ui, panel_id, panel, actions);
         });
     }
 
-    fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
-        ui.separator();
-        ui.label(RichText::new("Banding").strong());
+    fn show_outline(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        for corner in RectCorner::ALL {
+            let corner_id = corner.id();
+            let current = panel.corner_feature(corner_id);
+            let mode = current.map_or(CornerMode::None, |feature| match feature.feature() {
+                CornerFeatureKind::Radius { .. } => CornerMode::Radius,
+                CornerFeatureKind::Chamfer { .. } => CornerMode::Chamfer,
+            });
+            ui.horizontal(|ui| {
+                ui.label(format!("Corner {}", corner.label()));
+                let mut selected = mode;
+                ComboBox::from_id_salt(("corner_mode", panel_id.get(), corner_id.get()))
+                    .selected_text(mode.label())
+                    .show_ui(ui, |ui| {
+                        for option in CornerMode::ALL {
+                            if ui.selectable_label(selected == option, option.label()).clicked() && selected != option {
+                                selected = option;
+                                if option == CornerMode::None {
+                                    if current.is_some() {
+                                        actions.push(Action::ClearCorner { panel: panel_id, corner: corner_id });
+                                    }
+                                } else if let Some(feature) = corner_feature_for_mode(option, current) {
+                                    actions.push(Action::SetCorner { panel: panel_id, corner: corner_id, feature });
+                                }
+                            }
+                        }
+                    });
+                match current.map(CornerFeature::feature) {
+                    Some(CornerFeatureKind::Radius { radius }) => {
+                        let (committed, _) = millimetre_field(ui, radius, 0.1..=1_000.0);
+                        let value = committed.and_then(positive_length);
+                        if let Some(value) = value
+                            && value != radius
+                        {
+                            actions.push(Action::SetCorner {
+                                panel: panel_id,
+                                corner: corner_id,
+                                feature: CornerFeatureKind::Radius { radius: value },
+                            });
+                        }
+                    }
+                    Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => {
+                        ui.label("in");
+                        let (incoming_committed, _) = millimetre_field(ui, incoming, 0.1..=1_000.0);
+                        ui.label("out");
+                        let (outgoing_committed, _) = millimetre_field(ui, outgoing, 0.1..=1_000.0);
+                        let incoming_value = incoming_committed.and_then(positive_length);
+                        let outgoing_value = outgoing_committed.and_then(positive_length);
+                        if (incoming_value.is_some() || outgoing_value.is_some())
+                            && (incoming_value.unwrap_or(incoming) != incoming
+                                || outgoing_value.unwrap_or(outgoing) != outgoing)
+                        {
+                            actions.push(Action::SetCorner {
+                                panel: panel_id,
+                                corner: corner_id,
+                                feature: CornerFeatureKind::Chamfer {
+                                    incoming: incoming_value.unwrap_or(incoming),
+                                    outgoing: outgoing_value.unwrap_or(outgoing),
+                                },
+                            });
+                        }
+                    }
+                    None => {}
+                }
+            });
+        }
+    }
 
+    fn show_bowed_edges(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        for edge in RectEdge::ALL {
+            let edge_id = edge.id();
+            let current = panel.edge_bow(edge_id);
+            ui.horizontal(|ui| {
+                ui.label(edge_label(edge_id.get()));
+                let current_sagitta = current.map_or(Length::ZERO, |bow| bow.sagitta());
+                let (committed, _) = millimetre_field(ui, current_sagitta, -1_000.0..=1_000.0);
+                if let Some(sagitta) = committed.and_then(signed_length) {
+                    if sagitta.is_zero() {
+                        if current.is_some() {
+                            actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
+                        }
+                    } else if current.is_none_or(|bow| bow.sagitta() != sagitta) {
+                        actions.push(Action::SetBow { panel: panel_id, edge: edge_id, sagitta });
+                    }
+                }
+                if current.is_some() && ui.button("Clear").clicked() {
+                    actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
+                }
+            });
+        }
+    }
+
+    fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
         let listed = listed_band_sources(panel);
         if listed.is_empty() {
             ui.label("No banding.");
@@ -391,8 +396,6 @@ impl PanelCard {
     }
 
     fn show_diagnostics(&self, ui: &mut Ui, session: &Session, panel_id: Id) {
-        ui.separator();
-        ui.label(RichText::new("Diagnostics").strong());
         let diagnostics = session.panel_diagnostics(panel_id);
         if diagnostics.is_empty() {
             ui.label("No issues.");
@@ -400,6 +403,19 @@ impl PanelCard {
         }
         for diagnostic in diagnostics {
             ui.colored_label(Color32::LIGHT_RED, diagnostic_message(&diagnostic));
+        }
+    }
+}
+
+fn show_resolved(ui: &mut Ui, session: &Session, panel_id: Id) {
+    match session.panel_geometry(panel_id) {
+        Ok(geometry) => {
+            ui.label(format!("Thickness  {}", geometry.thickness()));
+            ui.label(format!("Core  {} × {}", geometry.core_length(), geometry.core_width()));
+            ui.label(format!("Overall  {} × {}", geometry.overall_length(), geometry.overall_width()));
+        }
+        Err(error) => {
+            ui.colored_label(Color32::LIGHT_RED, format!("Geometry: {error}"));
         }
     }
 }
@@ -1018,7 +1034,9 @@ mod tests {
             },
             |ui| {
                 if let Some(panel) = session.project().panel(panel_id) {
-                    PanelCard::default().show_shape(ui, session, panel_id, panel, &mut actions);
+                    let card = PanelCard::default();
+                    card.show_outline(ui, panel_id, panel, &mut actions);
+                    card.show_bowed_edges(ui, panel_id, panel, &mut actions);
                 }
             },
         );

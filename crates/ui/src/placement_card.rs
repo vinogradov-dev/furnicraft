@@ -13,6 +13,7 @@ use furnicraft_model::{EulerAngles, Id, Placement};
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
+use crate::section::section;
 
 /// Persistent state of the placement card.
 #[derive(Debug, Default)]
@@ -82,27 +83,37 @@ impl PlacementCard {
 
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;
-        ui.label(RichText::new("Translation").strong());
-        for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("mm"));
-                ui.label("mm");
-                commit |= response.lost_focus() && enter;
+        section(ui, "placement.transform", "Transform", true, |ui| {
+            section(ui, "placement.transform.translation", "Translation", true, |ui| {
+                for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("mm"));
+                        ui.label("mm");
+                        commit |= response.lost_focus() && enter;
+                    });
+                }
             });
-        }
-        ui.label(RichText::new(format!("Rotation ({})", EulerAngles::ORDER_LABEL)).strong());
-        for (label, text) in [("X", &mut draft.rx), ("Y", &mut draft.ry), ("Z", &mut draft.rz)] {
-            ui.horizontal(|ui| {
-                ui.label(label);
-                let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("°"));
-                ui.label("°");
-                commit |= response.lost_focus() && enter;
-            });
-        }
-        if ui.button("Apply").clicked() {
-            commit = true;
-        }
+            section(
+                ui,
+                "placement.transform.rotation",
+                format!("Rotation ({})", EulerAngles::ORDER_LABEL),
+                true,
+                |ui| {
+                    for (label, text) in [("X", &mut draft.rx), ("Y", &mut draft.ry), ("Z", &mut draft.rz)] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("°"));
+                            ui.label("°");
+                            commit |= response.lost_focus() && enter;
+                        });
+                    }
+                },
+            );
+            if ui.button("Apply").clicked() {
+                commit = true;
+            }
+        });
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
         }

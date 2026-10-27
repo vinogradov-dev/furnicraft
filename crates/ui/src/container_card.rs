@@ -10,6 +10,7 @@ use furnicraft_engine::{NodeRename, Session};
 use furnicraft_model::{Id, Project};
 
 use crate::command::{dispatch, json};
+use crate::section::section;
 
 /// Persistent state of the container card.
 #[derive(Debug, Default)]
@@ -80,31 +81,38 @@ impl ContainerCard {
             return;
         };
 
-        ui.separator();
-        ui.label(RichText::new("Name").strong());
         let mut rename = None;
-        ui.horizontal(|ui| {
-            let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-            let clicked = ui.button("Rename").clicked();
-            if response.lost_focus() || clicked {
-                let trimmed = draft.name.trim();
-                if trimmed.is_empty() {
-                    self.error = Some(format!("{} name must not be empty.", kind.label()));
-                } else if trimmed != name {
-                    rename = Some(trimmed.to_owned());
+        let mut name_error = None;
+        ui.separator();
+        section(ui, "container.name", "Name", true, |ui| {
+            ui.horizontal(|ui| {
+                let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
+                let clicked = ui.button("Rename").clicked();
+                if response.lost_focus() || clicked {
+                    let trimmed = draft.name.trim();
+                    if trimmed.is_empty() {
+                        name_error = Some(format!("{} name must not be empty.", kind.label()));
+                    } else if trimmed != name {
+                        rename = Some(trimmed.to_owned());
+                    }
                 }
-            }
+            });
         });
 
         ui.separator();
-        ui.label(RichText::new(kind.label()).strong());
-        ui.label(if is_root {
-            "Root group; it defines the world frame.".to_owned()
-        } else {
-            kind.description().to_owned()
+        section(ui, "container.summary", "Container", true, |ui| {
+            ui.label(RichText::new(kind.label()).strong());
+            ui.label(if is_root {
+                "Root group; it defines the world frame.".to_owned()
+            } else {
+                kind.description().to_owned()
+            });
+            ui.label(format!("Children  {children}"));
         });
-        ui.label(format!("Children  {children}"));
 
+        if let Some(error) = name_error {
+            self.error = Some(error);
+        }
         if let Some(new_name) = rename {
             match rename_container(session, container_id, new_name) {
                 Ok(()) => {
