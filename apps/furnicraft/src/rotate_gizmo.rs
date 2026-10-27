@@ -1,9 +1,11 @@
 //! The viewport rotate gizmo.
 //!
-//! Three rings follow the selected node's local axes and are projected over its world origin. A
-//! drag never mutates the document: it turns a preview of the selected panels about that origin, and
-//! the release dispatches one `node.placement.set`. The turn is post-multiplied onto the stored local
-//! rotation, so the translation is preserved bit-for-bit and the angles agree with the inspector.
+//! Three rings follow the selected node's local axes and are projected over its manipulation pivot,
+//! the first corner of its local bounds. A drag never mutates the document: it turns a preview of the
+//! selected panels about that pivot, and the release dispatches one `node.placement.set`. The turn is
+//! post-multiplied onto the stored local rotation; when the pivot is not the node's origin the
+//! translation is adjusted too, so the ring centre stays a fixed point of the object. For a panel,
+//! whose pivot is its origin, the translation is preserved bit-for-bit.
 //!
 //! Rings keep a roughly constant screen radius. A ring seen edge-on is not drawn: its plane is
 //! nearly parallel to the view direction, the pointer cannot define an angle on it and a drag would
@@ -39,6 +41,7 @@ struct Drag {
     axis: Axis,
     panels: Vec<Id>,
     pivot: DVec3,
+    pivot_local: DVec3,
     axis_world: DVec3,
     start_local: Placement,
     previous_angle: f64,
@@ -156,6 +159,9 @@ impl RotateGizmo {
         let Some(start_local) = target.project.node(selected).map(|node| node.placement()) else {
             return Ok(None);
         };
+        let Some(pivot_local) = target.project.pivot_local(selected) else {
+            return Ok(None);
+        };
         let Some(panels) = target.project.panel_ids_under(selected) else {
             return Ok(None);
         };
@@ -165,6 +171,7 @@ impl RotateGizmo {
             axis,
             panels,
             pivot,
+            pivot_local,
             axis_world,
             start_local,
             previous_angle: start_angle,
@@ -226,13 +233,14 @@ impl RotateGizmo {
     }
 }
 
-/// The world origin and rotation of the node the rings belong to, if it has a placement to edit.
+/// The world pivot and rotation of the node the rings belong to, if it has a placement to edit.
 fn target_rings(target: Target<'_>) -> Option<(DVec3, DQuat)> {
     let selected = target.selected?;
     // The root defines the world frame and has no placement to edit.
     target.project.parent_of(selected)?;
     let world = target.project.world_placement(selected)?;
-    Some((world.translation(), world.rotation()))
+    let pivot = target.project.pivot_world(selected)?;
+    Some((pivot, world.rotation()))
 }
 
 /// A local axis of the node expressed in world space.
@@ -321,11 +329,28 @@ fn commit_rotation(drag: &Drag) -> Result<Option<PlacementCommit>, String> {
         return Err("the drag produced a non-finite rotation".to_owned());
     }
     let delta = DQuat::from_axis_angle(drag.axis.direction(), drag.angle);
-    let rotation = (drag.start_local.rotation() * delta).normalize();
+    let start_rotation = drag.start_local.rotation();
+    let rotation = (start_rotation * delta).normalize();
     if !rotation.is_finite() {
         return Err("the drag produced a non-finite rotation".to_owned());
     }
-    let placement = Placement::new(drag.start_local.translation(), rotation).map_err(|error| error.to_string())?;
+    let placement = if drag.pivot_local == DVec3::ZERO {
+        // A panel turns about its own origin, so its translation is already exact.
+        Placement::new(drag.start_local.translation(), rotation).map_err(|error| error.to_string())?
+    } else {
+        // Keep the pivot fixed in the parent frame and round the new translation to micrometres.
+        let pivot_parent = drag.start_local.transform_point(drag.pivot_local);
+        let turned = start_rotation * delta * start_rotation.inverse();
+        let translation = pivot_parent + turned * (drag.start_local.translation() - pivot_parent);
+        if !translation.is_finite() {
+            return Err("the drag moved the node to a non-finite position".to_owned());
+        }
+        let placement = Placement::new(translation, rotation).map_err(|error| error.to_string())?;
+        let [x, y, z] = placement
+            .translation_lengths()
+            .ok_or_else(|| "the drag moved the node outside the editable millimetre range".to_owned())?;
+        placement.with_translation(x, y, z).map_err(|error| error.to_string())?
+    };
     if placement.same_transform(drag.start_local) {
         Ok(None)
     } else {
@@ -351,6 +376,7 @@ mod tests {
             axis,
             panels: Vec::new(),
             pivot: DVec3::ZERO,
+            pivot_local: DVec3::ZERO,
             axis_world: axis.direction(),
             start_local: Placement::IDENTITY,
             previous_angle: 0.0,
@@ -373,6 +399,30 @@ mod tests {
         assert_eq!(commit_rotation(&drag(Axis::X, 0.0)).expect("no error"), None);
         assert_eq!(commit_rotation(&drag(Axis::X, std::f64::consts::TAU)).expect("no error"), None);
         assert_eq!(commit_rotation(&drag(Axis::X, -std::f64::consts::TAU)).expect("no error"), None);
+    }
+
+    #[test]
+    fn a_turn_about_a_non_zero_pivot_keeps_that_point_fixed() {
+        let start = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("placement");
+        let pivot_local = DVec3::new(1.0, 2.0, 3.0);
+        let drag = Drag { start_local: start, pivot_local, ..drag(Axis::Z, FRAC_PI_2) };
+        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
+
+        let before = start.transform_point(pivot_local);
+        let after = commit.placement.transform_point(pivot_local);
+        assert!((before - after).length() < 1.0e-9, "pivot moved from {before:?} to {after:?}");
+        assert!(
+            (commit.placement.translation() - start.translation()).length() > 1.0,
+            "a turn about a corner must adjust the translation"
+        );
+    }
+
+    #[test]
+    fn a_zero_pivot_preserves_the_translation_bit_for_bit() {
+        let start = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(FRAC_PI_4)).expect("placement");
+        let drag = Drag { start_local: start, ..drag(Axis::Y, FRAC_PI_2) };
+        let commit = commit_rotation(&drag).expect("valid rotation").expect("a turn");
+        assert_eq!(commit.placement.translation(), start.translation());
     }
 
     #[test]
