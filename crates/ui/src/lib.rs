@@ -16,6 +16,7 @@
 mod command;
 mod container_card;
 mod panel_card;
+mod pivot_card;
 mod placement_card;
 mod scene_tree;
 mod section;
@@ -34,6 +35,7 @@ use furnicraft_units::Length;
 use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
 use crate::panel_card::PanelCard;
+use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::scene_tree::{Selection, TreeAction};
 
@@ -50,6 +52,7 @@ pub struct Editor {
     card: PanelCard,
     container_card: ContainerCard,
     placement_card: PlacementCard,
+    pivot_card: PivotCard,
     error: Option<String>,
     initialized: bool,
 }
@@ -180,6 +183,7 @@ impl Editor {
         };
         if session.project().parent_of(primary).is_some() {
             self.placement_card.show(ui, session, primary);
+            self.pivot_card.show(ui, session, primary);
         }
         if session.project().panel(primary).is_some() {
             self.card.show(ui, session, Some(primary));
