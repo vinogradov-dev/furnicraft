@@ -1,6 +1,6 @@
 # 0021. Assemblies are components, groups are containers
 
-- Status: Accepted; supersedes 0017
+- Status: Superseded by 0034; supersedes 0017
 - Date: 2026-10-25
 
 ## Context
