@@ -32,6 +32,10 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0025](0025-one-manipulation-pivot.md) | Move and Rotate share one pivot at the first corner of the local bounds | Superseded by 0026 |
 | [0026](0026-the-manipulation-pivot-is-stored-node-data.md) | The manipulation pivot is stored, editable node data | Accepted; supersedes 0025 |
 | [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) | The rotate gizmo uses world-aligned rings | Accepted |
+| [0028](0028-the-assistant-is-a-client-of-the-command-registry.md) | The assistant is a client of the command registry | Accepted |
+| [0029](0029-view-state-belongs-to-the-session.md) | View state belongs to the session | Accepted |
+| [0030](0030-construction-knowledge-is-code.md) | Construction knowledge is code, not prose | Accepted |
+| [0031](0031-external-resources-keep-their-own-system-of-record.md) | External resources keep their own system of record | Accepted |
 
 ## Format
 
