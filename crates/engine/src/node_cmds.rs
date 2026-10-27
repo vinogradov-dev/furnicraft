@@ -6,6 +6,8 @@
 //! into its parent without moving any leaf in world space; an assembly is dismantled by a separate
 //! operation, not by `node.ungroup`.
 
+use std::collections::HashSet;
+
 use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -261,6 +263,69 @@ fn node_placement_set_run(
     let params = parse::<NodePlacementSet>(params, NODE_PLACEMENT_SET_ID)?;
     project.set_node_placement(params.node, params.placement)?;
     Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the multi-node placement command.
+pub const NODE_PLACEMENT_SET_MANY_ID: &str = "node.placement.set_many";
+
+/// User-facing label of the multi-node placement command.
+pub const NODE_PLACEMENT_SET_MANY_LABEL: &str = "Place selection";
+
+/// One node and the placement it receives.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePlacement {
+    /// Panel, group or nested assembly to place relative to its parent.
+    pub node: Id,
+    /// The new rigid placement.
+    pub placement: Placement,
+}
+
+/// Parameters for `node.placement.set_many`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePlacementSetMany {
+    /// The nodes to place; at least one, each listed once, none the root.
+    pub placements: Vec<NodePlacement>,
+}
+
+/// The `node.placement.set_many` command.
+///
+/// The whole batch is one document change: one revision bump and one undo entry, so a gizmo drag
+/// that moves a selection is undone in one step.
+pub(crate) const NODE_PLACEMENT_SET_MANY: CommandSpec = CommandSpec::new(
+    NODE_PLACEMENT_SET_MANY_ID,
+    NODE_PLACEMENT_SET_MANY_LABEL,
+    node_placement_set_many_enabled,
+    node_placement_set_many_run,
+);
+
+fn node_placement_set_many_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePlacementSetMany>(params, NODE_PLACEMENT_SET_MANY_ID) else {
+        return false;
+    };
+    valid_placement_batch(session.project(), &params.placements)
+}
+
+fn node_placement_set_many_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePlacementSetMany>(params, NODE_PLACEMENT_SET_MANY_ID)?;
+    let placements: Vec<(Id, Placement)> =
+        params.placements.iter().map(|entry| (entry.node, entry.placement)).collect();
+    project.set_node_placements(&placements)?;
+    Ok(CommandOutcome::changed())
+}
+
+fn valid_placement_batch(project: &Project, placements: &[NodePlacement]) -> bool {
+    if placements.is_empty() {
+        return false;
+    }
+    let root = project.root().id();
+    let mut seen = HashSet::new();
+    placements.iter().all(|entry| seen.insert(entry.node) && entry.node != root && project.contains_node(entry.node))
 }
 
 /// Stable id of the pivot edit command.

@@ -435,6 +435,36 @@ impl Project {
         find_parent(&self.root, id)
     }
 
+    /// The given nodes that have no ancestor in the same list, in their original order.
+    ///
+    /// Unknown ids are skipped and a repeated id is kept once. The root counts as a top-most node;
+    /// callers that cannot move it filter it out themselves. A multi-selection transform uses this
+    /// so a moved container is not moved again through one of its descendants.
+    pub fn top_most_nodes(&self, ids: &[Id]) -> Vec<Id> {
+        let selected: HashSet<Id> = ids.iter().copied().filter(|id| self.contains_node(*id)).collect();
+        let mut kept = HashSet::new();
+        let mut top_most = Vec::new();
+        for id in ids {
+            if !selected.contains(id) || !kept.insert(*id) {
+                continue;
+            }
+            let mut ancestor = self.parent_of(*id);
+            let covered = loop {
+                let Some(current) = ancestor else {
+                    break false;
+                };
+                if selected.contains(&current) {
+                    break true;
+                }
+                ancestor = self.parent_of(current);
+            };
+            if !covered {
+                top_most.push(*id);
+            }
+        }
+        top_most
+    }
+
     /// Whether the id names a container or a panel.
     pub fn contains_node(&self, id: Id) -> bool {
         self.is_container(id) || self.panel(id).is_some()
@@ -1000,6 +1030,39 @@ impl Project {
             return Err(ProjectError::NodeNotFound { id });
         };
         node.set_placement(placement);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces several node placements at once and bumps the revision once.
+    ///
+    /// The whole batch is validated before anything changes: it must not be empty, every node must
+    /// exist, none may be the root, and no node may appear twice. Listing a container together with
+    /// one of its descendants is allowed here; a caller that moves a selection computes the
+    /// placements and should first keep only [`Project::top_most_nodes`].
+    pub fn set_node_placements(&mut self, placements: &[(Id, Placement)]) -> Result<Revision, ProjectError> {
+        if placements.is_empty() {
+            return Err(ProjectError::NoPlacements);
+        }
+        let mut seen = HashSet::new();
+        for (id, _) in placements {
+            if !seen.insert(*id) {
+                return Err(ProjectError::DuplicateNode { id: *id });
+            }
+            if *id == self.root.id {
+                return Err(ProjectError::RootImmutable { id: *id });
+            }
+            if !self.contains_node(*id) {
+                return Err(ProjectError::NodeNotFound { id: *id });
+            }
+        }
+        let next_revision = self.next_revision()?;
+        for (id, placement) in placements {
+            let Some(node) = find_node_mut(&mut self.root, *id) else {
+                return Err(ProjectError::NodeNotFound { id: *id });
+            };
+            node.set_placement(*placement);
+        }
         self.revision = next_revision;
         Ok(next_revision)
     }
@@ -1780,6 +1843,9 @@ pub enum ProjectError {
         /// The repeated node id.
         id: Id,
     },
+    /// A placement batch contained no entries.
+    #[error("no node placements were given")]
+    NoPlacements,
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {
@@ -5319,6 +5385,61 @@ mod tests {
 
         assert_eq!(project.set_node_placement(root, placement), Err(ProjectError::RootImmutable { id: root }));
         assert_eq!(project.revision().get(), 5);
+    }
+
+    #[test]
+    fn placement_batches_validate_before_mutating_and_bump_once() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+        let missing = Id::new(99).expect("id");
+        let moved = Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let raised = Placement::new(DVec3::new(0.0, 0.0, 25.0), DQuat::IDENTITY).expect("placement");
+        let revision = project.revision().get();
+
+        assert_eq!(project.set_node_placements(&[]), Err(ProjectError::NoPlacements));
+        assert_eq!(
+            project.set_node_placements(&[(panel, moved), (panel, raised)]),
+            Err(ProjectError::DuplicateNode { id: panel })
+        );
+        assert_eq!(
+            project.set_node_placements(&[(panel, moved), (root, raised)]),
+            Err(ProjectError::RootImmutable { id: root })
+        );
+        assert_eq!(
+            project.set_node_placements(&[(panel, moved), (missing, raised)]),
+            Err(ProjectError::NodeNotFound { id: missing })
+        );
+        assert_eq!(project.revision().get(), revision);
+        assert_eq!(project.panel(panel).expect("panel").placement(), Placement::IDENTITY);
+        assert_eq!(project.assembly(drawer).expect("assembly").placement(), Placement::IDENTITY);
+
+        assert_eq!(
+            project.set_node_placements(&[(panel, moved), (drawer, raised)]).expect("batch").get(),
+            revision + 1
+        );
+        assert_eq!(project.panel(panel).expect("panel").placement(), moved);
+        assert_eq!(project.assembly(drawer).expect("assembly").placement(), raised);
+        assert_eq!(project.panel(front).expect("front").placement(), Placement::IDENTITY);
+    }
+
+    #[test]
+    fn top_most_nodes_drop_descendants_repeats_and_unknown_ids() {
+        let project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let front = Id::new(4).expect("panel id");
+        let missing = Id::new(99).expect("id");
+
+        assert!(project.top_most_nodes(&[]).is_empty());
+        assert_eq!(project.top_most_nodes(&[front, panel]), vec![front, panel]);
+        assert_eq!(project.top_most_nodes(&[panel, drawer, front]), vec![panel, drawer]);
+        assert_eq!(project.top_most_nodes(&[front, drawer]), vec![drawer]);
+        assert_eq!(project.top_most_nodes(&[panel, panel, missing]), vec![panel]);
+        assert_eq!(project.top_most_nodes(&[root, drawer, panel]), vec![root]);
     }
 
     #[test]

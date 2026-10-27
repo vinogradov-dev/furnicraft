@@ -56,6 +56,8 @@ xtask                  workspace checks; not part of the product
 - `ui` never mutates the document directly: it dispatches commands and renders session state.
 - `scene` is data about a frame (what to draw), `render` is the driver that draws it. The document stores placements; cameras and viewports belong to the session or the shell.
 
+The assistant track (ADR 0028) adds `furnicraft-agent` at a new layer between `engine` and `ui`; `ui`, the shell and `testkit` move up one number in the same change. Do not create those crates or edit the layer map before the code lands.
+
 Editing anything under `vendor/` follows `vendor/AGENTS.md`: the upstream source is not ours to change.
 
 ## 4. Golden rules
@@ -117,6 +119,24 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene. Picking returns document `Id`s, never mesh indices or pointers.
 - A panel's local frame has its zero at the minimum corner; faces are `A` (at `z = thickness`) and `B` (at `z = 0`), vertices run counter-clockwise from the zero corner, and edge `i` joins vertex `i` to `i + 1`. Vertex and edge ids are stable and never reused; their numbers are labels, not keys. Machining is stored in panel-local coordinates; an edge reference is a topology reference, not a second coordinate system.
 - Manipulation goes through a command; the UI never writes a placement directly.
+
+### 4.11 The assistant is a client
+
+Faber is the in-app assistant (ADR 0028). It is a client of the same surface as the UI, never a
+second way into the document.
+
+- Every assistant action is a command, a query or a session view operation. No private mutation path,
+  no direct `Project` write, no shell or filesystem tool by default.
+- The core (`furnicraft-agent`) has no network, no language-model SDK, no async runtime, no `egui`,
+  no `wgpu`. The model is an injected adapter; a scripted model must run a whole task in tests.
+- Disabled by default: no endpoint, no tools, no network call. Keys and conversations never enter the
+  document, the repository or a log; the audit trail is a sidecar file.
+- The assistant reads the scene as data — tree, panels, materials, placements, diagnostics, derived
+  measures. A screenshot channel for a vision model needs its own decision.
+- External systems (material catalogue, order registry) are reached through the API their own UI
+  uses, never through their database. Irreversible external effects — ordering, issuing, sending —
+  require explicit confirmation and an idempotency key.
+- Any capability the assistant has must also be reachable from the UI or a CLI.
 
 ## 5. Stack
 

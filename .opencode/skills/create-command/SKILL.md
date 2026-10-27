@@ -23,7 +23,7 @@ Every user-visible change to the document is a command (AGENTS.md §4.1). This s
 
 1. Read `AGENTS.md` §4 (golden rules) and the crate map in §3; read the relevant part of `PROJECT.md`.
 2. If the change touches more than one file, present a plan and wait for approval (AGENTS.md §8).
-3. Find the crate the command belongs to: commands live in `furnicraft-engine` (L5). They may use `model`, `param` and `mesh`, and must not use `wgpu` or `egui`.
+3. Find the crate the command belongs to: commands live in `furnicraft-engine` (L6). They may use `model`, `param` and `mesh`, and must not use `wgpu` or `egui`.
 4. Check that the command is not already there under another id; reuse beats duplication.
 
 ## Steps
@@ -40,8 +40,14 @@ Write down:
 
 ### 2. Put it in its own module
 
-- One area per file: `crates/engine/src/<area>_cmds.rs` exposing `pub fn specs() -> Vec<CommandSpec>`.
-- Register the module's specs in the engine's command list; that registration is a small, surgical edit — re-read the shared file before touching it.
+- One area per file: `crates/engine/src/<area>_cmds.rs`, next to the existing `node_cmds.rs` and
+  `panel_cmds.rs`.
+- In that module, export the id and label as `pub const <AREA>_<VERB>_ID` / `_LABEL`, the typed
+  params struct, and a `pub(crate) const <AREA>_<VERB>: CommandSpec`. Re-export the params from
+  `crates/engine/src/lib.rs` when the shell needs to build them.
+- Register the spec in `static COMMANDS` in `crates/engine/src/commands.rs`; that registration is a
+  small, surgical edit — re-read the shared file before touching it, and bump the registry count in
+  its test.
 - Do not grow a shared file with unrelated commands.
 
 ### 3. Define the parameters
@@ -92,13 +98,13 @@ Tests must not need a GPU or a window. Use `furnicraft-testkit` fixtures rather 
 ### 9. Run the final gate
 
 ```sh
-cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo xtask layers
+cargo xtask ci
 ```
 
-`cargo xtask layers` must stay green: the engine may not gain `wgpu`/`egui` dependencies.
+It runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace` and `cargo xtask layers` in that order. Use `cargo fmt --all` to fix
+formatting; the gate only checks it. `cargo xtask layers` must stay green: the engine may not gain
+`wgpu`/`egui` dependencies.
 
 ## Checklist
 
@@ -123,4 +129,7 @@ cargo xtask layers
 
 ## Project status
 
-The workspace is at M0: `crates/engine` is an empty scaffold and the command registry does not exist yet. The first command creates `crates/engine/src/commands.rs` (`CommandSpec`, registry, dispatch) following this skill, and is the reference implementation for the rest. If the real API ends up different from this description, update this skill and `AGENTS.md` in the same change — the skill must describe the code that exists, not an aspiration.
+The workspace is at M5: the command registry exists with 23 commands, `Session` owns undo/redo and
+the UI dispatches by id. `crates/engine/src/commands.rs` and `node_cmds.rs` are the reference
+implementations. If the real API ends up different from this description, update this skill and
+`AGENTS.md` in the same change — the skill must describe the code that exists, not an aspiration.

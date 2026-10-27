@@ -13,6 +13,8 @@ FurniCraft is a native, free and open-source 3D editor for parametric cabinet fu
 3. 3D viewport: camera views, orbit/pan/zoom, shading, selection and picking, a floor grid, dimensions.
 4. Editing: create and edit panels, assemblies, materials and hardware through commands, with undo/redo.
 5. Output: cutting lists per material and sheet, panel drawings, and eventually CNC programs.
+6. Assistance: an optional built-in assistant, Faber, that reads the project, dispatches the same
+   commands a person uses, and can run headless jobs over existing orders.
 
 **Not in scope:** web or browser builds, cloud storage, collaboration, real-time rendering for presentation, free-form organic modelling, and import of third-party CAD formats at this stage.
 
@@ -38,7 +40,7 @@ A rigid transform relative to the parent frame: translation and rotation. Scale 
 
 ### Commands
 
-Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. `panel.create` takes the parent container id, a name, a `PanelNominalSize`, a `MaterialId` from the session catalogue and a `Placement`; it resolves the material thickness, allocates the panel id, bumps the revision once and returns the created id. `panel.rename` takes a panel id and a non-blank name and bumps the revision once. `panel.resize` takes a panel id and a new `PanelNominalSize` and bumps the revision once. `panel.material.set` takes a panel and a catalogue material and updates the material with its nominal thickness as the fallback. `panel.edge_banding.set` takes a panel, an edge, a catalogue banding material and the included-in-size flag; replacing an edge moves it to the end of the application order. `panel.edge_banding.clear` removes the banding on an edge. `cutout.create` takes a panel id, a rectangular `CutoutShape`, a `CutoutDepth` and an entry face, allocates the cutout id and bumps the revision once. The scene-tree commands operate on panels and both container kinds: `assembly.create` adds an empty assembly under a parent container, `node.rename` renames any node including the root, `node.delete` removes a subtree, `node.duplicate` deep-copies one with fresh ids, `node.group` wraps two or more sibling nodes in a new group, `node.ungroup` flattens a group back into its parent and `node.placement.set` moves a node relative to its parent. A panel is an atomic leaf: it is never split by grouping and never ungrouped. An assembly is a component with its own identity: `node.ungroup` refuses it, and a separate tool will dismantle it when furniture types land. Grouping keeps order and world transforms; the root group is immutable for delete, placement, grouping and ungrouping. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
+Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. `panel.create` takes the parent container id, a name, a `PanelNominalSize`, a `MaterialId` from the session catalogue and a `Placement`; it resolves the material thickness, allocates the panel id, bumps the revision once and returns the created id. `panel.rename` takes a panel id and a non-blank name and bumps the revision once. `panel.resize` takes a panel id and a new `PanelNominalSize` and bumps the revision once. `panel.material.set` takes a panel and a catalogue material and updates the material with its nominal thickness as the fallback. `panel.edge_banding.set` takes a panel, an edge, a catalogue banding material and the included-in-size flag; replacing an edge moves it to the end of the application order. `panel.edge_banding.clear` removes the banding on an edge. `cutout.create` takes a panel id, a rectangular `CutoutShape`, a `CutoutDepth` and an entry face, allocates the cutout id and bumps the revision once. The scene-tree commands operate on panels and both container kinds: `assembly.create` adds an empty assembly under a parent container, `node.rename` renames any node including the root, `node.delete` removes a subtree, `node.duplicate` deep-copies one with fresh ids, `node.group` wraps two or more sibling nodes in a new group, `node.ungroup` flattens a group back into its parent and `node.placement.set` moves a node relative to its parent. `node.placement.set_many` places a batch of nodes as one change: the selection's top-most nodes each get a placement, the revision bumps once and the whole drag is one undo entry ([ADR 0033](docs/decisions/0033-a-multi-selection-is-placed-by-one-command.md)). A panel is an atomic leaf: it is never split by grouping and never ungrouped. An assembly is a component with its own identity: `node.ungroup` refuses it, and a separate tool will dismantle it when furniture types land. Grouping keeps order and world transforms; the root group is immutable for delete, placement, grouping and ungrouping. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
 
 ### `Panel`
 
@@ -108,11 +110,46 @@ FurniCraft separates the model from the way it is viewed.
 
 - The document stores placements, each node's manipulation pivot and, optionally, named views (camera bookmarks).
 - Camera, projection, grid, shading, selection and hover are session/view state; they are never document data.
-- A viewport is a UI adapter: it owns a camera, turns input into camera moves or commands, and draws a scene. Several viewports may show the same document.
-- Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); selection lives in the session or the UI. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md).
+- A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene; its camera is session view state. Several viewports may show the same document.
+- Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); the session stores the resulting selection. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md) and [ADR 0029](docs/decisions/0029-view-state-belongs-to-the-session.md).
 - The floor grid has X, Y and a short Z axis at the origin, and a corner orientation widget shows the six world directions. Clicking one snaps the camera to look from that side; clicking the current side flips to the opposite. Both are view state. See [ADR 0019](docs/decisions/0019-standard-views-from-a-corner-widget.md).
-- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly. The viewport translate gizmo previews a moved frame during a drag and dispatches one `node.placement.set` on release, so the drag is one undo entry. The rotate gizmo uses world-aligned X/Y/Z rings and turns the selection about one of those world axes the same way. Both gizmos use one stored pivot in the node's own frame: a panel starts at its local zero, a container created with children at the centre of its local panel bounds, an empty container at its own origin, and the root is always zero. `node.pivot.set` and `node.pivot.center` move it explicitly; geometry edits do not. Only pure view state selects the active mode. See [ADR 0020](docs/decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md), [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md), [ADR 0026](docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md) and [ADR 0027](docs/decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md).
+- Manipulation (move/rotate, gizmos, snapping) is a command; the UI never writes a placement directly. The viewport gizmos preview a moved frame during a drag and dispatch one `node.placement.set_many` on release, so a drag of the whole selection is one undo entry. Only the top-most selected nodes move, and a shared turn uses the primary node's stored pivot ([ADR 0033](docs/decisions/0033-a-multi-selection-is-placed-by-one-command.md)). The translate gizmo moves along a world axis; the rotate gizmo uses world-aligned X/Y/Z rings and turns the selection about one of those world axes. Both gizmos use one stored pivot in the node's own frame: a panel starts at its local zero, a container created with children at the centre of its local panel bounds, an empty container at its own origin, and the root is always zero. `node.pivot.set` and `node.pivot.center` move it explicitly; geometry edits do not. Only pure view state selects the active mode. See [ADR 0020](docs/decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md), [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md), [ADR 0026](docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md) and [ADR 0027](docs/decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md).
 - Drawing views (projections, sections, details) are output, not interactive viewports, and arrive with the output milestone.
+
+## Assistant (Faber)
+
+FurniCraft ships an assistant named **Faber** that follows the project in real time. It is disabled by
+default because it needs a language-model connection; without one the editor behaves exactly as
+before.
+
+- Faber acts as a person does: every action is a command, a query or a session view operation,
+  dispatched by the same ids the UI uses. It has no private mutation path (ADR 0028).
+- It runs with a window, where the user watches it work, and headless, where it processes jobs
+  without a viewport. The core is deterministic and model-agnostic; the language model is an injected
+  adapter that may be local or remote. The application never listens for connections.
+- The core does not receive pixels. It reads the scene as data: the node tree, panels, materials,
+  placements, machining, diagnostics and derived measures. A vision channel is a separate, optional
+  decision.
+- Conversations, keys and the audit trail are not document data. Keys live in the OS keyring or a
+  restricted configuration file; the audit trail is a sidecar.
+- "Build a hinged wardrobe 600 × 2200 × 500" is one furniture type with named dimensions, not a
+  prompt: construction knowledge is deterministic code plus a workshop profile, and the type
+  catalogue shown to the model is generated from that registry (ADR 0030).
+- The material catalogue and the order registry are separate programs with their own databases and
+  APIs. Faber uses the same API as their interfaces, never the database. An order is the project
+  file, its records and the files produced for it; every version is a numbered folder holding the
+  complete file set, and only one is sent to production (ADR 0032). External side effects such as
+  ordering materials require a person's confirmation (ADR 0031).
+- View state — selection, open containers and cameras — belongs to the session, so every client
+  shares the user's context (ADR 0029).
+
+Open questions: what API the material and order programs expose locally and whether they ship with
+FurniCraft; where the workshop profile lives; whether reference retrieval (catalogues, norms, past
+jobs) is needed and in what form; voice input and output.
+
+The assistant adds `furnicraft-agent` between `engine` and `ui`, a model adapter and resource
+adapters at the composition boundary, and a project store for save and load. They enter the crate map
+only when the crates exist.
 
 ## Crate map
 
@@ -160,10 +197,11 @@ A crate may depend only on crates in lower layers. `kernel-truck` is the only cr
 | M2 | Geometry kernel boundary | `kernel` port and `kernel-truck` adapter; extrusion (linear sweep), boolean, tessellation, measure, panic guard; spike "panel + groove + chamfer" with analytic volumes; curved sweeps arrive with panel machining |
 | M3 | Viewport | `wgpu` window via the app shell: shaded primitives, orbit/pan/zoom, floor grid, resize handling; visual check |
 | M4 | Panel geometry | Panel outline, thickness, rectangular through and blind cutouts with an entry face, holes generated by hardware, chamfers/roundovers, shaped-cutter sweeps and edge banding, with volume and tessellation tests |
-| M5 | Editing | `egui` shell, command registry, undo/redo, scene tree with atomic panels, components and groups, create/place/select, closed-container viewport picking with an open mode, Blender-like axes and orientation widget, move/rotate |
+| M5 | Editing | `egui` shell, command registry, undo/redo, scene tree with atomic panels, components and groups, create/place/select, closed-container viewport picking with an open mode, Blender-like axes and orientation widget, move/rotate, multi-node placement as one undo entry |
 | M6 | Parametric assemblies | Dimensions drive panel sizes and placements; parts list derived; validation errors surfaced in the UI |
 | M7 | Hardware and joinery | Hardware catalogue, anchor points, generated holes, collision warnings |
 | M8 | Output | Cutting lists per material and sheet, panel drawings, CNC export |
+| M9 | Assistant | Faber runs as a client of the command registry: disabled by default, read-only first, one undo step per task, a whole task runnable by a scripted model without a network, and a headless job over a saved project |
 
 ## Open model questions (M1)
 

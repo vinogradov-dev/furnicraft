@@ -151,8 +151,8 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::node_cmds::{
-        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacementSet,
-        NodeRename, NodeUngroup,
+        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacement,
+        NodePlacementSet, NodePlacementSetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
@@ -180,6 +180,11 @@ mod tests {
 
     fn json_params<T: serde::Serialize>(value: &T) -> Value {
         serde_json::to_value(value).expect("params serialize")
+    }
+
+    fn placement(x: f64, y: f64, z: f64) -> Placement {
+        serde_json::from_value(serde_json::json!({"translation": [x, y, z], "rotation": [0.0, 0.0, 0.0, 1.0]}))
+            .expect("placement")
     }
 
     #[test]
@@ -1097,6 +1102,83 @@ mod tests {
         session.dispatch("node.placement.set", &json_params(&request)).expect("place panel");
         assert_eq!(session.project().panel(panel).expect("panel").placement(), placement);
         session.undo().expect("undo placement");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
+    }
+
+    #[test]
+    fn a_placement_batch_is_one_revision_and_one_undo_step() {
+        let mut session = sample_session();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("assembly id");
+        let moved = placement(10.0, 0.0, 0.0);
+        let raised = placement(0.0, 0.0, 25.0);
+        let request = NodePlacementSetMany {
+            placements: vec![
+                NodePlacement { node: panel, placement: moved },
+                NodePlacement { node: drawer, placement: raised },
+            ],
+        };
+        let params = json_params(&request);
+        let spec = CommandRegistry::new().get("node.placement.set_many").expect("registered");
+        assert!(spec.enabled(&session, &params));
+        let revision = session.project().revision();
+
+        session.dispatch("node.placement.set_many", &params).expect("place selection");
+
+        assert_eq!(session.project().revision().get(), revision.get() + 1);
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), moved);
+        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), raised);
+
+        session.undo().expect("undo batch");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
+        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), Placement::IDENTITY);
+        session.redo().expect("redo batch");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), moved);
+        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), raised);
+    }
+
+    #[test]
+    fn an_invalid_placement_batch_is_rejected_without_mutation() {
+        let mut session = sample_session();
+        let root = session.project().root().id();
+        let panel = Id::new(2).expect("panel id");
+        let missing = Id::new(999).expect("id");
+        let moved = placement(10.0, 0.0, 0.0);
+        let spec = CommandRegistry::new().get("node.placement.set_many").expect("registered");
+        let revision = session.project().revision();
+
+        let empty = NodePlacementSetMany { placements: Vec::new() };
+        assert!(!spec.enabled(&session, &json_params(&empty)));
+        assert!(session.dispatch("node.placement.set_many", &json_params(&empty)).is_err());
+
+        let duplicate = NodePlacementSetMany {
+            placements: vec![
+                NodePlacement { node: panel, placement: moved },
+                NodePlacement { node: panel, placement: moved },
+            ],
+        };
+        assert!(!spec.enabled(&session, &json_params(&duplicate)));
+        assert!(session.dispatch("node.placement.set_many", &json_params(&duplicate)).is_err());
+
+        let with_root = NodePlacementSetMany {
+            placements: vec![
+                NodePlacement { node: panel, placement: moved },
+                NodePlacement { node: root, placement: moved },
+            ],
+        };
+        assert!(!spec.enabled(&session, &json_params(&with_root)));
+        assert!(session.dispatch("node.placement.set_many", &json_params(&with_root)).is_err());
+
+        let with_missing = NodePlacementSetMany {
+            placements: vec![
+                NodePlacement { node: panel, placement: moved },
+                NodePlacement { node: missing, placement: moved },
+            ],
+        };
+        assert!(!spec.enabled(&session, &json_params(&with_missing)));
+        assert!(session.dispatch("node.placement.set_many", &json_params(&with_missing)).is_err());
+
+        assert_eq!(session.project().revision(), revision);
         assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
     }
 

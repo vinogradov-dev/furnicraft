@@ -1,22 +1,23 @@
 //! The viewport translate gizmo.
 //!
-//! Three world-axis handles are projected over the selected node's manipulation pivot, the first
-//! corner of its local bounds. A drag never mutates the document: it moves a preview of the selected
-//! panels, and the release dispatches one `node.placement.set`. The world-space delta is converted
-//! into the parent frame and rounded to micrometres, so the inspector and the document agree after
-//! the drag.
+//! Three world-axis handles are projected over the selection's manipulation pivot, the stored pivot
+//! of its primary node. A drag never mutates the document: it moves a preview of every selected
+//! panel, and the release dispatches one `node.placement.set_many`. Each node's world-space delta is
+//! converted into its own parent frame and rounded to micrometres, so a selection whose nodes have
+//! different parents still moves rigidly and the inspector agrees with the document after the drag.
 //!
 //! Handles keep a constant screen length. An axis within about ten degrees of the view direction is
 //! not drawn: its projected direction is unstable and a pointer drag would move it by metres.
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Response, Shape, Stroke, Ui, Vec2};
-use furnicraft_geom::{DQuat, DVec3};
-use furnicraft_model::{Id, Placement};
+use furnicraft_geom::DVec3;
+use furnicraft_model::Id;
 use furnicraft_scene::{Camera, MAX_DISTANCE_MM};
 
 use crate::gizmo_math::{
-    ACTIVE_COLOR, Axis, PlacementCommit, Preview, PreviewKey, Target, ray_to, screen_direction, screen_point,
+    ACTIVE_COLOR, Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_translation, ray_to,
+    screen_direction, screen_point,
 };
 
 /// Length of an axis handle, in points.
@@ -45,10 +46,9 @@ struct Drag {
     node: Id,
     axis: Axis,
     panels: Vec<Id>,
+    targets: Vec<MoveTarget>,
     start_origin: DVec3,
     start_parameter: f64,
-    start_local: Placement,
-    parent_rotation: DQuat,
     delta: DVec3,
 }
 
@@ -125,7 +125,7 @@ impl TranslateGizmo {
             }
             if !down {
                 self.consumed_click = true;
-                let commit = commit_placement(&drag)?;
+                let commit = commit_translation(&drag.targets, drag.delta)?;
                 return Ok(commit);
             }
             self.drag = Some(drag);
@@ -136,13 +136,11 @@ impl TranslateGizmo {
         if pointer_over_widget {
             return Ok(None);
         }
-        let Some(selected) = target.selected else {
+        let targets = target.move_targets();
+        let Some(anchor) = targets.last() else {
             return Ok(None);
         };
-        let Some(origin_world) = target.project.pivot_world(selected) else {
-            return Ok(None);
-        };
-        let Some(parent) = target.project.parent_of(selected) else {
+        let Some(origin_world) = target.project.pivot_world(anchor.node) else {
             return Ok(None);
         };
         let Some(pointer) = response.hover_pos() else {
@@ -161,24 +159,14 @@ impl TranslateGizmo {
         else {
             return Ok(None);
         };
-        let Some(parent_world) = target.project.world_placement(parent) else {
-            return Ok(None);
-        };
-        let Some(start_local) = target.project.node(selected).map(|node| node.placement()) else {
-            return Ok(None);
-        };
-        let Some(panels) = target.project.panel_ids_under(selected) else {
-            return Ok(None);
-        };
 
         self.drag = Some(Drag {
-            node: selected,
+            node: anchor.node,
             axis,
-            panels,
+            panels: target.panels(),
+            targets,
             start_origin: origin_world,
             start_parameter: parameter,
-            start_local,
-            parent_rotation: parent_world.rotation(),
             delta: DVec3::ZERO,
         });
         if !ui.input(|input| input.pointer.primary_down()) {
@@ -193,14 +181,7 @@ impl TranslateGizmo {
         let origin_world = if let Some(drag) = &self.drag {
             drag.start_origin + drag.delta
         } else {
-            let Some(selected) = target.selected else {
-                return;
-            };
-            // The root defines the world frame and has no placement to edit.
-            if target.project.parent_of(selected).is_none() {
-                return;
-            }
-            let Some(origin) = target.project.pivot_world(selected) else {
+            let Some(origin) = target.anchor_pivot() else {
                 return;
             };
             origin
@@ -298,29 +279,14 @@ fn handles(camera: Camera, viewport: egui::Rect, origin_world: DVec3, origin: Po
     handles
 }
 
-/// The placement to dispatch at the end of a drag, or `None` when nothing moved.
-fn commit_placement(drag: &Drag) -> Result<Option<PlacementCommit>, String> {
-    if drag.delta == DVec3::ZERO {
-        return Ok(None);
-    }
-    let local_delta = drag.parent_rotation.inverse() * drag.delta;
-    let translation = drag.start_local.translation() + local_delta;
-    if !translation.is_finite() {
-        return Err("the drag moved the node to a non-finite position".to_owned());
-    }
-    let placement = Placement::new(translation, drag.start_local.rotation()).map_err(|error| error.to_string())?;
-    let [x, y, z] = placement
-        .translation_lengths()
-        .ok_or_else(|| "the drag moved the node outside the editable millimetre range".to_owned())?;
-    let placement = placement.with_translation(x, y, z).map_err(|error| error.to_string())?;
-    if placement == drag.start_local { Ok(None) } else { Ok(Some(PlacementCommit { node: drag.node, placement })) }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use std::f64::consts::FRAC_PI_2;
+
+    use furnicraft_geom::DQuat;
+    use furnicraft_model::Placement;
 
     use super::*;
 
@@ -330,6 +296,15 @@ mod tests {
 
     fn origin_screen(camera: Camera) -> Pos2 {
         screen_point(camera, viewport(), camera.target()).expect("the target is in front")
+    }
+
+    fn move_target(node: u64, parent_rotation: DQuat, start_local: Placement) -> MoveTarget {
+        MoveTarget {
+            node: Id::new(node).expect("id"),
+            start_local,
+            parent: Placement::new(DVec3::ZERO, parent_rotation).expect("placement"),
+            pivot_local: DVec3::ZERO,
+        }
     }
 
     #[test]
@@ -370,42 +345,54 @@ mod tests {
 
     #[test]
     fn a_world_delta_is_converted_into_a_rotated_parent_frame() {
-        let drag = Drag {
-            node: Id::new(2).expect("id"),
-            axis: Axis::X,
-            panels: vec![Id::new(2).expect("id")],
-            start_origin: DVec3::ZERO,
-            start_parameter: 0.0,
-            start_local: Placement::IDENTITY,
-            parent_rotation: DQuat::from_rotation_z(FRAC_PI_2),
-            delta: DVec3::new(10.0, 0.0, 0.0),
-        };
-        let commit = commit_placement(&drag).expect("valid placement").expect("a move");
+        let target = move_target(2, DQuat::from_rotation_z(FRAC_PI_2), Placement::IDENTITY);
+        let commit =
+            commit_translation(&[target], DVec3::new(10.0, 0.0, 0.0)).expect("valid placement").expect("a move");
+        assert_eq!(commit.changes.len(), 1);
+        let change = commit.changes[0];
         let expected = DVec3::new(0.0, -10.0, 0.0);
         assert!(
-            (commit.placement.translation() - expected).length() < 1.0e-9,
+            (change.placement.translation() - expected).length() < 1.0e-9,
             "translation was {:?}",
-            commit.placement.translation()
+            change.placement.translation()
         );
-        assert_eq!(commit.placement.rotation(), Placement::IDENTITY.rotation());
+        assert_eq!(change.placement.rotation(), Placement::IDENTITY.rotation());
+    }
+
+    #[test]
+    fn a_batch_moves_a_selection_rigidly_across_different_parents() {
+        let turned = Placement::new(DVec3::new(500.0, 0.0, 0.0), DQuat::from_rotation_z(FRAC_PI_2)).expect("placement");
+        let targets = [
+            move_target(2, DQuat::IDENTITY, Placement::IDENTITY),
+            move_target(
+                3,
+                turned.rotation(),
+                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("placement"),
+            ),
+        ];
+        let commit = commit_translation(&targets, DVec3::new(10.0, 4.0, 0.0)).expect("valid").expect("a move");
+        assert_eq!(commit.changes.len(), 2);
+        assert_eq!(commit.changes[0].node, Id::new(2).expect("id"));
+        assert_eq!(commit.changes[1].node, Id::new(3).expect("id"));
+
+        // Every node receives the same world delta, expressed in its own parent frame.
+        for (change, target) in commit.changes.iter().zip(targets) {
+            let world_before = target.parent.transform_point(target.start_local.translation());
+            let world_after = target.parent.transform_point(change.placement.translation());
+            assert!(
+                (world_after - world_before - DVec3::new(10.0, 4.0, 0.0)).length() < 1.0e-9,
+                "world shift was {:?}",
+                world_after - world_before
+            );
+        }
     }
 
     #[test]
     fn a_zero_delta_or_a_rounded_out_delta_dispatches_nothing() {
-        let drag = Drag {
-            node: Id::new(2).expect("id"),
-            axis: Axis::Y,
-            panels: Vec::new(),
-            start_origin: DVec3::ZERO,
-            start_parameter: 0.0,
-            start_local: Placement::IDENTITY,
-            parent_rotation: DQuat::IDENTITY,
-            delta: DVec3::ZERO,
-        };
-        assert_eq!(commit_placement(&drag).expect("no error"), None);
-
-        let sub_micrometre = Drag { delta: DVec3::new(1.0e-7, 0.0, 0.0), ..drag };
-        assert_eq!(commit_placement(&sub_micrometre).expect("no error"), None);
+        let target = move_target(2, DQuat::IDENTITY, Placement::IDENTITY);
+        assert_eq!(commit_translation(&[target], DVec3::ZERO).expect("no error"), None);
+        assert_eq!(commit_translation(&[target], DVec3::new(1.0e-7, 0.0, 0.0)).expect("no error"), None);
+        assert_eq!(commit_translation(&[], DVec3::new(1.0, 0.0, 0.0)).expect("no error"), None);
     }
 
     #[test]
