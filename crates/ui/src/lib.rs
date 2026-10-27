@@ -18,6 +18,7 @@ mod container_card;
 mod panel_card;
 mod placement_card;
 mod scene_tree;
+mod section;
 
 use std::collections::HashSet;
 
