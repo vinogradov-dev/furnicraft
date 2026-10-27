@@ -102,6 +102,7 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_GROUP,
     node_cmds::NODE_UNGROUP,
     node_cmds::NODE_PLACEMENT_SET,
+    node_cmds::NODE_PLACEMENT_SET_MANY,
     node_cmds::NODE_PIVOT_SET,
     node_cmds::NODE_PIVOT_CENTER,
 ];
@@ -229,6 +230,9 @@ mod tests {
         let placement = registry.get("node.placement.set").expect("node.placement.set is registered");
         assert_eq!(placement.id(), "node.placement.set");
         assert_eq!(placement.label(), "Place");
+        let placement_many = registry.get("node.placement.set_many").expect("node.placement.set_many is registered");
+        assert_eq!(placement_many.id(), "node.placement.set_many");
+        assert_eq!(placement_many.label(), "Place selection");
         let pivot_set = registry.get("node.pivot.set").expect("node.pivot.set is registered");
         assert_eq!(pivot_set.id(), "node.pivot.set");
         assert_eq!(pivot_set.label(), "Set pivot");
@@ -236,6 +240,6 @@ mod tests {
         assert_eq!(pivot_center.id(), "node.pivot.center");
         assert_eq!(pivot_center.label(), "Center pivot");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 22);
+        assert_eq!(registry.specs().len(), 23);
     }
 }
