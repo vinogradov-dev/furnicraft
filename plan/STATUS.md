@@ -15,11 +15,14 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
   moves it. Assemblies and groups are separate container kinds: a viewport click selects a closed
   container as one object, double-click enters one level and Escape leaves one level. The inspector
   groups its properties into collapsible sections; the fold state is egui view state only and every
-  section starts open.
-- Working on: the next task is multi-node placement, then the M6 furniture-type design.
+  section starts open. A multi-selection from the scene tree moves and turns as one change: the
+  gizmos dispatch `node.placement.set_many`, so one drag is one revision and one undo entry, only the
+  top-most selected nodes move, and a shared turn uses the primary node's stored pivot.
+- Working on: the M6 furniture-type design — a type with named dimensions, a deterministic builder
+  and the workshop profile.
 - Direction: manual furniture design comes first. Parametric cabinets (M6) and project save/load are
   the next enablers; until save/load lands the scene lives only in the session.
-- Assistant: the architecture is recorded (ADRs 0028–0031) but not implemented. Faber is a client of
+- Assistant: the architecture is recorded (ADRs 0028–0032) but not implemented. Faber is a client of
   the command registry, reads the scene as data, and is disabled by default; it needs M6 furniture
   types and save/load before it is useful. View state moves to the session (0029) before the agent
   crate exists.
@@ -29,6 +32,10 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `docs: record multi-node placement` (ADR 0033)
+- `feat(app): move and turn the whole selection with one command`
+- `feat(engine): add the node.placement.set_many command`
+- `feat(model): place a batch of nodes atomically`
 - `docs: record order versions as numbered folders` (ADR 0032)
 - `docs: record the assistant architecture` (ADRs 0028–0031, `AGENTS.md` §4.11, `PROJECT.md`)
 - `docs: record the stored pivot and world-aligned rotate rings`
@@ -99,11 +106,11 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Multi-node placement: move the whole selection with one command and one undo entry.
-2. M6 model design: a furniture type with named dimensions and a deterministic builder, plus the
+1. M6 model design: a furniture type with named dimensions and a deterministic builder, plus the
    workshop profile. This is the enabler for both the assistant and the assembly dissolve; design it
    as an ADR before code.
-3. Save and load, with the project store outside `engine`, then the order bundle and pinning.
+2. Save and load, with the project store outside `engine`, then the order bundle and pinning.
+3. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
 
 ## Open questions
 
@@ -139,8 +146,9 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
   ADR 0029 places them in the session. They have not moved yet.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
-- History records one entry per command, so a multi-command task cannot yet be undone as one step.
-- Faber is designed (ADRs 0028–0031) but not implemented; with no save/load, a background job has no
+- History records one entry per command. A drag of a whole selection is one command, but a task made
+  of several commands (a future assistant task, for example) cannot yet be grouped into one step.
+- Faber is designed (ADRs 0028–0032) but not implemented; with no save/load, a background job has no
   project to open.
 - Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
   deliberate deferral, not an oversight.
@@ -151,7 +159,8 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 - The gizmos do not snap: translate and rotate angles are free, and snapping is not implemented yet.
 - The rotate rings are world-aligned only; a local-axis mode is not implemented.
 - The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.
-- Move and Rotate each act on one selected node; a multi-selection has no combined placement command.
+- Move and Rotate act on the top-most selected nodes; the viewport has no Ctrl+click multi-select
+  yet, so a multi-selection comes from the scene tree.
 - The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
   transform buffer per drawable can replace the full upload when a large cabinet makes it visible.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no

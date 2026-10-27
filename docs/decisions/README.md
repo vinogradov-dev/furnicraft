@@ -24,19 +24,20 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Superseded by 0021 |
 | [0018](0018-picking-ray-casts-the-scene.md) | Picking ray-casts the scene description and returns document ids | Accepted |
 | [0019](0019-standard-views-from-a-corner-widget.md) | Standard views come from a projected corner orientation widget | Accepted |
-| [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) | The translate gizmo previews a frame and commits one placement | Accepted |
+| [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) | The translate gizmo previews a frame and commits one placement | Accepted; batch commit extended by 0033 |
 | [0021](0021-assemblies-are-components-groups-are-containers.md) | Assemblies are components, groups are containers | Accepted; supersedes 0017 |
 | [0022](0022-closed-containers-pick-as-one-object.md) | A closed container picks as one object | Accepted |
 | [0023](0023-fasad-furniture-and-standard-views.md) | Fasad furniture and standard views | Accepted |
 | [0024](0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md) | Rotation is a quaternion shown as intrinsic XYZ Euler angles | Accepted |
 | [0025](0025-one-manipulation-pivot.md) | Move and Rotate share one pivot at the first corner of the local bounds | Superseded by 0026 |
 | [0026](0026-the-manipulation-pivot-is-stored-node-data.md) | The manipulation pivot is stored, editable node data | Accepted; supersedes 0025 |
-| [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) | The rotate gizmo uses world-aligned rings | Accepted |
+| [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) | The rotate gizmo uses world-aligned rings | Accepted; batch commit extended by 0033 |
 | [0028](0028-the-assistant-is-a-client-of-the-command-registry.md) | The assistant is a client of the command registry | Accepted |
 | [0029](0029-view-state-belongs-to-the-session.md) | View state belongs to the session | Accepted |
 | [0030](0030-construction-knowledge-is-code.md) | Construction knowledge is code, not prose | Accepted |
 | [0031](0031-external-resources-keep-their-own-system-of-record.md) | External resources keep their own system of record | Accepted |
 | [0032](0032-an-order-keeps-its-versions-as-folders.md) | An order keeps its versions as numbered folders | Accepted |
+| [0033](0033-a-multi-selection-is-placed-by-one-command.md) | A multi-selection is placed by one command | Accepted |
 
 ## Format
 
