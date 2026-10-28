@@ -1,0 +1,219 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 8,
+    "revision": 0,
+    "next_id": 5,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        {
+          "container": {
+            "id": 2,
+            "name": "Cabinet",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              300000,
+              200000,
+              9000
+            ],
+            "children": [
+              {
+                "panel": {
+                  "id": 3,
+                  "name": "Side",
+                  "nominal_size": {
+                    "length": 600000,
+                    "width": 400000
+                  },
+                  "material": null,
+                  "last_known_thickness": 18000,
+                  "placement": {
+                    "translation": [
+                      0.0,
+                      0.0,
+                      0.0
+                    ],
+                    "rotation": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ]
+                  },
+                  "pivot": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "machining": [],
+                  "edge_banding": [],
+                  "corner_banding": [],
+                  "band_order": [],
+                  "corner_features": [],
+                  "edge_bows": [],
+                  "properties": {}
+                }
+              }
+            ],
+            "properties": {
+              "cabinet.door.count": {
+                "kind": "integer",
+                "value": 2
+              },
+              "component": {
+                "kind": "bool",
+                "value": true
+              }
+            }
+          }
+        },
+        {
+          "object": {
+            "id": 4,
+            "name": "Bracket",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "properties": {},
+            "geometry": {
+              "kind": "mesh",
+              "positions": [
+                [
+                  -50000,
+                  -50000,
+                  -50000
+                ],
+                [
+                  50000,
+                  -50000,
+                  -50000
+                ],
+                [
+                  50000,
+                  50000,
+                  -50000
+                ],
+                [
+                  -50000,
+                  50000,
+                  -50000
+                ],
+                [
+                  -50000,
+                  -50000,
+                  50000
+                ],
+                [
+                  50000,
+                  -50000,
+                  50000
+                ],
+                [
+                  50000,
+                  50000,
+                  50000
+                ],
+                [
+                  -50000,
+                  50000,
+                  50000
+                ]
+              ],
+              "faces": [
+                [
+                  0,
+                  3,
+                  2,
+                  1
+                ],
+                [
+                  4,
+                  5,
+                  6,
+                  7
+                ],
+                [
+                  0,
+                  1,
+                  5,
+                  4
+                ],
+                [
+                  1,
+                  2,
+                  6,
+                  5
+                ],
+                [
+                  2,
+                  3,
+                  7,
+                  6
+                ],
+                [
+                  3,
+                  0,
+                  4,
+                  7
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {}
+    }
+  },
+  "generator": {
+    "name": "FurniCraft",
+    "version": "0.1.0"
+  }
+}

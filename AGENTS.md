@@ -40,6 +40,7 @@ crates/render          L5  wgpu renderer
 crates/scene           L4  renderer-agnostic frame description, camera, lights, grid
 crates/mesh            L3  evaluation cache: revision -> solid and triangle mesh
 crates/param           L2  document features -> kernel calls
+crates/project         L2  scene file envelope: read, write, atomic save, preserved sections
 crates/kernel-truck    L2  geometry kernel adapter implemented with truck
 crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tessellation
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials

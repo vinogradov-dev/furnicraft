@@ -214,6 +214,7 @@ only when the crates exist.
 | L1 | `furnicraft-model` | Document data: `Project`, `Container`, `Object`, `Geometry`, `Properties`, `FurnType`, `Placement`, `Panel`, `Material`, `Hardware`, `Id`, `Revision`; invariants and typed errors | units, geom, serde |
 | L2 | `furnicraft-kernel-truck` | Geometry kernel **adapter** implemented with `truck` (Apache-2.0). The only crate allowed to depend on `truck` | kernel, geom, truck-modeling, truck-shapeops, truck-meshalgo |
 | L2 | `furnicraft-param` | Compiles document features into kernel operations: panel features, placements, panel machining | model, kernel, geom, units |
+| L2 | `furnicraft-project` | Scene file envelope: format identity and version, read, atomic write, preserved unknown sections | model, serde, serde_json, thiserror |
 | L3 | `furnicraft-mesh` | Evaluation cache: `(Revision, PartId)` to solid and triangle mesh; tessellation policy | model, param, kernel, geom, units |
 | L4 | `furnicraft-scene` | Renderer-agnostic frame description: drawables, world transforms, materials, selection highlight, camera, lights, grid | model, mesh, geom |
 | L5 | `furnicraft-render` | `wgpu` renderer: pipelines, buffers, depth, camera. No `egui`, no window creation | scene, geom, wgpu, bytemuck |

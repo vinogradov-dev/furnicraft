@@ -10,14 +10,12 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: the first implementation step is in — a geometry object node with a baked mesh,
-  schema v8 (`Object`, `Geometry::Mesh`, mesh validation, object ids in the tree,
-  duplicate/delete/rename/placement, `StructuralKind::Object`), plus `object.primitive.create`
-  (cube), a flat-shaded drawable in the frame, the "+ Cube" tree action and the object inspector
-  card. Next is the project store and the `.fcs` envelope.
+- Working on: the scene-file store is in as a new layer-2 crate, `furnicraft-project`: the
+  `furnicraft.scene` envelope, read and atomic write, preserved unknown top-level sections, a
+  1 GiB read cap, and checked-in version 7 and 8 goldens. The shell has no File menu yet.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
-  shape. Save/load lands right after the first object and before mesh editing, so every later schema
-  bump is a migration with a golden file.
+  shape. The File menu, the dirty marker and the error dialog come next, then mesh editing, so every
+  later schema bump is a migration with a golden file.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -27,6 +25,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
 - `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
 - `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
 - `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
@@ -106,8 +105,8 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. The project store and the `.fcs` envelope: read, write, atomic save, golden files v7 and v8, then
-   the File menu, the dirty marker from `saved_revision` and the error dialog.
+1. The File menu in the shell: New, Open, Save and Save As over the scene store, the dirty marker
+   from `saved_revision`, a readable error dialog and a recovery-safe save path.
 2. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
    gizmo drag as one undo entry; mesh tools disabled on a constructive object.
 3. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
@@ -163,8 +162,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   of several commands (a future assistant task, for example) cannot yet be grouped into one step.
 - Faber is designed (ADRs 0028–0032) but not implemented; with no save/load, a background job has no
   project to open.
-- Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
-  deliberate deferral, not an oversight.
+- Save and load exist as a library (`furnicraft-project`) but the app has no File menu, no current
+  path and no dirty marker; `apps/furnicraft` still starts from `sample_session()`. This is the next
+  step.
 - Parametric cabinets do not exist yet: M6 provides classification and properties, and product
   prototypes arrive later as user scripts over those properties.
 - A component has no separate "dissolve" operation yet: `node.component.convert_to_group` clears its

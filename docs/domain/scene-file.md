@@ -57,6 +57,9 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
   cameras and lights are nodes inside it, not a second section ([0036](../decisions/0036-cameras-and-lights-are-scene-objects.md)).
 - The two versions are independent. A new geometry feature bumps `schema`; only a change to the
   framing bumps `format_version`.
+- `furnicraft-project` implements this envelope and the atomic writer; check its goldens under
+  `crates/project/tests/golden/` when a schema bump lands
+  ([ADR 0038](../decisions/0038-the-scene-file-lives-in-its-own-crate.md)).
 
 ## 3. What the file stores
 
