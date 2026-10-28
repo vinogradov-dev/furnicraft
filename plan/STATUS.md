@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-28. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-29. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
@@ -10,7 +10,17 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: cameras and lights are authored, editable and rendered. Schema 9 stores both as nodes
+- Working on: face picking and face moves in the mesh editor. The last task added the constructive
+  object: `object.extrude.create` builds a closed contour with one `Extrude` feature,
+  `object.contour.replace` edits it, the inspector card edits the contour and the height, and
+  `object.collapse` bakes the derived mesh in one undoable step. Schema 10 carries the payload, a
+  version 9 object still loads as a baked mesh, and the v10 golden keeps the contract. The viewport
+  evaluates a constructive object with the same function collapse uses, so the shape does not change
+  on collapse, and selection highlight, picking and gizmo preview treat panels and objects alike
+  (`Project::geometry_ids_under`). The same task fixed a regression: `contains_node` now covers
+  cameras and lights, so a newly created camera or light stays selected instead of disappearing after
+  one frame, and rename, properties and placement commands accept it.
+- Before that, cameras and lights are authored, editable and rendered. Schema 9 stores both as nodes
   and `Project::active_camera` names the render camera; the commands `camera.create`, `light.create`,
   `scene.active_camera.set`, `camera.projection.set` and `light.params.set` cover creation and edits,
   the inspector cards rename them, set the projection or light parameters and toggle the active
@@ -24,7 +34,8 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   still open.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. The workspace can round-trip a scene by hand, a created cube can be shaped by moving its
-  vertices, and cameras and lights are now scene objects; the constructive object follows.
+  vertices, a countertop is extruded from a contour and stays editable, and cameras and lights are
+  scene objects.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -34,6 +45,8 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `fix(model): include cameras and lights in contains_node` (one root fix for the one-frame selection of a new camera/light, `NodeNotFound` on rename/properties/placement and the missing gizmo target; regression tests in model, engine, UI and app)
+- `feat: create, edit and collapse contour extrusion objects` (`object.extrude.create`, `object.contour.replace`, `object.collapse`, schema 10, v10 golden, contour and height card, constructive evaluation in the viewport, panels and objects in selection highlight and gizmo preview)
 - `feat: create, edit and render authored cameras and lights` (`camera.create`, `light.create`, `scene.active_camera.set`, `camera.projection.set`, `light.params.set`, camera and light inspector cards, tree create actions, camera mapping and orthographic projection in `furnicraft-scene`, navigation disabled through an active camera)
 - `feat(model): add camera and light nodes and the active camera` (schema 9, validated projections and light values, tree rows, v9 golden, delete clears a dangling active camera)
 - `feat(app): drag mesh vertices with a vertex gizmo` (shared axis handles, mesh preview in the scene frame, one `mesh.vertices.move` per drag, Escape cancels, markers follow the preview)
@@ -120,12 +133,10 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Viewport gizmo icons for cameras and lights with pickable bounds, and a frame built from authored
-   lights instead of the built-in key light.
-2. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
-   the inspector and `object.collapse`.
-3. Face picking and face moves in the mesh editor.
-4. Viewport multi-select, copy/paste and gizmo snapping.
+1. Face picking and face moves in the mesh editor.
+2. Viewport multi-select, copy/paste and gizmo snapping.
+3. More constructive features and a viewport contour editor (booleans and fillets need the input
+   reference rule from ADR 0037).
 
 ## Open questions
 
@@ -168,10 +179,11 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - An authored camera pins the view and disables navigation, so the only way back to the navigable view
   is clearing the active camera in the inspector; a viewport-level "leave camera view" control is not
   implemented.
-- A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool
-  and no `object.collapse`. Mesh editing moves vertices only; there is no face or edge selection.
-  A cube is created at the parent origin and centred on it, so half of a default cube sits below the
-  floor until it is moved.
+- A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text lines in
+  the object card, not in the viewport; there are no booleans, fillets or other feature kinds yet.
+  Collapse is a one-way door and only undo brings the history back. Mesh editing moves vertices only;
+  there is no face or edge selection. A cube is created at the parent origin and centred on it, so
+  half of a default cube sits below the floor until it is moved.
 - Vertex markers are painted over the viewport image without an occlusion test, so a vertex on the
   far side of the mesh is visible and selectable through it. A depth readback or a pick pass can
   hide the back vertices when the first large mesh makes it matter. Picking and marker painting also
