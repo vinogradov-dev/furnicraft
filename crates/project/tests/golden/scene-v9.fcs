@@ -1,0 +1,96 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 9,
+    "revision": 0,
+    "next_id": 4,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        {
+          "camera": {
+            "id": 2,
+            "name": "Presentation",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "properties": {},
+            "projection": {
+              "kind": "perspective",
+              "fov_y": 50000
+            }
+          }
+        },
+        {
+          "light": {
+            "id": 3,
+            "name": "Key",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "properties": {},
+            "kind": "sun",
+            "color": [
+              1.0,
+              0.9,
+              0.8
+            ],
+            "intensity": 2.0
+          }
+        }
+      ],
+      "properties": {}
+    },
+    "active_camera": 2
+  }
+}

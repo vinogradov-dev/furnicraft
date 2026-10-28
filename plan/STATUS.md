@@ -10,15 +10,18 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: mesh editing is complete for vertices. `mesh.vertices.move` takes absolute local
-  positions for a batch, validates every index and moves the batch as one revision; the object card
-  starts a sub-object mode that paints markers, picks a vertex in screen space, adds with Shift or
-  Ctrl, and drags the selection along world axes with a gizmo that previews the moved mesh and
-  dispatches one command on release. Escape cancels a drag, then leaves the mode. Face picking and
-  face moves are the next mesh step.
+- Working on: camera and light nodes. Schema 9 adds `CameraNode` and `LightNode` beside containers,
+  panels and geometry objects, and `Project::active_camera` names the authored camera the scene is
+  rendered from; the tree shows both kinds and delete falls back to the built-in camera. The engine
+  commands (`camera.create`, `light.create`, `scene.active_camera.set`) and the inspector cards are
+  the next part of this step, then the viewport icons and rendering through the active camera.
+- Before that, mesh editing is complete for vertices: `mesh.vertices.move` takes a validated batch,
+  the object card starts a sub-object mode, and the vertex gizmo previews a drag and dispatches one
+  command on release. Escape cancels a drag, then leaves the mode. Face picking and face moves are
+  still open.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. The workspace can round-trip a scene by hand, and a created cube can be shaped by moving
-  its vertices; camera and light nodes are next.
+  its vertices; cameras, lights and the constructive object follow.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -28,6 +31,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(model): add camera and light nodes and the active camera` (schema 9, validated projections and light values, tree rows, v9 golden, delete clears a dangling active camera)
 - `feat(app): drag mesh vertices with a vertex gizmo` (shared axis handles, mesh preview in the scene frame, one `mesh.vertices.move` per drag, Escape cancels, markers follow the preview)
 - `feat(ui): select mesh vertices in a sub-object mode` (editor mesh mode, screen-space vertex picking and markers, object-card toggle, Escape exit)
 - `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
@@ -112,12 +116,13 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
-   and gizmo icons that make them selectable.
-2. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
+1. Camera and light commands and cards: `camera.create`, `light.create`, `scene.active_camera.set`,
+   an inspector card for each kind, and scene-building changes that render through the active camera.
+2. Viewport gizmo icons for cameras and lights with pickable bounds.
+3. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
    the inspector and `object.collapse`.
-3. Face picking and face moves in the mesh editor.
-4. Viewport multi-select, copy/paste and gizmo snapping.
+4. Face picking and face moves in the mesh editor.
+5. Viewport multi-select, copy/paste and gizmo snapping.
 
 ## Open questions
 

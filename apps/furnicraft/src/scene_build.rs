@@ -222,6 +222,7 @@ impl<'a> Evaluation<'a> {
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
                 Node::Object(object) => self.collect_object(object, parent)?,
+                Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
@@ -333,7 +334,7 @@ mod tests {
             match child {
                 Node::Panel(panel) => panels.push(panel),
                 Node::Container(container) => panels_in(container.children(), panels),
-                Node::Object(_) => {}
+                Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
     }

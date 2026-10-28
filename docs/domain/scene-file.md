@@ -40,7 +40,7 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
   "format": "furnicraft.scene",
   "format_version": 1,
   "document": {
-    "schema": 8,
+    "schema": 9,
     "revision": 42,
     "next_id": 120,
     "root": {},

@@ -249,7 +249,19 @@ fn show_node(
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, actions),
         Node::Object(object) => show_object(ui, object, selection, actions),
+        Node::Camera(camera) => show_leaf(ui, camera.id(), camera.name(), "camera", selection, actions),
+        Node::Light(light) => show_leaf(ui, light.id(), light.name(), "light", selection, actions),
     }
+}
+
+/// A camera or a light row: a named leaf with a kind tag and the usual duplicate/delete actions.
+fn show_leaf(ui: &mut Ui, id: Id, name: &str, kind: &str, selection: &mut Selection, actions: &mut Vec<TreeAction>) {
+    let label = RichText::new(format!("{name}  [{kind}]"));
+    let response = ui.selectable_label(selection.contains(id), label);
+    if response.clicked() {
+        select(ui, selection, id);
+    }
+    response.context_menu(|ui| object_menu(ui, id, actions));
 }
 
 fn show_object(
@@ -366,7 +378,7 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
                     return Some(id);
                 }
             }
-            Node::Object(_) => {}
+            Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
         }
     }
     None

@@ -15,6 +15,7 @@ use furnicraft_project::{MAX_SCENE_BYTES, SceneFile, SceneFileError};
 
 const V7: &str = include_str!("golden/scene-v7.fcs");
 const V8: &str = include_str!("golden/scene-v8.fcs");
+const V9: &str = include_str!("golden/scene-v9.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -46,7 +47,7 @@ impl Drop for TempDir {
 
 #[test]
 fn every_golden_file_loads_and_round_trips() {
-    for (name, text) in [("version 7", V7), ("version 8", V8)] {
+    for (name, text) in [("version 7", V7), ("version 8", V8), ("version 9", V9)] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
             scene.document().schema_version(),
@@ -84,6 +85,28 @@ fn a_version_eight_file_loads_the_object_and_preserves_unknown_sections() {
 }
 
 #[test]
+fn a_version_nine_file_loads_cameras_lights_and_the_active_camera() {
+    let scene = SceneFile::parse(V9).expect("version 9");
+    let document = scene.document();
+
+    let camera = document.camera(Id::new(2).expect("id")).expect("the camera must load");
+    assert_eq!(camera.name(), "Presentation");
+    assert_eq!(document.active_camera(), Some(camera.id()));
+    let light = document.light(Id::new(3).expect("id")).expect("the light must load");
+    assert_eq!(light.name(), "Key");
+    assert_eq!(light.kind(), furnicraft_model::LightKind::Sun);
+    assert_eq!(light.intensity(), 2.0);
+}
+
+#[test]
+fn a_version_eight_file_has_no_active_camera() {
+    let scene = SceneFile::parse(V8).expect("version 8");
+    assert_eq!(scene.document().active_camera(), None);
+    assert!(scene.document().query(&NodeQuery::any().with_kind(StructuralKind::Camera)).is_empty());
+    assert!(scene.document().query(&NodeQuery::any().with_kind(StructuralKind::Light)).is_empty());
+}
+
+#[test]
 fn a_scene_saved_from_a_document_keeps_the_sections_it_was_loaded_with() {
     let loaded = SceneFile::parse(V8).expect("version 8");
     let saved = SceneFile::new(loaded.document().clone()).with_extra(loaded.extra().clone());
@@ -110,7 +133,7 @@ fn a_newer_format_version_is_a_readable_error() {
 
 #[test]
 fn a_newer_document_schema_is_a_readable_error() {
-    let text = V8.replacen("\"schema_version\": 8", "\"schema_version\": 9", 1);
+    let text = V8.replacen("\"schema_version\": 8", "\"schema_version\": 10", 1);
     assert_ne!(text, V8);
     let error = SceneFile::parse(&text).expect_err("a newer document must be rejected");
     assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
