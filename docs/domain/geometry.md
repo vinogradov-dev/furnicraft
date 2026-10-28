@@ -103,6 +103,11 @@ direct mesh editing, so its contour stays the only way to change it.
   entering or leaving the mode needs no undo entry. Vertices are picked in screen space with a fixed
   point radius and painted as markers over the viewport; a click outside every vertex clears the
   vertex selection, Shift or Ctrl adds or removes one.
+- A selected vertex set is dragged with the same three world-axis handles as the object gizmo, at the
+  median of its vertices. The drag shows a moved copy of the mesh and a moved set of markers; the
+  release dispatches one `mesh.vertices.move` with absolute local positions, and Escape cancels the
+  drag by restoring the document. The world shift is rotated by the inverse of the object's placement
+  and rounded to micrometres, so the preview and the committed positions agree.
 - A mesh element is referenced by its index, valid only for the revision it was read in. A command
   that changes topology invalidates the selection, and the session clears it.
 - There are no stable names for vertices, edges or faces beyond a revision, and no persistent naming

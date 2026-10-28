@@ -21,17 +21,21 @@ mod mesh_pick;
 mod rotate_gizmo;
 mod scene_build;
 mod translate_gizmo;
+mod vertex_gizmo;
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use eframe::egui;
 use eframe::egui_wgpu;
 use eframe::wgpu;
+use furnicraft_engine::mesh_cmds::MESH_VERTICES_MOVE_ID;
 use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
-use furnicraft_engine::{NodePlacement, NodePlacementSetMany, Session};
+use furnicraft_engine::{MeshVertexMove, MeshVerticesMove, NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_model::{Id, Revision};
+use furnicraft_mesh::object_mesh;
+use furnicraft_model::{Id, Project, Revision};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
@@ -42,6 +46,7 @@ use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
 use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
 use crate::translate_gizmo::TranslateGizmo;
+use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
 
 /// Orbit sensitivity in radians per point dragged.
 const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
@@ -74,6 +79,7 @@ struct FurniCraftApp {
     texture_id: egui::TextureId,
     translate_gizmo: TranslateGizmo,
     rotate_gizmo: RotateGizmo,
+    vertex_gizmo: VertexGizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
     uploaded_preview: Option<PreviewKey>,
@@ -114,6 +120,7 @@ impl FurniCraftApp {
             texture_id,
             translate_gizmo: TranslateGizmo::default(),
             rotate_gizmo: RotateGizmo::default(),
+            vertex_gizmo: VertexGizmo::default(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             uploaded_preview: None,
@@ -143,6 +150,7 @@ impl FurniCraftApp {
         self.editor = Editor::new();
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
+        self.vertex_gizmo = VertexGizmo::default();
         self.highlighted.clear();
         self.uploaded_preview = None;
         self.extra = extra;
@@ -218,6 +226,10 @@ impl FurniCraftApp {
             Some(Preview::Rotation { panels, pivot, rotation }) => frame.with_world_rotation(panels, pivot, rotation),
             None => frame,
         };
+        let frame = match self.vertex_gizmo.preview() {
+            Some(preview) => preview_vertex_mesh(frame, self.session.project(), preview)?,
+            None => frame,
+        };
         self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
         self.highlighted.clear();
         self.highlighted.extend_from_slice(selection);
@@ -227,6 +239,9 @@ impl FurniCraftApp {
 
     /// The scene change the active gizmo is previewing.
     fn preview(&self) -> Option<Preview<'_>> {
+        if self.editor.mesh_edit().is_some() {
+            return None;
+        }
         match self.mode {
             TransformMode::Move => self.translate_gizmo.preview(),
             TransformMode::Rotate => self.rotate_gizmo.preview(),
@@ -235,6 +250,9 @@ impl FurniCraftApp {
 
     /// The preview currently shown by the renderer.
     fn preview_key(&self) -> Option<PreviewKey> {
+        if self.editor.mesh_edit().is_some() {
+            return self.vertex_gizmo.preview_key();
+        }
         match self.mode {
             TransformMode::Move => self.translate_gizmo.preview_key(),
             TransformMode::Rotate => self.rotate_gizmo.preview_key(),
@@ -266,6 +284,22 @@ impl FurniCraftApp {
         self.session.dispatch(NODE_PLACEMENT_SET_MANY_ID, &params).map_err(|error| error.to_string())?;
         // The preview already showed the new position; rebuilding here keeps the document, the
         // scene and the inspector in agreement without waiting a frame.
+        self.sync_scene()
+    }
+
+    /// Dispatches one `mesh.vertices.move` for a finished vertex drag and rebuilds the scene.
+    fn apply_mesh_commit(&mut self, commit: MeshVertexCommit) -> Result<(), String> {
+        let request = MeshVerticesMove {
+            object: commit.object,
+            moves: commit
+                .moves
+                .iter()
+                .map(|(vertex, position)| MeshVertexMove { vertex: *vertex, position: *position })
+                .collect(),
+        };
+        let params =
+            serde_json::to_value(request).map_err(|error| format!("could not encode the vertex batch: {error}"))?;
+        self.session.dispatch(MESH_VERTICES_MOVE_ID, &params).map_err(|error| error.to_string())?;
         self.sync_scene()
     }
 
@@ -303,13 +337,35 @@ impl FurniCraftApp {
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         let mesh_object = self.editor.mesh_edit().map(|edit| edit.object());
+        // Vertex editing owns the pointer: the object gizmo would move the whole mesh under the
+        // user's hand, so it is neither updated nor painted until the mode ends.
+        let vertex_update = if let Some(object) = mesh_object {
+            let target = vertex_gizmo::MeshTarget {
+                camera: self.scene.camera,
+                project: self.session.project(),
+                object,
+                vertices: self.editor.mesh_edit().map(|edit| edit.vertices()).unwrap_or_default(),
+            };
+            self.vertex_gizmo.update(ui, &response, rect, target, pointer_over_widget)
+        } else {
+            self.vertex_gizmo.reset();
+            Ok(None)
+        };
+        match vertex_update {
+            Ok(Some(commit)) => {
+                if let Err(error) = self.apply_mesh_commit(commit) {
+                    self.last_error = Some(error);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => self.last_error = Some(error),
+        }
+
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        // Vertex editing owns the pointer: the object gizmo would move the whole mesh under the
-        // user's hand, so it is neither updated nor painted until the mode ends.
         let update: Result<Option<PlacementCommit>, String> = if mesh_object.is_some() {
             Ok(None)
         } else {
@@ -330,12 +386,19 @@ impl FurniCraftApp {
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
         }
-        let dragging = mesh_object.is_none() && (self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging());
-        let consumed_click = mesh_object.is_none()
-            && match self.mode {
+        let dragging = if mesh_object.is_some() {
+            self.vertex_gizmo.is_dragging()
+        } else {
+            self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
+        };
+        let consumed_click = if mesh_object.is_some() {
+            self.vertex_gizmo.consumed_click()
+        } else {
+            match self.mode {
                 TransformMode::Move => self.translate_gizmo.consumed_click(),
                 TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
-            };
+            }
+        };
 
         if response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
@@ -427,7 +490,15 @@ impl FurniCraftApp {
             selection: self.editor.selected_nodes(),
         };
         // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
-        if mesh_object.is_none() {
+        if let Some(object) = mesh_object {
+            let target = vertex_gizmo::MeshTarget {
+                camera: self.scene.camera,
+                project: self.session.project(),
+                object,
+                vertices: self.editor.mesh_edit().map(|edit| edit.vertices()).unwrap_or_default(),
+            };
+            self.vertex_gizmo.paint(ui, rect, target);
+        } else {
             match self.mode {
                 TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
                 TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
@@ -450,12 +521,16 @@ impl FurniCraftApp {
             return;
         };
         let selected: HashSet<u32> = edit.vertices().iter().copied().collect();
+        let preview = self.vertex_gizmo.preview();
         let painter = ui.painter().with_clip_rect(rect);
         for (index, local) in mesh.positions().iter().enumerate() {
             let Ok(vertex) = u32::try_from(index) else {
                 continue;
             };
-            let world = mesh_pick::to_world(placement, *local);
+            // A marker follows the preview during a drag, so the dots stay inside the moved mesh
+            // instead of lagging at the old positions until the release.
+            let local = preview.as_ref().and_then(|preview| preview.moved(vertex, *local)).unwrap_or(*local);
+            let world = mesh_pick::to_world(placement, local);
             let Some(position) = gizmo_math::screen_point(self.scene.camera, rect, world) else {
                 continue;
             };
@@ -524,6 +599,32 @@ impl FurniCraftApp {
     }
 }
 
+/// A copy of the frame with one object's dragged vertices at their previewed positions.
+///
+/// The mesh is cloned, the selected vertices are offset and the clone is tessellated for this frame
+/// only; the document keeps the old positions until `mesh.vertices.move` commits them. An object
+/// that is not a mesh in the current revision leaves the frame unchanged.
+fn preview_vertex_mesh(frame: SceneFrame, project: &Project, preview: VertexPreview<'_>) -> Result<SceneFrame, String> {
+    let Some(mesh) = project.object(preview.object).and_then(|object| object.geometry().as_mesh()) else {
+        return Ok(frame);
+    };
+    let mut moved = mesh.clone();
+    for vertex in preview.vertices {
+        let Ok(index) = usize::try_from(*vertex) else {
+            continue;
+        };
+        let Some(position) = moved.positions().get(index).copied() else {
+            continue;
+        };
+        let Some(target) = preview.moved(*vertex, position) else {
+            continue;
+        };
+        moved.set_position(index, target).map_err(|error| error.to_string())?;
+    }
+    let data = object_mesh(&moved).map_err(|error| error.to_string())?;
+    Ok(frame.with_drawable_mesh(preview.object, Arc::new(data)))
+}
+
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Err(error) = self.sync_scene() {
@@ -533,6 +634,7 @@ impl eframe::App for FurniCraftApp {
         if escape
             && !self.translate_gizmo.is_dragging()
             && !self.rotate_gizmo.is_dragging()
+            && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
             if self.editor.mesh_edit().is_some() {

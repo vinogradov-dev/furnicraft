@@ -539,6 +539,21 @@ impl SceneFrame {
         }
         frame
     }
+
+    /// A copy of the frame with one drawable's local mesh replaced.
+    ///
+    /// This is a drag preview for sub-object editing: the shell builds a mesh with the moved
+    /// vertices and swaps it in for one frame, so the document and the renderer cache stay untouched
+    /// until the command commits. An unknown id leaves the frame unchanged.
+    pub fn with_drawable_mesh(&self, id: Id, mesh: Arc<MeshData>) -> Self {
+        let mut frame = self.clone();
+        for drawable in &mut frame.drawables {
+            if drawable.id == id {
+                drawable.mesh = mesh.clone();
+            }
+        }
+        frame
+    }
 }
 
 /// Linear RGB colour mixed into the selected drawable.
@@ -831,6 +846,25 @@ mod tests {
         assert_eq!(frame.with_world_rotation(&[], DVec3::ZERO, quarter_turn), frame);
         assert_eq!(frame.with_world_rotation(&[turned], DVec3::new(f64::NAN, 0.0, 0.0), quarter_turn), frame);
         assert_eq!(frame.with_world_rotation(&[turned], DVec3::ZERO, DQuat::from_xyzw(2.0, 0.0, 0.0, 0.0)), frame);
+    }
+
+    #[test]
+    fn a_mesh_preview_replaces_only_the_named_drawable() {
+        let edited = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(edited, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let mut replacement = (*quad_mesh()).clone();
+        replacement.positions[0] = [9.0, 9.0, 9.0];
+        let replacement = Arc::new(replacement);
+        let preview = frame.with_drawable_mesh(edited, replacement.clone());
+
+        assert_eq!(preview.drawables()[0].mesh, replacement);
+        assert_eq!(preview.drawables()[1].mesh, quad_mesh());
+        assert_eq!(frame.drawables()[0].mesh, quad_mesh(), "the base frame keeps its mesh");
+        assert_eq!(frame.with_drawable_mesh(Id::new(99).expect("id"), replacement), frame);
     }
 
     #[test]

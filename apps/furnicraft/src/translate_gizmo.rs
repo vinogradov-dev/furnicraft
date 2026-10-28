@@ -10,35 +10,15 @@
 //! not drawn: its projected direction is unstable and a pointer drag would move it by metres.
 
 use eframe::egui;
-use egui::{Align2, Color32, FontId, Pos2, Response, Shape, Stroke, Ui, Vec2};
+use egui::{Response, Ui};
 use furnicraft_geom::DVec3;
 use furnicraft_model::Id;
-use furnicraft_scene::{Camera, MAX_DISTANCE_MM};
+use furnicraft_scene::MAX_DISTANCE_MM;
 
 use crate::gizmo_math::{
-    ACTIVE_COLOR, Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_translation, ray_to,
-    screen_direction, screen_point,
+    Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_translation, hit_axis, paint_axis_handles,
+    ray_to,
 };
-
-/// Length of an axis handle, in points.
-const HANDLE_LENGTH: f32 = 84.0;
-
-/// Radius inside which a pointer hits a handle, in points.
-const HIT_RADIUS: f32 = 8.0;
-
-/// Part of a handle next to the origin that never starts a drag, in points.
-const ORIGIN_DEAD_ZONE: f32 = 10.0;
-
-/// Axes closer than this to the view direction are not drawn.
-const VIEW_ALIGNMENT_LIMIT: f64 = 0.985;
-
-/// A projected handle: the axis, its screen-space tip and its unit screen direction.
-#[derive(Clone, Copy, Debug)]
-struct Handle {
-    axis: Axis,
-    tip: Pos2,
-    direction: Vec2,
-}
 
 /// One continuous axis drag.
 #[derive(Debug)]
@@ -186,97 +166,15 @@ impl TranslateGizmo {
             };
             origin
         };
-        let Some(origin) = screen_point(target.camera, viewport, origin_world) else {
-            return;
-        };
-        if !viewport.expand(64.0).contains(origin) {
-            return;
-        }
-        let handles = handles(target.camera, viewport, origin_world, origin);
-        let painter = ui.painter().with_clip_rect(viewport);
-        let center_tone = if self.drag.is_some() { Color32::from_gray(140) } else { Color32::from_gray(220) };
-        painter.circle_filled(origin, 3.0, center_tone);
-
-        for handle in handles {
-            let active = self.drag.as_ref().is_some_and(|drag| drag.axis == handle.axis);
-            let hovered = self.hover == Some(handle.axis);
-            let mut color = if active || hovered { ACTIVE_COLOR } else { handle.axis.color() };
-            if self.drag.is_some() && !active {
-                color = color.gamma_multiply(0.4);
-            }
-            let width = if active || hovered { 3.5 } else { 2.2 };
-            painter.line_segment([origin, handle.tip], Stroke::new(width, color));
-
-            let perpendicular = Vec2::new(-handle.direction.y, handle.direction.x);
-            let base = handle.tip - handle.direction * 9.0;
-            painter.add(Shape::convex_polygon(
-                vec![handle.tip, base + perpendicular * 4.0, base - perpendicular * 4.0],
-                color,
-                Stroke::NONE,
-            ));
-            let label = handle.tip + handle.direction * 12.0;
-            painter.text(
-                label,
-                Align2::CENTER_CENTER,
-                handle.axis.label(),
-                FontId::proportional(12.0),
-                if active || hovered { ACTIVE_COLOR } else { Color32::from_gray(230) },
-            );
-        }
+        paint_axis_handles(
+            ui,
+            viewport,
+            target.camera,
+            origin_world,
+            self.hover,
+            self.drag.as_ref().map(|drag| drag.axis),
+        );
     }
-}
-
-/// The axis whose handle is nearest to `pointer`, ignoring the dead zone around the origin.
-fn hit_axis(camera: Camera, viewport: egui::Rect, origin_world: DVec3, pointer: Pos2) -> Option<Axis> {
-    let origin = screen_point(camera, viewport, origin_world)?;
-    if !viewport.expand(64.0).contains(origin) {
-        return None;
-    }
-    let mut best: Option<(f32, Axis)> = None;
-    for handle in handles(camera, viewport, origin_world, origin) {
-        let distance = distance_to_handle(pointer, origin, handle.tip);
-        let Some(distance) = distance else {
-            continue;
-        };
-        if distance <= HIT_RADIUS && best.is_none_or(|(nearest, _)| distance < nearest) {
-            best = Some((distance, handle.axis));
-        }
-    }
-    best.map(|(_, axis)| axis)
-}
-
-/// Distance from `point` to the segment, or `None` inside the dead zone next to the origin.
-fn distance_to_handle(point: Pos2, start: Pos2, end: Pos2) -> Option<f32> {
-    let segment = end - start;
-    let length_squared = segment.length_sq();
-    if length_squared <= f32::EPSILON {
-        return None;
-    }
-    let length = length_squared.sqrt();
-    let along = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
-    if along * length < ORIGIN_DEAD_ZONE {
-        return None;
-    }
-    Some((point - (start + segment * along)).length())
-}
-
-/// The projected handles of the selected node, skipping axes that point at the camera.
-fn handles(camera: Camera, viewport: egui::Rect, origin_world: DVec3, origin: Pos2) -> Vec<Handle> {
-    let step = (camera.distance() * 0.01).max(1.0);
-    let mut handles = Vec::with_capacity(Axis::ALL.len());
-    for axis in Axis::ALL {
-        if axis.direction().dot(camera.forward()).abs() > VIEW_ALIGNMENT_LIMIT {
-            continue;
-        }
-        let Some(end) = screen_point(camera, viewport, origin_world + axis.direction() * step) else {
-            continue;
-        };
-        let Some(direction) = screen_direction(end - origin) else {
-            continue;
-        };
-        handles.push(Handle { axis, tip: origin + direction * HANDLE_LENGTH, direction });
-    }
-    handles
 }
 
 #[cfg(test)]
@@ -285,17 +183,19 @@ mod tests {
 
     use std::f64::consts::FRAC_PI_2;
 
+    use egui::Pos2;
     use furnicraft_geom::DQuat;
     use furnicraft_model::Placement;
+    use furnicraft_scene::Camera;
 
     use super::*;
 
     fn viewport() -> egui::Rect {
-        egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))
+        egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 600.0))
     }
 
     fn origin_screen(camera: Camera) -> Pos2 {
-        screen_point(camera, viewport(), camera.target()).expect("the target is in front")
+        crate::gizmo_math::screen_point(camera, viewport(), camera.target()).expect("the target is in front")
     }
 
     fn move_target(node: u64, parent_rotation: DQuat, start_local: Placement) -> MoveTarget {
@@ -305,42 +205,6 @@ mod tests {
             parent: Placement::new(DVec3::ZERO, parent_rotation).expect("placement"),
             pivot_local: DVec3::ZERO,
         }
-    }
-
-    #[test]
-    fn the_default_view_draws_three_distinct_handles() {
-        let camera = Camera::default();
-        let handles = handles(camera, viewport(), camera.target(), origin_screen(camera));
-        assert_eq!(handles.len(), 3);
-        for handle in &handles {
-            assert!(handle.tip.is_finite());
-            assert!((handle.direction.length() - 1.0).abs() < 1.0e-5);
-            assert!((handle.tip - origin_screen(camera)).length() > 80.0);
-        }
-        let z = handles.iter().find(|handle| handle.axis == Axis::Z).expect("Z handle");
-        assert!(z.direction.y < -0.5, "Z should point up, direction was {:?}", z.direction);
-    }
-
-    #[test]
-    fn a_view_aligned_axis_has_no_handle() {
-        let mut camera = Camera::default();
-        camera.look_from(DVec3::Z);
-        let handles = handles(camera, viewport(), camera.target(), origin_screen(camera));
-        assert!(handles.iter().all(|handle| handle.axis != Axis::Z), "handles were {handles:?}");
-        assert_eq!(handles.len(), 2);
-    }
-
-    #[test]
-    fn the_handle_nearest_the_pointer_wins_and_the_origin_is_dead() {
-        let camera = Camera::default();
-        let origin_world = camera.target();
-        let origin = origin_screen(camera);
-        let handles = handles(camera, viewport(), origin_world, origin);
-        let x = handles.iter().find(|handle| handle.axis == Axis::X).expect("X handle");
-        let pointer = origin + (x.tip - origin) * 0.6;
-        assert_eq!(hit_axis(camera, viewport(), origin_world, pointer), Some(Axis::X));
-        assert_eq!(hit_axis(camera, viewport(), origin_world, origin), None);
-        assert_eq!(hit_axis(camera, viewport(), origin_world, origin + Vec2::new(300.0, 300.0)), None);
     }
 
     #[test]

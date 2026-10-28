@@ -10,15 +10,15 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: mesh editing, in two parts. The headless and selection halves are in:
-  `mesh.vertices.move` takes absolute local positions for a batch of vertices, validates every index
-  and moves the batch as one revision; the object card starts a sub-object mode that paints vertex
-  markers, picks a vertex in screen space, adds to the selection with Shift or Ctrl and leaves on
-  Escape or a selection change. The drag half — a vertex gizmo that previews and commits one command
-  — is next.
+- Working on: mesh editing is complete for vertices. `mesh.vertices.move` takes absolute local
+  positions for a batch, validates every index and moves the batch as one revision; the object card
+  starts a sub-object mode that paints markers, picks a vertex in screen space, adds with Shift or
+  Ctrl, and drags the selection along world axes with a gizmo that previews the moved mesh and
+  dispatches one command on release. Escape cancels a drag, then leaves the mode. Face picking and
+  face moves are the next mesh step.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
-  shape. The workspace can round-trip a scene by hand, and mesh editing turns a created cube into a
-  shape; camera and light nodes follow.
+  shape. The workspace can round-trip a scene by hand, and a created cube can be shaped by moving
+  its vertices; camera and light nodes are next.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -28,6 +28,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(app): drag mesh vertices with a vertex gizmo` (shared axis handles, mesh preview in the scene frame, one `mesh.vertices.move` per drag, Escape cancels, markers follow the preview)
 - `feat(ui): select mesh vertices in a sub-object mode` (editor mesh mode, screen-space vertex picking and markers, object-card toggle, Escape exit)
 - `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
 - `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
@@ -111,12 +112,11 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Mesh vertex gizmo: preview moved vertices during a drag and dispatch `mesh.vertices.move` once
-   on release, then face picking and face moves.
-2. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
+1. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
    and gizmo icons that make them selectable.
-3. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
+2. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
    the inspector and `object.collapse`.
+3. Face picking and face moves in the mesh editor.
 4. Viewport multi-select, copy/paste and gizmo snapping.
 
 ## Open questions
@@ -155,13 +155,14 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   ADR 0029 places them in the session. They have not moved yet. Cameras and lights are not document
   nodes yet: the camera is a shell value and the key light is a constant.
 - A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool
-  and no `object.collapse`. `mesh.vertices.move` exists and the object card can enter a vertex
-  selection mode, but there is no vertex drag yet, so vertices move only through the command. A cube
-  is created at the parent origin and centred on it, so half of a default cube sits below the floor
-  until it is moved.
+  and no `object.collapse`. Mesh editing moves vertices only; there is no face or edge selection.
+  A cube is created at the parent origin and centred on it, so half of a default cube sits below the
+  floor until it is moved.
 - Vertex markers are painted over the viewport image without an occlusion test, so a vertex on the
   far side of the mesh is visible and selectable through it. A depth readback or a pick pass can
-  hide the back vertices when the first large mesh makes it matter.
+  hide the back vertices when the first large mesh makes it matter. Picking and marker painting also
+  walk every vertex of the edited mesh each frame; a large mesh needs a spatial index or a GPU id
+  pass.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made
@@ -189,7 +190,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - Move and Rotate act on the top-most selected nodes; the viewport has no Ctrl+click multi-select
   yet, so a multi-selection comes from the scene tree.
 - The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
-  transform buffer per drawable can replace the full upload when a large cabinet makes it visible.
+  transform buffer per drawable can replace the full upload when a large cabinet makes it visible. A
+  vertex drag also re-tessellates the edited mesh on every pointer move instead of moving only the
+  affected triangle vertices.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
   menu fallback for the six views yet.
 - The selection highlight re-uploads every mesh when the selection changes; an incremental colour
