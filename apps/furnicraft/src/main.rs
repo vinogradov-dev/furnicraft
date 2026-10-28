@@ -17,10 +17,12 @@
 mod file_menu;
 mod gizmo;
 mod gizmo_math;
+mod mesh_pick;
 mod rotate_gizmo;
 mod scene_build;
 mod translate_gizmo;
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use eframe::egui;
@@ -46,6 +48,10 @@ const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
 
 /// Zoom sensitivity per scroll point.
 const ZOOM_PER_SCROLL_POINT: f64 = 0.004;
+
+/// Colour and radius of an unselected mesh vertex marker.
+const MESH_VERTEX_COLOR: egui::Color32 = egui::Color32::from_rgb(226, 226, 226);
+const MESH_VERTEX_RADIUS: f32 = 4.0;
 
 /// Which transform gizmo the viewport shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,14 +302,21 @@ impl FurniCraftApp {
 
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
+        let mesh_object = self.editor.mesh_edit().map(|edit| edit.object());
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        let update = match self.mode {
-            TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
-            TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+        // Vertex editing owns the pointer: the object gizmo would move the whole mesh under the
+        // user's hand, so it is neither updated nor painted until the mode ends.
+        let update: Result<Option<PlacementCommit>, String> = if mesh_object.is_some() {
+            Ok(None)
+        } else {
+            match self.mode {
+                TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+                TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+            }
         };
         match update {
             Ok(Some(commit)) => {
@@ -317,11 +330,12 @@ impl FurniCraftApp {
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
         }
-        let dragging = self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging();
-        let consumed_click = match self.mode {
-            TransformMode::Move => self.translate_gizmo.consumed_click(),
-            TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
-        };
+        let dragging = mesh_object.is_none() && (self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging());
+        let consumed_click = mesh_object.is_none()
+            && match self.mode {
+                TransformMode::Move => self.translate_gizmo.consumed_click(),
+                TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
+            };
 
         if response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
@@ -358,24 +372,44 @@ impl FurniCraftApp {
         let pointer_over_gizmo = response
             .interact_pointer_pos()
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
-        if (response.clicked() || response.double_clicked())
+        let clicked = if mesh_object.is_some() {
+            // A double-click would otherwise toggle the same vertex twice; the first click of the
+            // pair already selected it.
+            response.clicked() && !response.double_clicked()
+        } else {
+            response.clicked() || response.double_clicked()
+        };
+        if clicked
             && !pointer_over_gizmo
             && !consumed_click
             && let Some(pointer) = response.interact_pointer_pos()
             && rect.width() > 0.0
             && rect.height() > 0.0
         {
-            let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
-            let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
-            let ray = self.scene.camera.ray_ndc(ndc_x, ndc_y, f64::from(rect.width() / rect.height()));
-            let hit = self.scene.pick(ray);
-            if response.double_clicked() {
-                self.editor.enter_viewport_level(self.session.project(), hit);
+            if let Some(object) = mesh_object {
+                let hit = mesh_pick::pick_vertex(self.scene.camera, rect, self.session.project(), object, pointer);
+                let additive = ui.input(|input| input.modifiers.shift || input.modifiers.ctrl);
+                match hit {
+                    Some(vertex) => {
+                        self.editor.select_mesh_vertex(vertex, additive);
+                    }
+                    None if !additive => self.editor.clear_mesh_vertices(),
+                    None => {}
+                }
+                ui.ctx().request_repaint();
             } else {
-                self.editor.select_viewport_hit(self.session.project(), hit);
-            }
-            if let Err(error) = self.upload_scene() {
-                self.last_error = Some(error);
+                let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
+                let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
+                let ray = self.scene.camera.ray_ndc(ndc_x, ndc_y, f64::from(rect.width() / rect.height()));
+                let hit = self.scene.pick(ray);
+                if response.double_clicked() {
+                    self.editor.enter_viewport_level(self.session.project(), hit);
+                } else {
+                    self.editor.select_viewport_hit(self.session.project(), hit);
+                }
+                if let Err(error) = self.upload_scene() {
+                    self.last_error = Some(error);
+                }
             }
         }
 
@@ -386,17 +420,50 @@ impl FurniCraftApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+        self.paint_mesh_vertices(ui, rect);
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        match self.mode {
-            TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
-            TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
+        // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
+        if mesh_object.is_none() {
+            match self.mode {
+                TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
+                TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
+            }
         }
         if let Some(direction) = gizmo::show(ui, rect, self.scene.camera) {
             self.scene.camera.look_from(direction);
+        }
+    }
+
+    /// Paints every vertex of the object being edited, with the selected ones highlighted.
+    ///
+    /// Markers are drawn by the egui painter over the viewport image, so sub-object mode needs no
+    /// renderer change and leaves the uploaded scene untouched.
+    fn paint_mesh_vertices(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let Some(edit) = self.editor.mesh_edit() else {
+            return;
+        };
+        let Some((placement, mesh)) = mesh_pick::vertex_frame(self.session.project(), edit.object()) else {
+            return;
+        };
+        let selected: HashSet<u32> = edit.vertices().iter().copied().collect();
+        let painter = ui.painter().with_clip_rect(rect);
+        for (index, local) in mesh.positions().iter().enumerate() {
+            let Ok(vertex) = u32::try_from(index) else {
+                continue;
+            };
+            let world = mesh_pick::to_world(placement, *local);
+            let Some(position) = gizmo_math::screen_point(self.scene.camera, rect, world) else {
+                continue;
+            };
+            let is_selected = selected.contains(&vertex);
+            let radius = if is_selected { MESH_VERTEX_RADIUS + 1.0 } else { MESH_VERTEX_RADIUS };
+            let color = if is_selected { gizmo_math::ACTIVE_COLOR } else { MESH_VERTEX_COLOR };
+            painter.circle_filled(position, radius, color);
+            painter.circle_stroke(position, radius, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)));
         }
     }
 
@@ -423,6 +490,7 @@ impl FurniCraftApp {
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut reset = false;
+            let mesh_selection = self.editor.mesh_edit().map(|edit| edit.vertices().len());
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
@@ -433,7 +501,15 @@ impl FurniCraftApp {
                 ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
                 ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
                 ui.separator();
-                ui.label("LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom");
+                if let Some(count) = mesh_selection {
+                    ui.label(format!("Mesh edit · {count} vertices selected"));
+                    ui.separator();
+                    ui.label("LMB select vertex  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
+                } else {
+                    ui.label(
+                        "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
+                    );
+                }
                 if let Some(error) = &self.last_error {
                     ui.separator();
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -459,12 +535,16 @@ impl eframe::App for FurniCraftApp {
             && !self.rotate_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
-            let before = self.editor.selected_nodes().to_vec();
-            self.editor.exit_level(self.session.project());
-            if self.editor.selected_nodes() != before.as_slice()
-                && let Err(error) = self.upload_scene()
-            {
-                self.last_error = Some(error);
+            if self.editor.mesh_edit().is_some() {
+                self.editor.end_mesh_edit();
+            } else {
+                let before = self.editor.selected_nodes().to_vec();
+                self.editor.exit_level(self.session.project());
+                if self.editor.selected_nodes() != before.as_slice()
+                    && let Err(error) = self.upload_scene()
+                {
+                    self.last_error = Some(error);
+                }
             }
         }
         if self.editor.selected_nodes() != self.highlighted

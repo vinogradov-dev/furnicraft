@@ -99,6 +99,10 @@ direct mesh editing, so its contour stays the only way to change it.
 ## 7. References and topology
 
 - The document stores the mesh; the session stores the selection.
+- Vertex editing is editor view state: it names the object and the selected vertex indices, so
+  entering or leaving the mode needs no undo entry. Vertices are picked in screen space with a fixed
+  point radius and painted as markers over the viewport; a click outside every vertex clears the
+  vertex selection, Shift or Ctrl adds or removes one.
 - A mesh element is referenced by its index, valid only for the revision it was read in. A command
   that changes topology invalidates the selection, and the session clears it.
 - There are no stable names for vertices, edges or faces beyond a revision, and no persistent naming

@@ -15,6 +15,7 @@
 
 mod command;
 mod container_card;
+mod mesh_edit;
 mod object_card;
 mod panel_card;
 mod pivot_card;
@@ -41,12 +42,15 @@ use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
+use crate::mesh_edit::is_editable_mesh;
 use crate::object_card::ObjectCard;
 use crate::panel_card::PanelCard;
 use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
+
+pub use mesh_edit::MeshEdit;
 
 /// Default length of a newly created panel, in millimetres.
 const NEW_PANEL_LENGTH_MM: i64 = 600;
@@ -61,6 +65,7 @@ const NEW_OBJECT_SIZE_MM: i64 = 200;
 pub struct Editor {
     selection: Selection,
     open: HashSet<Id>,
+    mesh_edit: Option<MeshEdit>,
     card: PanelCard,
     container_card: ContainerCard,
     object_card: ObjectCard,
@@ -89,6 +94,76 @@ impl Editor {
     /// change while the inspector keeps showing the primary.
     pub fn selected_nodes(&self) -> &[Id] {
         self.selection.ids()
+    }
+
+    /// The mesh edit session, when the editor is in sub-object mode.
+    pub fn mesh_edit(&self) -> Option<&MeshEdit> {
+        self.mesh_edit.as_ref()
+    }
+
+    /// Enters vertex editing on the primary selection.
+    ///
+    /// The mode needs exactly one selected node and that node must carry a baked mesh; a panel,
+    /// a container or a constructive object refuses it. Returns whether the mode started.
+    pub fn start_mesh_edit(&mut self, project: &Project) -> bool {
+        if self.selection.ids().len() != 1 {
+            return false;
+        }
+        let Some(object) = self.selection.primary() else {
+            return false;
+        };
+        if !is_editable_mesh(project, object) {
+            return false;
+        }
+        self.mesh_edit = Some(MeshEdit::new(object));
+        true
+    }
+
+    /// Leaves vertex editing and drops the vertex selection.
+    pub fn end_mesh_edit(&mut self) {
+        self.mesh_edit = None;
+    }
+
+    /// Selects a vertex, replacing the selection or adding to it.
+    ///
+    /// Returns `false` when the editor is not in mesh mode. The caller only passes indices that
+    /// were picked from the edited mesh, so the index is not validated here.
+    pub fn select_mesh_vertex(&mut self, vertex: u32, additive: bool) -> bool {
+        let Some(edit) = self.mesh_edit.as_mut() else {
+            return false;
+        };
+        if additive {
+            edit.toggle(vertex);
+        } else {
+            edit.select(vertex);
+        }
+        true
+    }
+
+    /// Clears the vertex selection while staying in mesh mode.
+    pub fn clear_mesh_vertices(&mut self) {
+        if let Some(edit) = self.mesh_edit.as_mut() {
+            edit.clear();
+        }
+    }
+
+    /// Leaves mesh mode when its object vanished or the selection moved elsewhere, and drops
+    /// vertex indices that the current mesh no longer has.
+    pub fn retain_mesh_edit(&mut self, project: &Project) {
+        let Some(object) = self.mesh_edit.as_ref().map(MeshEdit::object) else {
+            return;
+        };
+        if self.selection.ids() != [object] || !is_editable_mesh(project, object) {
+            self.mesh_edit = None;
+            return;
+        }
+        let count = project
+            .object(object)
+            .and_then(|object| object.geometry().as_mesh())
+            .map_or(0, |mesh| mesh.positions().len());
+        if let Some(edit) = self.mesh_edit.as_mut() {
+            edit.retain_vertices(count);
+        }
     }
 
     /// Replaces the selection with one node, or clears it for `None`.
@@ -200,6 +275,7 @@ impl Editor {
 
     /// Draws the inspector card for the primary selection.
     pub fn show_card(&mut self, ui: &mut Ui, session: &mut Session) {
+        self.retain_mesh_edit(session.project());
         let Some(primary) = self.selection.primary() else {
             ui.label("Select a node in the scene tree.");
             return;
@@ -211,7 +287,15 @@ impl Editor {
         if session.project().panel(primary).is_some() {
             self.card.show(ui, session, Some(primary));
         } else if session.project().object(primary).is_some() {
-            self.object_card.show(ui, session, primary);
+            let single_selection = self.selection.ids().len() == 1;
+            let toggle = self.object_card.show(ui, session, primary, self.mesh_edit.as_ref(), single_selection);
+            if toggle {
+                if self.mesh_edit.is_some() {
+                    self.end_mesh_edit();
+                } else {
+                    self.start_mesh_edit(session.project());
+                }
+            }
         } else if session.project().is_container(primary) {
             self.container_card.show(ui, session, primary);
         } else {
@@ -384,8 +468,93 @@ mod tests {
 
     use furnicraft_engine::NodePropertySet;
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
-    use furnicraft_model::{FurnType, PropertyValue, SYSTEM_FURNTYPE};
+    use furnicraft_model::{FurnType, Geometry, Mesh, Placement, PropertyValue, SYSTEM_FURNTYPE};
     use furnicraft_testkit::{sample_catalog, sample_project};
+
+    fn cube_project() -> (Project, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let mesh = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
+        let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("add object");
+        (project, id)
+    }
+
+    #[test]
+    fn mesh_edit_starts_only_on_a_single_mesh_object() {
+        let (project, cube) = cube_project();
+        let mut editor = Editor::new();
+
+        assert!(!editor.start_mesh_edit(&project), "nothing is selected");
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::object), Some(cube));
+        assert_eq!(editor.mesh_edit().map(|edit| edit.vertices().len()), Some(0));
+
+        editor.end_mesh_edit();
+        assert!(editor.mesh_edit().is_none());
+
+        editor.select_node(Some(Id::new(2).expect("panel")));
+        assert!(!editor.start_mesh_edit(&project), "a panel has no editable mesh");
+        editor.select_node(Some(project.root().id()));
+        assert!(!editor.start_mesh_edit(&project), "the root is a container");
+    }
+
+    #[test]
+    fn a_multi_selection_cannot_enter_mesh_edit() {
+        let (project, cube) = cube_project();
+        let mut editor = Editor::new();
+        editor.selection.replace_all(vec![cube, Id::new(2).expect("panel")]);
+        assert!(!editor.start_mesh_edit(&project));
+
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        editor.selection.replace_all(vec![cube, Id::new(2).expect("panel")]);
+        editor.retain_mesh_edit(&project);
+        assert!(editor.mesh_edit().is_none(), "a selection change leaves the mode");
+    }
+
+    #[test]
+    fn a_mesh_edit_ends_when_its_object_disappears() {
+        let (mut project, cube) = cube_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+
+        editor.select_node(Some(project.root().id()));
+        editor.retain_mesh_edit(&project);
+        assert!(editor.mesh_edit().is_none());
+
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        project.remove_node(cube).expect("remove the object");
+        editor.selection.clear();
+        editor.retain_mesh_edit(&project);
+        assert!(editor.mesh_edit().is_none());
+    }
+
+    #[test]
+    fn vertex_selection_replaces_toggles_and_prunes_stale_indices() {
+        let (project, cube) = cube_project();
+        let mut editor = Editor::new();
+        assert!(!editor.select_mesh_vertex(0, false), "not in mesh mode");
+        editor.clear_mesh_vertices();
+
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        assert!(editor.select_mesh_vertex(3, false));
+        assert!(editor.select_mesh_vertex(4, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([3, 4].as_slice()));
+        assert!(editor.select_mesh_vertex(3, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([4].as_slice()));
+
+        assert!(editor.select_mesh_vertex(8, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([4, 8].as_slice()));
+        editor.retain_mesh_edit(&project);
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([4].as_slice()), "vertex 8 is outside the cube");
+
+        editor.clear_mesh_vertices();
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([].as_slice()));
+    }
 
     #[test]
     fn picking_replaces_the_tree_selection_and_an_empty_click_clears_it() {

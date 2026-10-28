@@ -10,10 +10,12 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: mesh editing, in two parts. The headless half is in: `mesh.vertices.move` takes
-  absolute local positions for a batch of vertices, validates every index and moves the batch as one
-  revision, and `Project::move_mesh_vertices` refuses a non-mesh node. The viewport half — a
-  sub-object mode, vertex picking, markers and a gizmo drag that commits once — is next.
+- Working on: mesh editing, in two parts. The headless and selection halves are in:
+  `mesh.vertices.move` takes absolute local positions for a batch of vertices, validates every index
+  and moves the batch as one revision; the object card starts a sub-object mode that paints vertex
+  markers, picks a vertex in screen space, adds to the selection with Shift or Ctrl and leaves on
+  Escape or a selection change. The drag half — a vertex gizmo that previews and commits one command
+  — is next.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. The workspace can round-trip a scene by hand, and mesh editing turns a created cube into a
   shape; camera and light nodes follow.
@@ -26,6 +28,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(ui): select mesh vertices in a sub-object mode` (editor mesh mode, screen-space vertex picking and markers, object-card toggle, Escape exit)
 - `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
 - `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
 - `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
@@ -108,9 +111,8 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Mesh editing in the viewport: a sub-object mode on the selected object, vertex picking with
-   markers, and a translate-gizmo drag that previews and dispatches `mesh.vertices.move` once on
-   release; the card shows the selected vertex count and leaves the mode when the node is deleted.
+1. Mesh vertex gizmo: preview moved vertices during a drag and dispatch `mesh.vertices.move` once
+   on release, then face picking and face moves.
 2. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
    and gizmo icons that make them selectable.
 3. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
@@ -153,9 +155,13 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   ADR 0029 places them in the session. They have not moved yet. Cameras and lights are not document
   nodes yet: the camera is a shell value and the key light is a constant.
 - A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool
-  and no `object.collapse`. `mesh.vertices.move` exists, but the viewport has no sub-object mode yet,
-  so vertices can only be moved through the command. A cube is created at the parent origin and
-  centred on it, so half of a default cube sits below the floor until it is moved.
+  and no `object.collapse`. `mesh.vertices.move` exists and the object card can enter a vertex
+  selection mode, but there is no vertex drag yet, so vertices move only through the command. A cube
+  is created at the parent origin and centred on it, so half of a default cube sits below the floor
+  until it is moved.
+- Vertex markers are painted over the viewport image without an occlusion test, so a vertex on the
+  far side of the mesh is visible and selectable through it. A depth readback or a pick pass can
+  hide the back vertices when the first large mesh makes it matter.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made

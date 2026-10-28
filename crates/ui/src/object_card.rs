@@ -1,9 +1,9 @@
 //! The selected geometry object card.
 //!
 //! An object is a leaf with one geometry payload. Today the only payload is a baked mesh, edited
-//! directly with no feature history: the card names the object and reports what it carries, and
-//! mesh editing arrives with its own tool. A constructive object will show its contour and
-//! features here instead ([ADR 0037]).
+//! directly with no feature history: the card names the object, reports what it carries and starts
+//! the sub-object vertex editor. A constructive object will show its contour and features here
+//! instead ([ADR 0037]).
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 
@@ -11,9 +11,14 @@ use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::{NodeRename, Session};
 use furnicraft_model::{Geometry, Id, Project};
+use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
+use crate::mesh_edit::MeshEdit;
 use crate::section::section;
+
+/// Most selected vertices the card lists with their positions; the count covers the rest.
+const MAX_LISTED_VERTICES: usize = 12;
 
 /// Persistent state of the object card.
 #[derive(Debug, Default)]
@@ -51,19 +56,29 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
 
 impl ObjectCard {
     /// Draws the card for the selected object and dispatches accepted edits.
-    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, object_id: Id) {
+    ///
+    /// Returns whether the user asked to start or finish vertex editing; the editor owns the mode
+    /// and validates that the object is a mesh before it starts.
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        object_id: Id,
+        mesh_edit: Option<&MeshEdit>,
+        single_selection: bool,
+    ) -> bool {
         let Some(summary) = object_summary(session.project(), object_id) else {
             self.draft = None;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return;
+            return false;
         };
         if self.draft.as_ref().is_none_or(|draft| draft.object != object_id) {
             self.error = None;
             self.draft = Some(Draft { object: object_id, name: summary.name.clone() });
         }
         let Some(draft) = self.draft.as_mut() else {
-            return;
+            return false;
         };
 
         let mut rename = None;
@@ -92,6 +107,29 @@ impl ObjectCard {
             ui.label("Editable as a mesh; undo is its only history.".to_owned());
         });
 
+        ui.separator();
+        let mut toggle = false;
+        section(ui, "object.mesh_edit", "Mesh editing", true, |ui| {
+            if single_selection {
+                let editing = mesh_edit.is_some_and(|edit| edit.object() == object_id);
+                let label = if editing { "Done" } else { "Edit mesh" };
+                toggle = ui.button(label).clicked();
+            } else {
+                ui.label("Select only this object to edit its vertices.");
+            }
+            if let Some(edit) = mesh_edit.filter(|edit| edit.object() == object_id) {
+                ui.label(format!("Selected vertices  {}", edit.vertices().len()));
+                let positions = selected_positions(session.project(), object_id, edit.vertices());
+                for (vertex, position) in positions.iter().take(MAX_LISTED_VERTICES) {
+                    ui.label(format!("v{vertex}  {}", format_position(*position)));
+                }
+                if positions.len() > MAX_LISTED_VERTICES {
+                    ui.label(format!("… and {} more", positions.len() - MAX_LISTED_VERTICES));
+                }
+                ui.label("Click a vertex in the viewport; Shift or Ctrl adds it to the selection.");
+            }
+        });
+
         if let Some(error) = name_error {
             self.error = Some(error);
         }
@@ -110,7 +148,26 @@ impl ObjectCard {
             ui.separator();
             ui.colored_label(Color32::LIGHT_RED, error);
         }
+        toggle
     }
+}
+
+/// The selected vertices that still exist, with their local positions.
+fn selected_positions(project: &Project, object: Id, vertices: &[u32]) -> Vec<(u32, [Length; 3])> {
+    let Some(mesh) = project.object(object).and_then(|object| object.geometry().as_mesh()) else {
+        return Vec::new();
+    };
+    vertices
+        .iter()
+        .filter_map(|vertex| {
+            let index = usize::try_from(*vertex).ok()?;
+            mesh.positions().get(index).map(|position| (*vertex, *position))
+        })
+        .collect()
+}
+
+fn format_position(position: [Length; 3]) -> String {
+    format!("{}  {}  {}", position[0], position[1], position[2])
 }
 
 fn rename_object(session: &mut Session, node: Id, name: String) -> Result<(), String> {
@@ -150,6 +207,19 @@ mod tests {
     fn an_unknown_id_has_no_summary() {
         let (project, _) = object_project();
         assert_eq!(object_summary(&project, Id::new(99).expect("id")), None);
+    }
+
+    #[test]
+    fn selected_positions_skip_indices_the_mesh_no_longer_has() {
+        let (project, id) = object_project();
+        let positions = selected_positions(&project, id, &[0, 3, 8]);
+        assert_eq!(positions.len(), 2, "vertex 8 is outside a cube");
+        assert_eq!(positions[0].0, 0);
+        assert_eq!(positions[1].0, 3);
+        let cube = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
+        assert_eq!(positions[0].1, cube.positions()[0]);
+        assert_eq!(positions[1].1, cube.positions()[3]);
+        assert!(format_position(positions[0].1).ends_with(" mm"));
     }
 
     #[test]
