@@ -22,8 +22,8 @@
 use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel, PanelContourError,
-    PanelGeometry, SegmentSource, VertexId,
+    BandingSpec, Constructive, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Mesh,
+    MeshError, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -55,6 +55,50 @@ pub enum ParamError {
     /// The contour cannot be sampled for the polygon-only kernel profile.
     #[error(transparent)]
     ContourSampling(#[from] ContourError),
+    /// The constructive history has a feature this build cannot evaluate.
+    #[error("this build evaluates a constructive object with exactly one extrusion")]
+    UnsupportedConstructive,
+    /// An extruded contour produced an invalid document mesh.
+    #[error("the constructed mesh is invalid: {0}")]
+    Mesh(#[from] MeshError),
+}
+
+/// Builds the polygon mesh of a constructive object with one extrusion.
+///
+/// A single linear extrusion is exact as polygons, so it needs no kernel: the result is two cap
+/// faces and one quad per contour edge, with the contour stored counter-clockwise. This is also
+/// the mesh `object.collapse` bakes, so the collapsed object matches what the viewport showed.
+/// Once a feature needs a boolean or a fillet the evaluation goes through the kernel port instead.
+///
+/// Coordinates stay in micrometres in the object's local frame, from `z = 0` to the feature height.
+pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, ParamError> {
+    if constructive.features().len() != 1 {
+        return Err(ParamError::UnsupportedConstructive);
+    }
+    let Some(extrude) = constructive.extrude_feature() else {
+        return Err(ParamError::UnsupportedConstructive);
+    };
+    let contour = extrude.contour();
+    let points = contour.points();
+    let count = u32::try_from(points.len()).map_err(|_| ParamError::UnsupportedConstructive)?;
+    let height = extrude.height();
+    let mut positions = Vec::with_capacity(points.len().saturating_mul(2));
+    for point in points {
+        positions.push([point[0], point[1], Length::ZERO]);
+    }
+    for point in points {
+        positions.push([point[0], point[1], height]);
+    }
+    let mut faces = Vec::with_capacity(points.len().saturating_add(2));
+    // The bottom cap is the contour reversed so its normal points down; the top keeps the
+    // counter-clockwise order. Each side quad is counter-clockwise seen from outside.
+    faces.push((0..count).rev().collect());
+    faces.push((count..count.saturating_mul(2)).collect());
+    for index in 0..count {
+        let next = (index + 1) % count;
+        faces.push(vec![index, next, next.saturating_add(count), index.saturating_add(count)]);
+    }
+    Ok(Mesh::new(positions, faces)?)
 }
 
 /// Builds the solid body of a rectangular panel in its local frame.
@@ -663,8 +707,8 @@ mod tests {
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
-        Container, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Id, MaterialId,
-        PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
+        Container, Contour, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Extrude,
+        Feature, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
     };
     use furnicraft_units::Length;
 
@@ -1738,5 +1782,58 @@ mod tests {
             .expect("panel parts");
         assert!(parts.bands().is_empty());
         assert_eq!(kernel.body_count(), 1);
+    }
+
+    fn rectangle_contour(width: Length, height: Length, clockwise: bool) -> Contour {
+        let mut points =
+            vec![[Length::ZERO, Length::ZERO], [width, Length::ZERO], [width, height], [Length::ZERO, height]];
+        if clockwise {
+            points.reverse();
+        }
+        Contour::new(points).expect("contour")
+    }
+
+    /// Signed volume of a polygon mesh through the divergence theorem; positive for outward faces.
+    fn signed_volume(mesh: &Mesh) -> f64 {
+        let point = |index: u32| {
+            let position = mesh.positions()[index as usize];
+            DVec3::new(position[0].millimetres_f64(), position[1].millimetres_f64(), position[2].millimetres_f64())
+        };
+        let mut total = 0.0;
+        for face in mesh.faces() {
+            for corner in 1..face.len().saturating_sub(1) {
+                let a = point(face[0]);
+                let b = point(face[corner]);
+                let c = point(face[corner + 1]);
+                total += a.dot(b.cross(c)) / 6.0;
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn an_extrusion_builds_two_caps_and_one_quad_per_edge() {
+        for clockwise in [false, true] {
+            let constructive =
+                Constructive::extrude(rectangle_contour(millimetres(100), millimetres(50), clockwise), millimetres(18))
+                    .expect("constructive");
+            let mesh = build_constructive_mesh(&constructive).expect("mesh");
+            assert_eq!(mesh.positions().len(), 8);
+            assert_eq!(mesh.faces().len(), 6);
+            assert!(mesh.faces().iter().all(|face| face.len() == 4), "no triangles and no n-gon caps");
+            assert!(
+                (signed_volume(&mesh) - 100.0 * 50.0 * 18.0).abs() < 1.0e-6,
+                "the volume is area times height and the faces point outward"
+            );
+        }
+    }
+
+    #[test]
+    fn a_history_with_more_than_one_feature_is_not_evaluated_silently() {
+        let extrude =
+            Extrude::new(rectangle_contour(millimetres(10), millimetres(10), false), millimetres(5)).expect("extrude");
+        let constructive = Constructive::new(vec![Feature::Extrude(extrude.clone()), Feature::Extrude(extrude)])
+            .expect("two features are valid data");
+        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::UnsupportedConstructive)));
     }
 }

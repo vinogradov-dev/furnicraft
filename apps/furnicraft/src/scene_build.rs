@@ -14,10 +14,10 @@ use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{object_mesh, tessellate_panel};
 use furnicraft_model::{
     CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
-    Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
-    StructuralKind,
+    Geometry, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement,
+    Project, StructuralKind,
 };
-use furnicraft_param::build_panel_parts_with;
+use furnicraft_param::{build_constructive_mesh, build_panel_parts_with};
 use furnicraft_scene::{Camera, DEFAULT_FOV_Y, Drawable, Lighting, Projection, SceneFrame};
 use furnicraft_units::Length;
 
@@ -279,14 +279,21 @@ impl<'a> Evaluation<'a> {
         Ok(())
     }
 
-    /// Turns a mesh object into one flat-shaded drawable in world space.
+    /// Turns a geometry object into one flat-shaded drawable in world space.
     ///
-    /// Only the baked mesh payload can be drawn today; a constructive object arrives with the
-    /// contour tool and evaluates through the kernel before this point.
+    /// A mesh payload is drawn as stored. A constructive payload is evaluated from its features
+    /// with the same function `object.collapse` bakes, so the collapsed object keeps the shape the
+    /// viewport showed.
     fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
         let world = Placement::compose(parent, object.placement()).map_err(describe)?;
-        let Some(mesh) = object.geometry().as_mesh() else {
-            return Ok(());
+        let derived;
+        let mesh = match object.geometry() {
+            Geometry::Mesh(mesh) => mesh,
+            Geometry::Constructive(constructive) => {
+                derived =
+                    build_constructive_mesh(constructive).map_err(|error| format!("{}: {error}", object.name()))?;
+                &derived
+            }
         };
         let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
@@ -562,6 +569,37 @@ mod tests {
         bounds.include_mesh(&mesh, DMat4::IDENTITY);
         assert_eq!(bounds.center(), Some(DVec3::new(50.0, 100.0, 20.0)));
         assert!(bounds.radius().is_some_and(|radius| radius > 0.0));
+    }
+
+    #[test]
+    fn a_constructive_object_is_evaluated_into_a_drawable() {
+        use furnicraft_model::{Constructive, Contour};
+
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let contour = Contour::new(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+            [millimetres(0), millimetres(400)],
+        ])
+        .expect("contour");
+        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let object =
+            project.add_object(root, "Top", Placement::IDENTITY, Geometry::Constructive(constructive)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        assert_eq!(evaluated.frame.drawables().len(), 1, "the derived mesh is one drawable");
+        let drawable = &evaluated.frame.drawables()[0];
+        assert_eq!(drawable.id, object, "the drawable carries the object id, so picking and selection work");
+        assert!(!drawable.mesh.positions.is_empty(), "the extrusion is tessellated from its contour");
+        let center = evaluated.bounds.center().expect("the object contributes bounds");
+        assert!(center.y > 0.0 && center.z > 0.0, "bounds follow the contour and the extrusion height");
     }
 
     #[test]

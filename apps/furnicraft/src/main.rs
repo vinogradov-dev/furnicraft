@@ -224,14 +224,16 @@ impl FurniCraftApp {
 
     fn upload_scene(&mut self) -> Result<(), String> {
         let selection = self.editor.selected_nodes();
-        let mut panels = Vec::new();
+        let mut geometry = Vec::new();
         for node in self.session.project().top_most_nodes(selection) {
-            panels.extend(self.session.project().panel_ids_under(node).unwrap_or_default());
+            geometry.extend(self.session.project().geometry_ids_under(node).unwrap_or_default());
         }
-        let frame = self.scene.with_selection_highlight(&panels);
+        let frame = self.scene.with_selection_highlight(&geometry);
         let frame = match self.preview() {
-            Some(Preview::Translation { panels, delta }) => frame.with_world_translation(panels, delta),
-            Some(Preview::Rotation { panels, pivot, rotation }) => frame.with_world_rotation(panels, pivot, rotation),
+            Some(Preview::Translation { drawables, delta }) => frame.with_world_translation(drawables, delta),
+            Some(Preview::Rotation { drawables, pivot, rotation }) => {
+                frame.with_world_rotation(drawables, pivot, rotation)
+            }
             None => frame,
         };
         let frame = match self.vertex_gizmo.preview() {

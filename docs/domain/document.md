@@ -221,6 +221,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as an ordinary container and every nested assembly keeps its kind (the kinds are unified by schema 7).
 - Version 6 stores the manipulation pivot on every node as three micrometre lengths. A version 5 or older file materializes the default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero.
 - Version 9 adds authored `camera` and `light` nodes and the optional `active_camera` document field. A version 8 file loads with no camera and no light, and the viewport falls back to the built-in camera and key light; an `active_camera` that does not name a camera node is a readable load error. Deleting the active camera clears the field.
+- Version 10 adds the constructive geometry payload: a closed contour and an ordered feature history whose mesh is derived. A version 9 object still loads as a baked mesh, and a constructive object is not editable as a mesh until it is collapsed.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 

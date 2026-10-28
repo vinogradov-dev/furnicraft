@@ -16,6 +16,7 @@ use furnicraft_project::{MAX_SCENE_BYTES, SceneFile, SceneFileError};
 const V7: &str = include_str!("golden/scene-v7.fcs");
 const V8: &str = include_str!("golden/scene-v8.fcs");
 const V9: &str = include_str!("golden/scene-v9.fcs");
+const V10: &str = include_str!("golden/scene-v10.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -47,7 +48,7 @@ impl Drop for TempDir {
 
 #[test]
 fn every_golden_file_loads_and_round_trips() {
-    for (name, text) in [("version 7", V7), ("version 8", V8), ("version 9", V9)] {
+    for (name, text) in [("version 7", V7), ("version 8", V8), ("version 9", V9), ("version 10", V10)] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
             scene.document().schema_version(),
@@ -99,6 +100,22 @@ fn a_version_nine_file_loads_cameras_lights_and_the_active_camera() {
 }
 
 #[test]
+fn a_version_ten_file_loads_a_constructive_object() {
+    let scene = SceneFile::parse(V10).expect("version 10");
+    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
+    assert_eq!(object.name(), "Countertop");
+    let constructive = object.geometry().as_constructive().expect("a constructive payload");
+    let contour = constructive.contour().expect("the contour");
+    assert_eq!(contour.points().len(), 4);
+    assert_eq!(constructive.height(), Some(furnicraft_units::Length::from_millimetres(18).expect("height")));
+    assert!(object.geometry().as_mesh().is_none(), "the mesh of a constructive object is derived, not stored");
+
+    let rewritten = scene.to_json().expect("serialize");
+    let again = SceneFile::parse(&rewritten).expect("the rewritten version 10 file loads");
+    assert_eq!(again.document(), scene.document());
+}
+
+#[test]
 fn a_version_eight_file_has_no_active_camera() {
     let scene = SceneFile::parse(V8).expect("version 8");
     assert_eq!(scene.document().active_camera(), None);
@@ -133,7 +150,8 @@ fn a_newer_format_version_is_a_readable_error() {
 
 #[test]
 fn a_newer_document_schema_is_a_readable_error() {
-    let text = V8.replacen("\"schema_version\": 8", "\"schema_version\": 10", 1);
+    let newer = Project::CURRENT_SCHEMA_VERSION + 1;
+    let text = V8.replacen("\"schema_version\": 8", &format!("\"schema_version\": {newer}"), 1);
     assert_ne!(text, V8);
     let error = SceneFile::parse(&text).expect_err("a newer document must be rejected");
     assert!(error.to_string().contains("unsupported schema version"), "error was {error}");

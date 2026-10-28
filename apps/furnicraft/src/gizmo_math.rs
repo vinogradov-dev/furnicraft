@@ -102,13 +102,13 @@ impl Target<'_> {
         self.project.pivot_world(self.anchor()?)
     }
 
-    /// Every panel that moves with the selection, in target order.
-    pub(crate) fn panels(&self) -> Vec<Id> {
-        let mut panels = Vec::new();
+    /// Every drawable that moves with the selection, in target order.
+    pub(crate) fn drawables(&self) -> Vec<Id> {
+        let mut drawables = Vec::new();
         for target in self.move_targets() {
-            panels.extend(self.project.panel_ids_under(target.node).unwrap_or_default());
+            drawables.extend(self.project.geometry_ids_under(target.node).unwrap_or_default());
         }
-        panels
+        drawables
     }
 }
 
@@ -265,17 +265,17 @@ fn quantised(placement: Placement) -> Result<Placement, String> {
 /// The scene change a gizmo drag is previewing, without touching the document.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Preview<'a> {
-    /// Shift the listed panels by a world-space delta.
+    /// Shift the listed drawables by a world-space delta.
     Translation {
-        /// Panels to move.
-        panels: &'a [Id],
+        /// Drawables to move.
+        drawables: &'a [Id],
         /// World-space shift.
         delta: DVec3,
     },
-    /// Turn the listed panels about a world-space pivot.
+    /// Turn the listed drawables about a world-space pivot.
     Rotation {
-        /// Panels to turn.
-        panels: &'a [Id],
+        /// Drawables to turn.
+        drawables: &'a [Id],
         /// World-space point the turn is centred on.
         pivot: DVec3,
         /// World-space turn.
@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gizmo_anchors_on_the_last_movable_node_and_lists_its_panels() {
+    fn the_gizmo_anchors_on_the_last_movable_node_and_lists_its_drawables() {
         let project = nested_project();
         let (cabinet, outer, inner) = (id(2), id(3), id(4));
         let selection = [outer, cabinet, inner];
@@ -605,12 +605,12 @@ mod tests {
 
         assert_eq!(gizmo_target.anchor(), Some(cabinet), "the last movable node anchors the gizmo");
         assert_eq!(gizmo_target.anchor_pivot(), project.pivot_world(cabinet));
-        assert_eq!(gizmo_target.panels(), vec![outer, inner], "each panel is listed once, in target order");
+        assert_eq!(gizmo_target.drawables(), vec![outer, inner], "each drawable is listed once, in target order");
 
         let inner_only = [inner];
         let leaf_target = target(&project, &inner_only);
         assert_eq!(leaf_target.anchor(), Some(inner), "a selected leaf is its own anchor");
-        assert_eq!(leaf_target.panels(), vec![inner]);
+        assert_eq!(leaf_target.drawables(), vec![inner]);
     }
 
     #[test]

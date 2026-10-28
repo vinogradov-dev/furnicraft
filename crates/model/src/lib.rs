@@ -913,8 +913,10 @@ impl Project {
     /// `Container` that carries typed properties: an old assembly becomes a component container
     /// and an old group an ordinary one. Version 8 adds the geometry object node with a baked mesh;
     /// older files simply contain none. Version 9 adds authored camera and light nodes and the
-    /// document's active camera; older files simply contain none.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 9;
+    /// document's active camera; older files simply contain none. Version 10 adds the constructive
+    /// geometry payload, a contour with a feature history whose mesh is derived; a version 9 object
+    /// still loads as a baked mesh.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 10;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -1101,11 +1103,12 @@ impl Project {
         None
     }
 
-    /// The ids of the panels at or below `id`, in scene order.
+    /// The ids of the nodes that produce geometry at or below `id`, in tree order.
     ///
-    /// A panel yields itself; a container yields every panel in its subtree. Returns `None` for an
-    /// unknown id. The list is empty for a container with no panels.
-    pub fn panel_ids_under(&self, id: Id) -> Option<Vec<Id>> {
+    /// A panel and an object both produce a drawable, so each yields itself; a container yields
+    /// every geometry node in its subtree. Cameras and lights carry no geometry and are skipped.
+    /// Returns `None` for an unknown id; the list is empty for a container with no geometry.
+    pub fn geometry_ids_under(&self, id: Id) -> Option<Vec<Id>> {
         fn collect(children: &[Node], ids: &mut Vec<Id>, depth: u32) {
             if depth > Project::MAX_ASSEMBLY_DEPTH {
                 return;
@@ -1113,13 +1116,14 @@ impl Project {
             for child in children {
                 match child {
                     Node::Panel(panel) => ids.push(panel.id()),
+                    Node::Object(object) => ids.push(object.id()),
                     Node::Container(container) => collect(&container.children, ids, depth.saturating_add(1)),
-                    Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
+                    Node::Camera(_) | Node::Light(_) => {}
                 }
             }
         }
 
-        if self.panel(id).is_some() {
+        if self.panel(id).is_some() || self.object(id).is_some() {
             return Some(vec![id]);
         }
         let container = self.container(id)?;
@@ -1596,6 +1600,49 @@ impl Project {
         children.push(Node::Object(object));
         self.revision = next_revision;
         Ok(id)
+    }
+
+    /// Replaces the contour of a constructive object and bumps the revision once.
+    ///
+    /// A node that is not a constructive object is [`ProjectError::NotConstructiveObject`]; an
+    /// invalid contour is refused before the document changes.
+    pub fn set_object_contour(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        let Some(constructive) = object.geometry_mut().as_constructive_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        constructive.set_contour(contour)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a constructive payload with a baked mesh and bumps the revision once.
+    ///
+    /// The caller evaluates the feature history and passes the resulting mesh; the id, name,
+    /// placement, pivot and properties are unchanged and the features are dropped
+    /// ([ADR 0037]). A node that is not a constructive object is refused.
+    ///
+    /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+    pub fn collapse_object(&mut self, id: Id, mesh: Mesh) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        if object.geometry().as_constructive().is_none() {
+            return Err(ProjectError::NotConstructiveObject { id });
+        }
+        *object.geometry_mut() = Geometry::Mesh(mesh);
+        self.revision = next_revision;
+        Ok(next_revision)
     }
 
     /// Adds an authored camera to an existing container and bumps the revision once.
@@ -2474,6 +2521,15 @@ fn object_bounds_mm(geometry: &Geometry) -> Option<(DVec3, DVec3)> {
             };
             Some((to_point(min), to_point(max)))
         }
+        Geometry::Constructive(constructive) => {
+            let extrude = constructive.extrude_feature()?;
+            let (min, max) = extrude.contour().bounds_micrometres();
+            let height = extrude.height().micrometres();
+            Some((
+                DVec3::new(min[0] as f64 / 1000.0, min[1] as f64 / 1000.0, 0.0),
+                DVec3::new(max[0] as f64 / 1000.0, max[1] as f64 / 1000.0, height as f64 / 1000.0),
+            ))
+        }
     }
 }
 
@@ -2717,6 +2773,9 @@ pub enum ProjectError {
     /// A geometry payload is invalid.
     #[error("invalid geometry: {0}")]
     InvalidGeometry(#[from] MeshError),
+    /// A constructive contour or feature list is invalid.
+    #[error("invalid constructive geometry: {0}")]
+    InvalidConstructive(#[from] ConstructiveError),
     /// An authored camera could not be built.
     #[error(transparent)]
     Camera(#[from] CameraError),
@@ -2828,6 +2887,12 @@ pub enum ProjectError {
     /// The node is not a mesh object, so it has no editable vertices.
     #[error("node {id} is not a mesh object")]
     NotAMeshObject {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The node is not a constructive object, so it has no contour or feature history.
+    #[error("node {id} is not a constructive object")]
+    NotConstructiveObject {
         /// The node that was asked.
         id: Id,
     },
@@ -4163,11 +4228,370 @@ impl TryFrom<MeshWire> for Mesh {
     }
 }
 
+/// Largest number of points in a constructive contour.
+pub const MAX_CONTOUR_POINTS: usize = 256;
+
+/// Largest number of features in a constructive object.
+pub const MAX_OBJECT_FEATURES: usize = 32;
+
+/// Largest accepted contour coordinate and extrusion height: ten metres.
+pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
+
+/// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContourWire {
+    points: Vec<[Length; 2]>,
+}
+
+/// A closed flat contour in the object's local XY plane.
+///
+/// The points form one polyline: no arcs, no holes. A valid contour has at least three points, is
+/// inside [`MAX_CONTOUR_COORDINATE`], has no repeated consecutive point, encloses a non-zero area
+/// and does not intersect itself. The constructor stores the points counter-clockwise, so face
+/// winding does not depend on how the user drew them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ContourWire")]
+pub struct Contour {
+    points: Vec<[Length; 2]>,
+}
+
+impl Contour {
+    /// Validates a contour and stores it counter-clockwise.
+    pub fn new(mut points: Vec<[Length; 2]>) -> Result<Self, ContourError> {
+        if points.len() < 3 {
+            return Err(ContourError::TooFewPoints { count: points.len() });
+        }
+        if points.len() > MAX_CONTOUR_POINTS {
+            return Err(ContourError::TooManyPoints { count: points.len(), max: MAX_CONTOUR_POINTS });
+        }
+        for (index, point) in points.iter().enumerate() {
+            if point
+                .iter()
+                .any(|value| value.micrometres().unsigned_abs() > MAX_CONTOUR_COORDINATE.micrometres() as u64)
+            {
+                return Err(ContourError::CoordinateOutOfRange { point: index, max: MAX_CONTOUR_COORDINATE });
+            }
+        }
+        for index in 0..points.len() {
+            let next = (index + 1) % points.len();
+            if points.get(index) == points.get(next) {
+                return Err(ContourError::RepeatedPoint { point: next });
+            }
+        }
+        let area2 = contour_area2(&points);
+        if area2 == 0 {
+            return Err(ContourError::ZeroArea);
+        }
+        if area2 < 0 {
+            points.reverse();
+        }
+        if let Some((first, second)) = first_intersection(&points) {
+            return Err(ContourError::SelfIntersecting { first, second });
+        }
+        Ok(Self { points })
+    }
+
+    /// The contour points, counter-clockwise.
+    pub fn points(&self) -> &[[Length; 2]] {
+        &self.points
+    }
+
+    /// The two axis-aligned extents of the contour, in micrometres.
+    pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
+        let mut min = [i64::MAX; 2];
+        let mut max = [i64::MIN; 2];
+        for point in &self.points {
+            for (axis, value) in point.iter().enumerate() {
+                let value = value.micrometres();
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        (min, max)
+    }
+}
+
+impl TryFrom<ContourWire> for Contour {
+    type Error = ContourError;
+
+    fn try_from(wire: ContourWire) -> Result<Self, Self::Error> {
+        Self::new(wire.points)
+    }
+}
+
+/// Twice the signed area of a contour, in square micrometres.
+fn contour_area2(points: &[[Length; 2]]) -> i128 {
+    let mut total = 0_i128;
+    for index in 0..points.len() {
+        let current = points.get(index).map(|point| [point[0].micrometres(), point[1].micrometres()]);
+        let next = points.get((index + 1) % points.len()).map(|point| [point[0].micrometres(), point[1].micrometres()]);
+        let (Some(current), Some(next)) = (current, next) else {
+            continue;
+        };
+        total += i128::from(current[0]) * i128::from(next[1]) - i128::from(next[0]) * i128::from(current[1]);
+    }
+    total
+}
+
+/// The first pair of non-adjacent edges that touch, as edge indices.
+fn first_intersection(points: &[[Length; 2]]) -> Option<(usize, usize)> {
+    let count = points.len();
+    for first in 0..count {
+        let first_next = (first + 1) % count;
+        for second in (first + 1)..count {
+            let second_next = (second + 1) % count;
+            let adjacent = second == first_next || first_next == second_next || (first == 0 && second_next == 0);
+            if adjacent {
+                continue;
+            }
+            let (Some(a), Some(b), Some(c), Some(d)) =
+                (points.get(first), points.get(first_next), points.get(second), points.get(second_next))
+            else {
+                continue;
+            };
+            let point = |value: &[Length; 2]| [value[0].micrometres(), value[1].micrometres()];
+            if segments_touch(point(a), point(b), point(c), point(d)) {
+                return Some((first, second));
+            }
+        }
+    }
+    None
+}
+
+fn orientation(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
+    (i128::from(b[0]) - i128::from(a[0])) * (i128::from(c[1]) - i128::from(a[1]))
+        - (i128::from(b[1]) - i128::from(a[1])) * (i128::from(c[0]) - i128::from(a[0]))
+}
+
+fn on_segment(a: [i64; 2], b: [i64; 2], point: [i64; 2]) -> bool {
+    point[0] >= a[0].min(b[0]) && point[0] <= a[0].max(b[0]) && point[1] >= a[1].min(b[1]) && point[1] <= a[1].max(b[1])
+}
+
+/// Whether two closed segments share any point, including a collinear overlap.
+fn segments_touch(a: [i64; 2], b: [i64; 2], c: [i64; 2], d: [i64; 2]) -> bool {
+    let abc = orientation(a, b, c);
+    let abd = orientation(a, b, d);
+    let cda = orientation(c, d, a);
+    let cdb = orientation(c, d, b);
+    if ((abc > 0 && abd < 0) || (abc < 0 && abd > 0)) && ((cda > 0 && cdb < 0) || (cda < 0 && cdb > 0)) {
+        return true;
+    }
+    (abc == 0 && on_segment(a, b, c))
+        || (abd == 0 && on_segment(a, b, d))
+        || (cda == 0 && on_segment(c, d, a))
+        || (cdb == 0 && on_segment(c, d, b))
+}
+
+/// A validation failure of a constructive contour.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ContourError {
+    /// The contour has fewer than three points.
+    #[error("a contour needs at least three points, got {count}")]
+    TooFewPoints {
+        /// The supplied point count.
+        count: usize,
+    },
+    /// The contour has more points than the limit allows.
+    #[error("a contour has {count} points, the limit is {max}")]
+    TooManyPoints {
+        /// The supplied point count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A point lies outside the accepted coordinate range.
+    #[error("contour point {point} is outside \u{00b1}{max}")]
+    CoordinateOutOfRange {
+        /// The point index.
+        point: usize,
+        /// The accepted absolute maximum.
+        max: Length,
+    },
+    /// A point repeats its predecessor.
+    #[error("contour point {point} repeats the previous point")]
+    RepeatedPoint {
+        /// The repeated point index.
+        point: usize,
+    },
+    /// The contour encloses no area.
+    #[error("the contour has zero area")]
+    ZeroArea,
+    /// Two non-adjacent edges touch.
+    #[error("contour edges {first} and {second} cross")]
+    SelfIntersecting {
+        /// The first edge index.
+        first: usize,
+        /// The second edge index.
+        second: usize,
+    },
+}
+
+/// Serialized form of [`Extrude`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtrudeWire {
+    contour: Contour,
+    height: Length,
+}
+
+/// The first feature: a contour extruded along `+Z` from `z = 0` to `z = height`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ExtrudeWire")]
+pub struct Extrude {
+    contour: Contour,
+    height: Length,
+}
+
+impl Extrude {
+    /// Validates the height and stores the feature.
+    pub fn new(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
+        if !height.is_positive() || height.micrometres() > MAX_CONTOUR_COORDINATE.micrometres() {
+            return Err(ConstructiveError::InvalidHeight { height, max: MAX_CONTOUR_COORDINATE });
+        }
+        Ok(Self { contour, height })
+    }
+
+    /// The contour in the object's local plane.
+    pub const fn contour(&self) -> &Contour {
+        &self.contour
+    }
+
+    /// The extrusion height, positive.
+    pub const fn height(&self) -> Length {
+        self.height
+    }
+
+    /// Replaces the contour, keeping the height.
+    pub fn set_contour(&mut self, contour: Contour) {
+        self.contour = contour;
+    }
+}
+
+impl TryFrom<ExtrudeWire> for Extrude {
+    type Error = ConstructiveError;
+
+    fn try_from(wire: ExtrudeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.contour, wire.height)
+    }
+}
+
+/// One step of a constructive object's feature history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Feature {
+    /// Extrusion of a closed contour.
+    Extrude(Extrude),
+}
+
+/// Serialized form of [`Constructive`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConstructiveWire {
+    features: Vec<Feature>,
+}
+
+/// A constructive geometry payload: an ordered feature history whose mesh is derived.
+///
+/// The contour and feature parameters are the source of truth; the mesh is never stored in the
+/// document and is not editable until [`Project::collapse_object`] bakes it ([ADR 0037]).
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ConstructiveWire")]
+pub struct Constructive {
+    features: Vec<Feature>,
+}
+
+impl Constructive {
+    /// Validates the feature list and stores it.
+    pub fn new(features: Vec<Feature>) -> Result<Self, ConstructiveError> {
+        if features.is_empty() || features.len() > MAX_OBJECT_FEATURES {
+            return Err(ConstructiveError::FeatureCount { count: features.len(), max: MAX_OBJECT_FEATURES });
+        }
+        if !matches!(features.first(), Some(Feature::Extrude(_))) {
+            return Err(ConstructiveError::MissingExtrude);
+        }
+        Ok(Self { features })
+    }
+
+    /// Creates an object with a single extrusion.
+    pub fn extrude(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
+        Self::new(vec![Feature::Extrude(Extrude::new(contour, height)?)])
+    }
+
+    /// The ordered features, at least one.
+    pub fn features(&self) -> &[Feature] {
+        &self.features
+    }
+
+    /// The first extrusion, which every constructive object has.
+    pub fn extrude_feature(&self) -> Option<&Extrude> {
+        match self.features.first() {
+            Some(Feature::Extrude(extrude)) => Some(extrude),
+            None => None,
+        }
+    }
+
+    /// The current contour of the first extrusion.
+    pub fn contour(&self) -> Option<&Contour> {
+        self.extrude_feature().map(Extrude::contour)
+    }
+
+    /// The height of the first extrusion.
+    pub fn height(&self) -> Option<Length> {
+        self.extrude_feature().map(Extrude::height)
+    }
+
+    /// Replaces the contour of the first extrusion, keeping every other feature.
+    pub fn set_contour(&mut self, contour: Contour) -> Result<(), ConstructiveError> {
+        let Some(Feature::Extrude(extrude)) = self.features.first_mut() else {
+            return Err(ConstructiveError::MissingExtrude);
+        };
+        extrude.set_contour(contour);
+        Ok(())
+    }
+}
+
+impl TryFrom<ConstructiveWire> for Constructive {
+    type Error = ConstructiveError;
+
+    fn try_from(wire: ConstructiveWire) -> Result<Self, Self::Error> {
+        Self::new(wire.features)
+    }
+}
+
+/// A validation failure of a constructive object.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ConstructiveError {
+    /// The contour is not a valid closed polyline.
+    #[error(transparent)]
+    Contour(#[from] ContourError),
+    /// The extrusion height is not positive or is too large.
+    #[error("an extrusion height must be positive and at most {max}, got {height}")]
+    InvalidHeight {
+        /// The rejected height.
+        height: Length,
+        /// The accepted maximum.
+        max: Length,
+    },
+    /// The feature list is empty or too long.
+    #[error("a constructive object needs between 1 and {max} features, got {count}")]
+    FeatureCount {
+        /// The supplied feature count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The first feature is not an extrusion.
+    #[error("the first feature of a constructive object must be an extrusion")]
+    MissingExtrude,
+}
+
 /// The geometry payload of an object node.
 ///
-/// Exactly one payload is stored. A `Mesh` is edited directly; a constructive payload is rebuilt
-/// from its features and is not editable as a mesh until the object is collapsed. Only the mesh
-/// payload exists so far; the constructive payload arrives with the contour tool
+/// Exactly one payload is stored. A `Mesh` is edited directly; a [`Constructive`] payload is
+/// rebuilt from its features and is not editable as a mesh until the object is collapsed
 /// ([ADR 0037]).
 ///
 /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
@@ -4176,6 +4600,8 @@ impl TryFrom<MeshWire> for Mesh {
 pub enum Geometry {
     /// A baked mesh, edited directly.
     Mesh(Mesh),
+    /// A contour and its feature history; the mesh is derived.
+    Constructive(Constructive),
 }
 
 impl Geometry {
@@ -4183,6 +4609,7 @@ impl Geometry {
     pub const fn as_mesh(&self) -> Option<&Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
+            Self::Constructive(_) => None,
         }
     }
 
@@ -4190,6 +4617,23 @@ impl Geometry {
     pub const fn as_mesh_mut(&mut self) -> Option<&mut Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
+            Self::Constructive(_) => None,
+        }
+    }
+
+    /// The feature history, when the payload is constructive.
+    pub const fn as_constructive(&self) -> Option<&Constructive> {
+        match self {
+            Self::Constructive(constructive) => Some(constructive),
+            Self::Mesh(_) => None,
+        }
+    }
+
+    /// The feature history for mutation, when the payload is constructive.
+    pub const fn as_constructive_mut(&mut self) -> Option<&mut Constructive> {
+        match self {
+            Self::Constructive(constructive) => Some(constructive),
+            Self::Mesh(_) => None,
         }
     }
 }
@@ -5755,7 +6199,7 @@ mod tests {
     }
 
     #[test]
-    fn world_placement_composes_the_chain_and_lists_panels() {
+    fn world_placement_composes_the_chain_and_lists_geometry() {
         let mut project = sample_project();
         let drawer = Id::new(3).expect("drawer id");
         let front = Id::new(4).expect("front id");
@@ -5784,10 +6228,20 @@ mod tests {
         assert_eq!(project.world_placement(root), Some(Placement::IDENTITY));
         assert_eq!(project.world_placement(Id::new(999).expect("id")), None);
 
-        assert_eq!(project.panel_ids_under(root), Some(vec![shelf, front]));
-        assert_eq!(project.panel_ids_under(drawer), Some(vec![front]));
-        assert_eq!(project.panel_ids_under(shelf), Some(vec![shelf]));
-        assert_eq!(project.panel_ids_under(Id::new(999).expect("id")), None);
+        let cube = project
+            .add_object(
+                drawer,
+                "Bracket",
+                Placement::IDENTITY,
+                Geometry::Mesh(Mesh::cube(Length::from_millimetres(20).expect("size")).expect("cube")),
+            )
+            .expect("add a geometry object");
+
+        assert_eq!(project.geometry_ids_under(root), Some(vec![shelf, front, cube]));
+        assert_eq!(project.geometry_ids_under(drawer), Some(vec![front, cube]));
+        assert_eq!(project.geometry_ids_under(shelf), Some(vec![shelf]));
+        assert_eq!(project.geometry_ids_under(cube), Some(vec![cube]));
+        assert_eq!(project.geometry_ids_under(Id::new(999).expect("id")), None);
     }
 
     #[test]
@@ -8115,5 +8569,129 @@ mod tests {
             project.set_light_params(camera, LightKind::Point, [1.0; 3], 1.0),
             Err(ProjectError::LightNotFound { id: camera })
         );
+    }
+
+    fn rectangle_contour(width: i64, height: i64) -> Contour {
+        Contour::new(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(width), millimetres(0)],
+            [millimetres(width), millimetres(height)],
+            [millimetres(0), millimetres(height)],
+        ])
+        .expect("rectangle")
+    }
+
+    #[test]
+    fn a_contour_rejects_every_shape_error_at_construction_and_load() {
+        assert_eq!(
+            Contour::new(vec![[millimetres(0), millimetres(0)], [millimetres(1), millimetres(0)]]),
+            Err(ContourError::TooFewPoints { count: 2 })
+        );
+        assert_eq!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(0), millimetres(10)]
+            ]),
+            Err(ContourError::RepeatedPoint { point: 2 })
+        );
+        assert_eq!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(20), millimetres(0)]
+            ]),
+            Err(ContourError::ZeroArea)
+        );
+        assert!(matches!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(30), millimetres(0)],
+                [millimetres(20), millimetres(20)],
+                [millimetres(10), millimetres(-10)]
+            ]),
+            Err(ContourError::SelfIntersecting { .. })
+        ));
+        let far = Length::from_micrometres(MAX_CONTOUR_COORDINATE.micrometres() + 1);
+        assert_eq!(
+            Contour::new(vec![
+                [far, millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(10)]
+            ]),
+            Err(ContourError::CoordinateOutOfRange { point: 0, max: MAX_CONTOUR_COORDINATE })
+        );
+        let too_many = (0..=MAX_CONTOUR_POINTS)
+            .map(|index| [millimetres(index as i64), millimetres((index % 2) as i64)])
+            .collect::<Vec<_>>();
+        assert!(matches!(Contour::new(too_many), Err(ContourError::TooManyPoints { .. })));
+
+        let too_short = r#"{"points":[[0,0],[10000,0]]}"#;
+        assert!(serde_json::from_str::<Contour>(too_short).is_err(), "load runs the same validation");
+    }
+
+    #[test]
+    fn a_constructive_object_keeps_its_contour_and_collapses_to_a_mesh() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let root = project.root().id();
+        let constructive = Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive");
+        let id = project
+            .add_object(root, "Countertop", Placement::IDENTITY, Geometry::Constructive(constructive.clone()))
+            .expect("object");
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"kind\":\"constructive\""), "the payload is tagged");
+        assert_eq!(serde_json::from_str::<Project>(&text).expect("load"), project, "the history round-trips");
+        assert!(project.object(id).expect("object").geometry().as_mesh().is_none(), "the mesh is derived");
+
+        let wider = rectangle_contour(120, 50);
+        let revision = project.set_object_contour(id, wider.clone()).expect("replace the contour");
+        assert_eq!(revision.get(), 2, "creation was revision one");
+        let object = project.object(id).expect("object");
+        assert_eq!(object.name(), "Countertop");
+        assert_eq!(object.placement(), Placement::IDENTITY);
+        assert_eq!(
+            object.geometry().as_constructive().expect("constructive").contour(),
+            Some(&wider),
+            "the id, name and placement survive a contour edit"
+        );
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, [millimetres(1), millimetres(1), millimetres(1)])]),
+            Err(ProjectError::NotAMeshObject { id })
+        );
+
+        let mesh = Mesh::cube(millimetres(10)).expect("mesh");
+        let revision = project.collapse_object(id, mesh.clone()).expect("collapse");
+        assert_eq!(revision.get(), 3);
+        let object = project.object(id).expect("object");
+        assert_eq!(object.geometry().as_mesh(), Some(&mesh));
+        assert!(object.geometry().as_constructive().is_none(), "collapse drops the history");
+        assert_eq!(project.collapse_object(id, mesh), Err(ProjectError::NotConstructiveObject { id }));
+    }
+
+    #[test]
+    fn a_constructive_object_bounds_use_the_contour_and_height() {
+        let geometry = Geometry::Constructive(
+            Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive"),
+        );
+        let (min, max) = object_bounds_mm(&geometry).expect("bounds");
+        assert!((min - DVec3::ZERO).length() < 1.0e-9);
+        assert!((max - DVec3::new(100.0, 50.0, 18.0)).length() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_bad_extrusion_height_is_rejected_on_build_and_load() {
+        let contour = rectangle_contour(10, 10);
+        assert_eq!(
+            Constructive::extrude(contour.clone(), Length::ZERO),
+            Err(ConstructiveError::InvalidHeight { height: Length::ZERO, max: MAX_CONTOUR_COORDINATE })
+        );
+        let constructive = Constructive::extrude(contour, millimetres(10)).expect("constructive");
+        let text = serde_json::to_string(&constructive).expect("serialize");
+        let too_high = text.replace("\"height\":10000", "\"height\":0");
+        assert_ne!(text, too_high, "the fixture must contain the height in micrometres");
+        assert!(serde_json::from_str::<Constructive>(&too_high).is_err());
     }
 }

@@ -25,7 +25,7 @@ use crate::gizmo_math::{
 struct Drag {
     node: Id,
     axis: Axis,
-    panels: Vec<Id>,
+    drawables: Vec<Id>,
     targets: Vec<MoveTarget>,
     start_origin: DVec3,
     start_parameter: f64,
@@ -51,13 +51,13 @@ impl TranslateGizmo {
         self.consumed_click
     }
 
-    /// The panel ids and world delta the renderer should preview, if a drag moved something.
+    /// The drawable ids and world delta the renderer should preview, if a drag moved something.
     pub(crate) fn preview(&self) -> Option<Preview<'_>> {
         let drag = self.drag.as_ref()?;
         if drag.delta == DVec3::ZERO {
             return None;
         }
-        Some(Preview::Translation { panels: &drag.panels, delta: drag.delta })
+        Some(Preview::Translation { drawables: &drag.drawables, delta: drag.delta })
     }
 
     /// The preview identity used to avoid re-uploading an unchanged drag.
@@ -143,7 +143,7 @@ impl TranslateGizmo {
         self.drag = Some(Drag {
             node: anchor.node,
             axis,
-            panels: target.panels(),
+            drawables: target.drawables(),
             targets,
             start_origin: origin_world,
             start_parameter: parameter,

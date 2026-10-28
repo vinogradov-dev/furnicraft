@@ -131,7 +131,8 @@ Rules:
 - Bump `document.schema` when the document layout changes; bump `format_version` only when the
   framing changes.
 - Every schema bump adds a migration from the previous version and a checked-in golden file that
-  must keep loading.
+  must keep loading. A bump that only adds a node kind or a payload variant still ships a golden
+  file for the new version; the older goldens stay in the suite.
 - A migration never guesses. A value that cannot be derived gets its documented default and a
   diagnostic; it is never inferred from geometry, a name or a catalogue entry.
 - A file whose `schema` is newer than this build supports is a readable error — "saved by a newer

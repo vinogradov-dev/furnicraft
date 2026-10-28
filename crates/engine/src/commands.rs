@@ -113,6 +113,9 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PROPERTY_CLEAR,
     node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
     object_cmds::OBJECT_PRIMITIVE_CREATE,
+    object_cmds::OBJECT_EXTRUDE_CREATE,
+    object_cmds::OBJECT_CONTOUR_REPLACE,
+    object_cmds::OBJECT_COLLAPSE,
     mesh_cmds::MESH_VERTICES_MOVE,
     scene_cmds::CAMERA_CREATE,
     scene_cmds::LIGHT_CREATE,
@@ -162,6 +165,14 @@ pub enum CommandError {
     /// The document rejected the change.
     #[error(transparent)]
     Model(#[from] ProjectError),
+    /// Deriving geometry for the command failed.
+    #[error("cannot evaluate `{command}`: {message}")]
+    Evaluation {
+        /// The stable command id.
+        command: &'static str,
+        /// A human-readable evaluation message.
+        message: String,
+    },
     /// The catalogue does not contain the requested material.
     #[error("unknown material {material}")]
     UnknownMaterial {
@@ -273,6 +284,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 34);
+        assert_eq!(registry.specs().len(), 37);
     }
 }

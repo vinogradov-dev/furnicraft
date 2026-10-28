@@ -76,6 +76,7 @@ pub(crate) enum TreeAction {
     CreatePanel { parent: Id },
     CreateAssembly { parent: Id },
     CreateObject { parent: Id },
+    CreateExtrude { parent: Id },
     CreateCamera { parent: Id },
     CreateLight { parent: Id },
     Duplicate { node: Id },
@@ -132,6 +133,9 @@ fn show_toolbar(
         }
         if ui.button("+ Cube").clicked() {
             actions.push(TreeAction::CreateObject { parent });
+        }
+        if ui.button("+ Extrude").clicked() {
+            actions.push(TreeAction::CreateExtrude { parent });
         }
         if ui.button("+ Camera").clicked() {
             actions.push(TreeAction::CreateCamera { parent });
@@ -281,6 +285,7 @@ fn show_object(
     let id = object.id();
     let kind = match object.geometry() {
         furnicraft_model::Geometry::Mesh(_) => "mesh",
+        furnicraft_model::Geometry::Constructive(_) => "contour",
     };
     let label = RichText::new(format!("{}  [{kind}]", object.name()));
     let response = ui.selectable_label(selection.contains(id), label);

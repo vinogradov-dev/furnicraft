@@ -40,7 +40,7 @@ const EDGE_ON_LIMIT: f64 = 0.2;
 struct Drag {
     node: Id,
     axis: Axis,
-    panels: Vec<Id>,
+    drawables: Vec<Id>,
     targets: Vec<MoveTarget>,
     pivot: DVec3,
     previous_angle: f64,
@@ -66,14 +66,14 @@ impl RotateGizmo {
         self.consumed_click
     }
 
-    /// The panel ids, pivot and world turn the renderer should preview, if a drag turned something.
+    /// The drawable ids, pivot and world turn the renderer should preview, if a drag turned something.
     pub(crate) fn preview(&self) -> Option<Preview<'_>> {
         let drag = self.drag.as_ref()?;
         if drag.angle == 0.0 || !drag.angle.is_finite() {
             return None;
         }
         Some(Preview::Rotation {
-            panels: &drag.panels,
+            drawables: &drag.drawables,
             pivot: drag.pivot,
             rotation: DQuat::from_axis_angle(drag.axis.direction(), drag.angle),
         })
@@ -159,7 +159,7 @@ impl RotateGizmo {
         self.drag = Some(Drag {
             node: anchor.node,
             axis,
-            panels: target.panels(),
+            drawables: target.drawables(),
             targets,
             pivot,
             previous_angle: start_angle,
@@ -315,7 +315,7 @@ mod tests {
         Drag {
             node: Id::new(2).expect("id"),
             axis,
-            panels: Vec::new(),
+            drawables: Vec::new(),
             targets: Vec::new(),
             pivot: DVec3::ZERO,
             previous_angle: 0.0,

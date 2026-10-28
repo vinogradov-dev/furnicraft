@@ -33,14 +33,14 @@ use furnicraft_engine::node_cmds::{
     ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
     NODE_UNGROUP_ID,
 };
-use furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID;
+use furnicraft_engine::object_cmds::{OBJECT_EXTRUDE_CREATE_ID, OBJECT_PRIMITIVE_CREATE_ID};
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
-    NodeUngroup, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
+    NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{CameraProjection, Id, LightKind, NodeQuery, PanelNominalSize, Placement, Project};
+use furnicraft_model::{CameraProjection, Contour, Id, LightKind, NodeQuery, PanelNominalSize, Placement, Project};
 use furnicraft_units::Length;
 
 use crate::camera_card::CameraCard;
@@ -64,6 +64,12 @@ const NEW_PANEL_WIDTH_MM: i64 = 400;
 
 /// Edge length of the default cube primitive, in millimetres.
 const NEW_OBJECT_SIZE_MM: i64 = 200;
+/// Longer side of the default extrusion contour, in millimetres.
+const NEW_EXTRUDE_LENGTH_MM: i64 = 600;
+/// Shorter side of the default extrusion contour, in millimetres.
+const NEW_EXTRUDE_WIDTH_MM: i64 = 400;
+/// Height of the default extrusion, in millimetres.
+const NEW_EXTRUDE_HEIGHT_MM: i64 = 18;
 
 /// Selection and draft state owned by the editor panels.
 #[derive(Debug, Default)]
@@ -356,6 +362,32 @@ impl Editor {
                     placement: Placement::IDENTITY,
                 })?;
                 let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
+                if let Some(id) = outcome.created_id() {
+                    self.selection.replace(id);
+                }
+            }
+            TreeAction::CreateExtrude { parent } => {
+                let length = Length::from_millimetres(NEW_EXTRUDE_LENGTH_MM)
+                    .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
+                let width = Length::from_millimetres(NEW_EXTRUDE_WIDTH_MM)
+                    .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
+                let height = Length::from_millimetres(NEW_EXTRUDE_HEIGHT_MM)
+                    .ok_or_else(|| "The default extrusion height does not fit a length.".to_owned())?;
+                let contour = Contour::new(vec![
+                    [Length::ZERO, Length::ZERO],
+                    [length, Length::ZERO],
+                    [length, width],
+                    [Length::ZERO, width],
+                ])
+                .map_err(|error| format!("The default extrusion contour is invalid: {error}"))?;
+                let params = json(&ObjectExtrudeCreate {
+                    parent,
+                    name: "Extrude".to_owned(),
+                    contour,
+                    height,
+                    placement: Placement::IDENTITY,
+                })?;
+                let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
                 if let Some(id) = outcome.created_id() {
                     self.selection.replace(id);
                 }
@@ -737,6 +769,40 @@ mod tests {
         assert_eq!(object.name(), "Cube");
         assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
         assert_eq!(session.project().revision().get(), 1, "one command is one revision");
+
+        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
+        assert!(session.project().object(id).is_none());
+    }
+
+    #[test]
+    fn creating_an_extrude_dispatches_the_extrude_command_and_selects_it() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+
+        editor.run_action(&mut session, TreeAction::CreateExtrude { parent: root }).expect("create extrusion");
+
+        let id = editor.selected_node().expect("the new object is selected");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.name(), "Extrude");
+        let constructive = object.geometry().as_constructive().expect("a constructive payload");
+        let height = Length::from_millimetres(18).expect("height");
+        assert_eq!(constructive.height(), Some(height));
+        let contour = constructive.contour().expect("the default contour");
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        assert_eq!(
+            contour,
+            &Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(600), millimetres(0)],
+                [millimetres(600), millimetres(400)],
+                [millimetres(0), millimetres(400)],
+            ])
+            .expect("rectangle")
+        );
+        assert!(object.geometry().as_mesh().is_none());
+        assert_eq!(session.project().revision().get(), 1);
 
         editor.run_action(&mut session, TreeAction::Undo).expect("undo");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
