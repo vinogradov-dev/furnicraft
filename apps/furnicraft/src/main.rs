@@ -72,6 +72,9 @@ struct FurniCraftApp {
     editor: Editor,
     kernel: TruckKernel,
     scene: SceneFrame,
+    /// The navigable view camera. The rendered camera in `scene` is this one unless an authored
+    /// camera is active, so orbit, pan and zoom never overwrite authored camera data.
+    view_camera: Camera,
     home_camera: Camera,
     scene_revision: Revision,
     renderer: ViewportRenderer,
@@ -96,8 +99,9 @@ impl FurniCraftApp {
         let mut kernel = TruckKernel::new();
         let evaluated = evaluate(&mut kernel, &session)?;
         let home_camera = home_camera(evaluated.bounds)?;
+        let view_camera = home_camera;
         let mut scene = evaluated.frame;
-        scene.camera = home_camera;
+        scene.camera = scene_build::scene_camera(session.project(), view_camera);
 
         let render_state =
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
@@ -114,6 +118,7 @@ impl FurniCraftApp {
             editor: Editor::new(),
             kernel,
             scene,
+            view_camera,
             home_camera,
             renderer,
             render_state,
@@ -139,12 +144,14 @@ impl FurniCraftApp {
         let mut kernel = TruckKernel::new();
         let evaluated = evaluate(&mut kernel, &session)?;
         let home_camera = home_camera(evaluated.bounds)?;
+        let view_camera = home_camera;
         let mut scene = evaluated.frame;
-        scene.camera = home_camera;
+        scene.camera = scene_build::scene_camera(session.project(), view_camera);
 
         self.session = session;
         self.kernel = kernel;
         self.scene = scene;
+        self.view_camera = view_camera;
         self.home_camera = home_camera;
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
@@ -208,7 +215,7 @@ impl FurniCraftApp {
         }
         let evaluated = evaluate(&mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
-        scene.camera = self.scene.camera;
+        scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
         self.scene = scene;
         self.scene_revision = revision;
         self.upload_scene()
@@ -304,7 +311,8 @@ impl FurniCraftApp {
     }
 
     fn reset_view(&mut self) {
-        self.scene.camera = self.home_camera;
+        self.view_camera = self.home_camera;
+        self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui) {
@@ -400,31 +408,35 @@ impl FurniCraftApp {
             }
         };
 
-        if response.hovered() && !dragging {
+        // Looking through an authored camera pins the view: navigation would move a camera the
+        // document owns, and a command is the only way to edit document data.
+        let navigable = self.session.project().active_camera().is_none();
+        if navigable && response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                self.scene.camera.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
+                self.view_camera.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
             }
         }
 
         let drag = response.drag_delta();
         // An axis drag owns the pointer; rotating the camera mid-drag would move the axis under the
         // pointer and change the drag parameter under the user's hand.
-        if !dragging && response.dragged_by(egui::PointerButton::Middle) {
+        if navigable && !dragging && response.dragged_by(egui::PointerButton::Middle) {
             let modifiers = ui.input(|input| input.modifiers);
             if modifiers.shift {
-                self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
+                self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
             } else if modifiers.ctrl {
                 let factor = (-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp();
-                self.scene.camera.zoom(factor);
+                self.view_camera.zoom(factor);
             } else {
-                self.scene
-                    .camera
+                self.view_camera
                     .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
             }
-        } else if !dragging && response.dragged_by(egui::PointerButton::Secondary) {
-            self.scene.camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
+        } else if navigable && !dragging && response.dragged_by(egui::PointerButton::Secondary) {
+            self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
         }
+        // The composite camera follows the navigable view unless an authored camera wins.
+        self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
 
         if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -504,8 +516,11 @@ impl FurniCraftApp {
                 TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
             }
         }
-        if let Some(direction) = gizmo::show(ui, rect, self.scene.camera) {
-            self.scene.camera.look_from(direction);
+        if self.session.project().active_camera().is_none()
+            && let Some(direction) = gizmo::show(ui, rect, self.view_camera)
+        {
+            self.view_camera.look_from(direction);
+            self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
         }
     }
 
@@ -584,6 +599,15 @@ impl FurniCraftApp {
                     ui.label(
                         "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
                     );
+                }
+                if let Some(camera) = self
+                    .session
+                    .project()
+                    .active_camera()
+                    .and_then(|id| self.session.project().camera(id))
+                {
+                    ui.separator();
+                    ui.label(format!("Camera · {}", camera.name()));
                 }
                 if let Some(error) = &self.last_error {
                     ui.separator();

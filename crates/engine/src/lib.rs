@@ -21,6 +21,7 @@ pub mod node_cmds;
 pub mod object_cmds;
 pub mod panel_cmds;
 mod resolve;
+pub mod scene_cmds;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
@@ -37,4 +38,5 @@ pub use panel_cmds::{
     PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
     PanelResize,
 };
+pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
 pub use session::Session;

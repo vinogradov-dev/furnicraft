@@ -13,11 +13,11 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{object_mesh, tessellate_panel};
 use furnicraft_model::{
-    Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
-    Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
+    CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
+    Id, MaterialId, Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
 };
 use furnicraft_param::build_panel_parts_with;
-use furnicraft_scene::{Camera, Drawable, SceneFrame};
+use furnicraft_scene::{Camera, DEFAULT_FOV_Y, Drawable, Projection, SceneFrame};
 use furnicraft_units::Length;
 
 /// Colours for the sample panels, in linear RGB.
@@ -275,9 +275,40 @@ pub fn home_camera(bounds: Bounds) -> Result<Camera, String> {
         return Ok(Camera::default());
     };
     let radius = bounds.radius().unwrap_or(0.0).max(50.0);
-    let half_fov = Camera::default().fov_y() * 0.5;
+    let half_fov = DEFAULT_FOV_Y * 0.5;
     let distance = radius / half_fov.tan() * 1.25;
     Camera::new(center, distance).map_err(describe)
+}
+
+/// Distance from an authored camera's eye to its orbit target, used as a pivot placeholder.
+const AUTHORED_CAMERA_DISTANCE_MM: f64 = 1_000.0;
+
+/// The authored camera the scene renders from, or `None` for the built-in camera.
+///
+/// A camera node looks down its local `-Z` with `+Y` up. The projection is copied from the
+/// document; near and far stay at the scene defaults because the model does not store them yet.
+/// An authored camera pins an explicit basis, so viewport navigation leaves it alone.
+pub fn authored_camera(project: &Project) -> Option<Camera> {
+    let id = project.active_camera()?;
+    let world = project.world_placement(id)?;
+    let projection = match project.camera(id)?.projection() {
+        CameraProjection::Perspective { fov_y } => Projection::Perspective { fov_y: fov_y.radians_f64() },
+        CameraProjection::Orthographic { height } => Projection::Orthographic { height: height.millimetres_f64() },
+    };
+    let eye = world.translation();
+    let rotation = world.rotation();
+    let right = rotation * DVec3::X;
+    let up = rotation * DVec3::Y;
+    let forward = rotation * -DVec3::Z;
+    let target = eye + forward * AUTHORED_CAMERA_DISTANCE_MM;
+    Camera::new(target, AUTHORED_CAMERA_DISTANCE_MM)
+        .ok()
+        .map(|camera| camera.looked_from(eye, right, up, forward).with_projection(projection))
+}
+
+/// The camera a viewport draws with: the active authored camera, or the navigable view fallback.
+pub fn scene_camera(project: &Project, view: Camera) -> Camera {
+    authored_camera(project).unwrap_or(view)
 }
 
 fn id(value: u64) -> Result<Id, String> {
@@ -337,6 +368,44 @@ mod tests {
                 Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
+    }
+
+    #[test]
+    fn an_authored_camera_maps_its_placement_and_projection() {
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let rotation = DQuat::from_rotation_z(FRAC_PI_2);
+        let placement = Placement::new(DVec3::new(100.0, 200.0, 300.0), rotation).expect("placement");
+        let fov = furnicraft_units::Degrees::from_millidegrees(60_000);
+        let camera_id = project
+            .add_camera(root, "Presentation", placement, CameraProjection::Perspective { fov_y: fov })
+            .expect("camera");
+        assert!(authored_camera(&project).is_none(), "the built-in camera is used while none is active");
+        let view = Camera::default();
+        assert_eq!(scene_camera(&project, view), view);
+
+        project.set_active_camera(Some(camera_id)).expect("active camera");
+        let camera = authored_camera(&project).expect("the authored camera");
+        assert!((camera.eye() - DVec3::new(100.0, 200.0, 300.0)).length() < 1.0e-9);
+        assert!(camera.forward().dot(rotation * -DVec3::Z) > 1.0 - 1.0e-9);
+        assert!(camera.right().dot(rotation * DVec3::X) > 1.0 - 1.0e-9);
+        assert!(camera.up().dot(rotation * DVec3::Y) > 1.0 - 1.0e-9);
+        assert_eq!(camera.projection(), Projection::Perspective { fov_y: fov.radians_f64() });
+        assert!(camera.project_ndc(camera.eye() + camera.forward() * 10.0, 1.0).is_some());
+
+        // An orthographic camera keeps its visible height.
+        project
+            .set_camera_projection(
+                camera_id,
+                CameraProjection::Orthographic { height: Length::from_millimetres(500).expect("height") },
+            )
+            .expect("orthographic");
+        let camera = authored_camera(&project).expect("camera");
+        assert_eq!(
+            camera.projection(),
+            Projection::Orthographic { height: Length::from_millimetres(500).expect("height").millimetres_f64() }
+        );
     }
 
     #[test]

@@ -584,7 +584,7 @@ fn component_convert_to_group_run(
     Ok(CommandOutcome::changed())
 }
 
-fn parse<T: serde::de::DeserializeOwned>(params: &Value, command: &'static str) -> Result<T, CommandError> {
+pub(crate) fn parse<T: serde::de::DeserializeOwned>(params: &Value, command: &'static str) -> Result<T, CommandError> {
     serde_json::from_value(params.clone())
         .map_err(|error| CommandError::InvalidParams { command, message: error.to_string() })
 }

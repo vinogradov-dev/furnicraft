@@ -1646,6 +1646,49 @@ impl Project {
         Ok(id)
     }
 
+    /// Replaces a camera's projection and bumps the revision once.
+    ///
+    /// The projection is validated before anything changes; an id that is not a camera is
+    /// [`ProjectError::CameraNotFound`].
+    pub fn set_camera_projection(&mut self, id: Id, projection: CameraProjection) -> Result<Revision, ProjectError> {
+        if !projection.is_valid() {
+            return Err(CameraError::InvalidProjection.into());
+        }
+        let next_revision = self.next_revision()?;
+        let Some(camera) = find_node_mut(&mut self.root, id).and_then(Node::as_camera_mut) else {
+            return Err(ProjectError::CameraNotFound { id });
+        };
+        camera.set_projection(projection)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a light's kind, colour and intensity and bumps the revision once.
+    ///
+    /// The values are validated before anything changes; an id that is not a light is
+    /// [`ProjectError::LightNotFound`].
+    pub fn set_light_params(
+        &mut self,
+        id: Id,
+        kind: LightKind,
+        color: [f32; 3],
+        intensity: f32,
+    ) -> Result<Revision, ProjectError> {
+        if !valid_light_color(color) {
+            return Err(LightError::InvalidColor.into());
+        }
+        if !valid_light_intensity(intensity) {
+            return Err(LightError::InvalidIntensity.into());
+        }
+        let next_revision = self.next_revision()?;
+        let Some(light) = find_node_mut(&mut self.root, id).and_then(Node::as_light_mut) else {
+            return Err(ProjectError::LightNotFound { id });
+        };
+        light.set_params(kind, color, intensity)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Moves mesh vertices to absolute local positions and bumps the revision once.
     ///
     /// The batch is validated before anything changes: an empty batch, a repeated index or an
@@ -2684,6 +2727,12 @@ pub enum ProjectError {
     #[error("camera {id} not found")]
     CameraNotFound {
         /// The missing camera id.
+        id: Id,
+    },
+    /// The requested node is not an authored light.
+    #[error("light {id} not found")]
+    LightNotFound {
+        /// The missing light id.
         id: Id,
     },
     /// The node tree is nested more deeply than the supported limit.
@@ -4353,6 +4402,15 @@ impl CameraNode {
         self.projection
     }
 
+    /// Replaces the projection after validating it.
+    pub fn set_projection(&mut self, projection: CameraProjection) -> Result<(), CameraError> {
+        if !projection.is_valid() {
+            return Err(CameraError::InvalidProjection);
+        }
+        self.projection = projection;
+        Ok(())
+    }
+
     /// The typed properties of this camera.
     pub const fn properties(&self) -> &Properties {
         &self.properties
@@ -4515,6 +4573,20 @@ impl LightNode {
     /// The intensity multiplier.
     pub const fn intensity(&self) -> f32 {
         self.intensity
+    }
+
+    /// Replaces the kind, colour and intensity after validating the colour and intensity.
+    pub fn set_params(&mut self, kind: LightKind, color: [f32; 3], intensity: f32) -> Result<(), LightError> {
+        if !valid_light_color(color) {
+            return Err(LightError::InvalidColor);
+        }
+        if !valid_light_intensity(intensity) {
+            return Err(LightError::InvalidIntensity);
+        }
+        self.kind = kind;
+        self.color = color;
+        self.intensity = intensity;
+        Ok(())
     }
 
     /// The typed properties of this light.
@@ -4823,6 +4895,22 @@ impl Node {
         match self {
             Self::Camera(camera) => Some(camera),
             Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The authored camera for mutation, or `None` for another node kind.
+    pub const fn as_camera_mut(&mut self) -> Option<&mut CameraNode> {
+        match self {
+            Self::Camera(camera) => Some(camera),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The authored light for mutation, or `None` for another node kind.
+    pub const fn as_light_mut(&mut self) -> Option<&mut LightNode> {
+        match self {
+            Self::Light(light) => Some(light),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Camera(_) => None,
         }
     }
 
@@ -7983,5 +8071,49 @@ mod tests {
         let too_bright = text.replace("\"intensity\":1.0", "\"intensity\":-2.0");
         assert_ne!(too_bright, text);
         assert!(serde_json::from_str::<LightNode>(&too_bright).is_err());
+    }
+
+    #[test]
+    fn camera_projection_and_light_params_change_in_one_revision() {
+        let mut project =
+            Project::new(Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new()))
+                .expect("valid project");
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+        let not_a_camera = project.root().id();
+
+        let before = project.revision();
+        let orthographic = CameraProjection::Orthographic { height: Length::from_millimetres(2_000).expect("height") };
+        let after = project.set_camera_projection(camera, orthographic).expect("projection");
+        assert_eq!(after, before.checked_next().expect("revision"));
+        assert_eq!(project.camera(camera).expect("camera").projection(), orthographic);
+
+        // A refused value changes neither the projection nor the revision.
+        project
+            .set_camera_projection(camera, CameraProjection::Perspective { fov_y: Degrees::ZERO })
+            .expect_err("a zero field of view is invalid");
+        assert_eq!(project.camera(camera).expect("camera").projection(), orthographic);
+        assert_eq!(project.revision(), after);
+        assert_eq!(
+            project.set_camera_projection(not_a_camera, CameraProjection::DEFAULT),
+            Err(ProjectError::CameraNotFound { id: not_a_camera })
+        );
+
+        project.set_light_params(light, LightKind::Point, [0.5, 0.4, 0.3], 4.0).expect("light params");
+        let light_node = project.light(light).expect("light");
+        assert_eq!(light_node.kind(), LightKind::Point);
+        assert_eq!(light_node.color(), [0.5, 0.4, 0.3]);
+        assert_eq!(light_node.intensity(), 4.0);
+        assert_eq!(
+            project.set_light_params(light, LightKind::Point, [2.0; 3], 1.0),
+            Err(ProjectError::Light(LightError::InvalidColor))
+        );
+        assert_eq!(
+            project.set_light_params(camera, LightKind::Point, [1.0; 3], 1.0),
+            Err(ProjectError::LightNotFound { id: camera })
+        );
     }
 }

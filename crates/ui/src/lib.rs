@@ -13,8 +13,10 @@
     clippy::unreachable
 )]
 
+mod camera_card;
 mod command;
 mod container_card;
+mod light_card;
 mod mesh_edit;
 mod object_card;
 mod panel_card;
@@ -33,15 +35,18 @@ use furnicraft_engine::node_cmds::{
 };
 use furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID;
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
+use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
-    AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup,
-    ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
+    AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
+    NodeUngroup, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{Id, NodeQuery, PanelNominalSize, Placement, Project};
+use furnicraft_model::{CameraProjection, Id, LightKind, NodeQuery, PanelNominalSize, Placement, Project};
 use furnicraft_units::Length;
 
+use crate::camera_card::CameraCard;
 use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
+use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
 use crate::object_card::ObjectCard;
 use crate::panel_card::PanelCard;
@@ -69,6 +74,8 @@ pub struct Editor {
     card: PanelCard,
     container_card: ContainerCard,
     object_card: ObjectCard,
+    camera_card: CameraCard,
+    light_card: LightCard,
     placement_card: PlacementCard,
     pivot_card: PivotCard,
     properties_card: PropertiesCard,
@@ -296,6 +303,10 @@ impl Editor {
                     self.start_mesh_edit(session.project());
                 }
             }
+        } else if session.project().camera(primary).is_some() {
+            self.camera_card.show(ui, session, primary);
+        } else if session.project().light(primary).is_some() {
+            self.light_card.show(ui, session, primary);
         } else if session.project().is_container(primary) {
             self.container_card.show(ui, session, primary);
         } else {
@@ -345,6 +356,32 @@ impl Editor {
                     placement: Placement::IDENTITY,
                 })?;
                 let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
+                if let Some(id) = outcome.created_id() {
+                    self.selection.replace(id);
+                }
+            }
+            TreeAction::CreateCamera { parent } => {
+                let params = json(&CameraCreate {
+                    parent,
+                    name: "Camera".to_owned(),
+                    placement: Placement::IDENTITY,
+                    projection: CameraProjection::DEFAULT,
+                })?;
+                let outcome = dispatch(session, CAMERA_CREATE_ID, &params)?;
+                if let Some(id) = outcome.created_id() {
+                    self.selection.replace(id);
+                }
+            }
+            TreeAction::CreateLight { parent } => {
+                let params = json(&LightCreate {
+                    parent,
+                    name: "Light".to_owned(),
+                    placement: Placement::IDENTITY,
+                    kind: LightKind::Sun,
+                    color: [1.0, 0.97, 0.92],
+                    intensity: 1.0,
+                })?;
+                let outcome = dispatch(session, LIGHT_CREATE_ID, &params)?;
                 if let Some(id) = outcome.created_id() {
                     self.selection.replace(id);
                 }
@@ -704,5 +741,26 @@ mod tests {
         editor.run_action(&mut session, TreeAction::Undo).expect("undo");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object(id).is_none());
+    }
+
+    #[test]
+    fn creating_a_camera_or_a_light_selects_it_and_one_undo_removes_it() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+
+        editor.run_action(&mut session, TreeAction::CreateCamera { parent: root }).expect("create camera");
+        let camera = editor.selected_node().expect("the camera is selected");
+        assert_eq!(session.project().camera(camera).expect("camera").name(), "Camera");
+        assert_eq!(session.project().revision().get(), 1);
+
+        editor.run_action(&mut session, TreeAction::CreateLight { parent: root }).expect("create light");
+        let light = editor.selected_node().expect("the light is selected");
+        assert_eq!(session.project().light(light).expect("light").name(), "Light");
+        assert_eq!(session.project().revision().get(), 2);
+
+        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        assert!(session.project().light(light).is_none());
+        assert!(editor.selected_node().is_none());
     }
 }

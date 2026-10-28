@@ -113,6 +113,12 @@ defaults, not nodes: they cannot be selected or deleted and are used when the sc
 ([ADR 0036](../decisions/0036-cameras-and-lights-are-scene-objects.md)). A scene with no camera and
 no light is valid.
 
+A camera looks down its local `-Z` with `+Y` up, and its projection is either a perspective vertical
+field of view or an orthographic visible height. A sun light emits along its local `-Z`; a point
+light radiates from its origin. While an active camera is set the viewport draws through it and
+navigation is disabled, because orbiting would move a camera the document owns. Clearing the active
+camera returns the viewport to the built-in, navigable camera.
+
 ## 3. What the scene file does not store
 
 - the material catalogue;

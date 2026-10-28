@@ -8,6 +8,7 @@ use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
 use crate::panel_cmds;
+use crate::scene_cmds;
 use crate::session::Session;
 
 /// The result of a successful command.
@@ -113,6 +114,11 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
     object_cmds::OBJECT_PRIMITIVE_CREATE,
     mesh_cmds::MESH_VERTICES_MOVE,
+    scene_cmds::CAMERA_CREATE,
+    scene_cmds::LIGHT_CREATE,
+    scene_cmds::SCENE_ACTIVE_CAMERA_SET,
+    scene_cmds::CAMERA_PROJECTION_SET,
+    scene_cmds::LIGHT_PARAMS_SET,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -267,6 +273,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 29);
+        assert_eq!(registry.specs().len(), 34);
     }
 }

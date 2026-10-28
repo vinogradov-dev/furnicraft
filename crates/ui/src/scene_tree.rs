@@ -76,6 +76,8 @@ pub(crate) enum TreeAction {
     CreatePanel { parent: Id },
     CreateAssembly { parent: Id },
     CreateObject { parent: Id },
+    CreateCamera { parent: Id },
+    CreateLight { parent: Id },
     Duplicate { node: Id },
     Delete { node: Id },
     Group { nodes: Vec<Id> },
@@ -130,6 +132,12 @@ fn show_toolbar(
         }
         if ui.button("+ Cube").clicked() {
             actions.push(TreeAction::CreateObject { parent });
+        }
+        if ui.button("+ Camera").clicked() {
+            actions.push(TreeAction::CreateCamera { parent });
+        }
+        if ui.button("+ Light").clicked() {
+            actions.push(TreeAction::CreateLight { parent });
         }
         ui.separator();
         if ui.add_enabled(can_group, egui::Button::new("Group")).clicked() {
