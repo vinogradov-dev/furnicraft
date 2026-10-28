@@ -10,14 +10,13 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: the shell has a File menu over the scene store — New (with a discard
-  confirmation when the scene is dirty), Open and Save As through a path dialog that lists nearby
-  `.fcs` files, Save to the current path, a dirty marker in the menu bar, and errors reported in the
-  viewport toolbar. Opening installs a new session: undo history, selection and gizmos reset, the
-  catalogue stays. Unknown top-level sections of a loaded file are carried back on save.
+- Working on: mesh editing, in two parts. The headless half is in: `mesh.vertices.move` takes
+  absolute local positions for a batch of vertices, validates every index and moves the batch as one
+  revision, and `Project::move_mesh_vertices` refuses a non-mesh node. The viewport half — a
+  sub-object mode, vertex picking, markers and a gizmo drag that commits once — is next.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
-  shape. The workspace can now round-trip a scene by hand, so mesh editing comes next and every
-  later schema bump is a migration with a golden file.
+  shape. The workspace can round-trip a scene by hand, and mesh editing turns a created cube into a
+  shape; camera and light nodes follow.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -27,6 +26,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
 - `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
 - `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
 - `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
@@ -108,8 +108,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
-   gizmo drag as one undo entry; mesh tools disabled on a constructive object.
+1. Mesh editing in the viewport: a sub-object mode on the selected object, vertex picking with
+   markers, and a translate-gizmo drag that previews and dispatches `mesh.vertices.move` once on
+   release; the card shows the selected vertex count and leaves the mode when the node is deleted.
 2. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
    and gizmo icons that make them selectable.
 3. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
@@ -151,9 +152,10 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - Selection and open containers still live in `ui::Editor` and the camera in the shell, although
   ADR 0029 places them in the session. They have not moved yet. Cameras and lights are not document
   nodes yet: the camera is a shell value and the key light is a constant.
-- A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool,
-  no `object.collapse` and no mesh editing yet. A cube is created at the parent origin and centred on
-  it, so half of a default cube sits below the floor until it is moved.
+- A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool
+  and no `object.collapse`. `mesh.vertices.move` exists, but the viewport has no sub-object mode yet,
+  so vertices can only be moved through the command. A cube is created at the parent origin and
+  centred on it, so half of a default cube sits below the floor until it is moved.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made

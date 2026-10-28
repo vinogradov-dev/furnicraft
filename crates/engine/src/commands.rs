@@ -4,6 +4,7 @@ use furnicraft_model::{Catalog, Id, MaterialId, Project, ProjectError};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
 use crate::panel_cmds;
@@ -111,6 +112,7 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PROPERTY_CLEAR,
     node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
     object_cmds::OBJECT_PRIMITIVE_CREATE,
+    mesh_cmds::MESH_VERTICES_MOVE,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -258,7 +260,13 @@ mod tests {
             registry.get("node.component.convert_to_group").expect("node.component.convert_to_group is registered");
         assert_eq!(convert.id(), "node.component.convert_to_group");
         assert_eq!(convert.label(), "Convert to group");
+        let create_object = registry.get("object.primitive.create").expect("object.primitive.create is registered");
+        assert_eq!(create_object.id(), "object.primitive.create");
+        assert_eq!(create_object.label(), "Create primitive");
+        let move_vertices = registry.get("mesh.vertices.move").expect("mesh.vertices.move is registered");
+        assert_eq!(move_vertices.id(), "mesh.vertices.move");
+        assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 28);
+        assert_eq!(registry.specs().len(), 29);
     }
 }

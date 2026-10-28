@@ -1547,6 +1547,48 @@ impl Project {
         Ok(id)
     }
 
+    /// Moves mesh vertices to absolute local positions and bumps the revision once.
+    ///
+    /// The batch is validated before anything changes: an empty batch, a repeated index or an
+    /// index outside the mesh rejects the whole call, so a partial move can never reach the
+    /// document. A constructive object has no editable mesh and is refused; it becomes a mesh
+    /// object only through `object.collapse`.
+    pub fn move_mesh_vertices(&mut self, id: Id, moves: &[(u32, [Length; 3])]) -> Result<Revision, ProjectError> {
+        if moves.is_empty() {
+            return Err(ProjectError::NoVertexMoves);
+        }
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotAMeshObject { id });
+        };
+        let Some(mesh) = object.geometry_mut().as_mesh_mut() else {
+            return Err(ProjectError::NotAMeshObject { id });
+        };
+        let count = mesh.positions().len();
+        let mut seen = HashSet::with_capacity(moves.len());
+        let mut resolved = Vec::with_capacity(moves.len());
+        for (vertex, position) in moves {
+            if !seen.insert(*vertex) {
+                return Err(ProjectError::DuplicateVertex { object: id, vertex: *vertex });
+            }
+            let Ok(index) = usize::try_from(*vertex) else {
+                return Err(MeshError::VertexIndexOutOfBounds { vertex: usize::MAX, count }.into());
+            };
+            if index >= count {
+                return Err(MeshError::VertexIndexOutOfBounds { vertex: index, count }.into());
+            }
+            resolved.push((index, *position));
+        }
+        for (index, position) in resolved {
+            mesh.set_position(index, position)?;
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Adds an empty container marked as a furniture component and bumps the revision once.
     ///
     /// The parent may be the root or any nested container. Adding a child below
@@ -2573,6 +2615,23 @@ pub enum ProjectError {
     /// A placement batch contained no entries.
     #[error("no node placements were given")]
     NoPlacements,
+    /// A vertex batch contained no entries.
+    #[error("no mesh vertex moves were given")]
+    NoVertexMoves,
+    /// The same mesh vertex is moved more than once in one batch.
+    #[error("vertex {vertex} of object {object} is moved more than once")]
+    DuplicateVertex {
+        /// The object whose vertex was repeated.
+        object: Id,
+        /// The repeated vertex index.
+        vertex: u32,
+    },
+    /// The node is not a mesh object, so it has no editable vertices.
+    #[error("node {id} is not a mesh object")]
+    NotAMeshObject {
+        /// The node that was asked.
+        id: Id,
+    },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {
@@ -4160,6 +4219,14 @@ impl Node {
         }
     }
 
+    /// The geometry object for mutation, or `None` for another node kind.
+    pub const fn as_object_mut(&mut self) -> Option<&mut Object> {
+        match self {
+            Self::Object(object) => Some(object),
+            Self::Container(_) | Self::Panel(_) => None,
+        }
+    }
+
     /// The typed properties of the node.
     pub const fn properties(&self) -> &Properties {
         match self {
@@ -5415,6 +5482,68 @@ mod tests {
         project.remove_node(id).expect("delete");
         assert!(project.object(id).is_none());
         assert!(project.object(copy).is_some());
+    }
+
+    #[test]
+    fn mesh_vertices_move_as_one_revision() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+        let before = project.object(id).expect("object").geometry().as_mesh().expect("mesh").positions()[0];
+        let target = [millimetres(10), millimetres(20), millimetres(30)];
+
+        let revision = project.move_mesh_vertices(id, &[(0, target)]).expect("move the vertex");
+
+        assert_eq!(revision.get(), 1);
+        assert_eq!(project.revision().get(), 1);
+        let mesh = project.object(id).expect("object").geometry().as_mesh().expect("mesh");
+        assert_eq!(mesh.positions()[0], target);
+        assert_ne!(before, target);
+        assert_eq!(mesh.positions().len(), 8, "a move changes no topology");
+        assert_eq!(mesh.faces().len(), 6);
+    }
+
+    #[test]
+    fn a_bad_vertex_batch_is_rejected_without_mutating() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+        let before = project.clone();
+        let target = [millimetres(1), millimetres(2), millimetres(3)];
+
+        assert_eq!(project.move_mesh_vertices(id, &[]), Err(ProjectError::NoVertexMoves));
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, target), (0, target)]),
+            Err(ProjectError::DuplicateVertex { object: id, vertex: 0 })
+        );
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, target), (8, target)]),
+            Err(ProjectError::InvalidGeometry(MeshError::VertexIndexOutOfBounds { vertex: 8, count: 8 }))
+        );
+        assert_eq!(project.revision(), before.revision(), "a rejected batch does not bump the revision");
+        assert!(project.same_content(&before));
+    }
+
+    #[test]
+    fn a_non_mesh_node_has_no_editable_vertices() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_panel(Id::new(2).expect("id"), "Shelf").into()],
+        );
+        let mut project = Project::new(root).expect("valid project");
+        let target = [millimetres(1), millimetres(2), millimetres(3)];
+
+        assert_eq!(
+            project.move_mesh_vertices(Id::new(2).expect("id"), &[(0, target)]),
+            Err(ProjectError::NotAMeshObject { id: Id::new(2).expect("id") })
+        );
+        assert_eq!(
+            project.move_mesh_vertices(Id::new(99).expect("id"), &[(0, target)]),
+            Err(ProjectError::NodeNotFound { id: Id::new(99).expect("id") })
+        );
+        assert_eq!(project.revision(), Revision::ZERO);
     }
 
     #[test]

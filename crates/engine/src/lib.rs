@@ -16,6 +16,7 @@
 
 mod commands;
 mod diagnostics;
+pub mod mesh_cmds;
 pub mod node_cmds;
 pub mod object_cmds;
 pub mod panel_cmds;
@@ -24,6 +25,7 @@ mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
+pub use mesh_cmds::{MESH_VERTICES_MOVE_ID, MESH_VERTICES_MOVE_LABEL, MeshVertexMove, MeshVerticesMove};
 pub use node_cmds::{
     AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet,
     NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear, NodePropertySet,
