@@ -27,6 +27,9 @@ would also bind FurniCraft to a foreign registry it does not control.
   no second colon-separated part.
 - **Zero suffix is the parent.** A query on `30` matches every facade; a query on `30.01` matches
   every hinged door. Matching is prefix-based on the integer, which is why the digits are positional.
+- **`000000` is a sentinel, not the root of the tree.** A query on unclassified matches only nodes
+  without a type, so a report can find unclassified work instead of matching everything. The formal
+  parent link from a group to `000000` exists for ancestry walks, not for subtree selection.
 - **Codes are stable and opaque.** A code is assigned once and never reused. Labels and the
   hierarchy are registry data; commands and reports match numbers, so a translation or a rename
   does not touch a saved project.

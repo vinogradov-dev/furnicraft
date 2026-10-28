@@ -1,17 +1,16 @@
 # Status
 
-Updated: 2026-10-27. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-28. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
 - Milestone: M6 — Properties and classification. M5 editing is done: the scene tree, node editing,
   typed placement, viewport picking, the orientation widget, both gizmos, the stored pivot and
-  multi-node placement as one undo entry. The model design for M6 is accepted: `Assembly` and
-  `Group` become one `Container` with typed properties, a component is a marker rather than a node
-  kind, and `FurnType` is a six-digit tree (`GG.TT.VV`) with `000000` unclassified
-  (ADRs 0034–0035, `docs/domain/furntypes.md`).
-- Working on: the schema v7 model — `FurnType`, the property bag with `Structured` JSON, one
-  `Container`, system keys, the component marker and migration of version 6 files.
+  multi-node placement as one undo entry. The model design for M6 is accepted and implemented:
+  `Container` is the only container kind, every node carries typed properties, a component is a
+  marker rather than a node kind, and `FurnType` is a six-digit tree (`GG.TT.VV`) with `000000`
+  unclassified (ADRs 0034–0035, `docs/domain/furntypes.md`).
+- Working on: save and load, now that schema v7 carries the final node shape.
 - Direction: properties and classification come before save/load, so the first project files carry
   the final shape. Parametric products are user prototype scripts over these properties, not
   built-in builders; scripts are deferred.
@@ -25,6 +24,7 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
 - `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)
 - `docs: record multi-node placement` (ADR 0033)
 - `feat(app): move and turn the whole selection with one command`
@@ -100,15 +100,12 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Schema v7 in `furnicraft-model`: `FurnType` and its registry, the property bag including
-   `Structured` JSON, one `Container` with a component marker, system keys, queries by kind/type/
-   property and the version 6 migration. Tests cover serde round-trip, old files, the ungroup rule
-   and prefix matching.
-2. Engine commands: property set/clear and batch edits, container create, convert-to-group, and
-   select-by-query; each is one revision and one undo entry.
-3. UI: the properties card, the type picker and tree, type badges and select-by-type.
-4. Save and load, with the project store outside `engine`, then the order bundle and pinning.
-5. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
+1. Save and load, with the project store outside `engine`, then the order bundle and pinning.
+2. An engine `node.select`-style query command and saved reports over the same `NodeQuery`; the
+   scene tree already selects by furniture type, but a report needs a stored query and columns.
+3. The furniture-type picker and tree in the inspector; type labels now come from
+   `docs/domain/furntypes.md`, and the card edits the raw code.
+4. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
 
 ## Open questions
 
@@ -152,13 +149,15 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
   deliberate deferral, not an oversight.
 - Parametric cabinets do not exist yet: M6 provides classification and properties, and product
   prototypes arrive later as user scripts over those properties.
-- A component has no dissolve operation yet: `node.ungroup` refuses it, and
-  `node.component.convert_to_group` only clears the marker; dismantling a component is not
-  implemented.
+- A component has no separate "dissolve" operation yet: `node.component.convert_to_group` clears its
+  marker, prototype keys and furniture type and then flattens it into the parent. There is no way to
+  keep the component and detach its prototype record on its own.
 - The property catalogue is not designed: user properties are free-form and the inspector has no
   type editor for `Structured` values yet.
-- Furniture types are not on the engine or UI path yet: schema v7 is a model change, and commands
-  and the properties card follow.
+- Furniture types have no registry-backed picker: the inspector edits the raw `GG.TT.VV` code and the
+  scene tree shows the stored code, while names and ancestry live in `docs/domain/furntypes.md`.
+- Queries exist in the model and the scene tree selects a furniture-type subtree, but there is no
+  engine command or saved report over a query yet.
 - The gizmos do not snap: translate and rotate angles are free, and snapping is not implemented yet.
 - The rotate rings are world-aligned only; a local-axis mode is not implemented.
 - The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.

@@ -105,6 +105,10 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PLACEMENT_SET_MANY,
     node_cmds::NODE_PIVOT_SET,
     node_cmds::NODE_PIVOT_CENTER,
+    node_cmds::NODE_PROPERTY_SET,
+    node_cmds::NODE_PROPERTY_SET_MANY,
+    node_cmds::NODE_PROPERTY_CLEAR,
+    node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -239,7 +243,20 @@ mod tests {
         let pivot_center = registry.get("node.pivot.center").expect("node.pivot.center is registered");
         assert_eq!(pivot_center.id(), "node.pivot.center");
         assert_eq!(pivot_center.label(), "Center pivot");
+        let property_set = registry.get("node.property.set").expect("node.property.set is registered");
+        assert_eq!(property_set.id(), "node.property.set");
+        assert_eq!(property_set.label(), "Set property");
+        let property_many = registry.get("node.property.set_many").expect("node.property.set_many is registered");
+        assert_eq!(property_many.id(), "node.property.set_many");
+        assert_eq!(property_many.label(), "Set properties");
+        let property_clear = registry.get("node.property.clear").expect("node.property.clear is registered");
+        assert_eq!(property_clear.id(), "node.property.clear");
+        assert_eq!(property_clear.label(), "Clear property");
+        let convert =
+            registry.get("node.component.convert_to_group").expect("node.component.convert_to_group is registered");
+        assert_eq!(convert.id(), "node.component.convert_to_group");
+        assert_eq!(convert.label(), "Convert to group");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 23);
+        assert_eq!(registry.specs().len(), 27);
     }
 }

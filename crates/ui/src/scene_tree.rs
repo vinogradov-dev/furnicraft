@@ -1,15 +1,14 @@
 //! The scene tree.
 //!
-//! The tree mirrors the document hierarchy: groups and assemblies contain panels and other
-//! containers. A panel is an atomic leaf, so it is never shown with children and can never be
-//! ungrouped. A group is an organisational container that can be wrapped and flattened; an
-//! assembly is a furniture component with its own identity. Selection is view state and is shared
-//! with the viewport.
+//! The tree mirrors the document hierarchy: containers contain panels and other containers. A panel
+//! is an atomic leaf, so it is never shown with children and can never be ungrouped. A container is
+//! an ordinary group or a furniture component; the component badge and its furniture type come from
+//! the node's properties. Selection is view state and is shared with the viewport.
 
 use egui::collapsing_header::CollapsingState;
 use egui::{RichText, Ui};
 use furnicraft_engine::Session;
-use furnicraft_model::{Assembly, Group, Id, Node, Panel, Project};
+use furnicraft_model::{Container, FurnType, Id, Node, Panel, Project};
 
 /// The selected document nodes, in click order. The last one is the primary selection.
 #[derive(Debug, Default)]
@@ -44,6 +43,11 @@ impl Selection {
         self.ids.clear();
     }
 
+    /// Replaces the selection with a query result, or clears it when nothing matched.
+    pub(crate) fn replace_all(&mut self, ids: Vec<Id>) {
+        self.ids = ids;
+    }
+
     /// Adds the node to the selection, or removes it when it is already selected.
     pub(crate) fn toggle(&mut self, id: Id) {
         if let Some(index) = self.ids.iter().position(|selected| *selected == id) {
@@ -75,28 +79,44 @@ pub(crate) enum TreeAction {
     Delete { node: Id },
     Group { nodes: Vec<Id> },
     Ungroup { node: Id },
+    ConvertToGroup { node: Id },
+    SelectUnderType { furntype: FurnType },
     Undo,
     Redo,
 }
 
-/// Draws the toolbar and the assembly tree, returning the actions the user requested.
-pub(crate) fn show(ui: &mut Ui, session: &Session, selection: &mut Selection) -> Vec<TreeAction> {
+/// Draws the toolbar and the container tree, returning the actions the user requested.
+pub(crate) fn show(
+    ui: &mut Ui,
+    session: &Session,
+    selection: &mut Selection,
+    type_filter: &mut String,
+) -> Vec<TreeAction> {
     let project = session.project();
     let mut actions = Vec::new();
-    show_toolbar(ui, session, selection, &mut actions);
+    show_toolbar(ui, session, selection, type_filter, &mut actions);
     ui.separator();
     let has_panel_material = !session.catalog().panel_materials().is_empty();
-    show_group(ui, project, project.root(), selection, &mut actions, 0, has_panel_material);
+    show_container(ui, project, project.root(), selection, &mut actions, 0, has_panel_material);
     actions
 }
 
-fn show_toolbar(ui: &mut Ui, session: &Session, selection: &Selection, actions: &mut Vec<TreeAction>) {
+fn show_toolbar(
+    ui: &mut Ui,
+    session: &Session,
+    selection: &Selection,
+    type_filter: &mut String,
+    actions: &mut Vec<TreeAction>,
+) {
     let project = session.project();
     let parent = add_parent(project, selection);
     let has_panel_material = !session.catalog().panel_materials().is_empty();
     let primary = selection.primary();
     let primary_node = primary.and_then(|id| project.node(id));
-    let can_ungroup = primary.is_some_and(|id| project.group(id).is_some() && id != project.root().id());
+    let can_ungroup = primary.is_some_and(|id| {
+        id != project.root().id() && project.container(id).is_some_and(|container| !container.is_component())
+    });
+    let can_convert = primary.is_some_and(|id| project.is_component(id));
     let can_group = selection.ids().len() >= 2 && project.validate_group(selection.ids()).is_ok();
     let can_add_panel = has_panel_material && project.is_container(parent);
 
@@ -115,6 +135,11 @@ fn show_toolbar(ui: &mut Ui, session: &Session, selection: &Selection, actions: 
             && let Some(node) = primary
         {
             actions.push(TreeAction::Ungroup { node });
+        }
+        if ui.add_enabled(can_convert, egui::Button::new("Convert to group")).clicked()
+            && let Some(node) = primary
+        {
+            actions.push(TreeAction::ConvertToGroup { node });
         }
         if ui.add_enabled(primary_node.is_some(), egui::Button::new("Duplicate")).clicked()
             && let Some(node) = primary
@@ -135,6 +160,22 @@ fn show_toolbar(ui: &mut Ui, session: &Session, selection: &Selection, actions: 
             actions.push(TreeAction::Redo);
         }
     });
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Type");
+        ui.add(egui::TextEdit::singleline(type_filter).hint_text("12.03").desired_width(90.0));
+        let parsed = type_filter.trim().parse::<FurnType>().ok();
+        if ui
+            .add_enabled(parsed.is_some(), egui::Button::new("Select subtree"))
+            .on_hover_text("Select every node of this furniture type and its sub-types")
+            .clicked()
+            && let Some(furntype) = parsed
+        {
+            actions.push(TreeAction::SelectUnderType { furntype });
+        }
+        if ui.add_enabled(!type_filter.is_empty(), egui::Button::new("Clear")).clicked() {
+            type_filter.clear();
+        }
+    });
 }
 
 fn add_parent(project: &Project, selection: &Selection) -> Id {
@@ -144,79 +185,49 @@ fn add_parent(project: &Project, selection: &Selection) -> Id {
     if project.is_container(primary) { primary } else { project.parent_of(primary).unwrap_or(project.root().id()) }
 }
 
-fn show_assembly(
-    ui: &mut Ui,
-    project: &Project,
-    assembly: &Assembly,
-    selection: &mut Selection,
-    actions: &mut Vec<TreeAction>,
-    depth: u32,
-    has_panel_material: bool,
-) {
-    show_container(
-        ui,
-        project,
-        assembly.id(),
-        assembly.name(),
-        assembly.children(),
-        false,
-        selection,
-        actions,
-        depth,
-        has_panel_material,
-    );
-}
-
-fn show_group(
-    ui: &mut Ui,
-    project: &Project,
-    group: &Group,
-    selection: &mut Selection,
-    actions: &mut Vec<TreeAction>,
-    depth: u32,
-    has_panel_material: bool,
-) {
-    show_container(
-        ui,
-        project,
-        group.id(),
-        group.name(),
-        group.children(),
-        true,
-        selection,
-        actions,
-        depth,
-        has_panel_material,
-    );
+fn container_label(project: &Project, container: &Container) -> RichText {
+    let name = container.name();
+    if container.id() == project.root().id() {
+        return RichText::new(name).strong();
+    }
+    if !container.is_component() {
+        return RichText::new(name);
+    }
+    let badge = match project.furntype(container.id()) {
+        Some(furntype) if !furntype.is_unclassified() => furntype.to_string(),
+        _ => "component".to_owned(),
+    };
+    RichText::new(format!("{name}  [{badge}]"))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn show_container(
     ui: &mut Ui,
     project: &Project,
-    id: Id,
-    name: &str,
-    children: &[Node],
-    is_group: bool,
+    container: &Container,
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
     depth: u32,
     has_panel_material: bool,
 ) {
+    let id = container.id();
     let is_root = id == project.root().id();
+    let is_component = container.is_component();
     let state_id = ui.make_persistent_id(("scene_container", id.get()));
     let state = CollapsingState::load_with_default_open(ui.ctx(), state_id, depth < 2);
-    let label = if is_root { RichText::new(name).strong() } else { RichText::new(name) };
+    let label = container_label(project, container);
     let (_toggle, header, _) =
         state.show_header(ui, |ui| ui.selectable_label(selection.contains(id), label)).body(|ui| {
-            for child in children {
+            for child in container.children() {
                 show_node(ui, project, child, selection, actions, depth.saturating_add(1), has_panel_material);
             }
         });
     if header.inner.clicked() {
         select(ui, selection, id);
     }
-    header.inner.context_menu(|ui| container_menu(ui, id, is_root, is_group, has_panel_material, actions));
+    header.inner.context_menu(|ui| {
+        container_menu(ui, id, is_root, is_component, has_panel_material, actions);
+    });
 }
 
 fn show_node(
@@ -229,11 +240,8 @@ fn show_node(
     has_panel_material: bool,
 ) {
     match node {
-        Node::Assembly(assembly) => {
-            show_assembly(ui, project, assembly, selection, actions, depth, has_panel_material);
-        }
-        Node::Group(group) => {
-            show_group(ui, project, group, selection, actions, depth, has_panel_material);
+        Node::Container(container) => {
+            show_container(ui, project, container, selection, actions, depth, has_panel_material);
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, actions),
     }
@@ -261,7 +269,7 @@ fn container_menu(
     ui: &mut Ui,
     id: Id,
     is_root: bool,
-    is_group: bool,
+    is_component: bool,
     can_add_panel: bool,
     actions: &mut Vec<TreeAction>,
 ) {
@@ -279,7 +287,12 @@ fn container_menu(
             actions.push(TreeAction::Duplicate { node: id });
             ui.close();
         }
-        if is_group && ui.button("Ungroup").clicked() {
+        if is_component {
+            if ui.button("Convert to group").clicked() {
+                actions.push(TreeAction::ConvertToGroup { node: id });
+                ui.close();
+            }
+        } else if ui.button("Ungroup").clicked() {
             actions.push(TreeAction::Ungroup { node: id });
             ui.close();
         }
@@ -302,7 +315,7 @@ fn panel_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
 }
 
 /// Returns the first panel in depth-first order, used to open the card on a useful node.
-pub(crate) fn first_panel(root: &Group) -> Option<Id> {
+pub(crate) fn first_panel(root: &Container) -> Option<Id> {
     first_panel_in(root.children())
 }
 
@@ -310,13 +323,8 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
     for child in children {
         match child {
             Node::Panel(panel) => return Some(panel.id()),
-            Node::Assembly(assembly) => {
-                if let Some(id) = first_panel_in(assembly.children()) {
-                    return Some(id);
-                }
-            }
-            Node::Group(group) => {
-                if let Some(id) = first_panel_in(group.children()) {
+            Node::Container(container) => {
+                if let Some(id) = first_panel_in(container.children()) {
                     return Some(id);
                 }
             }
@@ -350,12 +358,8 @@ mod tests {
         .expect("panel")
     }
 
-    fn assembly(id: u64, children: Vec<Node>) -> Assembly {
-        Assembly::new(Id::new(id).expect("id"), format!("Assembly {id}"), Placement::IDENTITY, children)
-    }
-
-    fn group(id: u64, children: Vec<Node>) -> Group {
-        Group::new(Id::new(id).expect("id"), format!("Group {id}"), Placement::IDENTITY, children)
+    fn container(id: u64, children: Vec<Node>) -> Container {
+        Container::new(Id::new(id).expect("id"), format!("Container {id}"), Placement::IDENTITY, children)
     }
 
     #[test]
@@ -363,14 +367,13 @@ mod tests {
         let project = sample_project();
         let expected = Id::new(2).expect("id");
         assert_eq!(first_panel(project.root()), Some(expected));
-        assert_eq!(first_panel(&group(10, Vec::new())), None);
+        assert_eq!(first_panel(&container(10, Vec::new())), None);
     }
 
     #[test]
     fn first_panel_descends_into_nested_containers() {
-        let nested = assembly(20, vec![Node::Panel(panel(21)), Node::Panel(panel(22))]);
-        let nested_group = group(30, vec![Node::Assembly(nested)]);
-        let root = group(10, vec![Node::Group(nested_group), Node::Panel(panel(11))]);
+        let nested = container(30, vec![Node::Panel(panel(21)), Node::Panel(panel(22))]);
+        let root = container(10, vec![Node::Container(nested), Node::Panel(panel(11))]);
         assert_eq!(first_panel(&root), Some(Id::new(21).expect("id")));
     }
 
@@ -402,6 +405,22 @@ mod tests {
     }
 
     #[test]
+    fn selection_replaces_all_matches() {
+        let first = Id::new(2).expect("id");
+        let second = Id::new(3).expect("id");
+        let mut selection = Selection::default();
+        selection.replace(Id::new(4).expect("id"));
+
+        selection.replace_all(vec![first, second]);
+        assert_eq!(selection.ids(), &[first, second]);
+        assert_eq!(selection.primary(), Some(second));
+
+        selection.replace_all(Vec::new());
+        assert!(selection.ids().is_empty());
+        assert_eq!(selection.primary(), None);
+    }
+
+    #[test]
     fn selection_drops_removed_nodes() {
         let project = sample_project();
         let mut selection = Selection::default();
@@ -415,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn adding_uses_the_selected_assembly_or_the_panels_parent() {
+    fn adding_uses_the_selected_container_or_the_panels_parent() {
         let project = sample_project();
         let mut selection = Selection::default();
         assert_eq!(add_parent(&project, &selection), project.root().id());

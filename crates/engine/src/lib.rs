@@ -24,8 +24,9 @@ mod session;
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
 pub use node_cmds::{
-    AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacement,
-    NodePlacementSet, NodePlacementSetMany, NodeRename, NodeUngroup,
+    AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet,
+    NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear, NodePropertySet,
+    NodePropertySetMany, NodeRename, NodeUngroup,
 };
 pub use panel_cmds::{
     CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,

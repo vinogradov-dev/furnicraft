@@ -12,7 +12,7 @@
 )]
 
 use furnicraft_model::{
-    Assembly, Catalog, EdgeBandingMaterial, Group, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
+    Catalog, Container, EdgeBandingMaterial, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
     Placement, Project,
 };
 use furnicraft_units::Length;
@@ -167,7 +167,7 @@ pub fn sample_blind_depth() -> Length {
     Length::from_millimetres(8).expect("8 mm fits a length")
 }
 
-/// A small valid project: a root, one panel and one nested assembly with a panel.
+/// A small valid project: a root, one panel and one component container with a panel.
 #[allow(clippy::expect_used)]
 pub fn sample_project() -> Project {
     let size = sample_panel_nominal_size();
@@ -189,8 +189,14 @@ pub fn sample_project() -> Project {
         Placement::IDENTITY,
     )
     .expect("sample front is valid");
-    let drawer = Assembly::new(Id::new(3).expect("non-zero id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
-    let root =
-        Group::new(Id::new(1).expect("non-zero id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
+    let mut drawer =
+        Container::new(Id::new(3).expect("non-zero id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
+    drawer.set_component_marker(true).expect("sample drawer is a component");
+    let root = Container::new(
+        Id::new(1).expect("non-zero id"),
+        "Root",
+        Placement::IDENTITY,
+        vec![shelf.into(), drawer.into()],
+    );
     Project::new(root).expect("sample project is valid")
 }

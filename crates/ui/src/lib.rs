@@ -18,6 +18,7 @@ mod container_card;
 mod panel_card;
 mod pivot_card;
 mod placement_card;
+mod properties_card;
 mod scene_tree;
 mod section;
 
@@ -25,11 +26,15 @@ use std::collections::HashSet;
 
 use egui::{Color32, Ui};
 use furnicraft_engine::node_cmds::{
-    ASSEMBLY_CREATE_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID, NODE_UNGROUP_ID,
+    ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
+    NODE_UNGROUP_ID,
 };
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
-use furnicraft_engine::{AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup, PanelCreate, Session};
-use furnicraft_model::{Id, PanelNominalSize, Placement, Project};
+use furnicraft_engine::{
+    AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup, PanelCreate,
+    Session,
+};
+use furnicraft_model::{Id, NodeQuery, PanelNominalSize, Placement, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
@@ -37,6 +42,7 @@ use crate::container_card::ContainerCard;
 use crate::panel_card::PanelCard;
 use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
+use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
 /// Default length of a newly created panel, in millimetres.
@@ -53,6 +59,8 @@ pub struct Editor {
     container_card: ContainerCard,
     placement_card: PlacementCard,
     pivot_card: PivotCard,
+    properties_card: PropertiesCard,
+    type_filter: String,
     error: Option<String>,
     initialized: bool,
 }
@@ -169,7 +177,7 @@ impl Editor {
             ui.colored_label(Color32::LIGHT_RED, error);
             ui.separator();
         }
-        let actions = scene_tree::show(ui, session, &mut self.selection);
+        let actions = scene_tree::show(ui, session, &mut self.selection, &mut self.type_filter);
         if actions.is_empty() {
             return;
         }
@@ -200,6 +208,7 @@ impl Editor {
         } else {
             ui.label("Select a node in the scene tree.");
         }
+        self.properties_card.show(ui, session, primary);
     }
 
     fn run_action(&mut self, session: &mut Session, action: TreeAction) -> Result<(), String> {
@@ -257,6 +266,19 @@ impl Editor {
                 let params = json(&NodeUngroup { node })?;
                 dispatch(session, NODE_UNGROUP_ID, &params)?;
                 self.after_node_removed(session, parent);
+            }
+            TreeAction::ConvertToGroup { node } => {
+                let parent = session.project().parent_of(node);
+                let params = json(&NodeComponentConvertToGroup { node })?;
+                dispatch(session, NODE_COMPONENT_CONVERT_TO_GROUP_ID, &params)?;
+                self.after_node_removed(session, parent);
+            }
+            TreeAction::SelectUnderType { furntype } => {
+                let ids = session.project().query(&NodeQuery::any().with_furntype_under(furntype));
+                if ids.is_empty() {
+                    return Err(format!("No node has furniture type {furntype} or a sub-type."));
+                }
+                self.selection.replace_all(ids);
             }
             TreeAction::Undo => {
                 session.undo().map_err(|error| error.to_string())?;
@@ -336,7 +358,10 @@ mod tests {
 
     use super::*;
 
-    use furnicraft_testkit::sample_project;
+    use furnicraft_engine::NodePropertySet;
+    use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
+    use furnicraft_model::{FurnType, PropertyValue, SYSTEM_FURNTYPE};
+    use furnicraft_testkit::{sample_catalog, sample_project};
 
     #[test]
     fn picking_replaces_the_tree_selection_and_an_empty_click_clears_it() {
@@ -350,6 +375,43 @@ mod tests {
         editor.select_node(None);
         assert_eq!(editor.selected_node(), None);
         assert!(editor.selected_nodes().is_empty());
+    }
+
+    #[test]
+    fn selecting_a_furniture_type_subtree_replaces_the_selection() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        set_furntype(&mut session, drawer, "12.03.02");
+        set_furntype(&mut session, front, "12.03.01");
+
+        let mut editor = Editor::new();
+        editor
+            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12.03".parse().expect("type") })
+            .expect("select subtree");
+        assert_eq!(editor.selected_nodes(), [drawer, front]);
+        assert_eq!(editor.selected_node(), Some(front), "the last match is primary");
+
+        assert!(
+            editor
+                .run_action(&mut session, TreeAction::SelectUnderType { furntype: "13".parse().expect("type") })
+                .is_err()
+        );
+        assert_eq!(editor.selected_nodes(), [drawer, front], "a miss leaves the selection alone");
+
+        editor.selection.clear();
+        editor
+            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12".parse().expect("type") })
+            .expect("select group");
+        assert_eq!(editor.selected_nodes(), [drawer, front]);
+    }
+
+    fn set_furntype(session: &mut Session, node: Id, furntype: &str) {
+        let furntype: FurnType = furntype.parse().expect("valid furntype");
+        let params =
+            json(&NodePropertySet { node, key: SYSTEM_FURNTYPE.to_owned(), value: PropertyValue::furn_type(furntype) })
+                .expect("params");
+        dispatch(session, NODE_PROPERTY_SET_ID, &params).expect("set furntype");
     }
 
     fn grouped_project() -> (Project, Id, Id, Id) {

@@ -56,7 +56,8 @@ The hierarchy is strict:
 
 There are no sibling ranges and no second colon-separated part: a code always describes one node
 in one tree. A query matches the node itself and all of its descendants, so `30` finds every facade
-and `40.02` finds every runner.
+and `40.02` finds every runner. `000000` is the exception: querying unclassified matches only nodes
+that have no type, not the whole tree.
 
 ## 4. Registry
 

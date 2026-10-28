@@ -61,7 +61,7 @@ A node id is unique across both kinds and is never reused after a delete or an u
 A container is a **component** when it carries a non-zero `furntype`, a `prototype.id` or an explicit
 `component = true`; otherwise it is an ordinary group. `node.ungroup` flattens an ordinary container
 into its parent and refuses a component. `node.component.convert_to_group` clears the component
-marker and the prototype keys, after which the container can be ungrouped. A **furniture type** is a
+marker and the prototype keys and then flattens the container into its parent. A **furniture type** is a
 six-digit `GG.TT.VV` code stored in `furntype`; `000000` means unclassified. The registry and query
 rules live in [Furniture types](furntypes.md).
 
@@ -186,7 +186,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
 - Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
 - Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
-- Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as a group and every nested assembly keeps its kind.
+- Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as an ordinary container and every nested assembly keeps its kind (the kinds are unified by schema 7).
 - Version 6 stores the manipulation pivot on every node as three micrometre lengths. A version 5 or older file materializes the default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
