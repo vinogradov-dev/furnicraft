@@ -10,10 +10,11 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: the first implementation step — a geometry object node with a baked mesh, schema v8.
-  The model part is in: `Object`, `Geometry::Mesh`, mesh validation, object ids in the tree,
-  duplicate/delete/rename/placement and `StructuralKind::Object`. Creation, rendering and the
-  inspector card come next.
+- Working on: the first implementation step is in — a geometry object node with a baked mesh,
+  schema v8 (`Object`, `Geometry::Mesh`, mesh validation, object ids in the tree,
+  duplicate/delete/rename/placement, `StructuralKind::Object`), plus `object.primitive.create`
+  (cube), a flat-shaded drawable in the frame, the "+ Cube" tree action and the object inspector
+  card. Next is the project store and the `.fcs` envelope.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. Save/load lands right after the first object and before mesh editing, so every later schema
   bump is a migration with a golden file.
@@ -26,6 +27,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
 - `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
 - `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
 - `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
@@ -104,17 +106,15 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. A geometry object node with a baked mesh, schema v8: model, validation, `Node::Object`, generic node
-   commands, triangulation into the frame, `object.primitive.create` (box) and the scene-tree action.
-2. The project store and the `.fcs` envelope: read, write, atomic save, golden files v7 and v8, then
+1. The project store and the `.fcs` envelope: read, write, atomic save, golden files v7 and v8, then
    the File menu, the dirty marker from `saved_revision` and the error dialog.
-3. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
+2. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
    gizmo drag as one undo entry; mesh tools disabled on a constructive object.
-4. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
+3. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
    and gizmo icons that make them selectable.
-5. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
+4. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
    the inspector and `object.collapse`.
-6. Viewport multi-select, copy/paste and gizmo snapping.
+5. Viewport multi-select, copy/paste and gizmo snapping.
 
 ## Open questions
 
@@ -154,8 +154,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - Selection and open containers still live in `ui::Editor` and the camera in the shell, although
   ADR 0029 places them in the session. They have not moved yet. Cameras and lights are not document
   nodes yet: the camera is a shell value and the key light is a constant.
-- There is no geometry object: the document, the scene tree, picking and the inspector know only
-  containers and panels, so a mesh or a contour cannot be created.
+- A geometry object exists only as a baked mesh: there is no constructive payload, no contour tool,
+  no `object.collapse` and no mesh editing yet. A cube is created at the parent origin and centred on
+  it, so half of a default cube sits below the floor until it is moved.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made

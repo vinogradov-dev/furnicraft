@@ -75,6 +75,7 @@ impl Selection {
 pub(crate) enum TreeAction {
     CreatePanel { parent: Id },
     CreateAssembly { parent: Id },
+    CreateObject { parent: Id },
     Duplicate { node: Id },
     Delete { node: Id },
     Group { nodes: Vec<Id> },
@@ -126,6 +127,9 @@ fn show_toolbar(
         }
         if ui.button("+ Assembly").clicked() {
             actions.push(TreeAction::CreateAssembly { parent });
+        }
+        if ui.button("+ Cube").clicked() {
+            actions.push(TreeAction::CreateObject { parent });
         }
         ui.separator();
         if ui.add_enabled(can_group, egui::Button::new("Group")).clicked() {
@@ -309,6 +313,10 @@ fn container_menu(
     }
     if ui.button("Add assembly").clicked() {
         actions.push(TreeAction::CreateAssembly { parent: id });
+        ui.close();
+    }
+    if ui.button("Add cube").clicked() {
+        actions.push(TreeAction::CreateObject { parent: id });
         ui.close();
     }
     if !is_root {

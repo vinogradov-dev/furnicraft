@@ -15,6 +15,7 @@
 
 mod command;
 mod container_card;
+mod object_card;
 mod panel_card;
 mod pivot_card;
 mod placement_card;
@@ -29,16 +30,18 @@ use furnicraft_engine::node_cmds::{
     ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
     NODE_UNGROUP_ID,
 };
+use furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID;
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::{
-    AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup, PanelCreate,
-    Session,
+    AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup,
+    ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{Id, NodeQuery, PanelNominalSize, Placement, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
+use crate::object_card::ObjectCard;
 use crate::panel_card::PanelCard;
 use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
@@ -50,6 +53,9 @@ const NEW_PANEL_LENGTH_MM: i64 = 600;
 /// Default width of a newly created panel, in millimetres.
 const NEW_PANEL_WIDTH_MM: i64 = 400;
 
+/// Edge length of the default cube primitive, in millimetres.
+const NEW_OBJECT_SIZE_MM: i64 = 200;
+
 /// Selection and draft state owned by the editor panels.
 #[derive(Debug, Default)]
 pub struct Editor {
@@ -57,6 +63,7 @@ pub struct Editor {
     open: HashSet<Id>,
     card: PanelCard,
     container_card: ContainerCard,
+    object_card: ObjectCard,
     placement_card: PlacementCard,
     pivot_card: PivotCard,
     properties_card: PropertiesCard,
@@ -203,6 +210,8 @@ impl Editor {
         }
         if session.project().panel(primary).is_some() {
             self.card.show(ui, session, Some(primary));
+        } else if session.project().object(primary).is_some() {
+            self.object_card.show(ui, session, primary);
         } else if session.project().is_container(primary) {
             self.container_card.show(ui, session, primary);
         } else {
@@ -237,6 +246,21 @@ impl Editor {
                 let params =
                     json(&AssemblyCreate { parent, name: "Assembly".to_owned(), placement: Placement::IDENTITY })?;
                 let outcome = dispatch(session, ASSEMBLY_CREATE_ID, &params)?;
+                if let Some(id) = outcome.created_id() {
+                    self.selection.replace(id);
+                }
+            }
+            TreeAction::CreateObject { parent } => {
+                let size = Length::from_millimetres(NEW_OBJECT_SIZE_MM)
+                    .ok_or_else(|| "The default cube size does not fit a length.".to_owned())?;
+                let params = json(&ObjectPrimitiveCreate {
+                    parent,
+                    name: "Cube".to_owned(),
+                    primitive: PrimitiveKind::Cube,
+                    size,
+                    placement: Placement::IDENTITY,
+                })?;
+                let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
                 if let Some(id) = outcome.created_id() {
                     self.selection.replace(id);
                 }
@@ -492,5 +516,24 @@ mod tests {
 
         editor.exit_level(&project);
         assert_eq!(editor.selected_node(), Some(group), "the top level stays selected");
+    }
+
+    #[test]
+    fn creating_a_cube_dispatches_the_primitive_command_and_selects_it() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+
+        editor.run_action(&mut session, TreeAction::CreateObject { parent: root }).expect("create cube");
+
+        let id = editor.selected_node().expect("the new object is selected");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.name(), "Cube");
+        assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
+        assert_eq!(session.project().revision().get(), 1, "one command is one revision");
+
+        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
+        assert!(session.project().object(id).is_none());
     }
 }

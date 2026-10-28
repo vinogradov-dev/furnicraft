@@ -593,7 +593,7 @@ fn valid_name(name: &str) -> bool {
     !name.trim().is_empty()
 }
 
-fn validate_name(name: &str, command: &'static str) -> Result<(), CommandError> {
+pub(crate) fn validate_name(name: &str, command: &'static str) -> Result<(), CommandError> {
     if valid_name(name) {
         Ok(())
     } else {

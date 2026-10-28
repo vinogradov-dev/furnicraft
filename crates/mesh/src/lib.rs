@@ -17,6 +17,7 @@
 
 use furnicraft_geom::MeshData;
 use furnicraft_kernel::{BodyId, KernelError, SolidKernel, TessOptions};
+use furnicraft_model::Mesh;
 use thiserror::Error;
 
 /// An error raised while building a render mesh.
@@ -39,6 +40,76 @@ pub fn tessellate_panel(kernel: &dyn SolidKernel, body: BodyId, options: &TessOp
     let mesh = kernel.tessellate(body, options)?;
     validate_mesh(&mesh)?;
     Ok(mesh)
+}
+
+/// Triangulates a document mesh into flat-shaded renderable triangles.
+///
+/// Polygons are fan-triangulated and each face gets one normal, so the object renders faceted
+/// without smoothing. Positions are converted from micrometres to local millimetres here, at the
+/// render boundary, and a degenerate face is skipped rather than producing a NaN normal.
+pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    for face in mesh.faces() {
+        let mut points = Vec::with_capacity(face.len());
+        for index in face {
+            let Some(position) = mesh.positions().get(*index as usize) else {
+                return Err(MeshError::Invalid(format!("face refers to missing vertex {index}")));
+            };
+            let point = [
+                position[0].micrometres() as f64 / 1000.0,
+                position[1].micrometres() as f64 / 1000.0,
+                position[2].micrometres() as f64 / 1000.0,
+            ];
+            if point.iter().any(|value| !value.is_finite()) {
+                return Err(MeshError::Invalid("a vertex is not finite".into()));
+            }
+            points.push(point);
+        }
+        let Some(normal) = face_normal(&points) else {
+            continue;
+        };
+        let normal = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
+        let base = u32::try_from(positions.len())
+            .map_err(|_| MeshError::Invalid("the object has too many vertices to index".into()))?;
+        for index in 1..points.len().saturating_sub(1) {
+            for corner in [0, index, index + 1] {
+                let Some(point) = points.get(corner) else {
+                    continue;
+                };
+                positions.push([point[0] as f32, point[1] as f32, point[2] as f32]);
+                normals.push(normal);
+            }
+        }
+        let added = u32::try_from(points.len().saturating_sub(2).saturating_mul(3))
+            .map_err(|_| MeshError::Invalid("the face has too many vertices".into()))?;
+        indices.extend(base..base.saturating_add(added));
+    }
+    let data = MeshData { positions, normals, indices };
+    if data.is_empty() {
+        // Every face was degenerate, so there is nothing to draw. An object must not fail the
+        // whole frame because one of its faces has zero area.
+        return Ok(data);
+    }
+    validate_mesh(&data)?;
+    Ok(data)
+}
+
+/// Newell's normal of a polygon, or `None` when it is degenerate.
+fn face_normal(points: &[[f64; 3]]) -> Option<[f64; 3]> {
+    let mut normal = [0.0f64; 3];
+    for (index, current) in points.iter().enumerate() {
+        let next = points.get((index + 1) % points.len())?;
+        normal[0] += (current[1] - next[1]) * (current[2] + next[2]);
+        normal[1] += (current[2] - next[2]) * (current[0] + next[0]);
+        normal[2] += (current[0] - next[0]) * (current[1] + next[1]);
+    }
+    let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+    if !length.is_finite() || length <= f64::EPSILON {
+        return None;
+    }
+    Some([normal[0] / length, normal[1] / length, normal[2] / length])
 }
 
 fn validate_mesh(mesh: &MeshData) -> Result<(), MeshError> {
@@ -168,6 +239,58 @@ mod tests {
         let mut mesh = triangle();
         mesh.normals.clear();
         assert!(validate_mesh(&mesh).is_ok());
+    }
+
+    #[test]
+    fn object_mesh_triangulates_a_cube_into_twelve_flat_triangles() {
+        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let mesh = object_mesh(&cube).expect("render mesh");
+        assert_eq!(mesh.triangle_count(), 12);
+        assert_eq!(mesh.vertex_count(), 36, "flat shading duplicates vertices per face");
+        for normal in &mesh.normals {
+            let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+            assert!((length - 1.0).abs() < 1.0e-5, "normal was {normal:?}");
+            let axes = normal.iter().filter(|value| value.abs() > 0.5).count();
+            assert_eq!(axes, 1, "a cube normal points along one axis, was {normal:?}");
+        }
+        let half = 50.0f32;
+        for position in &mesh.positions {
+            assert_eq!(position[0].abs(), half);
+            assert_eq!(position[1].abs(), half);
+            assert_eq!(position[2].abs(), half);
+        }
+    }
+
+    #[test]
+    fn object_mesh_skips_degenerate_faces_without_failing() {
+        let collinear = furnicraft_model::Mesh::new(
+            vec![
+                [millimetres(0), millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0), millimetres(0)],
+                [millimetres(20), millimetres(0), millimetres(0)],
+                [millimetres(0), millimetres(10), millimetres(0)],
+            ],
+            vec![vec![0, 1, 2], vec![0, 1, 3]],
+        )
+        .expect("the model accepts a geometrically degenerate face");
+        let mesh = object_mesh(&collinear).expect("render mesh");
+        assert_eq!(mesh.triangle_count(), 1, "only the triangle with area survives");
+        assert!(mesh.positions.iter().flatten().all(|value| value.is_finite()));
+    }
+
+    #[test]
+    fn object_mesh_with_only_degenerate_faces_is_empty() {
+        let collinear = furnicraft_model::Mesh::new(
+            vec![
+                [millimetres(0), millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0), millimetres(0)],
+                [millimetres(20), millimetres(0), millimetres(0)],
+            ],
+            vec![vec![0, 1, 2]],
+        )
+        .expect("valid mesh");
+        let mesh = object_mesh(&collinear).expect("render mesh");
+        assert!(mesh.is_empty());
     }
 
     #[test]

@@ -5,6 +5,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::node_cmds;
+use crate::object_cmds;
 use crate::panel_cmds;
 use crate::session::Session;
 
@@ -109,6 +110,7 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PROPERTY_SET_MANY,
     node_cmds::NODE_PROPERTY_CLEAR,
     node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
+    object_cmds::OBJECT_PRIMITIVE_CREATE,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -257,6 +259,6 @@ mod tests {
         assert_eq!(convert.id(), "node.component.convert_to_group");
         assert_eq!(convert.label(), "Convert to group");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 27);
+        assert_eq!(registry.specs().len(), 28);
     }
 }

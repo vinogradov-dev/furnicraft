@@ -11,7 +11,7 @@ use furnicraft_engine::Session;
 use furnicraft_geom::{DMat4, DQuat, DVec3, MeshData};
 use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_mesh::tessellate_panel;
+use furnicraft_mesh::{object_mesh, tessellate_panel};
 use furnicraft_model::{
     Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
     Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
@@ -25,6 +25,9 @@ const PANEL_COLORS: [[f32; 4]; 3] = [[0.62, 0.42, 0.22, 1.0], [0.50, 0.34, 0.20,
 
 /// A common debug colour for every band on a panel.
 const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
+
+/// The default surface colour of a geometry object; v1 has no per-object material.
+const OBJECT_COLOR: [f32; 4] = [0.58, 0.60, 0.64, 1.0];
 
 /// Sample catalogue ids. They are stable only for this demonstration document.
 const SAMPLE_OAK_MATERIAL: u64 = 1;
@@ -207,9 +210,7 @@ impl<'a> Evaluation<'a> {
                     self.collect(container.children(), world)?;
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
-                // A geometry object has no drawable yet; the mesh path lands with the object
-                // commands. It still contributes the document ids the tree and the inspector show.
-                Node::Object(_) => {}
+                Node::Object(object) => self.collect_object(object, parent)?,
             }
         }
         Ok(())
@@ -236,6 +237,22 @@ impl<'a> Evaluation<'a> {
             self.bounds.include_mesh(&mesh, transform);
             self.frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, EDGE_BAND_COLOR));
         }
+        Ok(())
+    }
+
+    /// Turns a mesh object into one flat-shaded drawable in world space.
+    ///
+    /// Only the baked mesh payload can be drawn today; a constructive object arrives with the
+    /// contour tool and evaluates through the kernel before this point.
+    fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
+        let world = Placement::compose(parent, object.placement()).map_err(describe)?;
+        let Some(mesh) = object.geometry().as_mesh() else {
+            return Ok(());
+        };
+        let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
+        let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+        self.bounds.include_mesh(&mesh, transform);
+        self.frame.push(Drawable::new(object.id(), Arc::new(mesh), transform, OBJECT_COLOR));
         Ok(())
     }
 }

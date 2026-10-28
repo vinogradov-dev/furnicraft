@@ -1522,6 +1522,31 @@ impl Project {
         Ok(id)
     }
 
+    /// Adds a geometry object to an existing container and bumps the revision once.
+    ///
+    /// The object id is allocated from the document; callers must not invent one. The parent may
+    /// be the root or any nested container.
+    pub fn add_object(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        geometry: Geometry,
+    ) -> Result<Id, ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let object = Object::new(id, name, placement, geometry);
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Object(object));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
     /// Adds an empty container marked as a furniture component and bumps the revision once.
     ///
     /// The parent may be the root or any nested container. Adding a child below
@@ -2466,6 +2491,9 @@ pub enum ProjectError {
     /// Two nodes in the tree use the same id.
     #[error("duplicate document id {0}")]
     DuplicateId(Id),
+    /// A geometry payload is invalid.
+    #[error("invalid geometry: {0}")]
+    InvalidGeometry(#[from] MeshError),
     /// The node tree is nested more deeply than the supported limit.
     #[error("container nesting exceeds {max} levels")]
     TooDeep {
@@ -3719,6 +3747,12 @@ pub enum MeshError {
         /// The vertex count of the mesh.
         count: usize,
     },
+    /// A primitive was asked for with a size that is not positive.
+    #[error("primitive size must be positive, got {edge} micrometres")]
+    NonPositiveSize {
+        /// The rejected size in micrometres.
+        edge: i64,
+    },
 }
 
 /// Serialized form of [`Mesh`]; validation happens in its `TryFrom` implementation.
@@ -3811,6 +3845,42 @@ impl Mesh {
             }
         }
         (min, max)
+    }
+
+    /// Builds a cube of `edge` length centred on the object's local origin.
+    ///
+    /// The cube is the first primitive; its six quads are counter-clockwise seen from outside. An
+    /// odd edge length loses at most one micrometre to integer halving, which no panel rule cares
+    /// about.
+    pub fn cube(edge: Length) -> Result<Self, MeshError> {
+        let half = edge.micrometres() / 2;
+        if half <= 0 {
+            return Err(MeshError::NonPositiveSize { edge: edge.micrometres() });
+        }
+        let corner = |x: i64, y: i64, z: i64| {
+            [Length::from_micrometres(x), Length::from_micrometres(y), Length::from_micrometres(z)]
+        };
+        let positions = vec![
+            corner(-half, -half, -half),
+            corner(half, -half, -half),
+            corner(half, half, -half),
+            corner(-half, half, -half),
+            corner(-half, -half, half),
+            corner(half, -half, half),
+            corner(half, half, half),
+            corner(-half, half, half),
+        ];
+        Self::new(
+            positions,
+            vec![
+                vec![0, 3, 2, 1],
+                vec![4, 5, 6, 7],
+                vec![0, 1, 5, 4],
+                vec![1, 2, 6, 5],
+                vec![2, 3, 7, 6],
+                vec![3, 0, 4, 7],
+            ],
+        )
     }
 }
 

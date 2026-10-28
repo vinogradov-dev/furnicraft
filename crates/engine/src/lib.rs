@@ -17,6 +17,7 @@
 mod commands;
 mod diagnostics;
 pub mod node_cmds;
+pub mod object_cmds;
 pub mod panel_cmds;
 mod resolve;
 mod session;
@@ -28,6 +29,7 @@ pub use node_cmds::{
     NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear, NodePropertySet,
     NodePropertySetMany, NodeRename, NodeUngroup,
 };
+pub use object_cmds::{ObjectPrimitiveCreate, PrimitiveKind};
 pub use panel_cmds::{
     CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
     PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
