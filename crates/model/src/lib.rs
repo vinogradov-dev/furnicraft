@@ -747,6 +747,8 @@ pub enum StructuralKind {
     Panel,
     /// A container, whether an ordinary group or a furniture component.
     Container,
+    /// A free-form geometry object.
+    Object,
 }
 
 /// A property predicate: the named property must equal the given value.
@@ -903,8 +905,9 @@ impl Project {
     /// Version 5 split assembly components from organisational groups. Version 6 stores the
     /// manipulation pivot on every node. Version 7 replaces the two container kinds with one
     /// `Container` that carries typed properties: an old assembly becomes a component container
-    /// and an old group an ordinary one.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+    /// and an old group an ordinary one. Version 8 adds the geometry object node with a baked mesh;
+    /// older files simply contain none.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 8;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -964,6 +967,11 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
+    /// Finds a geometry object anywhere in the tree.
+    pub fn object(&self, id: Id) -> Option<&Object> {
+        self.node(id)?.as_object()
+    }
+
     /// Finds a panel or a nested container below the root.
     ///
     /// The root container is not a [`Node`]; use [`Project::container`] with the root id to reach
@@ -1007,9 +1015,9 @@ impl Project {
         top_most
     }
 
-    /// Whether the id names a container or a panel.
+    /// Whether the id names a container, a panel or an object.
     pub fn contains_node(&self, id: Id) -> bool {
-        self.is_container(id) || self.panel(id).is_some()
+        self.is_container(id) || self.panel(id).is_some() || self.object(id).is_some()
     }
 
     /// The world placement of a node: every placement from the root down to it, composed.
@@ -1059,6 +1067,7 @@ impl Project {
                 match child {
                     Node::Panel(panel) => ids.push(panel.id()),
                     Node::Container(container) => collect(&container.children, ids, depth.saturating_add(1)),
+                    Node::Object(_) => {}
                 }
             }
         }
@@ -1085,6 +1094,7 @@ impl Project {
         match self.node(id)? {
             Node::Panel(panel) => Some(panel.pivot),
             Node::Container(container) => Some(container.pivot),
+            Node::Object(object) => Some(object.pivot),
         }
     }
 
@@ -1117,6 +1127,10 @@ impl Project {
             ) * 0.5;
             return Some(half);
         }
+        if let Some(object) = self.object(id) {
+            let (min, max) = object_bounds_mm(object.geometry())?;
+            return Some((min + max) * 0.5);
+        }
         let (_, container) = find_container(&self.root, id, 0)?;
         let (min, max) = panel_bounds(container.children(), Placement::IDENTITY, 0)?;
         Some((min + max) * 0.5)
@@ -1137,6 +1151,7 @@ impl Project {
         match node {
             Node::Panel(panel) => panel.pivot = pivot,
             Node::Container(container) => container.pivot = pivot,
+            Node::Object(object) => object.pivot = pivot,
         }
         self.revision = next_revision;
         Ok(next_revision)
@@ -1752,6 +1767,7 @@ impl Project {
         match self.node(id)? {
             Node::Container(container) => Some(&container.properties),
             Node::Panel(panel) => Some(&panel.properties),
+            Node::Object(object) => Some(&object.properties),
         }
     }
 
@@ -1797,6 +1813,7 @@ impl Project {
             match node {
                 Node::Container(container) => container.set_property(&change.key, change.value.clone())?,
                 Node::Panel(panel) => panel.set_property(&change.key, change.value.clone())?,
+                Node::Object(object) => object.set_property(&change.key, change.value.clone())?,
             }
         }
         self.revision = next_revision;
@@ -1815,6 +1832,7 @@ impl Project {
         let removed = match node {
             Node::Container(container) => container.clear_property(key),
             Node::Panel(panel) => panel.clear_property(key),
+            Node::Object(object) => object.clear_property(key),
         };
         if !removed {
             return Err(ProjectError::PropertyNotFound { node: id, key: key.to_owned() });
@@ -1862,6 +1880,11 @@ impl Project {
                     Node::Panel(panel) => {
                         if matches(&panel.properties, StructuralKind::Panel, query) {
                             ids.push(panel.id);
+                        }
+                    }
+                    Node::Object(object) => {
+                        if matches(&object.properties, StructuralKind::Object, query) {
+                            ids.push(object.id);
                         }
                     }
                 }
@@ -1963,6 +1986,12 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
                         }
                     }
                 }
+                Node::Object(object) => {
+                    if !seen.insert(object.id.get()) {
+                        return Err(ProjectError::DuplicateId(object.id));
+                    }
+                    max_id = max_id.max(object.id.get());
+                }
             }
         }
     }
@@ -2041,7 +2070,7 @@ fn find_panel_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Panel)>
                     return Some(found);
                 }
             }
-            Node::Panel(_) => {}
+            Node::Panel(_) | Node::Object(_) => {}
         }
     }
     None
@@ -2063,7 +2092,7 @@ fn find_panel_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, 
                     return Some(found);
                 }
             }
-            Node::Panel(_) => {}
+            Node::Panel(_) | Node::Object(_) => {}
         }
     }
     None
@@ -2159,6 +2188,17 @@ fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> Option<(DVe
                     }
                 }
             }
+            Node::Object(object) => {
+                if let Some((min, max)) = object_bounds_mm(object.geometry()) {
+                    for x in [min.x, max.x] {
+                        for y in [min.y, max.y] {
+                            for z in [min.z, max.z] {
+                                include(relative.transform_point(DVec3::new(x, y, z)));
+                            }
+                        }
+                    }
+                }
+            }
             Node::Container(container) => {
                 if let Some((min, max)) = panel_bounds(&container.children, relative, depth.saturating_add(1)) {
                     include(min);
@@ -2178,16 +2218,29 @@ fn default_container_pivot(children: &[Node]) -> Pivot {
     Pivot::from_local((min + max) * 0.5).unwrap_or(Pivot::ZERO)
 }
 
+/// The local bounding box of an object's geometry, in millimetres.
+fn object_bounds_mm(geometry: &Geometry) -> Option<(DVec3, DVec3)> {
+    match geometry {
+        Geometry::Mesh(mesh) => {
+            let (min, max) = mesh.bounds_micrometres();
+            let to_point = |values: [i64; 3]| {
+                DVec3::new(values[0] as f64 / 1000.0, values[1] as f64 / 1000.0, values[2] as f64 / 1000.0)
+            };
+            Some((to_point(min), to_point(max)))
+        }
+    }
+}
+
 fn node_height(node: &Node) -> u32 {
     match node {
-        Node::Panel(_) => 1,
+        Node::Panel(_) | Node::Object(_) => 1,
         Node::Container(container) => container.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
     }
 }
 
 fn count_nodes(node: &Node) -> u64 {
     match node {
-        Node::Panel(_) => 1,
+        Node::Panel(_) | Node::Object(_) => 1,
         Node::Container(container) => {
             1u64.saturating_add(container.children.iter().map(count_nodes).fold(0, u64::saturating_add))
         }
@@ -2217,6 +2270,7 @@ fn assign_new_ids(node: &mut Node, ids: &mut impl Iterator<Item = Id>) -> Result
     let id = ids.next().ok_or(ProjectError::IdSpaceExhausted)?;
     match node {
         Node::Panel(panel) => panel.id = id,
+        Node::Object(object) => object.id = id,
         Node::Container(container) => {
             container.id = id;
             for child in &mut container.children {
@@ -2706,6 +2760,7 @@ fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), 
             match child {
                 Node::Container(container) => walk(&mut container.children, depth.saturating_add(1))?,
                 Node::Panel(panel) => panel.migrate_machining_from_core()?,
+                Node::Object(_) => {}
             }
         }
         Ok(())
@@ -2728,7 +2783,7 @@ fn migrate_container_pivots(root: &mut Container, depth: u32) -> Result<(), Proj
                     container.pivot = default_container_pivot(&container.children);
                     walk(&mut container.children, depth.saturating_add(1))?;
                 }
-                Node::Panel(_) => {}
+                Node::Panel(_) | Node::Object(_) => {}
             }
         }
         Ok(())
@@ -3597,6 +3652,276 @@ impl TryFrom<PanelRectWire> for PanelRect {
     }
 }
 
+/// Largest accepted number of vertices in one mesh.
+pub const MAX_MESH_VERTICES: usize = 1_000_000;
+
+/// Largest accepted number of polygon faces in one mesh.
+pub const MAX_MESH_FACES: usize = 1_000_000;
+
+/// Largest accepted number of vertices in one polygon face.
+pub const MAX_FACE_VERTICES: usize = 1_024;
+
+/// A rejected mesh.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum MeshError {
+    /// The mesh has no vertices or no faces.
+    #[error("a mesh must have at least one vertex and one face")]
+    Empty,
+    /// The mesh has more vertices than the limit allows.
+    #[error("mesh has {count} vertices, the limit is {max}")]
+    TooManyVertices {
+        /// The supplied vertex count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The mesh has more faces than the limit allows.
+    #[error("mesh has {count} faces, the limit is {max}")]
+    TooManyFaces {
+        /// The supplied face count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A face has too few or too many vertices.
+    #[error("face {face} has {count} vertices, expected between 3 and {max}")]
+    FaceVertexCount {
+        /// The face index.
+        face: usize,
+        /// The supplied vertex count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A face names the same vertex twice.
+    #[error("face {face} repeats vertex {vertex}")]
+    FaceRepeatedVertex {
+        /// The face index.
+        face: usize,
+        /// The repeated vertex index.
+        vertex: u32,
+    },
+    /// A face names a vertex that does not exist.
+    #[error("face {face} refers to vertex {vertex} of {vertices}")]
+    FaceIndexOutOfBounds {
+        /// The face index.
+        face: usize,
+        /// The rejected vertex index.
+        vertex: u32,
+        /// The vertex count of the mesh.
+        vertices: usize,
+    },
+    /// A vertex index is outside the mesh.
+    #[error("vertex {vertex} is outside the {count} vertices of the mesh")]
+    VertexIndexOutOfBounds {
+        /// The rejected vertex index.
+        vertex: usize,
+        /// The vertex count of the mesh.
+        count: usize,
+    },
+}
+
+/// Serialized form of [`Mesh`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeshWire {
+    positions: Vec<[Length; 3]>,
+    faces: Vec<Vec<u32>>,
+}
+
+/// A baked polygon mesh: the geometry payload of a mesh object.
+///
+/// Positions are local coordinates in the object's frame. Faces are polygons, not triangles: the
+/// document keeps quads and larger faces so editing a box does not degrade it, and triangulation
+/// happens only when the mesh is turned into a renderable drawable. A mesh is the source of truth;
+/// it has no feature history, and undo is its only record ([ADR 0037]).
+///
+/// Validation is bounded and total: a hostile file cannot ask for an allocation it did not pay for,
+/// and every index is checked before it is used.
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MeshWire")]
+pub struct Mesh {
+    positions: Vec<[Length; 3]>,
+    faces: Vec<Vec<u32>>,
+}
+
+impl Mesh {
+    /// Validates and stores a mesh.
+    pub fn new(positions: Vec<[Length; 3]>, faces: Vec<Vec<u32>>) -> Result<Self, MeshError> {
+        if positions.is_empty() || faces.is_empty() {
+            return Err(MeshError::Empty);
+        }
+        if positions.len() > MAX_MESH_VERTICES {
+            return Err(MeshError::TooManyVertices { count: positions.len(), max: MAX_MESH_VERTICES });
+        }
+        if faces.len() > MAX_MESH_FACES {
+            return Err(MeshError::TooManyFaces { count: faces.len(), max: MAX_MESH_FACES });
+        }
+        for (index, face) in faces.iter().enumerate() {
+            if !(3..=MAX_FACE_VERTICES).contains(&face.len()) {
+                return Err(MeshError::FaceVertexCount { face: index, count: face.len(), max: MAX_FACE_VERTICES });
+            }
+            let mut seen = HashSet::with_capacity(face.len());
+            for vertex in face {
+                if !seen.insert(*vertex) {
+                    return Err(MeshError::FaceRepeatedVertex { face: index, vertex: *vertex });
+                }
+                if *vertex as usize >= positions.len() {
+                    return Err(MeshError::FaceIndexOutOfBounds {
+                        face: index,
+                        vertex: *vertex,
+                        vertices: positions.len(),
+                    });
+                }
+            }
+        }
+        Ok(Self { positions, faces })
+    }
+
+    /// The local vertex positions.
+    pub fn positions(&self) -> &[[Length; 3]] {
+        &self.positions
+    }
+
+    /// The polygon faces, as vertex indices.
+    pub fn faces(&self) -> &[Vec<u32>] {
+        &self.faces
+    }
+
+    /// Replaces one vertex position; returns an error for an unknown index.
+    pub fn set_position(&mut self, index: usize, position: [Length; 3]) -> Result<(), MeshError> {
+        let Some(slot) = self.positions.get_mut(index) else {
+            return Err(MeshError::VertexIndexOutOfBounds { vertex: index, count: self.positions.len() });
+        };
+        *slot = position;
+        Ok(())
+    }
+
+    /// The minimum and maximum local corners of the vertex cloud, in micrometres.
+    pub fn bounds_micrometres(&self) -> ([i64; 3], [i64; 3]) {
+        let mut min = [i64::MAX; 3];
+        let mut max = [i64::MIN; 3];
+        for position in &self.positions {
+            for (axis, value) in position.iter().enumerate() {
+                let value = value.micrometres();
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        (min, max)
+    }
+}
+
+impl TryFrom<MeshWire> for Mesh {
+    type Error = MeshError;
+
+    fn try_from(wire: MeshWire) -> Result<Self, Self::Error> {
+        Self::new(wire.positions, wire.faces)
+    }
+}
+
+/// The geometry payload of an object node.
+///
+/// Exactly one payload is stored. A `Mesh` is edited directly; a constructive payload is rebuilt
+/// from its features and is not editable as a mesh until the object is collapsed. Only the mesh
+/// payload exists so far; the constructive payload arrives with the contour tool
+/// ([ADR 0037]).
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Geometry {
+    /// A baked mesh, edited directly.
+    Mesh(Mesh),
+}
+
+impl Geometry {
+    /// The mesh, when the payload is a baked mesh.
+    pub const fn as_mesh(&self) -> Option<&Mesh> {
+        match self {
+            Self::Mesh(mesh) => Some(mesh),
+        }
+    }
+
+    /// The mesh for mutation, when the payload is a baked mesh.
+    pub const fn as_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        match self {
+            Self::Mesh(mesh) => Some(mesh),
+        }
+    }
+}
+
+/// A free-form geometry object: a named, placed leaf with a geometry payload.
+///
+/// A panel is not an object: panel rules are manufacturing rules. An object is a leaf in v1, so
+/// several parts are grouped by wrapping them in a container.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Object {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    geometry: Geometry,
+}
+
+impl Object {
+    /// Creates an object with a zero pivot.
+    pub fn new(id: Id, name: impl Into<String>, placement: Placement, geometry: Geometry) -> Self {
+        Self { id, name: name.into(), placement, pivot: Pivot::ZERO, properties: Properties::new(), geometry }
+    }
+
+    /// The stable object id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// The manipulation pivot in the object's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
+    }
+
+    /// The geometry payload.
+    pub const fn geometry(&self) -> &Geometry {
+        &self.geometry
+    }
+
+    /// The geometry payload for mutation.
+    pub const fn geometry_mut(&mut self) -> &mut Geometry {
+        &mut self.geometry
+    }
+
+    /// The typed properties of this object.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
+
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
+    }
+
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
+    }
+}
+
 /// A child of a container.
 ///
 /// A container is a group or a furniture component; a panel is an atomic leaf. Version-6 files
@@ -3609,6 +3934,8 @@ pub enum Node {
     Container(Container),
     /// A panel.
     Panel(Panel),
+    /// A free-form geometry object.
+    Object(Object),
 }
 
 impl<'de> Deserialize<'de> for Node {
@@ -3634,9 +3961,10 @@ impl<'de> Visitor<'de> for NodeVisitor {
     where
         A: MapAccess<'de>,
     {
-        const FIELDS: &[&str] = &["container", "assembly", "group", "panel"];
+        const FIELDS: &[&str] = &["container", "assembly", "group", "panel", "object"];
         let mut container: Option<Container> = None;
         let mut panel: Option<Panel> = None;
+        let mut object: Option<Object> = None;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "container" | "assembly" | "group" => {
@@ -3655,14 +3983,24 @@ impl<'de> Visitor<'de> for NodeVisitor {
                     }
                     panel = Some(map.next_value()?);
                 }
+                "object" => {
+                    if object.is_some() {
+                        return Err(de::Error::custom("a node must not have two object entries"));
+                    }
+                    object = Some(map.next_value()?);
+                }
                 _ => return Err(de::Error::unknown_field(&key, FIELDS)),
             }
         }
-        match (container, panel) {
-            (Some(container), None) => Ok(Self::Value::Container(container)),
-            (None, Some(panel)) => Ok(Self::Value::Panel(panel)),
-            (Some(_), Some(_)) => Err(de::Error::custom("a node must not be both a container and a panel")),
-            (None, None) => Err(de::Error::custom("a node must be a container or a panel")),
+        let present = usize::from(container.is_some()) + usize::from(panel.is_some()) + usize::from(object.is_some());
+        if present > 1 {
+            return Err(de::Error::custom("a node must have exactly one kind"));
+        }
+        match (container, panel, object) {
+            (Some(container), None, None) => Ok(Self::Value::Container(container)),
+            (None, Some(panel), None) => Ok(Self::Value::Panel(panel)),
+            (None, None, Some(object)) => Ok(Self::Value::Object(object)),
+            _ => Err(de::Error::custom("a node must be a container, a panel or an object")),
         }
     }
 }
@@ -3679,12 +4017,19 @@ impl From<Panel> for Node {
     }
 }
 
+impl From<Object> for Node {
+    fn from(object: Object) -> Self {
+        Self::Object(object)
+    }
+}
+
 impl Node {
-    /// The stable node id, shared by panels and containers.
+    /// The stable node id, shared by containers, panels and objects.
     pub const fn id(&self) -> Id {
         match self {
             Self::Container(container) => container.id,
             Self::Panel(panel) => panel.id,
+            Self::Object(object) => object.id,
         }
     }
 
@@ -3693,6 +4038,7 @@ impl Node {
         match self {
             Self::Container(container) => &container.name,
             Self::Panel(panel) => &panel.name,
+            Self::Object(object) => &object.name,
         }
     }
 
@@ -3701,37 +4047,46 @@ impl Node {
         match self {
             Self::Container(container) => container.placement,
             Self::Panel(panel) => panel.placement,
+            Self::Object(object) => object.placement,
         }
     }
 
-    /// The children of a container, or `None` for a panel.
+    /// The children of a container, or `None` for a leaf.
     pub fn children(&self) -> Option<&[Node]> {
         match self {
             Self::Container(container) => Some(&container.children),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) => None,
         }
     }
 
     fn children_mut(&mut self) -> Option<&mut Vec<Node>> {
         match self {
             Self::Container(container) => Some(&mut container.children),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) => None,
         }
     }
 
-    /// The nested container, or `None` for a panel.
+    /// The nested container, or `None` for a leaf.
     pub const fn as_container(&self) -> Option<&Container> {
         match self {
             Self::Container(container) => Some(container),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) => None,
         }
     }
 
-    /// The panel, or `None` for a container.
+    /// The panel, or `None` for another node kind.
     pub const fn as_panel(&self) -> Option<&Panel> {
         match self {
             Self::Panel(panel) => Some(panel),
-            Self::Container(_) => None,
+            Self::Container(_) | Self::Object(_) => None,
+        }
+    }
+
+    /// The geometry object, or `None` for another node kind.
+    pub const fn as_object(&self) -> Option<&Object> {
+        match self {
+            Self::Object(object) => Some(object),
+            Self::Container(_) | Self::Panel(_) => None,
         }
     }
 
@@ -3740,6 +4095,7 @@ impl Node {
         match self {
             Self::Container(container) => &container.properties,
             Self::Panel(panel) => &panel.properties,
+            Self::Object(object) => &object.properties,
         }
     }
 
@@ -3747,6 +4103,7 @@ impl Node {
         match self {
             Self::Container(container) => container.name = name,
             Self::Panel(panel) => panel.name = name,
+            Self::Object(object) => object.name = name,
         }
     }
 
@@ -3754,6 +4111,7 @@ impl Node {
         match self {
             Self::Container(container) => container.placement = placement,
             Self::Panel(panel) => panel.placement = placement,
+            Self::Object(object) => object.placement = placement,
         }
     }
 }
@@ -4890,6 +5248,129 @@ mod tests {
         MaterialId::new(1).expect("material id")
     }
 
+    fn box_mesh() -> Mesh {
+        let p = millimetres;
+        Mesh::new(
+            vec![
+                [p(0), p(0), p(0)],
+                [p(10), p(0), p(0)],
+                [p(10), p(10), p(0)],
+                [p(0), p(10), p(0)],
+                [p(0), p(0), p(10)],
+                [p(10), p(0), p(10)],
+                [p(10), p(10), p(10)],
+                [p(0), p(10), p(10)],
+            ],
+            vec![
+                vec![0, 3, 2, 1],
+                vec![4, 5, 6, 7],
+                vec![0, 1, 5, 4],
+                vec![1, 2, 6, 5],
+                vec![2, 3, 7, 6],
+                vec![3, 0, 4, 7],
+            ],
+        )
+        .expect("valid box mesh")
+    }
+
+    fn sample_object(id: u64) -> Object {
+        Object::new(Id::new(id).expect("id"), format!("Object {id}"), Placement::IDENTITY, Geometry::Mesh(box_mesh()))
+    }
+
+    #[test]
+    fn mesh_rejects_bad_topology() {
+        let p = millimetres;
+        let square = vec![[p(0), p(0), p(0)], [p(1), p(0), p(0)], [p(1), p(1), p(0)]];
+        assert_eq!(Mesh::new(Vec::new(), vec![vec![0, 1, 2]]), Err(MeshError::Empty));
+        assert_eq!(Mesh::new(square.clone(), Vec::new()), Err(MeshError::Empty));
+        assert_eq!(
+            Mesh::new(square.clone(), vec![vec![0, 1]]),
+            Err(MeshError::FaceVertexCount { face: 0, count: 2, max: MAX_FACE_VERTICES })
+        );
+        assert_eq!(
+            Mesh::new(square.clone(), vec![vec![0, 1, 1]]),
+            Err(MeshError::FaceRepeatedVertex { face: 0, vertex: 1 })
+        );
+        assert_eq!(
+            Mesh::new(square, vec![vec![0, 1, 3]]),
+            Err(MeshError::FaceIndexOutOfBounds { face: 0, vertex: 3, vertices: 3 })
+        );
+    }
+
+    #[test]
+    fn mesh_caps_the_vertices_of_one_face() {
+        let p = millimetres;
+        let positions: Vec<[Length; 3]> = (0..=MAX_FACE_VERTICES).map(|index| [p(index as i64), p(0), p(0)]).collect();
+        let face: Vec<u32> = (0..=MAX_FACE_VERTICES as u32).collect();
+        assert_eq!(
+            Mesh::new(positions, vec![face]),
+            Err(MeshError::FaceVertexCount { face: 0, count: MAX_FACE_VERTICES + 1, max: MAX_FACE_VERTICES })
+        );
+    }
+
+    #[test]
+    fn object_round_trips_in_schema_eight() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let project = Project::new(root).expect("valid project");
+        assert_eq!(project.schema_version(), 8);
+        let object = project.object(Id::new(5).expect("id")).expect("object");
+        assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        assert!(text.contains("\"schema_version\":8"));
+        assert!(text.contains("\"object\":{"));
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn object_node_commands_rename_place_duplicate_and_delete() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+
+        project.rename_node(id, "Bracket").expect("rename");
+        assert_eq!(project.object(id).expect("object").name(), "Bracket");
+
+        let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("placement");
+        project.set_node_placement(id, placement).expect("place");
+        assert_eq!(project.object(id).expect("object").placement(), placement);
+
+        let copy = project.duplicate_node(id).expect("duplicate");
+        assert_ne!(copy, id);
+        let copy_object = project.object(copy).expect("copied object");
+        assert_eq!(copy_object.name(), "Bracket copy");
+        assert_eq!(copy_object.geometry(), project.object(id).expect("object").geometry());
+
+        project.remove_node(id).expect("delete");
+        assert!(project.object(id).is_none());
+        assert!(project.object(copy).is_some());
+    }
+
+    #[test]
+    fn object_duplicate_id_is_rejected() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_object(5).into(), sample_object(5).into()],
+        );
+        assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(Id::new(5).expect("id"))));
+    }
+
+    #[test]
+    fn query_selects_objects_by_structural_kind() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_object(5).into(), sample_panel(Id::new(2).expect("id"), "Shelf").into()],
+        );
+        let project = Project::new(root).expect("valid project");
+        let found = project.query(&NodeQuery::any().with_kind(StructuralKind::Object));
+        assert_eq!(found, vec![Id::new(5).expect("id")]);
+    }
+
     #[test]
     fn corner_features_and_bows_survive_a_project_round_trip() {
         let mut project = sample_project();
@@ -5714,7 +6195,11 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":7", "\"schema_version\":8", 1);
+        let newer = text.replacen(
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION),
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION + 1),
+            1,
+        );
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 

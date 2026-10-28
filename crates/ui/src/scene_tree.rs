@@ -244,6 +244,36 @@ fn show_node(
             show_container(ui, project, container, selection, actions, depth, has_panel_material);
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, actions),
+        Node::Object(object) => show_object(ui, object, selection, actions),
+    }
+}
+
+fn show_object(
+    ui: &mut Ui,
+    object: &furnicraft_model::Object,
+    selection: &mut Selection,
+    actions: &mut Vec<TreeAction>,
+) {
+    let id = object.id();
+    let kind = match object.geometry() {
+        furnicraft_model::Geometry::Mesh(_) => "mesh",
+    };
+    let label = RichText::new(format!("{}  [{kind}]", object.name()));
+    let response = ui.selectable_label(selection.contains(id), label);
+    if response.clicked() {
+        select(ui, selection, id);
+    }
+    response.context_menu(|ui| object_menu(ui, id, actions));
+}
+
+fn object_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
+    if ui.button("Duplicate").clicked() {
+        actions.push(TreeAction::Duplicate { node: id });
+        ui.close();
+    }
+    if ui.button("Delete").clicked() {
+        actions.push(TreeAction::Delete { node: id });
+        ui.close();
     }
 }
 
@@ -328,6 +358,7 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
                     return Some(id);
                 }
             }
+            Node::Object(_) => {}
         }
     }
     None

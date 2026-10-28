@@ -11,6 +11,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
 - Working on: the first implementation step — a geometry object node with a baked mesh, schema v8.
+  The model part is in: `Object`, `Geometry::Mesh`, mesh validation, object ids in the tree,
+  duplicate/delete/rename/placement and `StructuralKind::Object`. Creation, rendering and the
+  inspector card come next.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. Save/load lands right after the first object and before mesh editing, so every later schema
   bump is a migration with a golden file.
@@ -23,6 +26,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
 - `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
 - `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
 - `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)

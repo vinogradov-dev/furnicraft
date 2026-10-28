@@ -207,6 +207,9 @@ impl<'a> Evaluation<'a> {
                     self.collect(container.children(), world)?;
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
+                // A geometry object has no drawable yet; the mesh path lands with the object
+                // commands. It still contributes the document ids the tree and the inspector show.
+                Node::Object(_) => {}
             }
         }
         Ok(())
@@ -302,6 +305,7 @@ mod tests {
             match child {
                 Node::Panel(panel) => panels.push(panel),
                 Node::Container(container) => panels_in(container.children(), panels),
+                Node::Object(_) => {}
             }
         }
     }
