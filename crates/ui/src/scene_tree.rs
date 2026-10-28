@@ -401,7 +401,7 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Id, Node, Panel, PanelNominalSize, Placement};
+    use furnicraft_model::{CameraProjection, Id, LightKind, Node, Panel, PanelNominalSize, Placement};
     use furnicraft_testkit::sample_project;
 
     use super::*;
@@ -495,6 +495,24 @@ mod tests {
         selection.replace(Id::new(3).expect("id"));
         selection.retain_existing(&project);
         assert!(selection.contains(Id::new(3).expect("id")));
+    }
+
+    #[test]
+    fn selection_keeps_authored_cameras_and_lights() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let light = project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("light");
+
+        let mut selection = Selection::default();
+        selection.replace_all(vec![camera, light]);
+        selection.retain_existing(&project);
+        assert_eq!(
+            selection.ids(),
+            &[camera, light],
+            "a camera and a light are scene nodes, so the next frame keeps them selected"
+        );
     }
 
     #[test]

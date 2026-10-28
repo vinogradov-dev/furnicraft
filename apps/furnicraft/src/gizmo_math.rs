@@ -488,8 +488,8 @@ pub(crate) fn paint_axis_handles(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Container, Panel, Project};
-    use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness};
+    use furnicraft_model::{CameraProjection, Container, LightKind, Panel, Project};
+    use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness, sample_project};
 
     use super::*;
 
@@ -581,6 +581,27 @@ mod tests {
         assert!(move_targets(&project, &[project.root().id()]).is_empty(), "the root has no placement to edit");
         assert!(move_targets(&project, &[]).is_empty());
         assert!(move_targets(&project, &[id(99)]).is_empty());
+    }
+
+    #[test]
+    fn a_selected_camera_and_light_are_move_targets() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let light = project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("light");
+
+        let targets = move_targets(&project, &[camera, light]);
+        assert_eq!(
+            targets.iter().map(|target| target.node).collect::<Vec<_>>(),
+            vec![camera, light],
+            "a camera and a light carry a placement, so the gizmo moves them"
+        );
+        assert_eq!(target(&project, &[camera]).anchor(), Some(camera));
+        assert!(
+            target(&project, &[camera]).drawables().is_empty(),
+            "an icon stands for itself and has no geometry to preview"
+        );
     }
 
     #[test]

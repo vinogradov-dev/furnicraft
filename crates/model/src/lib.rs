@@ -1064,9 +1064,12 @@ impl Project {
         top_most
     }
 
-    /// Whether the id names a container, a panel or an object.
+    /// Whether the id names the root or any node below it.
+    ///
+    /// Every node kind counts: a container, a panel, an object, a camera or a light. The root is
+    /// included because it owns the document frame.
     pub fn contains_node(&self, id: Id) -> bool {
-        self.is_container(id) || self.panel(id).is_some() || self.object(id).is_some()
+        id == self.root.id || self.node(id).is_some()
     }
 
     /// The world placement of a node: every placement from the root down to it, composed.
@@ -8426,6 +8429,45 @@ mod tests {
         assert!(!text.contains("active_camera"), "an unset active camera is not written");
         let decoded: Project = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn contains_node_covers_every_node_kind() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+
+        assert!(project.contains_node(root), "the root owns the document frame");
+        assert!(project.contains_node(Id::new(2).expect("shelf")), "a panel");
+        assert!(project.contains_node(Id::new(3).expect("drawer")), "a container");
+        assert!(project.contains_node(camera), "a camera is a scene node");
+        assert!(project.contains_node(light), "a light is a scene node");
+        assert!(!project.contains_node(Id::new(999).expect("id")), "an unknown id is not a node");
+    }
+
+    #[test]
+    fn a_camera_and_a_light_move_and_hold_properties() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+        let moved = Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+
+        let before = project.revision();
+        let after = project.set_node_placements(&[(camera, moved), (light, moved)]).expect("a camera and a light move");
+        assert_eq!(after, before.checked_next().expect("revision"), "a batch is one revision");
+        assert_eq!(project.camera(camera).expect("camera").placement(), moved);
+        assert_eq!(project.light(light).expect("light").placement(), moved);
+
+        let text = PropertyValue::Text { value: "presentation".to_owned() };
+        let property_revision = project.set_property(camera, "shot", text.clone()).expect("a camera holds properties");
+        assert_eq!(property_revision, after.checked_next().expect("revision"));
+        assert_eq!(project.properties(camera).and_then(|properties| properties.get("shot")), Some(&text));
     }
 
     #[test]

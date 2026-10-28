@@ -829,4 +829,22 @@ mod tests {
         assert!(session.project().light(light).is_none());
         assert!(editor.selected_node().is_none());
     }
+
+    #[test]
+    fn a_created_camera_and_light_stay_selected_on_the_next_frame() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+
+        editor.run_action(&mut session, TreeAction::CreateCamera { parent: root }).expect("create camera");
+        let camera = editor.selected_node().expect("the camera is selected");
+        // The tree retains the selection at the start of every frame; a scene node must survive it.
+        editor.selection.retain_existing(session.project());
+        assert_eq!(editor.selected_node(), Some(camera));
+
+        editor.run_action(&mut session, TreeAction::CreateLight { parent: root }).expect("create light");
+        let light = editor.selected_node().expect("the light is selected");
+        editor.selection.retain_existing(session.project());
+        assert_eq!(editor.selected_node(), Some(light));
+    }
 }

@@ -416,4 +416,60 @@ mod tests {
         let revision = session.project().revision();
         assert_eq!(revision, before.checked_next().and_then(|r| r.checked_next()).expect("revisions"));
     }
+
+    #[test]
+    fn a_camera_and_a_light_rename_move_and_hold_properties() {
+        use crate::node_cmds::{NODE_PLACEMENT_SET_MANY_ID, NODE_PROPERTY_SET_ID, NODE_RENAME_ID};
+        use crate::{NodePlacement, NodePlacementSetMany, NodePropertySet, NodeRename};
+        use furnicraft_model::PropertyValue;
+
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let camera = session
+            .dispatch(CAMERA_CREATE_ID, &camera_params(&session, "Camera"))
+            .expect("create camera")
+            .created_id()
+            .expect("a camera id");
+        let light = session
+            .dispatch(LIGHT_CREATE_ID, &light_params(&session, "Key"))
+            .expect("create light")
+            .created_id()
+            .expect("a light id");
+
+        let value = serde_json::to_value(NodeRename { node: camera, name: "Presentation".to_owned() }).expect("params");
+        session.dispatch(NODE_RENAME_ID, &value).expect("rename the camera");
+        assert_eq!(session.project().camera(camera).expect("camera").name(), "Presentation");
+
+        let value = serde_json::to_value(NodeRename { node: light, name: "Fill".to_owned() }).expect("params");
+        session.dispatch(NODE_RENAME_ID, &value).expect("rename the light");
+        assert_eq!(session.project().light(light).expect("light").name(), "Fill");
+
+        let value = serde_json::to_value(NodePropertySet {
+            node: light,
+            key: "shot".to_owned(),
+            value: PropertyValue::Bool { value: true },
+        })
+        .expect("params");
+        session.dispatch(NODE_PROPERTY_SET_ID, &value).expect("a light holds properties");
+
+        let moved: Placement = serde_json::from_value(serde_json::json!({
+            "translation": [100.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0, 1.0],
+        }))
+        .expect("placement");
+        let before = session.project().revision();
+        let value = serde_json::to_value(NodePlacementSetMany {
+            placements: vec![
+                NodePlacement { node: camera, placement: moved },
+                NodePlacement { node: light, placement: moved },
+            ],
+        })
+        .expect("params");
+        session.dispatch(NODE_PLACEMENT_SET_MANY_ID, &value).expect("move the camera and the light");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(session.project().camera(camera).expect("camera").placement(), moved);
+        assert_eq!(session.project().light(light).expect("light").placement(), moved);
+
+        session.undo().expect("undo the batch");
+        assert_eq!(session.project().camera(camera).expect("camera").placement(), Placement::IDENTITY);
+    }
 }
