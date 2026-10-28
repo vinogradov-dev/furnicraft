@@ -10,11 +10,13 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: the scene-file store is in as a new layer-2 crate, `furnicraft-project`: the
-  `furnicraft.scene` envelope, read and atomic write, preserved unknown top-level sections, a
-  1 GiB read cap, and checked-in version 7 and 8 goldens. The shell has no File menu yet.
+- Working on: the shell has a File menu over the scene store — New (with a discard
+  confirmation when the scene is dirty), Open and Save As through a path dialog that lists nearby
+  `.fcs` files, Save to the current path, a dirty marker in the menu bar, and errors reported in the
+  viewport toolbar. Opening installs a new session: undo history, selection and gizmos reset, the
+  catalogue stays. Unknown top-level sections of a loaded file are carried back on save.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
-  shape. The File menu, the dirty marker and the error dialog come next, then mesh editing, so every
+  shape. The workspace can now round-trip a scene by hand, so mesh editing comes next and every
   later schema bump is a migration with a golden file.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
@@ -25,6 +27,7 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
 - `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
 - `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
 - `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
@@ -105,15 +108,13 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. The File menu in the shell: New, Open, Save and Save As over the scene store, the dirty marker
-   from `saved_revision`, a readable error dialog and a recovery-safe save path.
-2. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
+1. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
    gizmo drag as one undo entry; mesh tools disabled on a constructive object.
-3. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
+2. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
    and gizmo icons that make them selectable.
-4. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
+3. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
    the inspector and `object.collapse`.
-5. Viewport multi-select, copy/paste and gizmo snapping.
+4. Viewport multi-select, copy/paste and gizmo snapping.
 
 ## Open questions
 
@@ -141,9 +142,6 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
   connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
-- Where the project store lives: a new `furnicraft-project` crate between `model` and `scene`, or a
-  module owned by the shell; decide when the envelope lands, and register it in the layer map and
-  `PROJECT.md` in the same change.
 - Whether visibility and lock are document data or session state.
 - Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
@@ -160,11 +158,12 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made
   of several commands (a future assistant task, for example) cannot yet be grouped into one step.
-- Faber is designed (ADRs 0028–0032) but not implemented; with no save/load, a background job has no
-  project to open.
-- Save and load exist as a library (`furnicraft-project`) but the app has no File menu, no current
-  path and no dirty marker; `apps/furnicraft` still starts from `sample_session()`. This is the next
-  step.
+- Faber is designed (ADRs 0028–0032) but not implemented; the scene store now gives a background job a
+  file to open, but there is no headless binary or query surface yet.
+- Save and load exist in the shell. Gaps: there is no prompt when the window closes with unsaved
+  changes, Open warns inside the path dialog instead of asking for confirmation, there is no
+  recent-files list and no autosave. `apps/furnicraft` still starts from `sample_session()`; a new
+  empty scene is one menu click away.
 - Parametric cabinets do not exist yet: M6 provides classification and properties, and product
   prototypes arrive later as user scripts over those properties.
 - A component has no separate "dissolve" operation yet: `node.component.convert_to_group` clears its

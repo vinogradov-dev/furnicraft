@@ -1244,6 +1244,7 @@ dependencies = [
  "furnicraft-mesh",
  "furnicraft-model",
  "furnicraft-param",
+ "furnicraft-project",
  "furnicraft-render",
  "furnicraft-scene",
  "furnicraft-testkit",

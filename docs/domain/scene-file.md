@@ -119,8 +119,9 @@ Rules:
 - Only the envelope and the document are written. Derived geometry is not recomputed into the file;
   `last_known_*` fallbacks are refreshed from the catalogue when a material resolves
   ([document.md](document.md) §8).
-- Saving records `saved_revision` in the session. The document is dirty when
-  `document.revision != saved_revision`; editing a viewport or a selection never makes it dirty.
+- Saving marks the session's saved content. The document is dirty when its user-visible content
+  differs from that snapshot — the revision counter and the id allocator are ignored, so undoing back
+  to the saved state clears the marker. Editing a viewport or a selection never makes it dirty.
 - Save replaces the current file; Save As creates a new one and makes it current.
 - Every failure — a missing directory, a permission, a full disk, a serialization error — reaches
   the user as a message with the path and the cause. No panic and no silent failure.

@@ -130,6 +130,13 @@ impl SceneFile {
         Self { document, extra: BTreeMap::new() }
     }
 
+    /// Carries top-level sections from a file that was loaded earlier, so a save of that scene
+    /// gives them back unchanged.
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+
     /// Parses and checks a scene file's text.
     ///
     /// The document is migrated and validated by its own deserializer; this function checks the

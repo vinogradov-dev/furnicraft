@@ -14,11 +14,14 @@
     clippy::unreachable
 )]
 
+mod file_menu;
 mod gizmo;
 mod gizmo_math;
 mod rotate_gizmo;
 mod scene_build;
 mod translate_gizmo;
+
+use std::path::Path;
 
 use eframe::egui;
 use eframe::egui_wgpu;
@@ -27,13 +30,15 @@ use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
 use furnicraft_engine::{NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_model::{Id, Revision};
+use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
 use furnicraft_ui::Editor;
 
+use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
 use crate::rotate_gizmo::RotateGizmo;
-use crate::scene_build::{evaluate, home_camera, sample_session};
+use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
 use crate::translate_gizmo::TranslateGizmo;
 
 /// Orbit sensitivity in radians per point dragged.
@@ -66,6 +71,10 @@ struct FurniCraftApp {
     mode: TransformMode,
     highlighted: Vec<Id>,
     uploaded_preview: Option<PreviewKey>,
+    files: FileMenu,
+    /// Top-level sections of the loaded file that this build does not understand; written back on
+    /// save so an older build never silently destroys a newer build's data.
+    extra: PreservedSections,
     last_error: Option<String>,
 }
 
@@ -102,8 +111,80 @@ impl FurniCraftApp {
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             uploaded_preview: None,
+            files: FileMenu::new(),
+            extra: PreservedSections::new(),
             last_error: None,
         })
+    }
+
+    /// Replaces the whole scene with another session and its preserved sections.
+    ///
+    /// Opening a file is not an undoable document edit: it installs a new session, so the previous
+    /// undo history, selection, gizmo drags and evaluated geometry are dropped together. The
+    /// catalogue stays: it is session state, not scene data, and the file never carries it.
+    fn adopt(&mut self, session: Session, extra: PreservedSections) -> Result<(), String> {
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session)?;
+        let home_camera = home_camera(evaluated.bounds)?;
+        let mut scene = evaluated.frame;
+        scene.camera = home_camera;
+
+        self.session = session;
+        self.kernel = kernel;
+        self.scene = scene;
+        self.home_camera = home_camera;
+        self.scene_revision = self.session.project().revision();
+        self.editor = Editor::new();
+        self.translate_gizmo = TranslateGizmo::default();
+        self.rotate_gizmo = RotateGizmo::default();
+        self.highlighted.clear();
+        self.uploaded_preview = None;
+        self.extra = extra;
+        self.last_error = None;
+        self.upload_scene()
+    }
+
+    /// Reads a scene file and makes it the current scene.
+    fn open_scene(&mut self, path: &Path) -> Result<(), String> {
+        let scene = SceneFile::read(path).map_err(|error| error.to_string())?;
+        let extra = scene.extra().clone();
+        let project = scene.into_document();
+        let session = Session::with_catalog(project, self.session.catalog().clone());
+        self.adopt(session, extra)?;
+        self.files.set_path(Some(path.to_owned()));
+        Ok(())
+    }
+
+    /// Writes the current scene and marks the document as saved.
+    fn save_scene(&mut self, path: &Path) -> Result<(), String> {
+        SceneFile::new(self.session.project().clone())
+            .with_extra(self.extra.clone())
+            .write(path)
+            .map_err(|error| error.to_string())?;
+        self.session.mark_saved();
+        self.files.set_path(Some(path.to_owned()));
+        Ok(())
+    }
+
+    /// Performs the operation the File menu returned and reports a failure in the toolbar.
+    fn handle_file_action(&mut self, action: FileAction) {
+        self.last_error = None;
+        let result = match action {
+            FileAction::New => {
+                let adopted = empty_session().and_then(|session| self.adopt(session, PreservedSections::new()));
+                if adopted.is_ok() {
+                    // A new scene has no file yet; leaving the old path would make Save overwrite the
+                    // scene the user just left.
+                    self.files.set_path(None);
+                }
+                adopted
+            }
+            FileAction::Open(path) => self.open_scene(&path),
+            FileAction::Save(path) => self.save_scene(&path),
+        };
+        if let Err(error) = result {
+            self.last_error = Some(error);
+        }
     }
 
     fn sync_scene(&mut self) -> Result<(), String> {
@@ -390,6 +471,10 @@ impl eframe::App for FurniCraftApp {
             && let Err(error) = self.upload_scene()
         {
             self.last_error = Some(error);
+        }
+        let dirty = self.session.is_dirty();
+        if let Some(action) = self.files.show(ui, dirty) {
+            self.handle_file_action(action);
         }
         self.scene_tree(ui);
         self.panel_card(ui);

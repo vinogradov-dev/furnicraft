@@ -18,6 +18,7 @@ furnicraft-kernel-truck = { workspace = true }
 furnicraft-mesh = { workspace = true }
 furnicraft-model = { workspace = true }
 furnicraft-param = { workspace = true }
+furnicraft-project = { workspace = true }
 furnicraft-render = { workspace = true }
 furnicraft-scene = { workspace = true }
 furnicraft-ui = { workspace = true }

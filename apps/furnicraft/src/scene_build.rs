@@ -128,6 +128,17 @@ pub fn sample_session() -> Result<Session, String> {
     Ok(Session::with_catalog(project, sample_catalog()?))
 }
 
+/// Builds an empty scene: a root container with no children.
+///
+/// A new document still carries the session catalogue; the catalogue is not scene data and is
+/// never written to the file, so starting from the demonstration materials only affects what the
+/// inspector can offer, not what a save contains.
+pub fn empty_session() -> Result<Session, String> {
+    let root = Container::new(id(1)?, "Scene", Placement::IDENTITY, Vec::new());
+    let project = Project::new(root).map_err(describe)?;
+    Ok(Session::with_catalog(project, sample_catalog()?))
+}
+
 /// Builds the demonstration catalogue handed to the sample session.
 pub fn sample_catalog() -> Result<Catalog, String> {
     let thickness = millimetres(18)?;
@@ -385,6 +396,20 @@ mod tests {
         }
         assert_eq!(panel_materials.len(), 3);
         assert_ne!(panel_materials[0], panel_materials[1], "the two panels demonstrate different materials");
+    }
+
+    #[test]
+    fn an_empty_session_has_a_root_and_nothing_to_draw() {
+        let session = empty_session().expect("empty session");
+        session.project().validate().expect("valid empty document");
+        assert!(session.project().root().children().is_empty());
+        assert!(!session.is_dirty());
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        assert!(evaluated.frame.drawables().is_empty());
+        assert_eq!(evaluated.bounds.center(), None);
+        assert!(home_camera(evaluated.bounds).is_ok(), "an empty scene still has a usable camera");
     }
 
     #[test]

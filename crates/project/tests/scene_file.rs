@@ -84,6 +84,15 @@ fn a_version_eight_file_loads_the_object_and_preserves_unknown_sections() {
 }
 
 #[test]
+fn a_scene_saved_from_a_document_keeps_the_sections_it_was_loaded_with() {
+    let loaded = SceneFile::parse(V8).expect("version 8");
+    let saved = SceneFile::new(loaded.document().clone()).with_extra(loaded.extra().clone());
+
+    assert_eq!(saved.extra(), loaded.extra());
+    assert!(saved.to_json().expect("serialize").contains("\"generator\""));
+}
+
+#[test]
 fn an_unknown_field_inside_the_document_is_a_readable_error() {
     let text = V8.replacen("\"schema_version\": 8,", "\"schema_version\": 8,\n    \"future_field\": 1,", 1);
     assert_ne!(text, V8, "the fixture must contain the schema line");
