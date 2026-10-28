@@ -20,6 +20,7 @@ mod gizmo_math;
 mod mesh_pick;
 mod rotate_gizmo;
 mod scene_build;
+mod scene_gizmo;
 mod translate_gizmo;
 mod vertex_gizmo;
 
@@ -472,6 +473,13 @@ impl FurniCraftApp {
                     None => {}
                 }
                 ui.ctx().request_repaint();
+            } else if let Some(id) = scene_gizmo::pick(self.scene.camera, rect, self.session.project(), pointer) {
+                // A camera or light icon has no mesh to ray-pick; it selects the node itself, not the
+                // container above it.
+                self.editor.select_node(Some(id));
+                if let Err(error) = self.upload_scene() {
+                    self.last_error = Some(error);
+                }
             } else {
                 let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
                 let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
@@ -495,6 +503,7 @@ impl FurniCraftApp {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+        scene_gizmo::paint(ui, rect, self.scene.camera, self.session.project(), self.editor.selected_nodes());
         self.paint_mesh_vertices(ui, rect);
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,

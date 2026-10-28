@@ -14,9 +14,10 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   and `Project::active_camera` names the render camera; the commands `camera.create`, `light.create`,
   `scene.active_camera.set`, `camera.projection.set` and `light.params.set` cover creation and edits,
   the inspector cards rename them, set the projection or light parameters and toggle the active
-  camera, and the viewport draws through the active camera (perspective or orthographic) while
-  navigation is disabled. What is left in this step: viewport gizmo icons with pickable bounds, and
-  using authored lights in the frame instead of the built-in key light.
+  camera, the viewport draws through the active camera (perspective or orthographic) while
+  navigation is disabled, and authored cameras and lights have pickable viewport icons. The frame is
+  lit by the first authored sun light (direction from its world rotation, colour times intensity)
+  and falls back to the built-in key light when the scene has no sun.
 - Before that, mesh editing is complete for vertices: `mesh.vertices.move` takes a validated batch,
   the object card starts a sub-object mode, and the vertex gizmo previews a drag and dispatches one
   command on release. Escape cancels a drag, then leaves the mode. Face picking and face moves are
@@ -159,10 +160,11 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 ## Known debt
 
 - Selection and open containers still live in `ui::Editor` and the view camera in the shell, although
-  ADR 0029 places them in the session. They have not moved yet. Cameras and lights are document nodes,
-  but they have no viewport icon yet, so they are selected only in the scene tree; authored lights are
-  saved and undoable but do not light the frame, which still uses the built-in key light. An authored
-  camera uses the scene default near and far planes because the model does not store them.
+  ADR 0029 places them in the session. They have not moved yet. Cameras and lights are document nodes
+  with viewport icons. The frame uses the first authored sun light; point lights are saved and
+  undoable but do not light the frame yet, because the renderer has one directional key light and no
+  falloff model. An authored camera uses the scene default near and far planes because the model does
+  not store them.
 - An authored camera pins the view and disables navigation, so the only way back to the navigable view
   is clearing the active camera in the inspector; a viewport-level "leave camera view" control is not
   implemented.
