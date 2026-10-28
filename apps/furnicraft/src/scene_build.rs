@@ -1,4 +1,4 @@
-//! Sample document and evaluation of the assembly tree into a render scene.
+//! Sample document and evaluation of the container tree into a render scene.
 //!
 //! This is composition-root code: it owns the geometry adapter, evaluates panels through the
 //! parametric layer and composes placements into world transforms. It does not mutate the
@@ -13,8 +13,8 @@ use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::tessellate_panel;
 use furnicraft_model::{
-    Catalog, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Group, Id, MaterialId, Node,
-    Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
+    Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
+    Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
 };
 use furnicraft_param::build_panel_parts_with;
 use furnicraft_scene::{Camera, Drawable, SceneFrame};
@@ -87,7 +87,7 @@ pub struct EvaluatedScene {
 /// document data created once at startup; user edits will go through engine commands.
 pub fn sample_session() -> Result<Session, String> {
     let root_id = id(1)?;
-    let root = Group::new(root_id, "FurniCraft sample", Placement::IDENTITY, Vec::new());
+    let root = Container::new(root_id, "FurniCraft sample", Placement::IDENTITY, Vec::new());
     let mut project = Project::new(root).map_err(describe)?;
     let oak = material_id(SAMPLE_OAK_MATERIAL)?;
     let white = material_id(SAMPLE_WHITE_MATERIAL)?;
@@ -115,7 +115,7 @@ pub fn sample_session() -> Result<Session, String> {
 
     project.group_nodes(&[back, shelf], "Loose parts").map_err(describe)?;
 
-    let drawer = project.add_assembly(root_id, "Drawer", Placement::IDENTITY).map_err(describe)?;
+    let drawer = project.add_component(root_id, "Drawer", Placement::IDENTITY).map_err(describe)?;
     let front_offset = Placement::new(DVec3::new(0.0, 120.0, 40.0), DQuat::IDENTITY).map_err(describe)?;
     project
         .add_panel(drawer, "Drawer front", panel_nominal_size(500, 180)?, Some(white), thickness, front_offset)
@@ -202,13 +202,9 @@ impl<'a> Evaluation<'a> {
     fn collect(&mut self, children: &[Node], parent: Placement) -> Result<(), String> {
         for child in children {
             match child {
-                Node::Assembly(assembly) => {
-                    let world = Placement::compose(parent, assembly.placement()).map_err(describe)?;
-                    self.collect(assembly.children(), world)?;
-                }
-                Node::Group(group) => {
-                    let world = Placement::compose(parent, group.placement()).map_err(describe)?;
-                    self.collect(group.children(), world)?;
+                Node::Container(container) => {
+                    let world = Placement::compose(parent, container.placement()).map_err(describe)?;
+                    self.collect(container.children(), world)?;
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
             }
@@ -305,8 +301,7 @@ mod tests {
         for child in children {
             match child {
                 Node::Panel(panel) => panels.push(panel),
-                Node::Assembly(assembly) => panels_in(assembly.children(), panels),
-                Node::Group(group) => panels_in(group.children(), panels),
+                Node::Container(container) => panels_in(container.children(), panels),
             }
         }
     }
@@ -330,22 +325,24 @@ mod tests {
     }
 
     #[test]
-    fn sample_document_has_one_group_and_one_assembly() {
+    fn sample_document_has_one_group_and_one_component() {
         let session = sample_session().expect("sample session");
         let project = session.project();
         let root = project.root();
         assert_eq!(root.children().len(), 2);
         let mut groups = 0;
-        let mut assemblies = 0;
+        let mut components = 0;
         for child in root.children() {
-            match child {
-                Node::Group(_) => groups += 1,
-                Node::Assembly(_) => assemblies += 1,
-                Node::Panel(_) => {}
+            if let Node::Container(container) = child {
+                if container.is_component() {
+                    components += 1;
+                } else {
+                    groups += 1;
+                }
             }
         }
         assert_eq!(groups, 1);
-        assert_eq!(assemblies, 1);
+        assert_eq!(components, 1);
     }
 
     #[test]

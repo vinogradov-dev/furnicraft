@@ -1,6 +1,6 @@
 //! The placement card shared by panels and assemblies.
 //!
-//! Coordinates are local to the parent assembly and entered in millimetres. Rotation is shown as
+//! Coordinates are local to the parent container and entered in millimetres. Rotation is shown as
 //! intrinsic XYZ Euler angles in degrees; the document keeps a unit quaternion, so the angles are
 //! only a view of it. The card keeps the typed text until the edit ends: Enter in any field or the
 //! Apply button parses all six fields and dispatches one `node.placement.set`, so an edit is one
@@ -58,7 +58,7 @@ impl Draft {
 impl PlacementCard {
     /// Draws the local placement of `node` and dispatches an accepted edit.
     ///
-    /// The root assembly defines the world frame and has no placement, so it never reaches here.
+    /// The root container defines the world frame and has no placement, so it never reaches here.
     pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, node: Id) {
         let Some(current) = session.project().node(node).map(|node| node.placement()) else {
             self.draft = None;
@@ -72,7 +72,7 @@ impl PlacementCard {
 
         ui.label(RichText::new("Placement").strong());
         if let Some(parent) = session.project().parent_of(node) {
-            let name = session.project().assembly(parent).map_or("parent assembly", |assembly| assembly.name());
+            let name = session.project().container(parent).map_or("parent container", |container| container.name());
             ui.label(format!("Local to {name}"));
         }
 

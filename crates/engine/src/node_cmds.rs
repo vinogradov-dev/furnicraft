@@ -1,33 +1,37 @@
-//! Commands that create, rename, place, copy, group and remove scene nodes.
+//! Commands that create, rename, place, copy, group and remove scene nodes, and edit their
+//! properties.
 //!
 //! A panel is an atomic leaf: it owns its geometry and machining and is never split into child
-//! nodes. An assembly is a meaningful furniture component. A group is an organisational container
-//! with no furniture type. These commands wrap siblings into a new group and flatten a group back
-//! into its parent without moving any leaf in world space; an assembly is dismantled by a separate
-//! operation, not by `node.ungroup`.
+//! nodes. A container is either an ordinary group or a furniture component; a component is marked
+//! by a non-zero `furntype`, a `prototype.id` or `component = true`. These commands wrap siblings
+//! into a new group and flatten an ordinary container back into its parent without moving any leaf
+//! in world space. `node.ungroup` refuses a component; `node.component.convert_to_group` clears the
+//! marker first.
 
 use std::collections::HashSet;
 
-use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError, PropertyChange, PropertyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 
-/// Stable id of the assembly creation command.
+/// Stable id of the component container creation command.
 pub const ASSEMBLY_CREATE_ID: &str = "assembly.create";
 
-/// User-facing label of the assembly creation command.
+/// User-facing label of the component container creation command.
 pub const ASSEMBLY_CREATE_LABEL: &str = "Create assembly";
 
 /// Parameters for `assembly.create`.
+///
+/// The command creates a container marked as a furniture component.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AssemblyCreate {
-    /// Id of the container that receives the new assembly.
+    /// Id of the container that receives the new component.
     pub parent: Id,
-    /// User-visible assembly name; it must contain a non-whitespace character.
+    /// User-visible name; it must contain a non-whitespace character.
     pub name: String,
     /// Placement relative to the parent container.
     pub placement: Placement,
@@ -51,7 +55,7 @@ fn assembly_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<AssemblyCreate>(params, ASSEMBLY_CREATE_ID)?;
     validate_name(&params.name, ASSEMBLY_CREATE_ID)?;
-    let id = project.add_assembly(params.parent, params.name, params.placement)?;
+    let id = project.add_component(params.parent, params.name, params.placement)?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -65,7 +69,7 @@ pub const NODE_RENAME_LABEL: &str = "Rename";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeRename {
-    /// Panel, group or assembly to rename.
+    /// Panel or container to rename.
     pub node: Id,
     /// New user-visible name; it must contain a non-whitespace character.
     pub name: String,
@@ -102,7 +106,7 @@ pub const NODE_DELETE_LABEL: &str = "Delete";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDelete {
-    /// Panel, group or nested assembly to remove with all of its children.
+    /// Panel or container to remove with all of its children.
     pub node: Id,
 }
 
@@ -133,7 +137,7 @@ pub const NODE_DUPLICATE_LABEL: &str = "Duplicate";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeDuplicate {
-    /// Panel, group or nested assembly to copy deeply.
+    /// Panel or container to copy deeply.
     pub node: Id,
 }
 
@@ -202,7 +206,7 @@ pub const NODE_UNGROUP_LABEL: &str = "Ungroup";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeUngroup {
-    /// Group to flatten into its parent.
+    /// Ordinary container to flatten into its parent; a component is refused.
     pub node: Id,
 }
 
@@ -215,7 +219,7 @@ fn node_ungroup_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     let project = session.project();
-    project.group(params.node).is_some() && params.node != project.root().id()
+    params.node != project.root().id() && project.container(params.node).is_some_and(|c| !c.is_component())
 }
 
 fn node_ungroup_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
@@ -234,7 +238,7 @@ pub const NODE_PLACEMENT_SET_LABEL: &str = "Place";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePlacementSet {
-    /// Panel, group or nested assembly to place relative to its parent.
+    /// Panel or container to place relative to its parent.
     pub node: Id,
     /// The new rigid placement.
     pub placement: Placement,
@@ -275,7 +279,7 @@ pub const NODE_PLACEMENT_SET_MANY_LABEL: &str = "Place selection";
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePlacement {
-    /// Panel, group or nested assembly to place relative to its parent.
+    /// Panel or container to place relative to its parent.
     pub node: Id,
     /// The new rigid placement.
     pub placement: Placement,
@@ -338,7 +342,7 @@ pub const NODE_PIVOT_SET_LABEL: &str = "Set pivot";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePivotSet {
-    /// Panel, group or nested assembly whose pivot moves.
+    /// Panel or container whose pivot moves.
     pub node: Id,
     /// The new pivot in the node's own frame, in exact micrometres.
     pub pivot: Pivot,
@@ -375,7 +379,7 @@ pub const NODE_PIVOT_CENTER_LABEL: &str = "Center pivot";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePivotCenter {
-    /// Panel, group or nested assembly whose pivot moves to its local bounds centre.
+    /// Panel or container whose pivot moves to its local bounds centre.
     pub node: Id,
 }
 
@@ -397,6 +401,186 @@ fn node_pivot_center_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePivotCenter>(params, NODE_PIVOT_CENTER_ID)?;
     project.center_node_pivot(params.node)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the property edit command.
+pub const NODE_PROPERTY_SET_ID: &str = "node.property.set";
+
+/// User-facing label of the property edit command.
+pub const NODE_PROPERTY_SET_LABEL: &str = "Set property";
+
+/// Stable id of the multi-node property edit command.
+pub const NODE_PROPERTY_SET_MANY_ID: &str = "node.property.set_many";
+
+/// User-facing label of the multi-node property edit command.
+pub const NODE_PROPERTY_SET_MANY_LABEL: &str = "Set properties";
+
+/// Stable id of the property removal command.
+pub const NODE_PROPERTY_CLEAR_ID: &str = "node.property.clear";
+
+/// User-facing label of the property removal command.
+pub const NODE_PROPERTY_CLEAR_LABEL: &str = "Clear property";
+
+/// Stable id of the component-to-group conversion command.
+pub const NODE_COMPONENT_CONVERT_TO_GROUP_ID: &str = "node.component.convert_to_group";
+
+/// User-facing label of the component-to-group conversion command.
+pub const NODE_COMPONENT_CONVERT_TO_GROUP_LABEL: &str = "Convert to group";
+
+/// Parameters for `node.property.set`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePropertySet {
+    /// Panel or container that receives the property.
+    pub node: Id,
+    /// Property key; a reserved system key requires its documented value type.
+    pub key: String,
+    /// The typed value to store.
+    pub value: PropertyValue,
+}
+
+/// The `node.property.set` command.
+pub(crate) const NODE_PROPERTY_SET: CommandSpec =
+    CommandSpec::new(NODE_PROPERTY_SET_ID, NODE_PROPERTY_SET_LABEL, property_set_enabled, property_set_run);
+
+fn property_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePropertySet>(params, NODE_PROPERTY_SET_ID) else {
+        return false;
+    };
+    let project = session.project();
+    params.node != project.root().id() && project.contains_node(params.node)
+}
+
+fn property_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePropertySet>(params, NODE_PROPERTY_SET_ID)?;
+    project.set_property(params.node, &params.key, params.value)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// One property change in a batch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeProperty {
+    /// Panel or container that receives the value.
+    pub node: Id,
+    /// Property key.
+    pub key: String,
+    /// The typed value to store.
+    pub value: PropertyValue,
+}
+
+/// Parameters for `node.property.set_many`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePropertySetMany {
+    /// The changes; at least one, each node and key listed once, none the root.
+    pub properties: Vec<NodeProperty>,
+}
+
+/// The `node.property.set_many` command.
+///
+/// The whole batch is one document change: one revision bump and one undo entry, so editing a
+/// selection's properties is undone in one step.
+pub(crate) const NODE_PROPERTY_SET_MANY: CommandSpec = CommandSpec::new(
+    NODE_PROPERTY_SET_MANY_ID,
+    NODE_PROPERTY_SET_MANY_LABEL,
+    property_set_many_enabled,
+    property_set_many_run,
+);
+
+fn property_set_many_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePropertySetMany>(params, NODE_PROPERTY_SET_MANY_ID) else {
+        return false;
+    };
+    let project = session.project();
+    let root = project.root().id();
+    let mut seen = HashSet::new();
+    !params.properties.is_empty()
+        && params.properties.iter().all(|entry| {
+            seen.insert((entry.node, entry.key.as_str())) && entry.node != root && project.contains_node(entry.node)
+        })
+}
+
+fn property_set_many_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePropertySetMany>(params, NODE_PROPERTY_SET_MANY_ID)?;
+    let changes: Vec<PropertyChange> = params
+        .properties
+        .into_iter()
+        .map(|entry| PropertyChange { node: entry.node, key: entry.key, value: entry.value })
+        .collect();
+    project.set_properties(&changes)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Parameters for `node.property.clear`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePropertyClear {
+    /// Panel or container whose property is removed.
+    pub node: Id,
+    /// Property key to remove.
+    pub key: String,
+}
+
+/// The `node.property.clear` command.
+pub(crate) const NODE_PROPERTY_CLEAR: CommandSpec =
+    CommandSpec::new(NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_CLEAR_LABEL, property_clear_enabled, property_clear_run);
+
+fn property_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePropertyClear>(params, NODE_PROPERTY_CLEAR_ID) else {
+        return false;
+    };
+    let project = session.project();
+    params.node != project.root().id()
+        && project.properties(params.node).is_some_and(|properties| properties.contains_key(&params.key))
+}
+
+fn property_clear_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePropertyClear>(params, NODE_PROPERTY_CLEAR_ID)?;
+    project.clear_property(params.node, &params.key)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Parameters for `node.component.convert_to_group`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeComponentConvertToGroup {
+    /// Component container to demote and flatten.
+    pub node: Id,
+}
+
+/// The `node.component.convert_to_group` command.
+pub(crate) const NODE_COMPONENT_CONVERT_TO_GROUP: CommandSpec = CommandSpec::new(
+    NODE_COMPONENT_CONVERT_TO_GROUP_ID,
+    NODE_COMPONENT_CONVERT_TO_GROUP_LABEL,
+    component_convert_to_group_enabled,
+    component_convert_to_group_run,
+);
+
+fn component_convert_to_group_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodeComponentConvertToGroup>(params, NODE_COMPONENT_CONVERT_TO_GROUP_ID) else {
+        return false;
+    };
+    let project = session.project();
+    params.node != project.root().id() && project.is_component(params.node)
+}
+
+fn component_convert_to_group_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodeComponentConvertToGroup>(params, NODE_COMPONENT_CONVERT_TO_GROUP_ID)?;
+    project.convert_to_group(params.node)?;
     Ok(CommandOutcome::changed())
 }
 

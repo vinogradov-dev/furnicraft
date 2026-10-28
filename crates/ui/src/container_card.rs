@@ -1,8 +1,9 @@
 //! The selected-container card.
 //!
-//! An assembly is a meaningful furniture component; a group is an organisational container with no
-//! furniture type. Both own children and are renamed through `node.rename`. Grouping and ungrouping
-//! live in the scene tree so the same action covers several selected nodes.
+//! A container is either an ordinary group or a furniture component. The difference is data, not a
+//! separate node kind: a component carries a non-zero `furntype`, a `prototype.id` or
+//! `component = true`. Both own children and are renamed through `node.rename`. Grouping and
+//! ungrouping live in the scene tree so the same action covers several selected nodes.
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
@@ -25,26 +26,26 @@ struct Draft {
     name: String,
 }
 
-/// The two kinds of container the document stores.
+/// A container's role for display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ContainerKind {
-    Assembly,
+    Component,
     Group,
 }
 
 impl ContainerKind {
     const fn label(self) -> &'static str {
         match self {
-            Self::Assembly => "Assembly",
+            Self::Component => "Component",
             Self::Group => "Group",
         }
     }
 
     const fn description(self) -> &'static str {
         match self {
-            Self::Assembly => {
-                "A furniture or industrial component. It keeps its own identity and is dismantled by a dedicated \
-                 tool, not by Ungroup."
+            Self::Component => {
+                "A furniture or industrial component. It keeps its own identity and must be converted to a group \
+                 before Ungroup will flatten it."
             }
             Self::Group => {
                 "An organisational container with no furniture type. Ungroup flattens it into its parent without \
@@ -55,11 +56,9 @@ impl ContainerKind {
 }
 
 fn container_summary(project: &Project, id: Id) -> Option<(ContainerKind, &str, usize)> {
-    if let Some(assembly) = project.assembly(id) {
-        return Some((ContainerKind::Assembly, assembly.name(), assembly.children().len()));
-    }
-    let group = project.group(id)?;
-    Some((ContainerKind::Group, group.name(), group.children().len()))
+    let container = project.container(id)?;
+    let kind = if project.is_component(id) { ContainerKind::Component } else { ContainerKind::Group };
+    Some((kind, container.name(), container.children().len()))
 }
 
 impl ContainerCard {
@@ -103,7 +102,7 @@ impl ContainerCard {
         section(ui, "container.summary", "Container", true, |ui| {
             ui.label(RichText::new(kind.label()).strong());
             ui.label(if is_root {
-                "Root group; it defines the world frame.".to_owned()
+                "Root; it defines the world frame and is never a furniture component.".to_owned()
             } else {
                 kind.description().to_owned()
             });
@@ -145,21 +144,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renaming_an_assembly_dispatches_through_the_engine() {
+    fn renaming_a_component_dispatches_through_the_engine() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let assembly = Id::new(3).expect("assembly id");
-        rename_container(&mut session, assembly, "Drawer box".to_owned()).expect("rename");
-        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
+        let container = Id::new(3).expect("container id");
+        rename_container(&mut session, container, "Drawer box".to_owned()).expect("rename");
+        assert_eq!(session.project().container(container).expect("container").name(), "Drawer box");
+        assert_eq!(container_summary(session.project(), container).expect("summary").0, ContainerKind::Component);
         session.undo().expect("undo");
-        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer");
+        assert_eq!(session.project().container(container).expect("container").name(), "Drawer");
     }
 
     #[test]
-    fn renaming_the_root_group_dispatches_through_the_engine() {
+    fn an_unmarked_container_shows_as_a_group() {
+        let session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        assert_eq!(container_summary(session.project(), root).expect("summary").0, ContainerKind::Group);
+    }
+
+    #[test]
+    fn renaming_the_root_container_dispatches_through_the_engine() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let root = session.project().root().id();
         rename_container(&mut session, root, "Workshop".to_owned()).expect("rename root");
         assert_eq!(session.project().root().name(), "Workshop");
-        assert_eq!(session.project().group(root).expect("group").name(), "Workshop");
+        assert_eq!(session.project().container(root).expect("container").name(), "Workshop");
     }
 }

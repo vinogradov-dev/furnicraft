@@ -1,37 +1,31 @@
 # Status
 
-Updated: 2026-10-27. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-28. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
-- Milestone: M5 — Editing. The scene tree, node editing, grouping, typed placement, viewport
-  picking, the orientation widget, the translate gizmo and rotation editing are done. Rotation is
-  edited as intrinsic XYZ Euler angles in the inspector and by a rotate gizmo in the viewport; both
-  write the stored unit quaternion. The rotate rings are world X/Y/Z aligned and do not turn with the
-  object. Both gizmos use one stored pivot in the node's own frame: a panel starts at its local zero,
-  a container created with children at the centre of its local panel bounds, an empty container at
-  its origin, and the root is always zero. The pivot is editable with `node.pivot.set` /
-  `node.pivot.center` and the inspector's X/Y/Z fields plus Center; resizing or reparenting never
-  moves it. Assemblies and groups are separate container kinds: a viewport click selects a closed
-  container as one object, double-click enters one level and Escape leaves one level. The inspector
-  groups its properties into collapsible sections; the fold state is egui view state only and every
-  section starts open. A multi-selection from the scene tree moves and turns as one change: the
-  gizmos dispatch `node.placement.set_many`, so one drag is one revision and one undo entry, only the
-  top-most selected nodes move, and a shared turn uses the primary node's stored pivot.
-- Working on: the M6 furniture-type design — a type with named dimensions, a deterministic builder
-  and the workshop profile.
-- Direction: manual furniture design comes first. Parametric cabinets (M6) and project save/load are
-  the next enablers; until save/load lands the scene lives only in the session.
-- Assistant: the architecture is recorded (ADRs 0028–0032) but not implemented. Faber is a client of
-  the command registry, reads the scene as data, and is disabled by default; it needs M6 furniture
-  types and save/load before it is useful. View state moves to the session (0029) before the agent
-  crate exists.
+- Milestone: M6 — Properties and classification. M5 editing is done: the scene tree, node editing,
+  typed placement, viewport picking, the orientation widget, both gizmos, the stored pivot and
+  multi-node placement as one undo entry. The model design for M6 is accepted and implemented:
+  `Container` is the only container kind, every node carries typed properties, a component is a
+  marker rather than a node kind, and `FurnType` is a six-digit tree (`GG.TT.VV`) with `000000`
+  unclassified (ADRs 0034–0035, `docs/domain/furntypes.md`).
+- Working on: save and load, now that schema v7 carries the final node shape.
+- Direction: properties and classification come before save/load, so the first project files carry
+  the final shape. Parametric products are user prototype scripts over these properties, not
+  built-in builders; scripts are deferred.
+- Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
+  client of the command registry, reads and queries the scene as data, and is disabled by default;
+  it needs save/load and the property/type commands before it is useful. View state moves to the
+  session (0029) before the agent crate exists.
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with
   `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
+- `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)
 - `docs: record multi-node placement` (ADR 0033)
 - `feat(app): move and turn the whole selection with one command`
 - `feat(engine): add the node.placement.set_many command`
@@ -106,11 +100,12 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. M6 model design: a furniture type with named dimensions and a deterministic builder, plus the
-   workshop profile. This is the enabler for both the assistant and the assembly dissolve; design it
-   as an ADR before code.
-2. Save and load, with the project store outside `engine`, then the order bundle and pinning.
-3. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
+1. Save and load, with the project store outside `engine`, then the order bundle and pinning.
+2. An engine `node.select`-style query command and saved reports over the same `NodeQuery`; the
+   scene tree already selects by furniture type, but a report needs a stored query and columns.
+3. The furniture-type picker and tree in the inspector; type labels now come from
+   `docs/domain/furntypes.md`, and the card edits the raw code.
+4. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
 
 ## Open questions
 
@@ -152,10 +147,17 @@ Updated: 2026-10-27. Rewrite this file at the end of every task; never append a 
   project to open.
 - Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
   deliberate deferral, not an oversight.
-- Parametric cabinets (dimensions driving panel sizes and placements) do not exist yet; the M6 model
-  design is the next architectural step after multi-node placement.
-- Assemblies have no dissolve operation yet: `node.ungroup` only flattens groups, and dismantling a
-  component needs the type-specific rules that arrive with M6.
+- Parametric cabinets do not exist yet: M6 provides classification and properties, and product
+  prototypes arrive later as user scripts over those properties.
+- A component has no separate "dissolve" operation yet: `node.component.convert_to_group` clears its
+  marker, prototype keys and furniture type and then flattens it into the parent. There is no way to
+  keep the component and detach its prototype record on its own.
+- The property catalogue is not designed: user properties are free-form and the inspector has no
+  type editor for `Structured` values yet.
+- Furniture types have no registry-backed picker: the inspector edits the raw `GG.TT.VV` code and the
+  scene tree shows the stored code, while names and ancestry live in `docs/domain/furntypes.md`.
+- Queries exist in the model and the scene tree selects a furniture-type subtree, but there is no
+  engine command or saved report over a query yet.
 - The gizmos do not snap: translate and rotate angles are free, and snapping is not implemented yet.
 - The rotate rings are world-aligned only; a local-axis mode is not implemented.
 - The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.

@@ -8,8 +8,8 @@ FurniCraft is a native, free and open-source 3D editor for parametric cabinet fu
 
 **In scope, in order of arrival:**
 
-1. A document model for cabinet furniture: model space and placements, assemblies, panels, machined features, edge banding, materials, hardware, dimensions.
-2. Parametric evaluation: named dimensions drive part sizes; the parts list is derived, not drawn by hand.
+1. A document model for cabinet furniture: model space and placements, containers and components, panels, machined features, edge banding, materials, hardware, typed properties and furniture types.
+2. Classification and queries: every object carries a numeric furniture type and typed properties, so parts lists, reports and CNC rules are derived by query. Parametric construction arrives later as user scripts, not built-in product builders.
 3. 3D viewport: camera views, orbit/pan/zoom, shading, selection and picking, a floor grid, dimensions.
 4. Editing: create and edit panels, assemblies, materials and hardware through commands, with undo/redo.
 5. Output: cutting lists per material and sheet, panel drawings, and eventually CNC programs.
@@ -24,15 +24,38 @@ The model is intentionally described at the level of vocabulary and responsibili
 
 ### Document (`Project`)
 
-The root of a saved file: the node tree, the material catalogue, the dimension set, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision, next id and root group; catalogues and settings follow.
+The root of a saved file: the node tree, the material catalogue, the property and furniture-type data, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision, next id and root container; catalogues and settings follow.
 
 ### `Id` and `Revision`
 
-Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a panel, a group or an assembly without holding a pointer. A monotonically increasing `Revision` marks every document change; caches (meshes, picking structures, derived parts) are keyed by it. Both are technical plumbing, not user-visible entities. In v1 an `Id` is a non-zero `u64` serialized as a number, and a `Revision` is a `u64` starting at zero. Panel vertices and edges use stable ids of the same kind; their visible numbers are labels, not keys.
+Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a panel or a container without holding a pointer. A monotonically increasing `Revision` marks every document change; caches (meshes, picking structures, derived parts) are keyed by it. Both are technical plumbing, not user-visible entities. In v1 an `Id` is a non-zero `u64` serialized as a number, and a `Revision` is a `u64` starting at zero. Panel vertices and edges use stable ids of the same kind; their visible numbers are labels, not keys.
 
-### `Assembly` and `Group`
+### `Container`, `Properties` and `FurnType`
 
-The tree has two container kinds besides the panel. An **assembly** is a meaningful furniture or industrial component: a cabinet, a drawer box, a runner, a hinge. It groups panels, hardware and nested containers, owns the dimensions that describe it and, from M6, carries a furniture type with type-specific properties and operations. An assembly is both "the product" and "the sub-assembly" depending on where it sits, so nesting is part of the model rather than a special case. A **group** is an organisational container for any nodes — panels, assemblies and nested groups, later points and contours. It has no furniture type and only the common operations: rename, move, duplicate, delete, group and ungroup. The project root is a group and defines the world frame. In v1 every tree node is unique and owns its children; shared definitions and instances are deferred.
+The tree has one container kind beside the panel. A **container** is a named, placed node with
+children and typed properties: a cabinet, a hinge of three parts, a facade holding a panel and its
+hardware, an ordinary temporary group. The project root is a container and defines the world frame.
+In v1 every tree node is unique and owns its children; shared definitions and instances are
+deferred.
+
+A container is a **component** (the older word, "assembly") when it carries a non-zero `furntype`, a
+`prototype.id`, or an explicit `component = true`. `node.ungroup` refuses a component;
+`node.component.convert_to_group` clears the marker so the container can be flattened like any other
+group. Component identity is a property, not a node kind ([ADR 0034](docs/decisions/0034-nodes-carry-typed-properties.md)).
+
+Every node — panel or container — carries a **property bag**: an ordered map from a dotted key to a
+typed value (`Bool`, `Integer`, `Length`, `Angle`, `Text`, `Choice`, `Reference`, `FurnType`,
+`Structured` JSON). Reset fields such as name, placement, pivot, panel size and material stay typed
+fields and are not duplicated there. System keys (`component`, `furntype`, `prototype.id`,
+`prototype.version`, `prototype.parameters`) are written only through validated commands; user keys
+live in their own namespaces. Unknown user properties survive a load.
+
+A **furniture type** is a six-digit code `GG.TT.VV` stored in `furntype`, with `000000` meaning
+unclassified; `GG` is the group, `TT` the type and `VV` the variant of a strict tree. Codes are
+stable and opaque, labels are registry data, and a query matches a prefix: `30` is every facade,
+`20.01.01` is every shelf. Material, finish, dimensions and price are separate properties, never
+encoded in the code. The registry lives in [`docs/domain/furntypes.md`](docs/domain/furntypes.md);
+see [ADR 0035](docs/decisions/0035-furniture-types-form-a-numbered-tree.md).
 
 ### `Placement`
 
@@ -40,11 +63,11 @@ A rigid transform relative to the parent frame: translation and rotation. Scale 
 
 ### Commands
 
-Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. `panel.create` takes the parent container id, a name, a `PanelNominalSize`, a `MaterialId` from the session catalogue and a `Placement`; it resolves the material thickness, allocates the panel id, bumps the revision once and returns the created id. `panel.rename` takes a panel id and a non-blank name and bumps the revision once. `panel.resize` takes a panel id and a new `PanelNominalSize` and bumps the revision once. `panel.material.set` takes a panel and a catalogue material and updates the material with its nominal thickness as the fallback. `panel.edge_banding.set` takes a panel, an edge, a catalogue banding material and the included-in-size flag; replacing an edge moves it to the end of the application order. `panel.edge_banding.clear` removes the banding on an edge. `cutout.create` takes a panel id, a rectangular `CutoutShape`, a `CutoutDepth` and an entry face, allocates the cutout id and bumps the revision once. The scene-tree commands operate on panels and both container kinds: `assembly.create` adds an empty assembly under a parent container, `node.rename` renames any node including the root, `node.delete` removes a subtree, `node.duplicate` deep-copies one with fresh ids, `node.group` wraps two or more sibling nodes in a new group, `node.ungroup` flattens a group back into its parent and `node.placement.set` moves a node relative to its parent. `node.placement.set_many` places a batch of nodes as one change: the selection's top-most nodes each get a placement, the revision bumps once and the whole drag is one undo entry ([ADR 0033](docs/decisions/0033-a-multi-selection-is-placed-by-one-command.md)). A panel is an atomic leaf: it is never split by grouping and never ungrouped. An assembly is a component with its own identity: `node.ungroup` refuses it, and a separate tool will dismantle it when furniture types land. Grouping keeps order and world transforms; the root group is immutable for delete, placement, grouping and ungrouping. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
+Every document change is a command in `furnicraft-engine` with a stable id and typed parameters. `panel.create` takes the parent container id, a name, a `PanelNominalSize`, a `MaterialId` from the session catalogue and a `Placement`; it resolves the material thickness, allocates the panel id, bumps the revision once and returns the created id. `panel.rename` takes a panel id and a non-blank name and bumps the revision once. `panel.resize` takes a panel id and a new `PanelNominalSize` and bumps the revision once. `panel.material.set` takes a panel and a catalogue material and updates the material with its nominal thickness as the fallback. `panel.edge_banding.set` takes a panel, an edge, a catalogue banding material and the included-in-size flag; replacing an edge moves it to the end of the application order. `panel.edge_banding.clear` removes the banding on an edge. `cutout.create` takes a panel id, a rectangular `CutoutShape`, a `CutoutDepth` and an entry face, allocates the cutout id and bumps the revision once. The scene-tree commands operate on panels and containers: `assembly.create` adds an empty container marked as a component under a parent, `node.rename` renames any node including the root, `node.delete` removes a subtree, `node.duplicate` deep-copies one with fresh ids, `node.group` wraps two or more sibling nodes in a new group container, `node.ungroup` flattens a non-component container back into its parent, `node.component.convert_to_group` clears the component marker and prototype keys and then flattens the container, and `node.placement.set` moves a node relative to its parent. `node.property.set`, `node.property.clear` and their batch form edit typed properties as one revision each; setting `furntype` or `prototype.id` marks a container as a component. `node.placement.set_many` places a batch of nodes as one change: the selection's top-most nodes each get a placement, the revision bumps once and the whole drag is one undo entry ([ADR 0033](docs/decisions/0033-a-multi-selection-is-placed-by-one-command.md)). A panel is an atomic leaf: it is never split by grouping and never ungrouped. A component is not flattened by `node.ungroup`; `node.component.convert_to_group` clears the marker and prototype keys and flattens it, so the two operations stay explicit. Grouping keeps order and world transforms; the root container is immutable for delete, placement, grouping and ungrouping. The UI dispatches commands by id; `Session` snapshots the document before a command and keeps one undo entry per successful change. Undo and redo restore content but advance the revision and keep the id allocator, so caches stay keyed to a monotonic counter and ids are never reused.
 
 ### `Panel`
 
-One flat part: nominal length and width, the material it is cut from, its grain direction, the placement that puts it in its parent assembly, edge banding on each of its edges, and the list of machined features on it. Panels are the atoms of cutting lists, drawings and CNC output, so they carry their own manufacturing data. The document stores the nominal size, the material id with a fallback thickness, the banding with fallback profiles and the placement; core, overall size and effective thickness are resolved from the material and banding. Grain and hardware-generated holes follow.
+One flat part: nominal length and width, the material it is cut from, its grain direction, the placement that puts it in its parent container, edge banding on each of its edges, and the list of machined features on it. Panels are the atoms of cutting lists, drawings and CNC output, so they carry their own manufacturing data. The document stores the nominal size, the material id with a fallback thickness, the banding with fallback profiles and the placement; core, overall size and effective thickness are resolved from the material and banding. Grain and hardware-generated holes follow.
 
 The panel's local frame has its origin at the **minimum corner of the nominal rectangle** (`z = 0`), `+X` along the **length**, `+Y` along the **width**, and `+Z` along the **thickness**; the panel occupies `z` from `0` to its thickness. Included bottom and left banding move the core inward, while the nominal corner stays the placement anchor. This convention is fixed for the geometry kernel and the panel features.
 
@@ -64,9 +87,9 @@ The banding applied to one segment of the panel contour: material, thickness, in
 
 A physical fitting: hinge, drawer runner, connector, shelf pin, handle, and so on. It has a type, a placement tied to one or more panels (a face and a position, or a reference to a machined feature such as a hole), and a quantity/orientation. Hardware must be able to generate the machining it requires, without duplicating hole definitions by hand.
 
-### `Dimension`
+### Queries and reports
 
-A named, typed value (a `Length`, a count, an angle or an enum choice) that describes an assembly: overall width, height and depth, board thickness, shelf count, drawer front gap. Dimensions are the parametric input; panel sizes and positions are computed from them by `furnicraft-param`. Whether dimensions may be expressions of other dimensions is an M1 decision.
+Every object can be selected by structural kind, `FurnType` subtree and property predicates. The same query layer feeds the scene-tree filter, selection, reports and, later, CNC rules; a report is a saved query plus a column set and grouping, so a report and a machining program cannot disagree about which panels are shelves. Product dimensions (overall width, shelf pitch, door gap) are typed properties, not a separate dimension object: a prototype script reads them, and the panel sizes it derives stay materialized geometry in the document.
 
 ### `Material`
 
@@ -79,6 +102,7 @@ Detailed, normative descriptions live in `docs/domain/`:
 - [`panels.md`](docs/domain/panels.md) — the panel as an atomic group, local frame, nominal/core/overall sizes, edge banding, order and corners.
 - [`materials.md`](docs/domain/materials.md) — material records, the external catalogue and its future database structure.
 - [`document.md`](docs/domain/document.md) — the scene file, loading, fallbacks, diagnostics, schema and migrations.
+- [`furntypes.md`](docs/domain/furntypes.md) — the numeric furniture-type registry, encoding and query examples.
 
 ## Architectural principles
 
@@ -101,7 +125,7 @@ FurniCraft separates the model from the way it is viewed.
 
 - Right-handed, Z-up, millimetres for display; persisted lengths are `Length`.
 - World origin at the floor (`z = 0`).
-- Every assembly and part has a local frame. A `Placement` is a rigid transform (translation and rotation; no scale or shear) relative to the parent frame.
+- Every container and part has a local frame. A `Placement` is a rigid transform (translation and rotation; no scale or shear) relative to the parent frame.
 - A node's world transform is the composition of placements from the root.
 - Imported assets are normalised on import: Z-up, scale baked, origin at the mounting point. Placements stay rigid.
 - A panel's local frame is fixed: origin at the minimum corner of the nominal rectangle (`z = 0`), `+X` length, `+Y` width, `+Z` thickness; the panel occupies `z` from `0` to its thickness. Faces are A (`z = thickness`) and B (`z = 0`); vertices run 1..n counter-clockwise from the nominal zero and edge `i` joins vertex `i` to `i+1`. Included bottom and left banding move the core inward; machining is core-local.
@@ -132,9 +156,11 @@ before.
   decision.
 - Conversations, keys and the audit trail are not document data. Keys live in the OS keyring or a
   restricted configuration file; the audit trail is a sidecar.
-- "Build a hinged wardrobe 600 × 2200 × 500" is one furniture type with named dimensions, not a
-  prompt: construction knowledge is deterministic code plus a workshop profile, and the type
-  catalogue shown to the model is generated from that registry (ADR 0030).
+- "Build a hinged wardrobe 600 × 2200 × 500" is one user prototype script with named parameters,
+  not a prompt. The script builds panels and placements through commands, and the document keeps the
+  materialized geometry, the furniture type, the prototype reference and its parameter record; the
+  model only chooses the prototype and fills the parameters. The catalogue available to the model is
+  generated from the prototype registry (ADR 0034).
 - The material catalogue and the order registry are separate programs with their own databases and
   APIs. Faber uses the same API as their interfaces, never the database. An order is the project
   file, its records and the files produced for it; every version is a numbered folder holding the
@@ -158,9 +184,9 @@ only when the crates exist.
 | L0 | `furnicraft-units` | `Length` in micrometres and `Degrees` in millidegrees, thickness helpers, parsing and formatting in mm and degrees | serde |
 | L0 | `furnicraft-geom` | `glam` re-exports, `Frame`, indexed `MeshData`; bounds and planes as features need them | glam, serde |
 | L1 | `furnicraft-kernel` | Geometry kernel **port**: `Profile`, opaque `BodyId`, extrusion (linear sweep), booleans, tessellation, measures. No third-party kernel types | geom, thiserror |
-| L1 | `furnicraft-model` | Document data: `Project`, `Assembly`, `Placement`, `Panel`, `Material`, `Hardware`, `Dimension`, `Id`, `Revision`; invariants and typed errors | units, geom, serde |
+| L1 | `furnicraft-model` | Document data: `Project`, `Container`, `Properties`, `FurnType`, `Placement`, `Panel`, `Material`, `Hardware`, `Id`, `Revision`; invariants and typed errors | units, geom, serde |
 | L2 | `furnicraft-kernel-truck` | Geometry kernel **adapter** implemented with `truck` (Apache-2.0). The only crate allowed to depend on `truck` | kernel, geom, truck-modeling, truck-shapeops, truck-meshalgo |
-| L2 | `furnicraft-param` | Compiles document features into kernel operations: dimensions, placements, panel machining | model, kernel, geom, units |
+| L2 | `furnicraft-param` | Compiles document features into kernel operations: panel features, placements, panel machining | model, kernel, geom, units |
 | L3 | `furnicraft-mesh` | Evaluation cache: `(Revision, PartId)` to solid and triangle mesh; tessellation policy | model, param, kernel, geom, units |
 | L4 | `furnicraft-scene` | Renderer-agnostic frame description: drawables, world transforms, materials, selection highlight, camera, lights, grid | model, mesh, geom |
 | L5 | `furnicraft-render` | `wgpu` renderer: pipelines, buffers, depth, camera. No `egui`, no window creation | scene, geom, wgpu, bytemuck |
@@ -198,7 +224,7 @@ A crate may depend only on crates in lower layers. `kernel-truck` is the only cr
 | M3 | Viewport | `wgpu` window via the app shell: shaded primitives, orbit/pan/zoom, floor grid, resize handling; visual check |
 | M4 | Panel geometry | Panel outline, thickness, rectangular through and blind cutouts with an entry face, holes generated by hardware, chamfers/roundovers, shaped-cutter sweeps and edge banding, with volume and tessellation tests |
 | M5 | Editing | `egui` shell, command registry, undo/redo, scene tree with atomic panels, components and groups, create/place/select, closed-container viewport picking with an open mode, Blender-like axes and orientation widget, move/rotate, multi-node placement as one undo entry |
-| M6 | Parametric assemblies | Dimensions drive panel sizes and placements; parts list derived; validation errors surfaced in the UI |
+| M6 | Properties and classification | Every node carries typed properties; `Assembly`/`Group` become one container with a component marker; a numeric `FurnType` registry and prefix queries select objects by type; reports derive from queries |
 | M7 | Hardware and joinery | Hardware catalogue, anchor points, generated holes, collision warnings |
 | M8 | Output | Cutting lists per material and sheet, panel drawings, CNC export |
 | M9 | Assistant | Faber runs as a client of the command registry: disabled by default, read-only first, one undo step per task, a whole task runnable by a scripted model without a network, and a headless job over a saved project |
@@ -210,9 +236,11 @@ These are deliberately unresolved. Do not pick an answer inside an unrelated tas
 - **View state.** What, if anything, is persisted in the document (only named views?) and what lives in the session?
 - **Selection.** In v1, can the user select objects and faces only, or edges too? How are faces identified after a rebuild?
 - **Hardware anchoring.** Does hardware attach to a panel face and a coordinate, to an existing machined feature (a hole), or to an edge? How are multi-panel fittings (hinges, runners) expressed? Generated holes themselves are always stored in core-local coordinates.
-- **Derived versus edited.** Which panels are fully derived from dimensions, which are hand-placed, and what happens when a dimension changes under a hand-edited panel?
+- **Derived versus edited.** Which panels are produced by a prototype script, which are hand-placed, and what happens when a parameter changes under a hand-edited panel?
 - **Reusable assemblies.** v1 uses unique tree nodes. Whether a later version adds shared definitions and instances is still open.
 - **Grain.** How is grain direction stored and how does it constrain rotation, cutting and edge banding?
-- **Dimensions.** Literal values only, or expressions depending on other dimensions? If expressions, when are they evaluated and how are cycles reported?
+- **Dimensions.** Product parameters are typed properties read by a user prototype script. Whether a property can be an expression of other properties is deferred with the script runtime.
+- **Property schema.** User properties are free-form until a schema/catalogue exists; decide whether the catalogue is per project or per workshop, and how a script declares the properties it writes.
+- **User scripts.** Product prototypes are scripts, not built-in builders. The sandbox, the language, the unit boundary and the failure policy (missing script/DB is a warning, never a load failure) are undecided.
 - **Invariants.** Panel-owned cutouts outside the core and overlapping cutouts are command errors in v1; loading a scene keeps machining that no longer fits as a problem panel instead of rejecting the file. ADR 0009 replaces these v1 rules in stage 3 with a union of through cutouts, boundary notches and a connected-core invariant; the union layer is the in-house `geom::region` module (ADR 0012). Panel larger than the sheet and overlapping hardware-generated holes remain open.
 - **Schema.** Versioning strategy and migrations for the document format.

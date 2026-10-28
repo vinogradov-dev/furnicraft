@@ -1,6 +1,6 @@
 # 0030. Construction knowledge is code, not prose
 
-- Status: Accepted
+- Status: Superseded by 0034
 - Date: 2026-10-27
 
 ## Context

@@ -354,7 +354,7 @@ pub(crate) fn screen_direction(delta: Vec2) -> Option<Vec2> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Group, Panel, Project};
+    use furnicraft_model::{Container, Panel, Project};
     use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness};
 
     use super::*;
@@ -369,7 +369,7 @@ mod tests {
         let panel = |id| {
             Panel::new(Id::new(id).expect("id"), "Panel", size, None, thickness, Placement::IDENTITY).expect("panel")
         };
-        let cabinet = Group::new(
+        let cabinet = Container::new(
             Id::new(2).expect("id"),
             "Cabinet",
             Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2))
@@ -377,7 +377,7 @@ mod tests {
             vec![panel(4).into()],
         );
         let root =
-            Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![cabinet.into(), panel(3).into()]);
+            Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![cabinet.into(), panel(3).into()]);
         Project::new(root).expect("project")
     }
 

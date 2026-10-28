@@ -3,7 +3,7 @@
 //! Pure serializable data plus its invariants. No geometry, no GPU, no UI, no file I/O. The exact
 //! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
 //!
-//! This module currently defines the document skeleton: ids and revisions, the assembly tree,
+//! This module currently defines the document skeleton: ids and revisions, the container tree,
 //! minimal panel records, validated rectangular dimensions, rigid placements and the external
 //! material catalogue. The two large faces, stable edge and vertex ids, and the local numbering of
 //! a rectangular outline are here as well; geometry, edge banding and machining arrive later.
@@ -17,13 +17,17 @@
     clippy::unreachable
 )]
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU64;
+use std::str::FromStr;
 
 use furnicraft_geom::{DQuat, DVec2, DVec3, EulerRot, Rect, regions_from_rects, subtract_rects};
 use furnicraft_units::{Degrees, Length};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use thiserror::Error;
 
 mod catalog;
@@ -37,7 +41,7 @@ pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 /// A stable document identifier.
 ///
 /// Identifiers are never reused while a document is edited, so commands, hardware references and
-/// the undo stack can refer to an assembly, panel or catalogue entry without holding a pointer.
+/// the undo stack can refer to a container, panel or catalogue entry without holding a pointer.
 /// Zero is reserved for "no entity" and is rejected on construction and deserialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -289,7 +293,548 @@ impl Pivot {
     }
 }
 
-/// Why a placement is not a valid rigid transform.
+/// The largest furniture type code: two digits for group, type and variant.
+pub const FURNTYPE_MAX_CODE: u32 = 999_999;
+
+/// Why a furniture type code or its text form is not usable.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum FurnTypeError {
+    /// The numeric code is outside the supported range.
+    #[error("furniture type {value} is outside the supported range 0 to {max}")]
+    OutOfRange {
+        /// The rejected code.
+        value: u32,
+        /// The largest supported code.
+        max: u32,
+    },
+    /// The text form is not a valid code.
+    #[error("furniture type `{text}` is not a valid code")]
+    Invalid {
+        /// The rejected text.
+        text: String,
+    },
+}
+
+/// A numeric furniture type in the strict `GG.TT.VV` tree.
+///
+/// The value is the stored integer code, from `0` (unclassified) to [`FurnType::MAX`]. The dotted
+/// form is a presentation only: it is produced by [`fmt::Display`] and accepted by `FromStr`, never
+/// stored. A zero suffix means "the type itself, without a variant".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FurnType(u32);
+
+impl FurnType {
+    /// The unclassified type, `000000`.
+    pub const UNCLASSIFIED: Self = Self(0);
+
+    /// The largest assignable furniture type.
+    pub const MAX: Self = Self(999_999);
+
+    /// Builds a type from its numeric code, or `None` when the code is not a valid tree position.
+    ///
+    /// A valid code has a non-zero group; a variant requires a type. Zero is
+    /// [`FurnType::UNCLASSIFIED`].
+    pub const fn from_code(code: u32) -> Option<Self> {
+        if code == 0 {
+            return Some(Self(0));
+        }
+        let group = code / 10_000;
+        let type_ = (code / 100) % 100;
+        let variant = code % 100;
+        if code <= 999_999 && group != 0 && (variant == 0 || type_ != 0) { Some(Self(code)) } else { None }
+    }
+
+    /// The numeric code without separators, the only stored form.
+    pub const fn value(self) -> u32 {
+        self.0
+    }
+
+    /// Whether the type is unclassified.
+    pub const fn is_unclassified(self) -> bool {
+        self.0 == 0
+    }
+
+    /// The parent type: the current type without its variant, or the group without its type.
+    pub const fn parent(self) -> Self {
+        let variant = self.0 % 100;
+        let type_ = (self.0 / 100) % 100;
+        if variant != 0 {
+            Self(self.0 - variant)
+        } else if type_ != 0 {
+            Self(self.0 - type_ * 100)
+        } else {
+            Self(0)
+        }
+    }
+
+    /// Whether `ancestor` is the type itself or one of its ancestors.
+    ///
+    /// `000000` is a sentinel, not a group: it matches only unclassified types, so a report can ask
+    /// for "everything without a type" instead of matching the whole tree.
+    pub fn is_ancestor_or_self(self, ancestor: Self) -> bool {
+        if ancestor.is_unclassified() {
+            return self.is_unclassified();
+        }
+        let mut current = self;
+        loop {
+            if current == ancestor {
+                return true;
+            }
+            if current.is_unclassified() {
+                return false;
+            }
+            current = current.parent();
+        }
+    }
+}
+
+impl fmt::Display for FurnType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let group = self.0 / 10_000;
+        let type_ = (self.0 / 100) % 100;
+        let variant = self.0 % 100;
+        if variant != 0 {
+            write!(formatter, "{group}.{:02}.{:02}", type_, variant)
+        } else if type_ != 0 {
+            write!(formatter, "{group}.{:02}", type_)
+        } else {
+            write!(formatter, "{group}")
+        }
+    }
+}
+
+impl FromStr for FurnType {
+    type Err = FurnTypeError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let text = text.trim();
+        let invalid = || FurnTypeError::Invalid { text: text.to_owned() };
+        if text.is_empty() {
+            return Err(invalid());
+        }
+        if !text.contains('.') {
+            let raw = text.parse::<u32>().map_err(|_| invalid())?;
+            // One or two digits name a group, the display form of a group code; a longer run is a
+            // raw integer code. Both round-trip through [`fmt::Display`].
+            let code = if text.len() <= 2 { raw * 10_000 } else { raw };
+            return FurnType::from_code(code).ok_or(FurnTypeError::OutOfRange { value: code, max: FURNTYPE_MAX_CODE });
+        }
+        let mut parts = text.split('.');
+        let group_text = parts.next().ok_or_else(invalid)?;
+        let type_text = parts.next();
+        let variant_text = parts.next();
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+        let parse_part = |part: &str, digits: usize| -> Result<u32, FurnTypeError> {
+            if part.is_empty() || part.len() > digits || !part.chars().all(|c| c.is_ascii_digit()) {
+                return Err(invalid());
+            }
+            let mut value = 0u32;
+            for c in part.chars() {
+                value = value * 10 + u32::from(c as u8 - b'0');
+            }
+            Ok(value)
+        };
+        let group = parse_part(group_text, 2)?;
+        if group == 0 {
+            return Err(invalid());
+        }
+        let type_ = match type_text {
+            Some(part) => parse_part(part, 2)?,
+            None => 0,
+        };
+        let variant = match variant_text {
+            Some(part) => parse_part(part, 2)?,
+            None => 0,
+        };
+        let code = group * 10_000 + type_ * 100 + variant;
+        FurnType::from_code(code).ok_or(FurnTypeError::OutOfRange { value: code, max: FURNTYPE_MAX_CODE })
+    }
+}
+
+impl Serialize for FurnType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for FurnType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let code = u32::deserialize(deserializer)?;
+        FurnType::from_code(code).ok_or_else(|| {
+            de::Error::custom(format_args!(
+                "furniture type {code} is outside the supported range 0 to {FURNTYPE_MAX_CODE}"
+            ))
+        })
+    }
+}
+
+/// The reserved system property keys of a node (ADR 0034).
+pub const SYSTEM_COMPONENT: &str = "component";
+/// The furniture type of a node; a non-zero value marks a container as a component (ADR 0035).
+pub const SYSTEM_FURNTYPE: &str = "furntype";
+/// The prototype a component was created from, when a user script exists.
+pub const SYSTEM_PROTOTYPE_ID: &str = "prototype.id";
+/// The version of the prototype parameters.
+pub const SYSTEM_PROTOTYPE_VERSION: &str = "prototype.version";
+/// The nested prototype parameter record, as a script wrote it.
+pub const SYSTEM_PROTOTYPE_PARAMETERS: &str = "prototype.parameters";
+
+/// A typed property value attached to a node.
+///
+/// Physical values use the domain units; a bare number is never a property value. `Structured` is
+/// the escape hatch for nested prototype parameters, which are free-form by design.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PropertyValue {
+    /// A boolean flag.
+    Bool {
+        /// The flag value.
+        value: bool,
+    },
+    /// A signed integer count.
+    Integer {
+        /// The integer value.
+        value: i64,
+    },
+    /// A physical length in micrometres.
+    Length {
+        /// The length value.
+        value: Length,
+    },
+    /// An angle in millidegrees.
+    Angle {
+        /// The angle value.
+        value: Degrees,
+    },
+    /// User-visible text.
+    Text {
+        /// The text value.
+        value: String,
+    },
+    /// A choice between labelled options.
+    Choice {
+        /// The stable option key.
+        key: String,
+        /// The user-visible option label.
+        label: String,
+    },
+    /// A reference to another document id.
+    Reference {
+        /// The referenced id.
+        id: Id,
+    },
+    /// A furniture type code.
+    #[serde(rename = "furntype")]
+    FurnType {
+        /// The furniture type.
+        value: FurnType,
+    },
+    /// A nested, free-form structured record, usually prototype parameters.
+    Structured {
+        /// The nested value.
+        value: Value,
+    },
+}
+
+impl PropertyValue {
+    /// Builds a boolean property value.
+    pub const fn bool(value: bool) -> Self {
+        Self::Bool { value }
+    }
+
+    /// Builds an integer property value.
+    pub const fn integer(value: i64) -> Self {
+        Self::Integer { value }
+    }
+
+    /// Builds a length property value.
+    pub const fn length(value: Length) -> Self {
+        Self::Length { value }
+    }
+
+    /// Builds an angle property value.
+    pub const fn angle(value: Degrees) -> Self {
+        Self::Angle { value }
+    }
+
+    /// Builds a text property value.
+    pub fn text(value: &str) -> Self {
+        Self::Text { value: value.to_owned() }
+    }
+
+    /// Builds a choice property value.
+    pub fn choice(key: &str, label: &str) -> Self {
+        Self::Choice { key: key.to_owned(), label: label.to_owned() }
+    }
+
+    /// Builds a reference property value.
+    pub const fn reference(id: Id) -> Self {
+        Self::Reference { id }
+    }
+
+    /// Builds a furniture type property value.
+    pub const fn furn_type(value: FurnType) -> Self {
+        Self::FurnType { value }
+    }
+
+    /// Builds a structured property value.
+    pub const fn structured(value: Value) -> Self {
+        Self::Structured { value }
+    }
+
+    /// The property kind name used in serialized form and diagnostics.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Bool { .. } => "bool",
+            Self::Integer { .. } => "integer",
+            Self::Length { .. } => "length",
+            Self::Angle { .. } => "angle",
+            Self::Text { .. } => "text",
+            Self::Choice { .. } => "choice",
+            Self::Reference { .. } => "reference",
+            Self::FurnType { .. } => "furntype",
+            Self::Structured { .. } => "structured",
+        }
+    }
+}
+
+/// An ordered map of property keys to typed values on one node.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Properties(BTreeMap<String, PropertyValue>);
+
+impl<'de> Deserialize<'de> for Properties {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let stored = BTreeMap::<String, PropertyValue>::deserialize(deserializer)?;
+        for (key, value) in &stored {
+            validate_property_value(key, value).map_err(de::Error::custom)?;
+        }
+        Ok(Self(stored))
+    }
+}
+
+impl Properties {
+    /// Creates an empty property bag.
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    /// The value stored under `key`, or `None` when the key is unknown.
+    pub fn get(&self, key: &str) -> Option<&PropertyValue> {
+        self.0.get(key)
+    }
+
+    /// The mutable value stored under `key`, or `None` when the key is unknown.
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut PropertyValue> {
+        self.0.get_mut(key)
+    }
+
+    /// Whether any property is stored.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether `key` is present.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.0.contains_key(key)
+    }
+
+    /// Stores or replaces the value under `key`, returning the previous value.
+    ///
+    /// Reserved system keys are validated here: a reserved key with the wrong value type is
+    /// rejected instead of coerced.
+    pub fn insert(&mut self, key: &str, value: PropertyValue) -> Result<Option<PropertyValue>, PropertyError> {
+        validate_property_value(key, &value)?;
+        Ok(self.0.insert(key.to_owned(), value))
+    }
+
+    /// Removes the value under `key`, returning it when present.
+    pub fn remove(&mut self, key: &str) -> Option<PropertyValue> {
+        self.0.remove(key)
+    }
+
+    /// Removes every property.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// The stored keys in sorted order.
+    pub fn keys(&self) -> impl Iterator<Item = &str> {
+        self.0.keys().map(String::as_str)
+    }
+
+    /// The stored entries in key order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &PropertyValue)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
+    }
+}
+
+/// Why a property key or value is not valid for the document.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum PropertyError {
+    /// The key or value violates the document property rules.
+    #[error("invalid property `{key}`: {message}")]
+    Invalid {
+        /// The rejected property key.
+        key: String,
+        /// A human-readable reason.
+        message: String,
+    },
+}
+
+/// Validates a property value against the reserved system keys.
+fn validate_property_value(key: &str, value: &PropertyValue) -> Result<(), PropertyError> {
+    match key {
+        SYSTEM_COMPONENT => match value {
+            PropertyValue::Bool { .. } => Ok(()),
+            _ => Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a boolean".to_owned() }),
+        },
+        SYSTEM_FURNTYPE => match value {
+            PropertyValue::FurnType { .. } => Ok(()),
+            _ => Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a furniture type".to_owned() }),
+        },
+        SYSTEM_PROTOTYPE_ID => match value {
+            PropertyValue::Reference { .. } => Ok(()),
+            _ => {
+                Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a prototype reference".to_owned() })
+            }
+        },
+        SYSTEM_PROTOTYPE_VERSION => match value {
+            PropertyValue::Integer { .. } => Ok(()),
+            _ => Err(PropertyError::Invalid {
+                key: key.to_owned(),
+                message: "must be an integer prototype version".to_owned(),
+            }),
+        },
+        SYSTEM_PROTOTYPE_PARAMETERS => match value {
+            PropertyValue::Structured { .. } => Ok(()),
+            _ => Err(PropertyError::Invalid {
+                key: key.to_owned(),
+                message: "must be a structured prototype parameter record".to_owned(),
+            }),
+        },
+        _ => Ok(()),
+    }
+}
+
+/// One property change applied to one node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropertyChange {
+    /// The node that receives the value.
+    pub node: Id,
+    /// The property key.
+    pub key: String,
+    /// The new typed value.
+    pub value: PropertyValue,
+}
+
+/// The structural kind a [`NodeQuery`] filters on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralKind {
+    /// A flat panel leaf.
+    Panel,
+    /// A container, whether an ordinary group or a furniture component.
+    Container,
+}
+
+/// A property predicate: the named property must equal the given value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PropertyPredicate {
+    key: String,
+    value: PropertyValue,
+}
+
+impl PropertyPredicate {
+    /// Creates an equality predicate for one property.
+    pub fn new(key: impl Into<String>, value: PropertyValue) -> Self {
+        Self { key: key.into(), value }
+    }
+
+    /// The property key.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The required value.
+    pub const fn value(&self) -> &PropertyValue {
+        &self.value
+    }
+}
+
+/// A query over the document tree: structural kind, furniture type subtree and property equality.
+///
+/// The same query feeds selection, reports and, later, CNC rules, so a report and a machining
+/// program cannot disagree about which nodes match. An empty query matches every node below the
+/// root.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeQuery {
+    #[serde(default)]
+    kind: Option<StructuralKind>,
+    #[serde(default)]
+    furntype: Option<FurnType>,
+    #[serde(default)]
+    property: Option<PropertyPredicate>,
+}
+
+impl NodeQuery {
+    /// A query that matches every node below the root.
+    pub const fn any() -> Self {
+        Self { kind: None, furntype: None, property: None }
+    }
+
+    /// Restricts the query to one structural kind.
+    pub const fn with_kind(mut self, kind: StructuralKind) -> Self {
+        self.kind = Some(kind);
+        self
+    }
+
+    /// Restricts the query to a furniture type and its descendants.
+    pub const fn with_furntype_under(mut self, furntype: FurnType) -> Self {
+        self.furntype = Some(furntype);
+        self
+    }
+
+    /// Adds a property equality predicate.
+    pub fn with_property(mut self, key: impl Into<String>, value: PropertyValue) -> Self {
+        self.property = Some(PropertyPredicate::new(key, value));
+        self
+    }
+
+    /// Whether the query has no filters and matches every node.
+    pub const fn is_empty(&self) -> bool {
+        self.kind.is_none() && self.furntype.is_none() && self.property.is_none()
+    }
+
+    /// The structural kind filter, if any.
+    pub const fn kind(&self) -> Option<StructuralKind> {
+        self.kind
+    }
+
+    /// The furniture type filter, if any.
+    pub const fn furntype(&self) -> Option<FurnType> {
+        self.furntype
+    }
+
+    /// The property predicate, if any.
+    pub const fn property(&self) -> Option<&PropertyPredicate> {
+        self.property.as_ref()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Error, PartialEq)]
 pub enum PlacementError {
     /// The translation contains a NaN or an infinity.
@@ -348,25 +893,27 @@ pub struct Project {
     schema_version: u32,
     revision: Revision,
     next_id: Id,
-    root: Group,
+    root: Container,
 }
 
 impl Project {
     /// The schema version written by this build.
     ///
     /// Version 3 moved panel-owned machining from core-local to nominal panel-local coordinates.
-    /// Version 5 splits assembly components from organisational groups. Version 6 stores the
-    /// manipulation pivot on every node.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 6;
+    /// Version 5 split assembly components from organisational groups. Version 6 stores the
+    /// manipulation pivot on every node. Version 7 replaces the two container kinds with one
+    /// `Container` that carries typed properties: an old assembly becomes a component container
+    /// and an old group an ordinary one.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
 
-    /// Creates a project from a root group and validates its tree.
+    /// Creates a project from a root container and validates its tree.
     ///
-    /// The root defines the world frame, so its pivot is forced to zero even if the supplied group
-    /// was built with children.
-    pub fn new(root: Group) -> Result<Self, ProjectError> {
+    /// The root defines the world frame, so its pivot is forced to zero even if the supplied
+    /// container was built with children.
+    pub fn new(root: Container) -> Result<Self, ProjectError> {
         let max_id = scan_tree(&root)?;
         let next_id = next_id_after(max_id)?;
         let mut root = root;
@@ -384,38 +931,32 @@ impl Project {
         self.revision
     }
 
-    /// The next id that [`Project::add_panel`] or [`Project::add_assembly`] will allocate.
+    /// The next id that [`Project::add_panel`] or [`Project::add_component`] will allocate.
     pub const fn next_id(&self) -> Id {
         self.next_id
     }
 
-    /// The root group.
+    /// The root container.
     ///
-    /// The root is an organisational container, not a furniture component. It defines the world
-    /// frame and cannot be deleted, moved, grouped, ungrouped or dissolved.
-    pub const fn root(&self) -> &Group {
+    /// The root defines the world frame and is never a furniture component. It cannot be deleted,
+    /// moved, grouped, ungrouped or dissolved.
+    pub const fn root(&self) -> &Container {
         &self.root
     }
 
-    /// Finds an assembly component anywhere in the tree.
-    pub fn assembly(&self, id: Id) -> Option<&Assembly> {
-        match self.container(id)? {
-            ContainerRef::Assembly(assembly) => Some(assembly),
-            ContainerRef::Group(_) => None,
-        }
+    /// Finds a container anywhere in the tree, including the root.
+    pub fn container(&self, id: Id) -> Option<&Container> {
+        find_container(&self.root, id, 1).map(|(_, container)| container)
     }
 
-    /// Finds a group anywhere in the tree, including the root.
-    pub fn group(&self, id: Id) -> Option<&Group> {
-        match self.container(id)? {
-            ContainerRef::Group(group) => Some(group),
-            ContainerRef::Assembly(_) => None,
-        }
-    }
-
-    /// Whether the id names an assembly, a group, or a panel.
+    /// Whether the id names a container or a panel.
     pub fn is_container(&self, id: Id) -> bool {
         self.container(id).is_some()
+    }
+
+    /// Whether the id names a container marked as a furniture component.
+    pub fn is_component(&self, id: Id) -> bool {
+        id != self.root.id && self.container(id).is_some_and(Container::is_component)
     }
 
     /// Finds a panel anywhere in the tree.
@@ -423,9 +964,10 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
-    /// Finds a panel, group or nested assembly below the root.
+    /// Finds a panel or a nested container below the root.
     ///
-    /// The root group is not a [`Node`]; use [`Project::group`] with the root id to reach it.
+    /// The root container is not a [`Node`]; use [`Project::container`] with the root id to reach
+    /// it.
     pub fn node(&self, id: Id) -> Option<&Node> {
         find_node(&self.root, id)
     }
@@ -516,8 +1058,7 @@ impl Project {
             for child in children {
                 match child {
                     Node::Panel(panel) => ids.push(panel.id()),
-                    Node::Assembly(assembly) => collect(&assembly.children, ids, depth.saturating_add(1)),
-                    Node::Group(group) => collect(&group.children, ids, depth.saturating_add(1)),
+                    Node::Container(container) => collect(&container.children, ids, depth.saturating_add(1)),
                 }
             }
         }
@@ -543,8 +1084,7 @@ impl Project {
         }
         match self.node(id)? {
             Node::Panel(panel) => Some(panel.pivot),
-            Node::Assembly(assembly) => Some(assembly.pivot),
-            Node::Group(group) => Some(group.pivot),
+            Node::Container(container) => Some(container.pivot),
         }
     }
 
@@ -596,8 +1136,7 @@ impl Project {
         };
         match node {
             Node::Panel(panel) => panel.pivot = pivot,
-            Node::Assembly(assembly) => assembly.pivot = pivot,
-            Node::Group(group) => group.pivot = pivot,
+            Node::Container(container) => container.pivot = pivot,
         }
         self.revision = next_revision;
         Ok(next_revision)
@@ -616,15 +1155,11 @@ impl Project {
         self.set_node_pivot(id, pivot)
     }
 
-    /// The container with the given id, including the root group.
-    fn container(&self, id: Id) -> Option<ContainerRef<'_>> {
-        find_container(&self.root, id, 1).map(|(_, container)| container)
-    }
-
     /// Checks that `nodes` can be wrapped in one new group.
     ///
     /// Grouping needs at least two distinct non-root nodes that share one parent container, and the
-    /// new level must stay inside [`Project::MAX_ASSEMBLY_DEPTH`].
+    /// new level must stay inside [`Project::MAX_ASSEMBLY_DEPTH`]; the name predates unified
+    /// containers and is kept as a stable public name.
     pub fn validate_group(&self, nodes: &[Id]) -> Result<(), ProjectError> {
         self.group_parent(nodes).map(|_| ())
     }
@@ -946,8 +1481,9 @@ impl Project {
 
     /// Adds a panel to an existing container and bumps the revision once.
     ///
-    /// Panels may live in a group as well as in an assembly; a group is only an organisational
-    /// container. The panel id is allocated from the document; callers must not invent one.
+    /// Panels may live in any container, whether an ordinary group or a furniture component; a
+    /// group is only organisational. The panel id is allocated from the document; callers must not
+    /// invent one.
     pub fn add_panel(
         &mut self,
         parent: Id,
@@ -971,11 +1507,11 @@ impl Project {
         Ok(id)
     }
 
-    /// Adds an empty assembly component and bumps the revision once.
+    /// Adds an empty container marked as a furniture component and bumps the revision once.
     ///
     /// The parent may be the root or any nested container. Adding a child below
     /// [`Project::MAX_ASSEMBLY_DEPTH`] is rejected.
-    pub fn add_assembly(
+    pub fn add_component(
         &mut self,
         parent: Id,
         name: impl Into<String>,
@@ -989,16 +1525,17 @@ impl Project {
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let assembly = Assembly::new(id, name, placement, Vec::new());
+        let mut container = Container::new(id, name, placement, Vec::new());
+        container.set_component_marker(true)?;
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };
-        children.push(Node::Assembly(assembly));
+        children.push(Node::Container(container));
         self.revision = next_revision;
         Ok(id)
     }
 
-    /// Renames any node, including the root group, and bumps the revision once.
+    /// Renames any node, including the root container, and bumps the revision once.
     ///
     /// Callers validate that the name is not blank; the model keeps user-visible text verbatim.
     pub fn rename_node(&mut self, id: Id, name: impl Into<String>) -> Result<Revision, ProjectError> {
@@ -1017,9 +1554,9 @@ impl Project {
         Ok(next_revision)
     }
 
-    /// Replaces a panel's, group's or assembly's placement and bumps the revision once.
+    /// Replaces a panel or container placement and bumps the revision once.
     ///
-    /// The root group defines the world frame and cannot be moved. The placement stays relative to
+    /// The root container defines the world frame and cannot be moved. The placement stays relative to
     /// the parent container, so moving a container moves all of its leaves.
     pub fn set_node_placement(&mut self, id: Id, placement: Placement) -> Result<Revision, ProjectError> {
         if id == self.root.id {
@@ -1141,31 +1678,56 @@ impl Project {
             }
         }
         let index = insert_at.unwrap_or(rest.len());
-        rest.insert(index, Node::Group(Group::new(id, name, Placement::IDENTITY, moved)));
+        rest.insert(index, Node::Container(Container::new(id, name, Placement::IDENTITY, moved)));
         *children = rest;
         self.revision = next_revision;
         Ok(id)
     }
 
-    /// Replaces a group with its children and bumps the revision once.
+    /// Replaces an ordinary container with its children and bumps the revision once.
     ///
     /// The children keep their world transforms: each child placement is composed with the removed
-    /// group's placement. An assembly is a furniture component with its own identity and cannot be
-    /// ungrouped by this command; a future dissolve command handles that separately. Panels are
-    /// atomic leaves and cannot be ungrouped. The root group cannot be ungrouped.
+    /// container's placement. A container marked as a furniture component has its own identity and
+    /// cannot be ungrouped by this command; use [`Project::convert_to_group`] first. Panels are
+    /// atomic leaves and cannot be ungrouped. The root cannot be ungrouped.
     pub fn ungroup_group(&mut self, id: Id) -> Result<Revision, ProjectError> {
         if id == self.root.id {
             return Err(ProjectError::RootImmutable { id });
         }
         let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
-        let Node::Group(group) = node else {
-            return Err(ProjectError::NotAGroup { id });
+        let Node::Container(container) = node else {
+            return Err(ProjectError::NotAnOrdinaryContainer { id });
         };
+        if container.is_component() {
+            return Err(ProjectError::NotAComponent { id });
+        }
+        self.flatten_container(container)
+    }
+
+    /// Clears the component marker and prototype keys, then flattens the container.
+    ///
+    /// The container becomes an ordinary group and its children take its place in the parent, as
+    /// with [`Project::ungroup_group`]. Nothing else about the children changes.
+    pub fn convert_to_group(&mut self, id: Id) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
+        let Node::Container(mut container) = node else {
+            return Err(ProjectError::NotAnOrdinaryContainer { id });
+        };
+        container.clear_component_marker();
+        self.flatten_container(container)
+    }
+
+    /// Moves a container's children into its parent and removes the container.
+    fn flatten_container(&mut self, container: Container) -> Result<Revision, ProjectError> {
+        let id = container.id;
         let parent_id = self.parent_of(id).ok_or(ProjectError::NodeNotFound { id })?;
         let next_revision = self.next_revision()?;
-        let mut children = Vec::with_capacity(group.children.len());
-        for mut child in group.children {
-            let placement = Placement::compose(group.placement, child.placement())
+        let mut children = Vec::with_capacity(container.children.len());
+        for mut child in container.children {
+            let placement = Placement::compose(container.placement, child.placement())
                 .map_err(|_| ProjectError::PlacementCompose { id })?;
             child.set_placement(placement);
             children.push(child);
@@ -1180,6 +1742,134 @@ impl Project {
         parent.splice(index..index, children);
         self.revision = next_revision;
         Ok(next_revision)
+    }
+
+    /// The property bag of a node, including the root.
+    pub fn properties(&self, id: Id) -> Option<&Properties> {
+        if id == self.root.id {
+            return Some(&self.root.properties);
+        }
+        match self.node(id)? {
+            Node::Container(container) => Some(&container.properties),
+            Node::Panel(panel) => Some(&panel.properties),
+        }
+    }
+
+    /// The furniture type stored on a node; unclassified when the node has no type.
+    pub fn furntype(&self, id: Id) -> Option<FurnType> {
+        match self.properties(id)?.get(SYSTEM_FURNTYPE) {
+            Some(PropertyValue::FurnType { value }) => Some(*value),
+            Some(_) => None,
+            None => Some(FurnType::UNCLASSIFIED),
+        }
+    }
+
+    /// Sets one property on one node and bumps the revision once.
+    pub fn set_property(&mut self, id: Id, key: &str, value: PropertyValue) -> Result<Revision, ProjectError> {
+        let changes = [PropertyChange { node: id, key: key.to_owned(), value }];
+        self.set_properties(&changes)
+    }
+
+    /// Sets several properties as one document change: one revision and one undo entry.
+    pub fn set_properties(&mut self, changes: &[PropertyChange]) -> Result<Revision, ProjectError> {
+        if changes.is_empty() {
+            return Err(ProjectError::NoPropertyChanges);
+        }
+        let root = self.root.id;
+        let mut seen: HashSet<(u64, &str)> = HashSet::new();
+        for change in changes {
+            if change.node == root {
+                return Err(ProjectError::RootImmutable { id: change.node });
+            }
+            if !seen.insert((change.node.get(), change.key.as_str())) {
+                return Err(ProjectError::DuplicateProperty { node: change.node, key: change.key.clone() });
+            }
+            if !self.contains_node(change.node) {
+                return Err(ProjectError::NodeNotFound { id: change.node });
+            }
+            validate_property_value(&change.key, &change.value)?;
+        }
+        let next_revision = self.next_revision()?;
+        for change in changes {
+            let Some(node) = find_node_mut(&mut self.root, change.node) else {
+                return Err(ProjectError::NodeNotFound { id: change.node });
+            };
+            match node {
+                Node::Container(container) => container.set_property(&change.key, change.value.clone())?,
+                Node::Panel(panel) => panel.set_property(&change.key, change.value.clone())?,
+            }
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes one property from one node and bumps the revision once.
+    pub fn clear_property(&mut self, id: Id, key: &str) -> Result<Revision, ProjectError> {
+        if id == self.root.id {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let removed = match node {
+            Node::Container(container) => container.clear_property(key),
+            Node::Panel(panel) => panel.clear_property(key),
+        };
+        if !removed {
+            return Err(ProjectError::PropertyNotFound { node: id, key: key.to_owned() });
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Selects the nodes that match a query, in tree order.
+    pub fn query(&self, query: &NodeQuery) -> Vec<Id> {
+        fn matches(properties: &Properties, kind: StructuralKind, query: &NodeQuery) -> bool {
+            if let Some(wanted) = query.kind()
+                && wanted != kind
+            {
+                return false;
+            }
+            if let Some(wanted) = query.furntype() {
+                let found = match properties.get(SYSTEM_FURNTYPE) {
+                    Some(PropertyValue::FurnType { value }) => *value,
+                    _ => FurnType::UNCLASSIFIED,
+                };
+                if !found.is_ancestor_or_self(wanted) {
+                    return false;
+                }
+            }
+            if let Some(predicate) = query.property()
+                && properties.get(predicate.key()) != Some(predicate.value())
+            {
+                return false;
+            }
+            true
+        }
+        fn walk(children: &[Node], query: &NodeQuery, ids: &mut Vec<Id>, depth: u32) {
+            if depth > Project::MAX_ASSEMBLY_DEPTH {
+                return;
+            }
+            for child in children {
+                match child {
+                    Node::Container(container) => {
+                        if matches(&container.properties, StructuralKind::Container, query) {
+                            ids.push(container.id);
+                        }
+                        walk(&container.children, query, ids, depth.saturating_add(1));
+                    }
+                    Node::Panel(panel) => {
+                        if matches(&panel.properties, StructuralKind::Panel, query) {
+                            ids.push(panel.id);
+                        }
+                    }
+                }
+            }
+        }
+        let mut ids = Vec::new();
+        walk(&self.root.children, query, &mut ids, 1);
+        ids
     }
 
     /// Advances the revision by one and returns it.
@@ -1238,34 +1928,10 @@ impl Project {
 }
 
 /// Validates the tree and returns the largest id it uses.
-/// A borrowed container, used by tree walks that treat assemblies and groups alike.
-#[derive(Clone, Copy)]
-enum ContainerRef<'a> {
-    Assembly(&'a Assembly),
-    Group(&'a Group),
-}
-
-impl<'a> ContainerRef<'a> {
-    const fn id(self) -> Id {
-        match self {
-            Self::Assembly(assembly) => assembly.id,
-            Self::Group(group) => group.id,
-        }
-    }
-
-    fn children(self) -> &'a [Node] {
-        match self {
-            Self::Assembly(assembly) => &assembly.children,
-            Self::Group(group) => &group.children,
-        }
-    }
-}
-
-/// Validates the tree and returns the largest id it uses.
-fn scan_tree(root: &Group) -> Result<u64, ProjectError> {
+fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
     let mut seen = HashSet::new();
     let mut max_id = 0u64;
-    let mut stack = vec![(ContainerRef::Group(root), 1u32)];
+    let mut stack = vec![(root, 1u32)];
     while let Some((container, depth)) = stack.pop() {
         if depth > Project::MAX_ASSEMBLY_DEPTH {
             return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
@@ -1277,11 +1943,8 @@ fn scan_tree(root: &Group) -> Result<u64, ProjectError> {
         max_id = max_id.max(id.get());
         for child in container.children() {
             match child {
-                Node::Assembly(assembly) => {
-                    stack.push((ContainerRef::Assembly(assembly), depth.saturating_add(1)));
-                }
-                Node::Group(group) => {
-                    stack.push((ContainerRef::Group(group), depth.saturating_add(1)));
+                Node::Container(container) => {
+                    stack.push((container, depth.saturating_add(1)));
                 }
                 Node::Panel(panel) => {
                     if !seen.insert(panel.id.get()) {
@@ -1312,44 +1975,33 @@ fn next_id_after(max_id: u64) -> Result<Id, ProjectError> {
     Id::new(next).ok_or(ProjectError::IdSpaceExhausted)
 }
 
-/// Finds any container, including the root group.
-fn find_container(root: &Group, id: Id, depth: u32) -> Option<(u32, ContainerRef<'_>)> {
+/// Finds any container, including the root.
+fn find_container(root: &Container, id: Id, depth: u32) -> Option<(u32, &Container)> {
     if root.id == id {
-        return Some((depth, ContainerRef::Group(root)));
+        return Some((depth, root));
     }
     find_container_in(&root.children, id, depth.saturating_add(1))
 }
 
-fn find_container_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, ContainerRef<'_>)> {
+fn find_container_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Container)> {
     if depth > Project::MAX_ASSEMBLY_DEPTH {
         return None;
     }
     for child in children {
-        match child {
-            Node::Assembly(assembly) => {
-                if assembly.id == id {
-                    return Some((depth, ContainerRef::Assembly(assembly)));
-                }
-                if let Some(found) = find_container_in(&assembly.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
+        if let Node::Container(container) = child {
+            if container.id == id {
+                return Some((depth, container));
             }
-            Node::Group(group) => {
-                if group.id == id {
-                    return Some((depth, ContainerRef::Group(group)));
-                }
-                if let Some(found) = find_container_in(&group.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
+            if let Some(found) = find_container_in(&container.children, id, depth.saturating_add(1)) {
+                return Some(found);
             }
-            Node::Panel(_) => {}
         }
     }
     None
 }
 
 /// Finds any container's child list for mutation.
-fn find_container_mut(root: &mut Group, id: Id, depth: u32) -> Option<(u32, &mut Vec<Node>)> {
+fn find_container_mut(root: &mut Container, id: Id, depth: u32) -> Option<(u32, &mut Vec<Node>)> {
     if root.id == id {
         return Some((depth, &mut root.children));
     }
@@ -1361,30 +2013,19 @@ fn find_container_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u
         return None;
     }
     for child in children {
-        match child {
-            Node::Assembly(assembly) => {
-                if assembly.id == id {
-                    return Some((depth, &mut assembly.children));
-                }
-                if let Some(found) = find_container_in_mut(&mut assembly.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
+        if let Node::Container(container) = child {
+            if container.id == id {
+                return Some((depth, &mut container.children));
             }
-            Node::Group(group) => {
-                if group.id == id {
-                    return Some((depth, &mut group.children));
-                }
-                if let Some(found) = find_container_in_mut(&mut group.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
+            if let Some(found) = find_container_in_mut(&mut container.children, id, depth.saturating_add(1)) {
+                return Some(found);
             }
-            Node::Panel(_) => {}
         }
     }
     None
 }
 
-fn find_panel_with_depth(root: &Group, id: Id, depth: u32) -> Option<(u32, &Panel)> {
+fn find_panel_with_depth(root: &Container, id: Id, depth: u32) -> Option<(u32, &Panel)> {
     find_panel_in(&root.children, id, depth)
 }
 
@@ -1395,13 +2036,8 @@ fn find_panel_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Panel)>
     for child in children {
         match child {
             Node::Panel(panel) if panel.id == id => return Some((depth, panel)),
-            Node::Assembly(assembly) => {
-                if let Some(found) = find_panel_in(&assembly.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
-            }
-            Node::Group(group) => {
-                if let Some(found) = find_panel_in(&group.children, id, depth.saturating_add(1)) {
+            Node::Container(container) => {
+                if let Some(found) = find_panel_in(&container.children, id, depth.saturating_add(1)) {
                     return Some(found);
                 }
             }
@@ -1411,7 +2047,7 @@ fn find_panel_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Panel)>
     None
 }
 
-fn find_panel_mut(root: &mut Group, id: Id, depth: u32) -> Option<(u32, &mut Panel)> {
+fn find_panel_mut(root: &mut Container, id: Id, depth: u32) -> Option<(u32, &mut Panel)> {
     find_panel_in_mut(&mut root.children, id, depth)
 }
 
@@ -1422,13 +2058,8 @@ fn find_panel_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, 
     for child in children {
         match child {
             Node::Panel(panel) if panel.id == id => return Some((depth, panel)),
-            Node::Assembly(assembly) => {
-                if let Some(found) = find_panel_in_mut(&mut assembly.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
-            }
-            Node::Group(group) => {
-                if let Some(found) = find_panel_in_mut(&mut group.children, id, depth.saturating_add(1)) {
+            Node::Container(container) => {
+                if let Some(found) = find_panel_in_mut(&mut container.children, id, depth.saturating_add(1)) {
                     return Some(found);
                 }
             }
@@ -1438,7 +2069,7 @@ fn find_panel_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, 
     None
 }
 
-fn find_node(root: &Group, id: Id) -> Option<&Node> {
+fn find_node(root: &Container, id: Id) -> Option<&Node> {
     find_node_in(&root.children, id)
 }
 
@@ -1456,7 +2087,7 @@ fn find_node_in(children: &[Node], id: Id) -> Option<&Node> {
     None
 }
 
-fn find_node_mut(root: &mut Group, id: Id) -> Option<&mut Node> {
+fn find_node_mut(root: &mut Container, id: Id) -> Option<&mut Node> {
     find_node_in_mut(&mut root.children, id)
 }
 
@@ -1474,7 +2105,7 @@ fn find_node_in_mut(children: &mut [Node], id: Id) -> Option<&mut Node> {
     None
 }
 
-fn find_parent(root: &Group, id: Id) -> Option<Id> {
+fn find_parent(root: &Container, id: Id) -> Option<Id> {
     fn walk(children: &[Node], id: Id, parent: Id) -> Option<Id> {
         for child in children {
             if child.id() == id {
@@ -1528,14 +2159,8 @@ fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> Option<(DVe
                     }
                 }
             }
-            Node::Assembly(assembly) => {
-                if let Some((min, max)) = panel_bounds(&assembly.children, relative, depth.saturating_add(1)) {
-                    include(min);
-                    include(max);
-                }
-            }
-            Node::Group(group) => {
-                if let Some((min, max)) = panel_bounds(&group.children, relative, depth.saturating_add(1)) {
+            Node::Container(container) => {
+                if let Some((min, max)) = panel_bounds(&container.children, relative, depth.saturating_add(1)) {
                     include(min);
                     include(max);
                 }
@@ -1556,22 +2181,20 @@ fn default_container_pivot(children: &[Node]) -> Pivot {
 fn node_height(node: &Node) -> u32 {
     match node {
         Node::Panel(_) => 1,
-        Node::Assembly(assembly) => assembly.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
-        Node::Group(group) => group.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
+        Node::Container(container) => container.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
     }
 }
 
 fn count_nodes(node: &Node) -> u64 {
     match node {
         Node::Panel(_) => 1,
-        Node::Assembly(assembly) => {
-            1u64.saturating_add(assembly.children.iter().map(count_nodes).fold(0, u64::saturating_add))
+        Node::Container(container) => {
+            1u64.saturating_add(container.children.iter().map(count_nodes).fold(0, u64::saturating_add))
         }
-        Node::Group(group) => 1u64.saturating_add(group.children.iter().map(count_nodes).fold(0, u64::saturating_add)),
     }
 }
 
-fn remove_child(root: &mut Group, id: Id) -> bool {
+fn remove_child(root: &mut Container, id: Id) -> bool {
     remove_child_in(&mut root.children, id)
 }
 
@@ -1594,15 +2217,9 @@ fn assign_new_ids(node: &mut Node, ids: &mut impl Iterator<Item = Id>) -> Result
     let id = ids.next().ok_or(ProjectError::IdSpaceExhausted)?;
     match node {
         Node::Panel(panel) => panel.id = id,
-        Node::Assembly(assembly) => {
-            assembly.id = id;
-            for child in &mut assembly.children {
-                assign_new_ids(child, ids)?;
-            }
-        }
-        Node::Group(group) => {
-            group.id = id;
-            for child in &mut group.children {
+        Node::Container(container) => {
+            container.id = id;
+            for child in &mut container.children {
                 assign_new_ids(child, ids)?;
             }
         }
@@ -1813,27 +2430,55 @@ pub enum ProjectError {
         /// The missing panel id.
         id: Id,
     },
-    /// The requested node is not in the tree, or it is the root group.
+    /// The requested node is not in the tree, or it is the root container.
     #[error("node {id} not found below the root")]
     NodeNotFound {
         /// The missing node id.
         id: Id,
     },
-    /// The root group cannot be deleted, moved, grouped, ungrouped or dissolved.
-    #[error("root group {id} cannot be changed this way")]
+    /// The root container cannot be deleted, moved, grouped, ungrouped or dissolved.
+    #[error("root container {id} cannot be changed this way")]
     RootImmutable {
-        /// The root group id.
+        /// The root container id.
         id: Id,
     },
-    /// Ungrouping was requested for a node that is not a group.
+    /// Ungrouping was requested for a node that is not an ordinary container.
     ///
-    /// A panel is an atomic leaf; an assembly is a furniture component with its own identity and is
-    /// dismantled by a separate operation rather than by `node.ungroup`.
-    #[error("node {id} is not a group and cannot be ungrouped")]
-    NotAGroup {
-        /// The node that is not a group.
+    /// A panel is an atomic leaf; a component has its own identity and is
+    /// converted to a group before `node.ungroup` will flatten it.
+    #[error("node {id} is not an ordinary container and cannot be ungrouped")]
+    NotAnOrdinaryContainer {
+        /// The node that is not an ordinary container.
         id: Id,
     },
+    /// Ungrouping was requested for a furniture component.
+    #[error("node {id} is a furniture component and cannot be ungrouped; convert it to a group first")]
+    NotAComponent {
+        /// The component that was not flattened.
+        id: Id,
+    },
+    /// A property batch contained no changes.
+    #[error("no property changes were given")]
+    NoPropertyChanges,
+    /// The same node and property are listed twice in one batch.
+    #[error("property `{key}` on node {node} is changed more than once")]
+    DuplicateProperty {
+        /// The node with the repeated change.
+        node: Id,
+        /// The repeated property key.
+        key: String,
+    },
+    /// The requested property is not stored on the node.
+    #[error("node {node} has no property `{key}`")]
+    PropertyNotFound {
+        /// The node that was asked.
+        node: Id,
+        /// The missing property key.
+        key: String,
+    },
+    /// A property key or value violates the document property rules.
+    #[error(transparent)]
+    Property(#[from] PropertyError),
     /// Grouping needs nodes that share one parent container.
     #[error("nodes selected for grouping do not share one parent container")]
     NodesNotSiblings,
@@ -2003,7 +2648,7 @@ struct ProjectWire {
     revision: Revision,
     #[serde(default)]
     next_id: Option<Id>,
-    root: Group,
+    root: Container,
 }
 
 impl TryFrom<ProjectWire> for Project {
@@ -2012,8 +2657,9 @@ impl TryFrom<ProjectWire> for Project {
     fn try_from(wire: ProjectWire) -> Result<Self, Self::Error> {
         // Version 1 stored a `size` on every panel; `PanelWire` migrates it to nominal size plus a
         // fallback. Version 2 stored machining in core-local coordinates; the migration below
-        // translates it to the nominal panel frame. All versions are normalized to the current one
-        // on load.
+        // translates it to the nominal panel frame. Version 7 unified the two container kinds;
+        // `Node` reads a version-6 assembly as a component container. All versions are normalized
+        // to the current one on load.
         if !(1..=Project::CURRENT_SCHEMA_VERSION).contains(&wire.schema_version) {
             return Err(ProjectError::UnsupportedSchemaVersion {
                 found: wire.schema_version,
@@ -2048,7 +2694,7 @@ impl TryFrom<ProjectWire> for Project {
 /// The conversion adds the stored fallback core origin to every cutout, so a loaded file keeps the
 /// hole at the same physical position. The migration is bounded by the same depth limit as the
 /// document tree.
-fn migrate_machining_to_nominal(root: &mut Group, depth: u32) -> Result<(), ProjectError> {
+fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), ProjectError> {
     if depth > Project::MAX_ASSEMBLY_DEPTH {
         return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
     }
@@ -2058,8 +2704,7 @@ fn migrate_machining_to_nominal(root: &mut Group, depth: u32) -> Result<(), Proj
         }
         for child in children {
             match child {
-                Node::Assembly(assembly) => walk(&mut assembly.children, depth.saturating_add(1))?,
-                Node::Group(group) => walk(&mut group.children, depth.saturating_add(1))?,
+                Node::Container(container) => walk(&mut container.children, depth.saturating_add(1))?,
                 Node::Panel(panel) => panel.migrate_machining_from_core()?,
             }
         }
@@ -2072,20 +2717,16 @@ fn migrate_machining_to_nominal(root: &mut Group, depth: u32) -> Result<(), Proj
 ///
 /// Panels keep their zero default from [`PanelWire`]. The walk is bounded by the same depth limit
 /// as the document tree.
-fn migrate_container_pivots(root: &mut Group, depth: u32) -> Result<(), ProjectError> {
+fn migrate_container_pivots(root: &mut Container, depth: u32) -> Result<(), ProjectError> {
     fn walk(children: &mut [Node], depth: u32) -> Result<(), ProjectError> {
         if depth > Project::MAX_ASSEMBLY_DEPTH {
             return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
         }
         for child in children {
             match child {
-                Node::Assembly(assembly) => {
-                    assembly.pivot = default_container_pivot(&assembly.children);
-                    walk(&mut assembly.children, depth.saturating_add(1))?;
-                }
-                Node::Group(group) => {
-                    group.pivot = default_container_pivot(&group.children);
-                    walk(&mut group.children, depth.saturating_add(1))?;
+                Node::Container(container) => {
+                    container.pivot = default_container_pivot(&container.children);
+                    walk(&mut container.children, depth.saturating_add(1))?;
                 }
                 Node::Panel(_) => {}
             }
@@ -2095,35 +2736,37 @@ fn migrate_container_pivots(root: &mut Group, depth: u32) -> Result<(), ProjectE
     walk(&mut root.children, depth.saturating_add(1))
 }
 
-/// A node in the product tree.
+/// A node that can hold children: an ordinary group or a furniture component.
 ///
-/// An assembly is a meaningful furniture or industrial component: a cabinet, a drawer box, a
-/// runner, a hinge. It owns its children, placement and, in a later milestone, a furniture type
-/// with type-specific properties and operations. An assembly is not ungrouped by `node.ungroup`;
-/// dismantling it is a separate operation with its own rules.
+/// There is one container kind. "Assembly" is a word for a container marked as a component — a
+/// cabinet, a drawer box, a facade or a hinge — by a non-zero `furntype`, a `prototype.id` or an
+/// explicit `component = true`. An unmarked container is an ordinary group and can be flattened by
+/// `node.ungroup`. The project root is a container.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Assembly {
+pub struct Container {
     id: Id,
     name: String,
     placement: Placement,
     #[serde(default)]
     pivot: Pivot,
     children: Vec<Node>,
+    #[serde(default)]
+    properties: Properties,
 }
 
-impl Assembly {
-    /// Creates an assembly. Global id uniqueness is checked by [`Project::validate`].
+impl Container {
+    /// Creates an ordinary container. Global id uniqueness is checked by [`Project::validate`].
     ///
-    /// A non-empty assembly starts with its pivot at the centre of its local panel bounds, so a
-    /// component created from a selection is grabbed at its visual centre. An empty assembly starts
-    /// at its own origin.
+    /// A non-empty container starts with its pivot at the centre of its local panel bounds, so a
+    /// container created from a selection is grabbed at its visual centre. An empty container
+    /// starts at its own origin. The root has its pivot forced back to zero by [`Project::new`].
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
         let pivot = default_container_pivot(&children);
-        Self { id, name: name.into(), placement, pivot, children }
+        Self { id, name: name.into(), placement, pivot, children, properties: Properties::new() }
     }
 
-    /// The stable assembly id.
+    /// The stable container id.
     pub const fn id(&self) -> Id {
         self.id
     }
@@ -2138,67 +2781,59 @@ impl Assembly {
         self.placement
     }
 
-    /// The manipulation pivot in the assembly's own frame.
+    /// The manipulation pivot in the container's own frame.
     pub const fn pivot(&self) -> Pivot {
         self.pivot
     }
 
-    /// The panels, groups and nested assemblies in this assembly.
+    /// The panels and nested containers in this container.
     pub fn children(&self) -> &[Node] {
         &self.children
     }
-}
 
-/// An organisational container.
-///
-/// A group holds any nodes and exists to move or work with them together. It has no furniture type
-/// and no type-specific properties or operations. Unlike an assembly it can be flattened back into
-/// its parent with `node.ungroup`. The project root is a group.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Group {
-    id: Id,
-    name: String,
-    placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
-    children: Vec<Node>,
-}
+    /// The typed properties of this container.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
 
-impl Group {
-    /// Creates a group. Global id uniqueness is checked by [`Project::validate`].
+    /// Whether the container is marked as a furniture component.
     ///
-    /// A non-empty group starts with its pivot at the centre of its local panel bounds; an empty
-    /// group starts at its own origin. The root group has its pivot forced back to zero by
-    /// [`Project::new`].
-    pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        let pivot = default_container_pivot(&children);
-        Self { id, name: name.into(), placement, pivot, children }
+    /// A non-zero furniture type, a prototype reference or an explicit `component = true` all mark
+    /// a component; an explicit `component = false` does not erase the other two markers.
+    pub fn is_component(&self) -> bool {
+        if let Some(PropertyValue::Bool { value: true }) = self.properties.get(SYSTEM_COMPONENT) {
+            return true;
+        }
+        if let Some(PropertyValue::FurnType { value }) = self.properties.get(SYSTEM_FURNTYPE)
+            && !value.is_unclassified()
+        {
+            return true;
+        }
+        self.properties.contains_key(SYSTEM_PROTOTYPE_ID)
     }
 
-    /// The stable group id.
-    pub const fn id(&self) -> Id {
-        self.id
+    /// Sets the explicit component marker through the validated property path.
+    pub fn set_component_marker(&mut self, component: bool) -> Result<(), PropertyError> {
+        self.properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(component)).map(|_| ())
     }
 
-    /// The user-visible name.
-    pub fn name(&self) -> &str {
-        &self.name
+    /// Clears the component marker, the prototype keys and the furniture type.
+    pub fn clear_component_marker(&mut self) {
+        self.properties.remove(SYSTEM_COMPONENT);
+        self.properties.remove(SYSTEM_FURNTYPE);
+        self.properties.remove(SYSTEM_PROTOTYPE_ID);
+        self.properties.remove(SYSTEM_PROTOTYPE_VERSION);
+        self.properties.remove(SYSTEM_PROTOTYPE_PARAMETERS);
     }
 
-    /// The placement relative to the parent frame.
-    pub const fn placement(&self) -> Placement {
-        self.placement
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
     }
 
-    /// The manipulation pivot in the group's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
-    }
-
-    /// The panels, assemblies and nested groups in this group.
-    pub fn children(&self) -> &[Node] {
-        &self.children
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
     }
 }
 
@@ -2225,6 +2860,7 @@ pub struct Panel {
     band_order: Vec<SegmentSource>,
     corner_features: Vec<CornerFeature>,
     edge_bows: Vec<EdgeBow>,
+    properties: Properties,
 }
 
 impl Panel {
@@ -2262,6 +2898,7 @@ impl Panel {
             band_order: Vec::new(),
             corner_features: Vec::new(),
             edge_bows: Vec::new(),
+            properties: Properties::new(),
         })
     }
 
@@ -2313,6 +2950,21 @@ impl Panel {
     /// The manipulation pivot in the panel-local frame.
     pub const fn pivot(&self) -> Pivot {
         self.pivot
+    }
+
+    /// The typed properties of this panel.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
+
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
+    }
+
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
     }
 
     /// Machining owned by this panel, in nominal panel-local coordinates.
@@ -2667,6 +3319,8 @@ struct PanelWire {
     #[serde(default)]
     edge_bows: Vec<EdgeBow>,
     #[serde(default)]
+    properties: Properties,
+    #[serde(default)]
     size: Option<LegacyPanelSize>,
 }
 
@@ -2715,6 +3369,7 @@ impl TryFrom<PanelWire> for Panel {
         panel.band_order = normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding);
         panel.corner_features = wire.corner_features;
         panel.edge_bows = wire.edge_bows;
+        panel.properties = wire.properties;
         Ok(panel)
     }
 }
@@ -2942,27 +3597,79 @@ impl TryFrom<PanelRectWire> for PanelRect {
     }
 }
 
-/// A child of an assembly.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A child of a container.
+///
+/// A container is a group or a furniture component; a panel is an atomic leaf. Version-6 files
+/// used separate `assembly` and `group` tags; [`Node`] accepts them on load and normalizes an
+/// assembly to a component container.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
-    /// A nested assembly component.
-    Assembly(Assembly),
-    /// An organisational group.
-    Group(Group),
+    /// A group or furniture component with children.
+    Container(Container),
     /// A panel.
     Panel(Panel),
 }
 
-impl From<Assembly> for Node {
-    fn from(assembly: Assembly) -> Self {
-        Self::Assembly(assembly)
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(NodeVisitor)
     }
 }
 
-impl From<Group> for Node {
-    fn from(group: Group) -> Self {
-        Self::Group(group)
+/// Accepts current `container`/`panel` nodes and version-6 `assembly`/`group` nodes.
+struct NodeVisitor;
+
+impl<'de> Visitor<'de> for NodeVisitor {
+    type Value = Node;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a node object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        const FIELDS: &[&str] = &["container", "assembly", "group", "panel"];
+        let mut container: Option<Container> = None;
+        let mut panel: Option<Panel> = None;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "container" | "assembly" | "group" => {
+                    if container.is_some() {
+                        return Err(de::Error::custom("a node must not have two container entries"));
+                    }
+                    let mut decoded = map.next_value::<Container>()?;
+                    if key == "assembly" {
+                        decoded.set_component_marker(true).map_err(de::Error::custom)?;
+                    }
+                    container = Some(decoded);
+                }
+                "panel" => {
+                    if panel.is_some() {
+                        return Err(de::Error::custom("a node must not have two panel entries"));
+                    }
+                    panel = Some(map.next_value()?);
+                }
+                _ => return Err(de::Error::unknown_field(&key, FIELDS)),
+            }
+        }
+        match (container, panel) {
+            (Some(container), None) => Ok(Self::Value::Container(container)),
+            (None, Some(panel)) => Ok(Self::Value::Panel(panel)),
+            (Some(_), Some(_)) => Err(de::Error::custom("a node must not be both a container and a panel")),
+            (None, None) => Err(de::Error::custom("a node must be a container or a panel")),
+        }
+    }
+}
+
+impl From<Container> for Node {
+    fn from(container: Container) -> Self {
+        Self::Container(container)
     }
 }
 
@@ -2973,11 +3680,10 @@ impl From<Panel> for Node {
 }
 
 impl Node {
-    /// The stable node id, shared by panels and both container kinds.
+    /// The stable node id, shared by panels and containers.
     pub const fn id(&self) -> Id {
         match self {
-            Self::Assembly(assembly) => assembly.id,
-            Self::Group(group) => group.id,
+            Self::Container(container) => container.id,
             Self::Panel(panel) => panel.id,
         }
     }
@@ -2985,8 +3691,7 @@ impl Node {
     /// The user-visible node name.
     pub fn name(&self) -> &str {
         match self {
-            Self::Assembly(assembly) => &assembly.name,
-            Self::Group(group) => &group.name,
+            Self::Container(container) => &container.name,
             Self::Panel(panel) => &panel.name,
         }
     }
@@ -2994,8 +3699,7 @@ impl Node {
     /// The placement relative to the parent container.
     pub const fn placement(&self) -> Placement {
         match self {
-            Self::Assembly(assembly) => assembly.placement,
-            Self::Group(group) => group.placement,
+            Self::Container(container) => container.placement,
             Self::Panel(panel) => panel.placement,
         }
     }
@@ -3003,33 +3707,23 @@ impl Node {
     /// The children of a container, or `None` for a panel.
     pub fn children(&self) -> Option<&[Node]> {
         match self {
-            Self::Assembly(assembly) => Some(&assembly.children),
-            Self::Group(group) => Some(&group.children),
+            Self::Container(container) => Some(&container.children),
             Self::Panel(_) => None,
         }
     }
 
     fn children_mut(&mut self) -> Option<&mut Vec<Node>> {
         match self {
-            Self::Assembly(assembly) => Some(&mut assembly.children),
-            Self::Group(group) => Some(&mut group.children),
+            Self::Container(container) => Some(&mut container.children),
             Self::Panel(_) => None,
         }
     }
 
-    /// The nested assembly, or `None` for a group or panel.
-    pub const fn as_assembly(&self) -> Option<&Assembly> {
+    /// The nested container, or `None` for a panel.
+    pub const fn as_container(&self) -> Option<&Container> {
         match self {
-            Self::Assembly(assembly) => Some(assembly),
-            Self::Group(_) | Self::Panel(_) => None,
-        }
-    }
-
-    /// The nested group, or `None` for an assembly or panel.
-    pub const fn as_group(&self) -> Option<&Group> {
-        match self {
-            Self::Group(group) => Some(group),
-            Self::Assembly(_) | Self::Panel(_) => None,
+            Self::Container(container) => Some(container),
+            Self::Panel(_) => None,
         }
     }
 
@@ -3037,22 +3731,28 @@ impl Node {
     pub const fn as_panel(&self) -> Option<&Panel> {
         match self {
             Self::Panel(panel) => Some(panel),
-            Self::Assembly(_) | Self::Group(_) => None,
+            Self::Container(_) => None,
+        }
+    }
+
+    /// The typed properties of the node.
+    pub const fn properties(&self) -> &Properties {
+        match self {
+            Self::Container(container) => &container.properties,
+            Self::Panel(panel) => &panel.properties,
         }
     }
 
     fn set_name(&mut self, name: String) {
         match self {
-            Self::Assembly(assembly) => assembly.name = name,
-            Self::Group(group) => group.name = name,
+            Self::Container(container) => container.name = name,
             Self::Panel(panel) => panel.name = name,
         }
     }
 
     fn set_placement(&mut self, placement: Placement) {
         match self {
-            Self::Assembly(assembly) => assembly.placement = placement,
-            Self::Group(group) => group.placement = placement,
+            Self::Container(container) => container.placement = placement,
             Self::Panel(panel) => panel.placement = placement,
         }
     }
@@ -3936,7 +4636,7 @@ mod tests {
         assert_eq!(project.pivot_world(root), Some(DVec3::ZERO));
 
         let empty_placement = Placement::new(DVec3::new(-5.0, 7.0, 9.0), DQuat::IDENTITY).expect("empty placement");
-        let empty = project.add_assembly(root, "Empty", empty_placement).expect("add empty assembly");
+        let empty = project.add_component(root, "Empty", empty_placement).expect("add empty assembly");
         assert_eq!(project.pivot_local(empty), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(empty), Some(DVec3::new(-5.0, 7.0, 9.0)));
         assert_eq!(project.pivot_local(Id::new(999).expect("id")), None);
@@ -4174,9 +4874,16 @@ mod tests {
     fn sample_project() -> Project {
         let shelf = sample_panel(Id::new(2).expect("id"), "Shelf");
         let front = sample_panel(Id::new(4).expect("id"), "Front");
-        let drawer = Assembly::new(Id::new(3).expect("id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
-        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
+        let drawer = component(Id::new(3).expect("id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
+        let root =
+            Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
         Project::new(root).expect("valid project")
+    }
+
+    fn component(id: Id, name: &str, placement: Placement, children: Vec<Node>) -> Container {
+        let mut container = Container::new(id, name, placement, children);
+        container.set_component_marker(true).expect("component marker");
+        container
     }
 
     fn sample_material() -> MaterialId {
@@ -4665,10 +5372,11 @@ mod tests {
         assert_eq!(project.revision().get(), 1);
         assert_eq!(project.root().children().len(), 3);
 
-        let assembly_id = project.add_assembly(root_id, "Carcass", Placement::IDENTITY).expect("add assembly");
+        let assembly_id = project.add_component(root_id, "Carcass", Placement::IDENTITY).expect("add assembly");
         assert_eq!(assembly_id.get(), 6);
         assert_eq!(project.revision().get(), 2);
-        assert_eq!(project.assembly(assembly_id).expect("new assembly").name(), "Carcass");
+        assert_eq!(project.container(assembly_id).expect("new component").name(), "Carcass");
+        assert!(project.is_component(assembly_id));
         assert!(project.validate().is_ok());
     }
 
@@ -4891,14 +5599,14 @@ mod tests {
             if deepest.is_none() {
                 deepest = Some(id);
             }
-            let assembly = Assembly::new(id, "Nested", Placement::IDENTITY, nested);
-            nested = vec![assembly.into()];
+            let container = Container::new(id, "Nested", Placement::IDENTITY, nested);
+            nested = vec![container.into()];
         }
-        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, nested);
-        let deepest = deepest.expect("at least one nested assembly");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, nested);
+        let deepest = deepest.expect("at least one nested container");
         let mut project = Project::new(root).expect("tree at the depth limit");
         assert_eq!(
-            project.add_assembly(deepest, "Too deep", Placement::IDENTITY),
+            project.add_component(deepest, "Too deep", Placement::IDENTITY),
             Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH })
         );
         assert_eq!(project.revision(), Revision::ZERO);
@@ -4942,6 +5650,24 @@ mod tests {
     }
 
     #[test]
+    fn reserved_property_keys_are_validated_on_load() {
+        let invalid = r#"{
+            "schema_version": 7,
+            "revision": 0,
+            "next_id": 2,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [],
+                "properties": {"component": {"kind": "text", "value": "yes"}}
+            }
+        }"#;
+        let error = serde_json::from_str::<Project>(invalid).expect_err("invalid reserved property");
+        assert!(error.to_string().contains("must be a boolean"), "error was {error}");
+    }
+
+    #[test]
     fn projects_load_without_next_id() {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
@@ -4964,7 +5690,7 @@ mod tests {
     fn projects_reject_duplicate_ids() {
         let duplicate = Id::new(1).expect("id");
         let panel = sample_panel(duplicate, "Panel");
-        let root = Group::new(duplicate, "Root", Placement::IDENTITY, vec![panel.into()]);
+        let root = Container::new(duplicate, "Root", Placement::IDENTITY, vec![panel.into()]);
         assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(duplicate)));
     }
 
@@ -4973,10 +5699,10 @@ mod tests {
         let mut nested = Vec::new();
         for index in 0..Project::MAX_ASSEMBLY_DEPTH {
             let id = Id::new(u64::from(index) + 2).expect("id");
-            let assembly = Assembly::new(id, "Nested", Placement::IDENTITY, nested);
-            nested = vec![assembly.into()];
+            let container = Container::new(id, "Nested", Placement::IDENTITY, nested);
+            nested = vec![container.into()];
         }
-        let root = Group::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, nested);
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, nested);
         assert!(matches!(
             Project::new(root),
             Err(ProjectError::TooDeep { max }) if max == Project::MAX_ASSEMBLY_DEPTH
@@ -4988,7 +5714,7 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":6", "\"schema_version\":7", 1);
+        let newer = text.replacen("\"schema_version\":7", "\"schema_version\":8", 1);
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 
@@ -5053,9 +5779,9 @@ mod tests {
         assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
         let root = Id::new(1).expect("root id");
         let drawer = Id::new(2).expect("drawer id");
-        assert!(project.group(root).is_some());
-        assert!(project.assembly(root).is_none());
-        assert!(project.assembly(drawer).is_some());
+        assert!(project.container(root).is_some());
+        assert!(!project.is_component(root));
+        assert!(project.is_component(drawer));
         assert_eq!(project.parent_of(drawer), Some(root));
         assert_eq!(project.pivot(root), Some(Pivot::ZERO));
         assert_eq!(
@@ -5375,13 +6101,13 @@ mod tests {
         assert_eq!(project.rename_node(drawer, "Drawer box").expect("rename assembly").get(), 2);
         assert_eq!(project.rename_node(root, "Cabinet").expect("rename root").get(), 3);
         assert_eq!(project.panel(panel).expect("panel").name(), "Top");
-        assert_eq!(project.assembly(drawer).expect("assembly").name(), "Drawer box");
+        assert_eq!(project.container(drawer).expect("assembly").name(), "Drawer box");
         assert_eq!(project.root().name(), "Cabinet");
 
         assert_eq!(project.set_node_placement(panel, placement).expect("place panel").get(), 4);
         assert_eq!(project.set_node_placement(drawer, placement).expect("place assembly").get(), 5);
         assert_eq!(project.panel(panel).expect("panel").placement(), placement);
-        assert_eq!(project.assembly(drawer).expect("assembly").placement(), placement);
+        assert_eq!(project.container(drawer).expect("assembly").placement(), placement);
 
         assert_eq!(project.set_node_placement(root, placement), Err(ProjectError::RootImmutable { id: root }));
         assert_eq!(project.revision().get(), 5);
@@ -5414,14 +6140,14 @@ mod tests {
         );
         assert_eq!(project.revision().get(), revision);
         assert_eq!(project.panel(panel).expect("panel").placement(), Placement::IDENTITY);
-        assert_eq!(project.assembly(drawer).expect("assembly").placement(), Placement::IDENTITY);
+        assert_eq!(project.container(drawer).expect("assembly").placement(), Placement::IDENTITY);
 
         assert_eq!(
             project.set_node_placements(&[(panel, moved), (drawer, raised)]).expect("batch").get(),
             revision + 1
         );
         assert_eq!(project.panel(panel).expect("panel").placement(), moved);
-        assert_eq!(project.assembly(drawer).expect("assembly").placement(), raised);
+        assert_eq!(project.container(drawer).expect("assembly").placement(), raised);
         assert_eq!(project.panel(front).expect("front").placement(), Placement::IDENTITY);
     }
 
@@ -5452,7 +6178,7 @@ mod tests {
         let next_id = project.next_id();
 
         assert_eq!(project.remove_node(drawer).expect("remove assembly").get(), 1);
-        assert!(project.assembly(drawer).is_none());
+        assert!(project.container(drawer).is_none());
         assert!(project.panel(front).is_none());
         assert!(project.panel(panel).is_some());
         assert_eq!(project.root().children().len(), 1);
@@ -5482,7 +6208,7 @@ mod tests {
 
         let copied_drawer = project.duplicate_node(drawer).expect("duplicate assembly");
         assert_eq!(copied_drawer, Id::new(6).expect("id"));
-        let assembly = project.assembly(copied_drawer).expect("copied assembly");
+        let assembly = project.container(copied_drawer).expect("copied assembly");
         assert_eq!(assembly.name(), "Drawer copy");
         assert_eq!(assembly.children().len(), 1);
         let copied_front = assembly.children().first().expect("copied child").id();
@@ -5522,7 +6248,7 @@ mod tests {
         assert_eq!(group_id, Id::new(5).expect("id"));
         assert_eq!(project.root().children().len(), 1);
         assert_eq!(project.root().children().first().expect("group").id(), group_id);
-        let group = project.group(group_id).expect("group");
+        let group = project.container(group_id).expect("group");
         assert_eq!(group.placement(), Placement::IDENTITY);
         assert_eq!(group.children().len(), 2);
         assert_eq!(group.children()[0].id(), panel);
@@ -5530,7 +6256,7 @@ mod tests {
         assert_eq!(project.parent_of(panel), Some(group_id));
         assert_eq!(project.parent_of(drawer), Some(group_id));
         assert_eq!(project.panel(panel).expect("panel").placement(), panel_placement);
-        assert_eq!(project.assembly(drawer).expect("drawer").placement(), drawer_placement);
+        assert_eq!(project.container(drawer).expect("drawer").placement(), drawer_placement);
         let after = Placement::compose(drawer_placement, front_placement).expect("world after");
         let point = Placement::compose(Placement::IDENTITY, after).expect("root world");
         let point = point.transform_point(DVec3::ZERO);
@@ -5578,7 +6304,7 @@ mod tests {
         let revision = project.revision();
 
         assert_eq!(project.ungroup_group(group_id).expect("ungroup").get(), revision.get() + 1);
-        assert!(project.group(group_id).is_none());
+        assert!(project.container(group_id).is_none());
         assert_eq!(project.parent_of(panel), Some(root));
         assert_eq!(project.parent_of(drawer), Some(root));
         assert_eq!(project.parent_of(front), Some(drawer));
@@ -5587,13 +6313,254 @@ mod tests {
         let expected_panel = Placement::compose(group_placement, panel_placement).expect("panel world");
         assert_eq!(project.panel(panel).expect("panel").placement(), expected_panel);
         let expected_drawer = Placement::compose(group_placement, drawer_placement).expect("drawer world");
-        assert_eq!(project.assembly(drawer).expect("drawer").placement(), expected_drawer);
+        assert_eq!(project.container(drawer).expect("drawer").placement(), expected_drawer);
         let expected_front = Placement::compose(expected_drawer, front_placement).expect("front world");
         assert_eq!(project.world_placement(front).expect("front world"), expected_front);
         assert_eq!(project.panel(front).expect("front").placement(), front_placement);
 
-        assert_eq!(project.ungroup_group(drawer), Err(ProjectError::NotAGroup { id: drawer }));
-        assert_eq!(project.ungroup_group(panel), Err(ProjectError::NotAGroup { id: panel }));
+        assert_eq!(project.ungroup_group(drawer), Err(ProjectError::NotAComponent { id: drawer }));
+        assert_eq!(project.ungroup_group(panel), Err(ProjectError::NotAnOrdinaryContainer { id: panel }));
         assert_eq!(project.ungroup_group(root), Err(ProjectError::RootImmutable { id: root }));
+    }
+
+    fn furntype(text: &str) -> FurnType {
+        text.parse().expect("valid furniture type")
+    }
+
+    #[test]
+    fn furniture_types_encode_three_levels_and_parents() {
+        let cabinet = furntype("12.03.02");
+        assert_eq!(cabinet.value(), 120_302);
+        assert_eq!(cabinet.to_string(), "12.03.02");
+        assert_eq!(cabinet.parent(), furntype("12.03"));
+        assert_eq!(cabinet.parent().parent(), furntype("12"));
+        assert_eq!(cabinet.parent().parent().parent(), FurnType::UNCLASSIFIED);
+        assert!(cabinet.is_ancestor_or_self(cabinet));
+        assert!(cabinet.is_ancestor_or_self(furntype("12")));
+        assert!(!furntype("12").is_ancestor_or_self(cabinet));
+        assert!(!cabinet.is_ancestor_or_self(FurnType::UNCLASSIFIED));
+        assert!(FurnType::UNCLASSIFIED.is_ancestor_or_self(FurnType::UNCLASSIFIED));
+        assert_eq!(furntype("12").value(), 120_000);
+        assert_eq!(format!("{}", furntype("12")), "12");
+        assert_eq!(format!("{}", FurnType::UNCLASSIFIED), "0");
+    }
+
+    #[test]
+    fn furniture_types_reject_bad_text_and_out_of_range_codes() {
+        assert_eq!(FurnType::from_code(1_000_000), None);
+        assert_eq!(FurnType::from_code(FURNTYPE_MAX_CODE), Some(FurnType::MAX));
+        assert!("".parse::<FurnType>().is_err());
+        assert!("0.0.0".parse::<FurnType>().is_err());
+        assert!("12.3.4.5".parse::<FurnType>().is_err());
+        assert!("12.123".parse::<FurnType>().is_err());
+        assert!("twelve".parse::<FurnType>().is_err());
+        assert_eq!("120302".parse::<FurnType>().expect("bare code"), furntype("12.03.02"));
+        assert_eq!("12.03".parse::<FurnType>().expect("type form"), furntype("12.03"));
+    }
+
+    #[test]
+    fn furniture_types_serialize_as_integers() {
+        let value = serde_json::to_value(furntype("12.03.02")).expect("serialize type");
+        assert_eq!(value, serde_json::json!(120_302));
+        let decoded: FurnType = serde_json::from_value(value).expect("deserialize type");
+        assert_eq!(decoded, furntype("12.03.02"));
+        assert!(serde_json::from_value::<FurnType>(serde_json::json!(1_000_000)).is_err());
+    }
+
+    #[test]
+    fn property_values_round_trip_by_kind() {
+        let values = [
+            PropertyValue::bool(true),
+            PropertyValue::integer(-7),
+            PropertyValue::length(millimetres(600)),
+            PropertyValue::angle(Degrees::from_millidegrees(45_000)),
+            PropertyValue::text("oak"),
+            PropertyValue::choice("left", "Left"),
+            PropertyValue::reference(Id::new(9).expect("id")),
+            PropertyValue::furn_type(furntype("12.03")),
+            PropertyValue::structured(serde_json::json!({"width": 600})),
+        ];
+        for value in values {
+            let json = serde_json::to_value(&value).expect("serialize property");
+            assert_eq!(json["kind"], value.kind());
+            let decoded: PropertyValue = serde_json::from_value(json).expect("deserialize property");
+            assert_eq!(decoded, value);
+        }
+    }
+
+    #[test]
+    fn reserved_property_keys_reject_the_wrong_value_kind() {
+        assert!(SYSTEM_COMPONENT.starts_with("component"));
+        for key in [
+            SYSTEM_COMPONENT,
+            SYSTEM_FURNTYPE,
+            SYSTEM_PROTOTYPE_ID,
+            SYSTEM_PROTOTYPE_VERSION,
+            SYSTEM_PROTOTYPE_PARAMETERS,
+        ] {
+            assert!(Properties::new().insert(key, PropertyValue::text("wrong")).is_err(), "{key} accepted text");
+        }
+        let mut properties = Properties::new();
+        properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("component flag");
+        properties.insert(SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12"))).expect("furntype");
+        properties
+            .insert(SYSTEM_PROTOTYPE_ID, PropertyValue::reference(Id::new(5).expect("id")))
+            .expect("prototype id");
+        properties.insert(SYSTEM_PROTOTYPE_VERSION, PropertyValue::integer(1)).expect("prototype version");
+        properties
+            .insert(SYSTEM_PROTOTYPE_PARAMETERS, PropertyValue::structured(serde_json::json!({})))
+            .expect("prototype parameters");
+        assert_eq!(properties.keys().count(), 5);
+    }
+
+    #[test]
+    fn projects_set_and_clear_properties_with_one_revision_per_batch() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel");
+        let drawer = Id::new(3).expect("drawer");
+        let revision = project.revision();
+
+        let next = project.set_property(panel, "material.finish", PropertyValue::text("oak")).expect("set property");
+        assert_eq!(next.get(), revision.get() + 1);
+        assert_eq!(project.properties(panel).and_then(|p| p.get("material.finish")), Some(&PropertyValue::text("oak")));
+
+        let next = project
+            .set_properties(&[
+                PropertyChange { node: panel, key: "edge".to_owned(), value: PropertyValue::integer(2) },
+                PropertyChange { node: drawer, key: "drawer.count".to_owned(), value: PropertyValue::integer(3) },
+            ])
+            .expect("batch");
+        assert_eq!(next.get(), revision.get() + 2);
+        assert_eq!(project.revision(), next);
+        assert_eq!(project.properties(drawer).and_then(|p| p.get("drawer.count")), Some(&PropertyValue::integer(3)));
+    }
+
+    #[test]
+    fn project_property_batches_reject_duplicates_unknown_nodes_and_the_root() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel");
+        let missing = Id::new(99).expect("id");
+        let revision = project.revision();
+        let change = |node, key: &str| PropertyChange { node, key: key.to_owned(), value: PropertyValue::integer(1) };
+
+        assert_eq!(project.set_properties(&[]), Err(ProjectError::NoPropertyChanges));
+        assert_eq!(
+            project.set_properties(&[change(panel, "a"), change(panel, "a")]),
+            Err(ProjectError::DuplicateProperty { node: panel, key: "a".to_owned() })
+        );
+        assert_eq!(project.set_properties(&[change(missing, "a")]), Err(ProjectError::NodeNotFound { id: missing }));
+        assert_eq!(project.set_properties(&[change(root, "a")]), Err(ProjectError::RootImmutable { id: root }));
+        assert_eq!(project.revision(), revision);
+
+        assert_eq!(
+            project.clear_property(panel, "missing"),
+            Err(ProjectError::PropertyNotFound { node: panel, key: "missing".to_owned() })
+        );
+        assert_eq!(project.revision(), revision);
+        project.set_property(panel, "a", PropertyValue::integer(1)).expect("set");
+        assert_eq!(project.clear_property(panel, "a").expect("clear").get(), revision.get() + 2);
+        assert!(!project.properties(panel).expect("properties").contains_key("a"));
+    }
+
+    #[test]
+    fn a_furniture_type_marks_a_container_as_a_component() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let group = project.group_nodes(&[Id::new(2).expect("id"), Id::new(3).expect("id")], "G").expect("group");
+        assert!(!project.is_component(group));
+
+        project.set_property(group, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        assert!(project.is_component(group));
+        project.set_property(group, SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("false marker");
+        assert!(project.is_component(group), "an explicit false does not erase the furniture type");
+        assert_eq!(project.furntype(group), Some(furntype("12.03.02")));
+        assert_eq!(project.furntype(root), Some(FurnType::UNCLASSIFIED));
+
+        assert_eq!(project.ungroup_group(group), Err(ProjectError::NotAComponent { id: group }));
+
+        project.convert_to_group(group).expect("convert to group");
+        assert!(project.container(group).is_none());
+        assert!(project.properties(Id::new(2).expect("id")).is_some());
+    }
+
+    #[test]
+    fn queries_select_by_kind_furniture_type_and_property() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel");
+        let front = Id::new(4).expect("front");
+        let drawer = Id::new(3).expect("drawer");
+        project.set_property(drawer, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(panel, "role", PropertyValue::text("shelf")).expect("role");
+
+        assert_eq!(project.query(&NodeQuery::any()), vec![panel, drawer, front]);
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Container)), vec![drawer]);
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Panel)), vec![panel, front]);
+        assert_eq!(
+            project.query(&NodeQuery::any().with_furntype_under(furntype("12"))),
+            vec![drawer],
+            "a query on a group matches every type below it"
+        );
+        assert_eq!(project.query(&NodeQuery::any().with_furntype_under(furntype("12.03.02"))), vec![drawer]);
+        assert!(project.query(&NodeQuery::any().with_furntype_under(furntype("13"))).is_empty());
+        assert_eq!(
+            project.query(&NodeQuery::any().with_furntype_under(FurnType::UNCLASSIFIED)),
+            vec![panel, front],
+            "unclassified is a sentinel, not the root of the type tree"
+        );
+        assert_eq!(project.query(&NodeQuery::any().with_property("role", PropertyValue::text("shelf"))), vec![panel]);
+        assert!(
+            project
+                .query(
+                    &NodeQuery::any()
+                        .with_kind(StructuralKind::Panel)
+                        .with_property("role", PropertyValue::text("shelf"))
+                )
+                .len()
+                == 1
+        );
+    }
+
+    #[test]
+    fn version_six_containers_migrate_to_one_container_kind() {
+        let legacy = r#"{
+            "schema_version": 6,
+            "revision": 3,
+            "next_id": 4,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [
+                    {"assembly": {
+                        "id": 2,
+                        "name": "Drawer",
+                        "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        "children": []
+                    }},
+                    {"group": {
+                        "id": 3,
+                        "name": "Parts",
+                        "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        "children": []
+                    }}
+                ]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version six");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let drawer = Id::new(2).expect("id");
+        let parts = Id::new(3).expect("id");
+        assert!(project.is_component(drawer));
+        assert!(!project.is_component(parts));
+        assert_eq!(project.container(drawer).expect("drawer").name(), "Drawer");
+        assert_eq!(project.container(parts).expect("parts").name(), "Parts");
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"container\""));
+        assert!(!text.contains("\"assembly\""));
+        assert!(!text.contains("\"group\":"));
+        let decoded: Project = serde_json::from_str(&text).expect("round trip");
+        assert_eq!(decoded, project);
     }
 }

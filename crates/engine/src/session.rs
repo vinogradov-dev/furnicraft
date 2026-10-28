@@ -138,8 +138,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, Id, Machining,
-        PanelMaterial, Pivot, Placement, ProjectError, RectCorner, RectEdge, Revision, VertexId,
+        Catalog, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Id,
+        Machining, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge, Revision,
+        SYSTEM_FURNTYPE, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -151,8 +152,9 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::node_cmds::{
-        AssemblyCreate, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet, NodePlacement,
-        NodePlacementSet, NodePlacementSetMany, NodeRename, NodeUngroup,
+        AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter,
+        NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear,
+        NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
@@ -1040,23 +1042,23 @@ mod tests {
         let create = AssemblyCreate { parent: root, name: "Box".to_owned(), placement: Placement::IDENTITY };
         let outcome = session.dispatch("assembly.create", &json_params(&create)).expect("create assembly");
         let assembly = outcome.created_id().expect("created id");
-        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Box");
+        assert_eq!(session.project().container(assembly).expect("assembly").name(), "Box");
         assert_eq!(session.project().root().children().len(), 3);
 
         session.undo().expect("undo create");
-        assert!(session.project().assembly(assembly).is_none());
+        assert!(session.project().container(assembly).is_none());
         session.redo().expect("redo create");
-        assert!(session.project().assembly(assembly).is_some());
+        assert!(session.project().container(assembly).is_some());
 
         let rename = NodeRename { node: assembly, name: "Drawer box".to_owned() };
         session.dispatch("node.rename", &json_params(&rename)).expect("rename assembly");
-        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
+        assert_eq!(session.project().container(assembly).expect("assembly").name(), "Drawer box");
 
         let delete = NodeDelete { node: assembly };
         session.dispatch("node.delete", &json_params(&delete)).expect("delete assembly");
-        assert!(session.project().assembly(assembly).is_none());
+        assert!(session.project().container(assembly).is_none());
         session.undo().expect("undo delete");
-        assert_eq!(session.project().assembly(assembly).expect("assembly").name(), "Drawer box");
+        assert_eq!(session.project().container(assembly).expect("assembly").name(), "Drawer box");
     }
 
     #[test]
@@ -1085,9 +1087,148 @@ mod tests {
 
         let ungroup = NodeUngroup { node: group_id };
         session.dispatch("node.ungroup", &json_params(&ungroup)).expect("ungroup");
-        assert!(session.project().group(group_id).is_none());
+        assert!(session.project().container(group_id).is_none());
         assert_eq!(session.project().parent_of(panel), Some(session.project().root().id()));
         assert_eq!(session.project().parent_of(drawer), Some(session.project().root().id()));
+    }
+
+    #[test]
+    fn property_commands_edit_values_as_single_undo_steps() {
+        let mut session = sample_session();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("drawer id");
+        let revision = session.project().revision();
+
+        let set = NodePropertySet { node: panel, key: "finish".to_owned(), value: PropertyValue::text("oak") };
+        session.dispatch("node.property.set", &json_params(&set)).expect("set property");
+        assert_eq!(session.project().revision().get(), revision.get() + 1);
+        assert_eq!(
+            session.project().properties(panel).and_then(|properties| properties.get("finish")),
+            Some(&PropertyValue::text("oak"))
+        );
+        session.undo().expect("undo set");
+        assert!(session.project().properties(panel).expect("properties").is_empty());
+
+        let revision = session.project().revision();
+        let many = NodePropertySetMany {
+            properties: vec![
+                NodeProperty { node: panel, key: "finish".to_owned(), value: PropertyValue::text("oak") },
+                NodeProperty { node: drawer, key: "drawer.count".to_owned(), value: PropertyValue::integer(3) },
+            ],
+        };
+        session.dispatch("node.property.set_many", &json_params(&many)).expect("set properties");
+        assert_eq!(session.project().revision().get(), revision.get() + 1);
+        assert_eq!(
+            session.project().properties(drawer).and_then(|properties| properties.get("drawer.count")),
+            Some(&PropertyValue::integer(3))
+        );
+        session.undo().expect("undo batch");
+        assert!(!session.project().properties(drawer).expect("properties").contains_key("drawer.count"));
+
+        session.dispatch("node.property.set", &json_params(&set)).expect("set property again");
+        let clear = NodePropertyClear { node: panel, key: "finish".to_owned() };
+        session.dispatch("node.property.clear", &json_params(&clear)).expect("clear property");
+        assert!(!session.project().properties(panel).expect("properties").contains_key("finish"));
+        session.undo().expect("undo clear");
+        assert_eq!(
+            session.project().properties(panel).and_then(|properties| properties.get("finish")),
+            Some(&PropertyValue::text("oak"))
+        );
+    }
+
+    #[test]
+    fn property_command_enabled_checks_reject_bad_params_and_protect_the_root() {
+        let session = sample_session();
+        let registry = CommandRegistry::new();
+        let root = session.project().root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("drawer id");
+        let set = registry.get("node.property.set").expect("registered");
+        let clear = registry.get("node.property.clear").expect("registered");
+        let many = registry.get("node.property.set_many").expect("registered");
+
+        let good = NodePropertySet { node: panel, key: "finish".to_owned(), value: PropertyValue::text("oak") };
+        assert!(set.enabled(&session, &json_params(&good)));
+        assert!(!set.enabled(&session, &json_params(&NodePropertySet { node: root, ..good.clone() })));
+        assert!(
+            !set.enabled(&session, &json_params(&NodePropertySet { node: Id::new(999).expect("id"), ..good.clone() }))
+        );
+        assert!(!set.enabled(&session, &Value::Null));
+
+        assert!(!clear.enabled(&session, &json_params(&NodePropertyClear { node: panel, key: "finish".to_owned() })));
+        assert!(!clear.enabled(&session, &json_params(&NodePropertyClear { node: root, key: "finish".to_owned() })));
+
+        let batch = |properties| NodePropertySetMany { properties };
+        assert!(many.enabled(
+            &session,
+            &json_params(&batch(vec![
+                NodeProperty { node: panel, key: "a".to_owned(), value: PropertyValue::integer(1) },
+                NodeProperty { node: drawer, key: "a".to_owned(), value: PropertyValue::integer(1) },
+            ]))
+        ));
+        assert!(!many.enabled(&session, &json_params(&batch(Vec::new()))));
+        assert!(!many.enabled(
+            &session,
+            &json_params(&batch(vec![
+                NodeProperty { node: panel, key: "a".to_owned(), value: PropertyValue::integer(1) },
+                NodeProperty { node: panel, key: "a".to_owned(), value: PropertyValue::integer(2) },
+            ]))
+        ));
+        assert!(!many.enabled(
+            &session,
+            &json_params(&batch(vec![NodeProperty {
+                node: root,
+                key: "a".to_owned(),
+                value: PropertyValue::integer(1),
+            }]))
+        ));
+    }
+
+    #[test]
+    fn a_furniture_type_makes_a_component_and_conversion_flattens_it() {
+        let mut session = sample_session();
+        let root = session.project().root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("drawer id");
+        let registry = CommandRegistry::new();
+        let ungroup = registry.get("node.ungroup").expect("registered");
+        let convert = registry.get("node.component.convert_to_group").expect("registered");
+
+        let group_id = session
+            .dispatch("node.group", &json_params(&NodeGroup { nodes: vec![panel, drawer], name: "G".to_owned() }))
+            .expect("group siblings")
+            .created_id()
+            .expect("group id");
+        assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
+        assert!(!convert.enabled(&session, &json_params(&NodeComponentConvertToGroup { node: group_id })));
+
+        let furntype: FurnType = "12.03.02".parse().expect("furntype");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: group_id,
+                    key: SYSTEM_FURNTYPE.to_owned(),
+                    value: PropertyValue::furn_type(furntype),
+                }),
+            )
+            .expect("type the container");
+        assert!(session.project().is_component(group_id));
+        assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
+        assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));
+        assert!(convert.enabled(&session, &json_params(&NodeComponentConvertToGroup { node: group_id })));
+
+        assert!(session.dispatch("node.ungroup", &json_params(&NodeUngroup { node: group_id })).is_err());
+        session
+            .dispatch("node.component.convert_to_group", &json_params(&NodeComponentConvertToGroup { node: group_id }))
+            .expect("convert to group");
+        assert!(session.project().container(group_id).is_none());
+        assert_eq!(session.project().parent_of(panel), Some(root));
+        assert_eq!(session.project().parent_of(drawer), Some(root));
+
+        session.undo().expect("undo conversion");
+        assert!(session.project().container(group_id).is_some());
+        assert!(session.project().is_component(group_id));
     }
 
     #[test]
@@ -1127,14 +1268,14 @@ mod tests {
 
         assert_eq!(session.project().revision().get(), revision.get() + 1);
         assert_eq!(session.project().panel(panel).expect("panel").placement(), moved);
-        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), raised);
+        assert_eq!(session.project().container(drawer).expect("assembly").placement(), raised);
 
         session.undo().expect("undo batch");
         assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
-        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), Placement::IDENTITY);
+        assert_eq!(session.project().container(drawer).expect("assembly").placement(), Placement::IDENTITY);
         session.redo().expect("redo batch");
         assert_eq!(session.project().panel(panel).expect("panel").placement(), moved);
-        assert_eq!(session.project().assembly(drawer).expect("assembly").placement(), raised);
+        assert_eq!(session.project().container(drawer).expect("assembly").placement(), raised);
     }
 
     #[test]
