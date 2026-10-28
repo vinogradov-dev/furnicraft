@@ -11,13 +11,14 @@ use furnicraft_engine::Session;
 use furnicraft_geom::{DMat4, DQuat, DVec3, MeshData};
 use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_mesh::tessellate_panel;
+use furnicraft_mesh::{object_mesh, tessellate_panel};
 use furnicraft_model::{
-    Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide, Id, MaterialId,
-    Node, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
+    CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
+    Geometry, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement,
+    Project, StructuralKind,
 };
-use furnicraft_param::build_panel_parts_with;
-use furnicraft_scene::{Camera, Drawable, SceneFrame};
+use furnicraft_param::{build_constructive_mesh, build_panel_parts_with};
+use furnicraft_scene::{Camera, DEFAULT_FOV_Y, Drawable, Lighting, Projection, SceneFrame};
 use furnicraft_units::Length;
 
 /// Colours for the sample panels, in linear RGB.
@@ -25,6 +26,9 @@ const PANEL_COLORS: [[f32; 4]; 3] = [[0.62, 0.42, 0.22, 1.0], [0.50, 0.34, 0.20,
 
 /// A common debug colour for every band on a panel.
 const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
+
+/// The default surface colour of a geometry object; v1 has no per-object material.
+const OBJECT_COLOR: [f32; 4] = [0.58, 0.60, 0.64, 1.0];
 
 /// Sample catalogue ids. They are stable only for this demonstration document.
 const SAMPLE_OAK_MATERIAL: u64 = 1;
@@ -125,6 +129,17 @@ pub fn sample_session() -> Result<Session, String> {
     Ok(Session::with_catalog(project, sample_catalog()?))
 }
 
+/// Builds an empty scene: a root container with no children.
+///
+/// A new document still carries the session catalogue; the catalogue is not scene data and is
+/// never written to the file, so starting from the demonstration materials only affects what the
+/// inspector can offer, not what a save contains.
+pub fn empty_session() -> Result<Session, String> {
+    let root = Container::new(id(1)?, "Scene", Placement::IDENTITY, Vec::new());
+    let project = Project::new(root).map_err(describe)?;
+    Ok(Session::with_catalog(project, sample_catalog()?))
+}
+
 /// Builds the demonstration catalogue handed to the sample session.
 pub fn sample_catalog() -> Result<Catalog, String> {
     let thickness = millimetres(18)?;
@@ -174,7 +189,33 @@ pub fn evaluate(kernel: &mut TruckKernel, session: &Session) -> Result<Evaluated
         evaluation.kernel.clear();
         return Err(error);
     }
+    if let Some(lighting) = authored_lighting(project) {
+        evaluation.frame.lighting = lighting;
+    }
     Ok(EvaluatedScene { frame: evaluation.frame, bounds: evaluation.bounds })
+}
+
+/// The frame lighting from the first authored sun light, if the scene has one.
+///
+/// A sun emits along its local `-Z`, so the direction from a surface towards it is the node's
+/// world rotation applied to `+Z`. The authored colour is multiplied by the intensity. A scene
+/// with only point lights, or none, keeps the built-in key light: a point light needs a falloff
+/// model the frame does not have yet.
+pub fn authored_lighting(project: &Project) -> Option<Lighting> {
+    let id = project
+        .query(&NodeQuery::any().with_kind(StructuralKind::Light))
+        .into_iter()
+        .find(|id| project.light(*id).is_some_and(|light| light.kind() == LightKind::Sun))?;
+    let light = project.light(id)?;
+    let world = project.world_placement(id)?;
+    let direction = (world.rotation() * DVec3::Z).try_normalize()?;
+    let intensity = light.intensity();
+    let color = light.color();
+    Some(Lighting {
+        key_direction: direction,
+        key_color: [color[0] * intensity, color[1] * intensity, color[2] * intensity],
+        ambient: Lighting::default().ambient,
+    })
 }
 
 /// Mutable state shared by one scene evaluation.
@@ -207,6 +248,8 @@ impl<'a> Evaluation<'a> {
                     self.collect(container.children(), world)?;
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
+                Node::Object(object) => self.collect_object(object, parent)?,
+                Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
@@ -235,6 +278,29 @@ impl<'a> Evaluation<'a> {
         }
         Ok(())
     }
+
+    /// Turns a geometry object into one flat-shaded drawable in world space.
+    ///
+    /// A mesh payload is drawn as stored. A constructive payload is evaluated from its features
+    /// with the same function `object.collapse` bakes, so the collapsed object keeps the shape the
+    /// viewport showed.
+    fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
+        let world = Placement::compose(parent, object.placement()).map_err(describe)?;
+        let derived;
+        let mesh = match object.geometry() {
+            Geometry::Mesh(mesh) => mesh,
+            Geometry::Constructive(constructive) => {
+                derived =
+                    build_constructive_mesh(constructive).map_err(|error| format!("{}: {error}", object.name()))?;
+                &derived
+            }
+        };
+        let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
+        let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+        self.bounds.include_mesh(&mesh, transform);
+        self.frame.push(Drawable::new(object.id(), Arc::new(mesh), transform, OBJECT_COLOR));
+        Ok(())
+    }
 }
 
 /// Places the initial camera so the whole sample fits in the viewport.
@@ -243,9 +309,40 @@ pub fn home_camera(bounds: Bounds) -> Result<Camera, String> {
         return Ok(Camera::default());
     };
     let radius = bounds.radius().unwrap_or(0.0).max(50.0);
-    let half_fov = Camera::default().fov_y() * 0.5;
+    let half_fov = DEFAULT_FOV_Y * 0.5;
     let distance = radius / half_fov.tan() * 1.25;
     Camera::new(center, distance).map_err(describe)
+}
+
+/// Distance from an authored camera's eye to its orbit target, used as a pivot placeholder.
+const AUTHORED_CAMERA_DISTANCE_MM: f64 = 1_000.0;
+
+/// The authored camera the scene renders from, or `None` for the built-in camera.
+///
+/// A camera node looks down its local `-Z` with `+Y` up. The projection is copied from the
+/// document; near and far stay at the scene defaults because the model does not store them yet.
+/// An authored camera pins an explicit basis, so viewport navigation leaves it alone.
+pub fn authored_camera(project: &Project) -> Option<Camera> {
+    let id = project.active_camera()?;
+    let world = project.world_placement(id)?;
+    let projection = match project.camera(id)?.projection() {
+        CameraProjection::Perspective { fov_y } => Projection::Perspective { fov_y: fov_y.radians_f64() },
+        CameraProjection::Orthographic { height } => Projection::Orthographic { height: height.millimetres_f64() },
+    };
+    let eye = world.translation();
+    let rotation = world.rotation();
+    let right = rotation * DVec3::X;
+    let up = rotation * DVec3::Y;
+    let forward = rotation * -DVec3::Z;
+    let target = eye + forward * AUTHORED_CAMERA_DISTANCE_MM;
+    Camera::new(target, AUTHORED_CAMERA_DISTANCE_MM)
+        .ok()
+        .map(|camera| camera.looked_from(eye, right, up, forward).with_projection(projection))
+}
+
+/// The camera a viewport draws with: the active authored camera, or the navigable view fallback.
+pub fn scene_camera(project: &Project, view: Camera) -> Camera {
+    authored_camera(project).unwrap_or(view)
 }
 
 fn id(value: u64) -> Result<Id, String> {
@@ -296,14 +393,95 @@ mod tests {
 
     use super::*;
     use furnicraft_model::Machining;
+    use furnicraft_testkit::sample_project;
 
     fn panels_in<'a>(children: &'a [Node], panels: &mut Vec<&'a Panel>) {
         for child in children {
             match child {
                 Node::Panel(panel) => panels.push(panel),
                 Node::Container(container) => panels_in(container.children(), panels),
+                Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
+    }
+
+    #[test]
+    fn an_authored_camera_maps_its_placement_and_projection() {
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let rotation = DQuat::from_rotation_z(FRAC_PI_2);
+        let placement = Placement::new(DVec3::new(100.0, 200.0, 300.0), rotation).expect("placement");
+        let fov = furnicraft_units::Degrees::from_millidegrees(60_000);
+        let camera_id = project
+            .add_camera(root, "Presentation", placement, CameraProjection::Perspective { fov_y: fov })
+            .expect("camera");
+        assert!(authored_camera(&project).is_none(), "the built-in camera is used while none is active");
+        let view = Camera::default();
+        assert_eq!(scene_camera(&project, view), view);
+
+        project.set_active_camera(Some(camera_id)).expect("active camera");
+        let camera = authored_camera(&project).expect("the authored camera");
+        assert!((camera.eye() - DVec3::new(100.0, 200.0, 300.0)).length() < 1.0e-9);
+        assert!(camera.forward().dot(rotation * -DVec3::Z) > 1.0 - 1.0e-9);
+        assert!(camera.right().dot(rotation * DVec3::X) > 1.0 - 1.0e-9);
+        assert!(camera.up().dot(rotation * DVec3::Y) > 1.0 - 1.0e-9);
+        assert_eq!(camera.projection(), Projection::Perspective { fov_y: fov.radians_f64() });
+        assert!(camera.project_ndc(camera.eye() + camera.forward() * 10.0, 1.0).is_some());
+
+        // An orthographic camera keeps its visible height.
+        project
+            .set_camera_projection(
+                camera_id,
+                CameraProjection::Orthographic { height: Length::from_millimetres(500).expect("height") },
+            )
+            .expect("orthographic");
+        let camera = authored_camera(&project).expect("camera");
+        assert_eq!(
+            camera.projection(),
+            Projection::Orthographic { height: Length::from_millimetres(500).expect("height").millimetres_f64() }
+        );
+    }
+
+    #[test]
+    fn an_authored_sun_lights_the_frame_through_its_world_rotation() {
+        // A scene without a light, or with only a point light, keeps the built-in key light.
+        let mut project = sample_project();
+        assert_eq!(authored_lighting(&project), None);
+        let root = project.root().id();
+        project
+            .add_light(root, "Fill", Placement::IDENTITY, LightKind::Point, [0.2, 0.3, 0.4], 0.5)
+            .expect("point light");
+        assert_eq!(authored_lighting(&project), None, "a point light has no falloff model yet");
+
+        let spin = DQuat::from_rotation_y(FRAC_PI_2);
+        let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), spin).expect("placement");
+        project.add_light(root, "Sun", placement, LightKind::Sun, [1.0, 0.5, 0.25], 2.0).expect("sun");
+        let lighting = authored_lighting(&project).expect("the sun lights the frame");
+        assert!(
+            lighting.key_direction.dot(DVec3::X) > 1.0 - 1.0e-9,
+            "a sun emits along local -Z, so the direction towards it is +Z turned into +X: {lighting:?}"
+        );
+        assert_eq!(lighting.key_color, [2.0, 1.0, 0.5]);
+        assert_eq!(lighting.ambient, Lighting::default().ambient);
+
+        // The direction follows the whole parent chain, not only the light's own placement.
+        let group = Container::new(
+            id(2).expect("id"),
+            "Group",
+            Placement::new(DVec3::ZERO, DQuat::from_rotation_z(FRAC_PI_2)).expect("placement"),
+            Vec::new(),
+        );
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, vec![Node::Container(group)]);
+        let mut nested = Project::new(root).expect("project");
+        nested
+            .add_light(id(2).expect("id"), "Sun", placement, LightKind::Sun, [1.0, 1.0, 1.0], 1.0)
+            .expect("nested sun");
+        let lighting = authored_lighting(&nested).expect("the nested sun lights the frame");
+        assert!(
+            lighting.key_direction.dot(DVec3::Y) > 1.0 - 1.0e-9,
+            "the parent turn and the light turn compose: {lighting:?}"
+        );
     }
 
     #[test]
@@ -367,6 +545,20 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_session_has_a_root_and_nothing_to_draw() {
+        let session = empty_session().expect("empty session");
+        session.project().validate().expect("valid empty document");
+        assert!(session.project().root().children().is_empty());
+        assert!(!session.is_dirty());
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        assert!(evaluated.frame.drawables().is_empty());
+        assert_eq!(evaluated.bounds.center(), None);
+        assert!(home_camera(evaluated.bounds).is_ok(), "an empty scene still has a usable camera");
+    }
+
+    #[test]
     fn bounds_report_their_centre_and_radius() {
         let mut bounds = Bounds::empty();
         let mesh = MeshData {
@@ -377,6 +569,37 @@ mod tests {
         bounds.include_mesh(&mesh, DMat4::IDENTITY);
         assert_eq!(bounds.center(), Some(DVec3::new(50.0, 100.0, 20.0)));
         assert!(bounds.radius().is_some_and(|radius| radius > 0.0));
+    }
+
+    #[test]
+    fn a_constructive_object_is_evaluated_into_a_drawable() {
+        use furnicraft_model::{Constructive, Contour};
+
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let contour = Contour::new(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+            [millimetres(0), millimetres(400)],
+        ])
+        .expect("contour");
+        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let object =
+            project.add_object(root, "Top", Placement::IDENTITY, Geometry::Constructive(constructive)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        assert_eq!(evaluated.frame.drawables().len(), 1, "the derived mesh is one drawable");
+        let drawable = &evaluated.frame.drawables()[0];
+        assert_eq!(drawable.id, object, "the drawable carries the object id, so picking and selection work");
+        assert!(!drawable.mesh.positions.is_empty(), "the extrusion is tessellated from its contour");
+        let center = evaluated.bounds.center().expect("the object contributes bounds");
+        assert!(center.y > 0.0 && center.z > 0.0, "bounds follow the contour and the extrusion height");
     }
 
     #[test]

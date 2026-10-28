@@ -4,8 +4,11 @@ use furnicraft_model::{Catalog, Id, MaterialId, Project, ProjectError};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::mesh_cmds;
 use crate::node_cmds;
+use crate::object_cmds;
 use crate::panel_cmds;
+use crate::scene_cmds;
 use crate::session::Session;
 
 /// The result of a successful command.
@@ -109,6 +112,16 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PROPERTY_SET_MANY,
     node_cmds::NODE_PROPERTY_CLEAR,
     node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP,
+    object_cmds::OBJECT_PRIMITIVE_CREATE,
+    object_cmds::OBJECT_EXTRUDE_CREATE,
+    object_cmds::OBJECT_CONTOUR_REPLACE,
+    object_cmds::OBJECT_COLLAPSE,
+    mesh_cmds::MESH_VERTICES_MOVE,
+    scene_cmds::CAMERA_CREATE,
+    scene_cmds::LIGHT_CREATE,
+    scene_cmds::SCENE_ACTIVE_CAMERA_SET,
+    scene_cmds::CAMERA_PROJECTION_SET,
+    scene_cmds::LIGHT_PARAMS_SET,
 ];
 
 /// A lookup table for the compiled command specs.
@@ -152,6 +165,14 @@ pub enum CommandError {
     /// The document rejected the change.
     #[error(transparent)]
     Model(#[from] ProjectError),
+    /// Deriving geometry for the command failed.
+    #[error("cannot evaluate `{command}`: {message}")]
+    Evaluation {
+        /// The stable command id.
+        command: &'static str,
+        /// A human-readable evaluation message.
+        message: String,
+    },
     /// The catalogue does not contain the requested material.
     #[error("unknown material {material}")]
     UnknownMaterial {
@@ -256,7 +277,13 @@ mod tests {
             registry.get("node.component.convert_to_group").expect("node.component.convert_to_group is registered");
         assert_eq!(convert.id(), "node.component.convert_to_group");
         assert_eq!(convert.label(), "Convert to group");
+        let create_object = registry.get("object.primitive.create").expect("object.primitive.create is registered");
+        assert_eq!(create_object.id(), "object.primitive.create");
+        assert_eq!(create_object.label(), "Create primitive");
+        let move_vertices = registry.get("mesh.vertices.move").expect("mesh.vertices.move is registered");
+        assert_eq!(move_vertices.id(), "mesh.vertices.move");
+        assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 27);
+        assert_eq!(registry.specs().len(), 37);
     }
 }

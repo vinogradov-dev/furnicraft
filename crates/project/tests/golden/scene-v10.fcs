@@ -1,0 +1,76 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 10,
+    "revision": 0,
+    "next_id": 3,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        {
+          "object": {
+            "id": 2,
+            "name": "Countertop",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "properties": {},
+            "geometry": {
+              "kind": "constructive",
+              "features": [
+                {
+                  "kind": "extrude",
+                  "contour": {
+                    "points": [
+                      [0, 0],
+                      [600000, 0],
+                      [600000, 400000],
+                      [0, 400000]
+                    ]
+                  },
+                  "height": 18000
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {}
+    }
+  }
+}

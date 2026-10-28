@@ -6,10 +6,22 @@
 //! means the two gizmos cannot drift apart.
 
 use eframe::egui;
-use egui::{Color32, Pos2, Vec2};
+use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
 use furnicraft_geom::{DQuat, DVec3};
 use furnicraft_model::{Id, Placement, Project};
 use furnicraft_scene::{Camera, Ray};
+
+/// Length of an axis handle, in points.
+pub(crate) const HANDLE_LENGTH: f32 = 84.0;
+
+/// Radius inside which a pointer hits a handle, in points.
+pub(crate) const HIT_RADIUS: f32 = 8.0;
+
+/// Part of a handle next to the origin that never starts a drag, in points.
+const ORIGIN_DEAD_ZONE: f32 = 10.0;
+
+/// Axes closer than this to the view direction are not drawn.
+const VIEW_ALIGNMENT_LIMIT: f64 = 0.985;
 
 /// Gamma-space colours for the three axes.
 const X_COLOR: Color32 = Color32::from_rgb(232, 80, 80);
@@ -90,13 +102,13 @@ impl Target<'_> {
         self.project.pivot_world(self.anchor()?)
     }
 
-    /// Every panel that moves with the selection, in target order.
-    pub(crate) fn panels(&self) -> Vec<Id> {
-        let mut panels = Vec::new();
+    /// Every drawable that moves with the selection, in target order.
+    pub(crate) fn drawables(&self) -> Vec<Id> {
+        let mut drawables = Vec::new();
         for target in self.move_targets() {
-            panels.extend(self.project.panel_ids_under(target.node).unwrap_or_default());
+            drawables.extend(self.project.geometry_ids_under(target.node).unwrap_or_default());
         }
-        panels
+        drawables
     }
 }
 
@@ -253,17 +265,17 @@ fn quantised(placement: Placement) -> Result<Placement, String> {
 /// The scene change a gizmo drag is previewing, without touching the document.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Preview<'a> {
-    /// Shift the listed panels by a world-space delta.
+    /// Shift the listed drawables by a world-space delta.
     Translation {
-        /// Panels to move.
-        panels: &'a [Id],
+        /// Drawables to move.
+        drawables: &'a [Id],
         /// World-space shift.
         delta: DVec3,
     },
-    /// Turn the listed panels about a world-space pivot.
+    /// Turn the listed drawables about a world-space pivot.
     Rotation {
-        /// Panels to turn.
-        panels: &'a [Id],
+        /// Drawables to turn.
+        drawables: &'a [Id],
         /// World-space point the turn is centred on.
         pivot: DVec3,
         /// World-space turn.
@@ -287,6 +299,13 @@ pub(crate) enum PreviewKey {
         node: Id,
         /// The accumulated local turn as raw bits.
         angle: u64,
+    },
+    /// A vertex-move preview: the edited object and the local offset in micrometres.
+    Vertex {
+        /// The object whose vertices move.
+        object: Id,
+        /// The quantised local offset per axis.
+        offset: [i64; 3],
     },
 }
 
@@ -350,12 +369,127 @@ pub(crate) fn screen_direction(delta: Vec2) -> Option<Vec2> {
     (delta.length() >= 0.5).then(|| delta.normalized())
 }
 
+/// One projected axis handle: the axis, its screen-space tip and its unit screen direction.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AxisHandle {
+    /// The axis this handle moves along.
+    pub(crate) axis: Axis,
+    /// The tip in viewport points.
+    pub(crate) tip: Pos2,
+    /// The unit direction from the origin towards the tip.
+    pub(crate) direction: Vec2,
+}
+
+/// The projected handles of a gizmo at `origin_world`, skipping axes that point at the camera.
+pub(crate) fn axis_handles(camera: Camera, viewport: egui::Rect, origin_world: DVec3, origin: Pos2) -> Vec<AxisHandle> {
+    let step = (camera.distance() * 0.01).max(1.0);
+    let mut handles = Vec::with_capacity(Axis::ALL.len());
+    for axis in Axis::ALL {
+        if axis.direction().dot(camera.forward()).abs() > VIEW_ALIGNMENT_LIMIT {
+            continue;
+        }
+        let Some(end) = screen_point(camera, viewport, origin_world + axis.direction() * step) else {
+            continue;
+        };
+        let Some(direction) = screen_direction(end - origin) else {
+            continue;
+        };
+        handles.push(AxisHandle { axis, tip: origin + direction * HANDLE_LENGTH, direction });
+    }
+    handles
+}
+
+/// The axis whose handle is nearest to `pointer`, ignoring the dead zone around the origin.
+pub(crate) fn hit_axis(camera: Camera, viewport: egui::Rect, origin_world: DVec3, pointer: Pos2) -> Option<Axis> {
+    let origin = screen_point(camera, viewport, origin_world)?;
+    if !viewport.expand(64.0).contains(origin) {
+        return None;
+    }
+    let mut best: Option<(f32, Axis)> = None;
+    for handle in axis_handles(camera, viewport, origin_world, origin) {
+        let distance = distance_to_handle(pointer, origin, handle.tip);
+        let Some(distance) = distance else {
+            continue;
+        };
+        if distance <= HIT_RADIUS && best.is_none_or(|(nearest, _)| distance < nearest) {
+            best = Some((distance, handle.axis));
+        }
+    }
+    best.map(|(_, axis)| axis)
+}
+
+/// Distance from `point` to the segment, or `None` inside the dead zone next to the origin.
+fn distance_to_handle(point: Pos2, start: Pos2, end: Pos2) -> Option<f32> {
+    let segment = end - start;
+    let length_squared = segment.length_sq();
+    if length_squared <= f32::EPSILON {
+        return None;
+    }
+    let length = length_squared.sqrt();
+    let along = ((point - start).dot(segment) / length_squared).clamp(0.0, 1.0);
+    if along * length < ORIGIN_DEAD_ZONE {
+        return None;
+    }
+    Some((point - (start + segment * along)).length())
+}
+
+/// Draws three axis handles at a world point.
+///
+/// `hover` is the axis under the pointer and `active` the axis being dragged. While a drag is
+/// active the other axes fade, so the user can see which one owns the pointer.
+pub(crate) fn paint_axis_handles(
+    ui: &Ui,
+    viewport: egui::Rect,
+    camera: Camera,
+    origin_world: DVec3,
+    hover: Option<Axis>,
+    active: Option<Axis>,
+) {
+    let Some(origin) = screen_point(camera, viewport, origin_world) else {
+        return;
+    };
+    if !viewport.expand(64.0).contains(origin) {
+        return;
+    }
+    let handles = axis_handles(camera, viewport, origin_world, origin);
+    let painter = ui.painter().with_clip_rect(viewport);
+    let center_tone = if active.is_some() { Color32::from_gray(140) } else { Color32::from_gray(220) };
+    painter.circle_filled(origin, 3.0, center_tone);
+
+    for handle in handles {
+        let is_active = active == Some(handle.axis);
+        let hovered = hover == Some(handle.axis);
+        let mut color = if is_active || hovered { ACTIVE_COLOR } else { handle.axis.color() };
+        if active.is_some() && !is_active {
+            color = color.gamma_multiply(0.4);
+        }
+        let width = if is_active || hovered { 3.5 } else { 2.2 };
+        painter.line_segment([origin, handle.tip], Stroke::new(width, color));
+
+        let perpendicular = Vec2::new(-handle.direction.y, handle.direction.x);
+        let base = handle.tip - handle.direction * 9.0;
+        painter.add(Shape::convex_polygon(
+            vec![handle.tip, base + perpendicular * 4.0, base - perpendicular * 4.0],
+            color,
+            Stroke::NONE,
+        ));
+        let label = handle.tip + handle.direction * 12.0;
+        painter.text(
+            label,
+            Align2::CENTER_CENTER,
+            handle.axis.label(),
+            FontId::proportional(12.0),
+            if is_active || hovered { ACTIVE_COLOR } else { Color32::from_gray(230) },
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Container, Panel, Project};
-    use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness};
+    use furnicraft_model::{CameraProjection, Container, LightKind, Panel, Project};
+    use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness, sample_project};
 
     use super::*;
 
@@ -389,6 +523,50 @@ mod tests {
         Target { camera: Camera::default(), project, selection }
     }
 
+    fn viewport() -> egui::Rect {
+        egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))
+    }
+
+    fn origin_screen(camera: Camera) -> Pos2 {
+        screen_point(camera, viewport(), camera.target()).expect("the target is in front")
+    }
+
+    #[test]
+    fn the_default_view_draws_three_distinct_handles() {
+        let camera = Camera::default();
+        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera));
+        assert_eq!(handles.len(), 3);
+        for handle in &handles {
+            assert!(handle.tip.is_finite());
+            assert!((handle.direction.length() - 1.0).abs() < 1.0e-5);
+            assert!((handle.tip - origin_screen(camera)).length() > 80.0);
+        }
+        let z = handles.iter().find(|handle| handle.axis == Axis::Z).expect("Z handle");
+        assert!(z.direction.y < -0.5, "Z should point up, direction was {:?}", z.direction);
+    }
+
+    #[test]
+    fn a_view_aligned_axis_has_no_handle() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::Z);
+        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera));
+        assert!(handles.iter().all(|handle| handle.axis != Axis::Z), "handles were {handles:?}");
+        assert_eq!(handles.len(), 2);
+    }
+
+    #[test]
+    fn the_handle_nearest_the_pointer_wins_and_the_origin_is_dead() {
+        let camera = Camera::default();
+        let origin_world = camera.target();
+        let origin = origin_screen(camera);
+        let handles = axis_handles(camera, viewport(), origin_world, origin);
+        let x = handles.iter().find(|handle| handle.axis == Axis::X).expect("X handle");
+        let pointer = origin + (x.tip - origin) * 0.6;
+        assert_eq!(hit_axis(camera, viewport(), origin_world, pointer), Some(Axis::X));
+        assert_eq!(hit_axis(camera, viewport(), origin_world, origin), None);
+        assert_eq!(hit_axis(camera, viewport(), origin_world, origin + Vec2::new(300.0, 300.0)), None);
+    }
+
     #[test]
     fn a_selection_moves_only_its_top_most_nodes() {
         let project = nested_project();
@@ -406,6 +584,27 @@ mod tests {
     }
 
     #[test]
+    fn a_selected_camera_and_light_are_move_targets() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let light = project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("light");
+
+        let targets = move_targets(&project, &[camera, light]);
+        assert_eq!(
+            targets.iter().map(|target| target.node).collect::<Vec<_>>(),
+            vec![camera, light],
+            "a camera and a light carry a placement, so the gizmo moves them"
+        );
+        assert_eq!(target(&project, &[camera]).anchor(), Some(camera));
+        assert!(
+            target(&project, &[camera]).drawables().is_empty(),
+            "an icon stands for itself and has no geometry to preview"
+        );
+    }
+
+    #[test]
     fn a_target_carries_the_parent_frame_and_the_stored_pivot() {
         let project = nested_project();
         let cabinet = id(2);
@@ -419,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gizmo_anchors_on_the_last_movable_node_and_lists_its_panels() {
+    fn the_gizmo_anchors_on_the_last_movable_node_and_lists_its_drawables() {
         let project = nested_project();
         let (cabinet, outer, inner) = (id(2), id(3), id(4));
         let selection = [outer, cabinet, inner];
@@ -427,12 +626,12 @@ mod tests {
 
         assert_eq!(gizmo_target.anchor(), Some(cabinet), "the last movable node anchors the gizmo");
         assert_eq!(gizmo_target.anchor_pivot(), project.pivot_world(cabinet));
-        assert_eq!(gizmo_target.panels(), vec![outer, inner], "each panel is listed once, in target order");
+        assert_eq!(gizmo_target.drawables(), vec![outer, inner], "each drawable is listed once, in target order");
 
         let inner_only = [inner];
         let leaf_target = target(&project, &inner_only);
         assert_eq!(leaf_target.anchor(), Some(inner), "a selected leaf is its own anchor");
-        assert_eq!(leaf_target.panels(), vec![inner]);
+        assert_eq!(leaf_target.drawables(), vec![inner]);
     }
 
     #[test]

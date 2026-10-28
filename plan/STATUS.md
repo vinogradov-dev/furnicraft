@@ -1,29 +1,62 @@
 # Status
 
-Updated: 2026-10-28. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-29. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
-- Milestone: M6 — Properties and classification. M5 editing is done: the scene tree, node editing,
-  typed placement, viewport picking, the orientation widget, both gizmos, the stored pivot and
-  multi-node placement as one undo entry. The model design for M6 is accepted and implemented:
-  `Container` is the only container kind, every node carries typed properties, a component is a
-  marker rather than a node kind, and `FurnType` is a six-digit tree (`GG.TT.VV`) with `000000`
-  unclassified (ADRs 0034–0035, `docs/domain/furntypes.md`).
-- Working on: save and load, now that schema v7 carries the final node shape.
-- Direction: properties and classification come before save/load, so the first project files carry
-  the final shape. Parametric products are user prototype scripts over these properties, not
-  built-in builders; scripts are deferred.
+- Milestone: M7 — Objects and the scene file. M6 is done: `Container` is the only container kind,
+  every node carries typed properties, a component is a marker rather than a node kind, and
+  `FurnType` is a six-digit tree (ADRs 0034–0035, `docs/domain/furntypes.md`).
+- M7 starts with the paper design, now written: the scene file envelope
+  (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
+  light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
+- Working on: face picking and face moves in the mesh editor. The last task added the constructive
+  object: `object.extrude.create` builds a closed contour with one `Extrude` feature,
+  `object.contour.replace` edits it, the inspector card edits the contour and the height, and
+  `object.collapse` bakes the derived mesh in one undoable step. Schema 10 carries the payload, a
+  version 9 object still loads as a baked mesh, and the v10 golden keeps the contract. The viewport
+  evaluates a constructive object with the same function collapse uses, so the shape does not change
+  on collapse, and selection highlight, picking and gizmo preview treat panels and objects alike
+  (`Project::geometry_ids_under`). The same task fixed a regression: `contains_node` now covers
+  cameras and lights, so a newly created camera or light stays selected instead of disappearing after
+  one frame, and rename, properties and placement commands accept it.
+- Before that, cameras and lights are authored, editable and rendered. Schema 9 stores both as nodes
+  and `Project::active_camera` names the render camera; the commands `camera.create`, `light.create`,
+  `scene.active_camera.set`, `camera.projection.set` and `light.params.set` cover creation and edits,
+  the inspector cards rename them, set the projection or light parameters and toggle the active
+  camera, the viewport draws through the active camera (perspective or orthographic) while
+  navigation is disabled, and authored cameras and lights have pickable viewport icons. The frame is
+  lit by the first authored sun light (direction from its world rotation, colour times intensity)
+  and falls back to the built-in key light when the scene has no sun.
+- Before that, mesh editing is complete for vertices: `mesh.vertices.move` takes a validated batch,
+  the object card starts a sub-object mode, and the vertex gizmo previews a drag and dispatches one
+  command on release. Escape cancels a drag, then leaves the mode. Face picking and face moves are
+  still open.
+- Direction: objects and the scene file come before hardware, so saved files carry the final node
+  shape. The workspace can round-trip a scene by hand, a created cube can be shaped by moving its
+  vertices, a countertop is extruded from a contour and stays editable, and cameras and lights are
+  scene objects.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
-  it needs save/load and the property/type commands before it is useful. View state moves to the
-  session (0029) before the agent crate exists.
+  it needs save/load and the property/type commands before it is useful.
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with
   `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `fix(model): include cameras and lights in contains_node` (one root fix for the one-frame selection of a new camera/light, `NodeNotFound` on rename/properties/placement and the missing gizmo target; regression tests in model, engine, UI and app)
+- `feat: create, edit and collapse contour extrusion objects` (`object.extrude.create`, `object.contour.replace`, `object.collapse`, schema 10, v10 golden, contour and height card, constructive evaluation in the viewport, panels and objects in selection highlight and gizmo preview)
+- `feat: create, edit and render authored cameras and lights` (`camera.create`, `light.create`, `scene.active_camera.set`, `camera.projection.set`, `light.params.set`, camera and light inspector cards, tree create actions, camera mapping and orthographic projection in `furnicraft-scene`, navigation disabled through an active camera)
+- `feat(model): add camera and light nodes and the active camera` (schema 9, validated projections and light values, tree rows, v9 golden, delete clears a dangling active camera)
+- `feat(app): drag mesh vertices with a vertex gizmo` (shared axis handles, mesh preview in the scene frame, one `mesh.vertices.move` per drag, Escape cancels, markers follow the preview)
+- `feat(ui): select mesh vertices in a sub-object mode` (editor mesh mode, screen-space vertex picking and markers, object-card toggle, Escape exit)
+- `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
+- `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
+- `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
+- `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
+- `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
+- `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
 - `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
 - `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)
 - `docs: record multi-node placement` (ADR 0033)
@@ -100,12 +133,10 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Save and load, with the project store outside `engine`, then the order bundle and pinning.
-2. An engine `node.select`-style query command and saved reports over the same `NodeQuery`; the
-   scene tree already selects by furniture type, but a report needs a stored query and columns.
-3. The furniture-type picker and tree in the inspector; type labels now come from
-   `docs/domain/furntypes.md`, and the card edits the raw code.
-4. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
+1. Face picking and face moves in the mesh editor.
+2. Viewport multi-select, copy/paste and gizmo snapping.
+3. More constructive features and a viewport contour editor (booleans and fillets need the input
+   reference rule from ADR 0037).
 
 ## Open questions
 
@@ -133,20 +164,41 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
   connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
+- Whether visibility and lock are document data or session state.
+- Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
-- Selection and open containers still live in `ui::Editor` and the camera in the shell, although
-  ADR 0029 places them in the session. They have not moved yet.
+- Selection and open containers still live in `ui::Editor` and the view camera in the shell, although
+  ADR 0029 places them in the session. They have not moved yet. Cameras and lights are document nodes
+  with viewport icons. The frame uses the first authored sun light; point lights are saved and
+  undoable but do not light the frame yet, because the renderer has one directional key light and no
+  falloff model. An authored camera uses the scene default near and far planes because the model does
+  not store them.
+- An authored camera pins the view and disables navigation, so the only way back to the navigable view
+  is clearing the active camera in the inspector; a viewport-level "leave camera view" control is not
+  implemented.
+- A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text lines in
+  the object card, not in the viewport; there are no booleans, fillets or other feature kinds yet.
+  Collapse is a one-way door and only undo brings the history back. Mesh editing moves vertices only;
+  there is no face or edge selection. A cube is created at the parent origin and centred on it, so
+  half of a default cube sits below the floor until it is moved.
+- Vertex markers are painted over the viewport image without an occlusion test, so a vertex on the
+  far side of the mesh is visible and selectable through it. A depth readback or a pick pass can
+  hide the back vertices when the first large mesh makes it matter. Picking and marker painting also
+  walk every vertex of the edited mesh each frame; a large mesh needs a spatial index or a GPU id
+  pass.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made
   of several commands (a future assistant task, for example) cannot yet be grouped into one step.
-- Faber is designed (ADRs 0028–0032) but not implemented; with no save/load, a background job has no
-  project to open.
-- Save and load do not exist; `apps/furnicraft` always starts from `sample_session()`. This is a
-  deliberate deferral, not an oversight.
+- Faber is designed (ADRs 0028–0032) but not implemented; the scene store now gives a background job a
+  file to open, but there is no headless binary or query surface yet.
+- Save and load exist in the shell. Gaps: there is no prompt when the window closes with unsaved
+  changes, Open warns inside the path dialog instead of asking for confirmation, there is no
+  recent-files list and no autosave. `apps/furnicraft` still starts from `sample_session()`; a new
+  empty scene is one menu click away.
 - Parametric cabinets do not exist yet: M6 provides classification and properties, and product
   prototypes arrive later as user scripts over those properties.
 - A component has no separate "dissolve" operation yet: `node.component.convert_to_group` clears its
@@ -164,7 +216,9 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 - Move and Rotate act on the top-most selected nodes; the viewport has no Ctrl+click multi-select
   yet, so a multi-selection comes from the scene tree.
 - The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
-  transform buffer per drawable can replace the full upload when a large cabinet makes it visible.
+  transform buffer per drawable can replace the full upload when a large cabinet makes it visible. A
+  vertex drag also re-tessellates the edited mesh on every pointer move instead of moving only the
+  affected triangle vertices.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
   menu fallback for the six views yet.
 - The selection highlight re-uploads every mesh when the selection changes; an incremental colour

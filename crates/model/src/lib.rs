@@ -747,6 +747,12 @@ pub enum StructuralKind {
     Panel,
     /// A container, whether an ordinary group or a furniture component.
     Container,
+    /// A free-form geometry object.
+    Object,
+    /// An authored camera.
+    Camera,
+    /// An authored light.
+    Light,
 }
 
 /// A property predicate: the named property must equal the given value.
@@ -894,6 +900,8 @@ pub struct Project {
     revision: Revision,
     next_id: Id,
     root: Container,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_camera: Option<Id>,
 }
 
 impl Project {
@@ -903,8 +911,12 @@ impl Project {
     /// Version 5 split assembly components from organisational groups. Version 6 stores the
     /// manipulation pivot on every node. Version 7 replaces the two container kinds with one
     /// `Container` that carries typed properties: an old assembly becomes a component container
-    /// and an old group an ordinary one.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+    /// and an old group an ordinary one. Version 8 adds the geometry object node with a baked mesh;
+    /// older files simply contain none. Version 9 adds authored camera and light nodes and the
+    /// document's active camera; older files simply contain none. Version 10 adds the constructive
+    /// geometry payload, a contour with a feature history whose mesh is derived; a version 9 object
+    /// still loads as a baked mesh.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 10;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -918,7 +930,13 @@ impl Project {
         let next_id = next_id_after(max_id)?;
         let mut root = root;
         root.pivot = Pivot::ZERO;
-        Ok(Self { schema_version: Self::CURRENT_SCHEMA_VERSION, revision: Revision::ZERO, next_id, root })
+        Ok(Self {
+            schema_version: Self::CURRENT_SCHEMA_VERSION,
+            revision: Revision::ZERO,
+            next_id,
+            root,
+            active_camera: None,
+        })
     }
 
     /// The schema version stored in the document.
@@ -964,6 +982,45 @@ impl Project {
         find_panel_with_depth(&self.root, id, 1).map(|(_, panel)| panel)
     }
 
+    /// Finds a geometry object anywhere in the tree.
+    pub fn object(&self, id: Id) -> Option<&Object> {
+        self.node(id)?.as_object()
+    }
+
+    /// Finds an authored camera anywhere in the tree.
+    pub fn camera(&self, id: Id) -> Option<&CameraNode> {
+        self.node(id)?.as_camera()
+    }
+
+    /// Finds an authored light anywhere in the tree.
+    pub fn light(&self, id: Id) -> Option<&LightNode> {
+        self.node(id)?.as_light()
+    }
+
+    /// The camera the scene is rendered from, or `None` for the built-in camera.
+    pub const fn active_camera(&self) -> Option<Id> {
+        self.active_camera
+    }
+
+    /// Names the camera the scene is rendered from, or clears it, and bumps the revision once.
+    ///
+    /// `Some(id)` must name an existing camera node. `None` returns to the built-in camera. The
+    /// document keeps no viewport state here: an active camera only says which authored camera
+    /// frames the scene ([ADR 0036]).
+    ///
+    /// [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
+    pub fn set_active_camera(&mut self, camera: Option<Id>) -> Result<Revision, ProjectError> {
+        if let Some(id) = camera
+            && self.camera(id).is_none()
+        {
+            return Err(ProjectError::CameraNotFound { id });
+        }
+        let next_revision = self.next_revision()?;
+        self.active_camera = camera;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Finds a panel or a nested container below the root.
     ///
     /// The root container is not a [`Node`]; use [`Project::container`] with the root id to reach
@@ -1007,9 +1064,12 @@ impl Project {
         top_most
     }
 
-    /// Whether the id names a container or a panel.
+    /// Whether the id names the root or any node below it.
+    ///
+    /// Every node kind counts: a container, a panel, an object, a camera or a light. The root is
+    /// included because it owns the document frame.
     pub fn contains_node(&self, id: Id) -> bool {
-        self.is_container(id) || self.panel(id).is_some()
+        id == self.root.id || self.node(id).is_some()
     }
 
     /// The world placement of a node: every placement from the root down to it, composed.
@@ -1046,11 +1106,12 @@ impl Project {
         None
     }
 
-    /// The ids of the panels at or below `id`, in scene order.
+    /// The ids of the nodes that produce geometry at or below `id`, in tree order.
     ///
-    /// A panel yields itself; a container yields every panel in its subtree. Returns `None` for an
-    /// unknown id. The list is empty for a container with no panels.
-    pub fn panel_ids_under(&self, id: Id) -> Option<Vec<Id>> {
+    /// A panel and an object both produce a drawable, so each yields itself; a container yields
+    /// every geometry node in its subtree. Cameras and lights carry no geometry and are skipped.
+    /// Returns `None` for an unknown id; the list is empty for a container with no geometry.
+    pub fn geometry_ids_under(&self, id: Id) -> Option<Vec<Id>> {
         fn collect(children: &[Node], ids: &mut Vec<Id>, depth: u32) {
             if depth > Project::MAX_ASSEMBLY_DEPTH {
                 return;
@@ -1058,12 +1119,14 @@ impl Project {
             for child in children {
                 match child {
                     Node::Panel(panel) => ids.push(panel.id()),
+                    Node::Object(object) => ids.push(object.id()),
                     Node::Container(container) => collect(&container.children, ids, depth.saturating_add(1)),
+                    Node::Camera(_) | Node::Light(_) => {}
                 }
             }
         }
 
-        if self.panel(id).is_some() {
+        if self.panel(id).is_some() || self.object(id).is_some() {
             return Some(vec![id]);
         }
         let container = self.container(id)?;
@@ -1085,6 +1148,9 @@ impl Project {
         match self.node(id)? {
             Node::Panel(panel) => Some(panel.pivot),
             Node::Container(container) => Some(container.pivot),
+            Node::Object(object) => Some(object.pivot),
+            Node::Camera(camera) => Some(camera.pivot),
+            Node::Light(light) => Some(light.pivot),
         }
     }
 
@@ -1117,6 +1183,10 @@ impl Project {
             ) * 0.5;
             return Some(half);
         }
+        if let Some(object) = self.object(id) {
+            let (min, max) = object_bounds_mm(object.geometry())?;
+            return Some((min + max) * 0.5);
+        }
         let (_, container) = find_container(&self.root, id, 0)?;
         let (min, max) = panel_bounds(container.children(), Placement::IDENTITY, 0)?;
         Some((min + max) * 0.5)
@@ -1137,6 +1207,9 @@ impl Project {
         match node {
             Node::Panel(panel) => panel.pivot = pivot,
             Node::Container(container) => container.pivot = pivot,
+            Node::Object(object) => object.pivot = pivot,
+            Node::Camera(camera) => camera.pivot = pivot,
+            Node::Light(light) => light.pivot = pivot,
         }
         self.revision = next_revision;
         Ok(next_revision)
@@ -1507,6 +1580,207 @@ impl Project {
         Ok(id)
     }
 
+    /// Adds a geometry object to an existing container and bumps the revision once.
+    ///
+    /// The object id is allocated from the document; callers must not invent one. The parent may
+    /// be the root or any nested container.
+    pub fn add_object(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        geometry: Geometry,
+    ) -> Result<Id, ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let object = Object::new(id, name, placement, geometry);
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Object(object));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Replaces the contour of a constructive object and bumps the revision once.
+    ///
+    /// A node that is not a constructive object is [`ProjectError::NotConstructiveObject`]; an
+    /// invalid contour is refused before the document changes.
+    pub fn set_object_contour(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        let Some(constructive) = object.geometry_mut().as_constructive_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        constructive.set_contour(contour)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a constructive payload with a baked mesh and bumps the revision once.
+    ///
+    /// The caller evaluates the feature history and passes the resulting mesh; the id, name,
+    /// placement, pivot and properties are unchanged and the features are dropped
+    /// ([ADR 0037]). A node that is not a constructive object is refused.
+    ///
+    /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+    pub fn collapse_object(&mut self, id: Id, mesh: Mesh) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        if object.geometry().as_constructive().is_none() {
+            return Err(ProjectError::NotConstructiveObject { id });
+        }
+        *object.geometry_mut() = Geometry::Mesh(mesh);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Adds an authored camera to an existing container and bumps the revision once.
+    ///
+    /// The projection is validated by [`CameraNode::new`]; nothing changes when it is refused.
+    pub fn add_camera(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        projection: CameraProjection,
+    ) -> Result<Id, ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let camera = CameraNode::new(id, name, placement, projection)?;
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Camera(camera));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Adds an authored light to an existing container and bumps the revision once.
+    pub fn add_light(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        kind: LightKind,
+        color: [f32; 3],
+        intensity: f32,
+    ) -> Result<Id, ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let light = LightNode::new(id, name, placement, kind, color, intensity)?;
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Light(light));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// Replaces a camera's projection and bumps the revision once.
+    ///
+    /// The projection is validated before anything changes; an id that is not a camera is
+    /// [`ProjectError::CameraNotFound`].
+    pub fn set_camera_projection(&mut self, id: Id, projection: CameraProjection) -> Result<Revision, ProjectError> {
+        if !projection.is_valid() {
+            return Err(CameraError::InvalidProjection.into());
+        }
+        let next_revision = self.next_revision()?;
+        let Some(camera) = find_node_mut(&mut self.root, id).and_then(Node::as_camera_mut) else {
+            return Err(ProjectError::CameraNotFound { id });
+        };
+        camera.set_projection(projection)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a light's kind, colour and intensity and bumps the revision once.
+    ///
+    /// The values are validated before anything changes; an id that is not a light is
+    /// [`ProjectError::LightNotFound`].
+    pub fn set_light_params(
+        &mut self,
+        id: Id,
+        kind: LightKind,
+        color: [f32; 3],
+        intensity: f32,
+    ) -> Result<Revision, ProjectError> {
+        if !valid_light_color(color) {
+            return Err(LightError::InvalidColor.into());
+        }
+        if !valid_light_intensity(intensity) {
+            return Err(LightError::InvalidIntensity.into());
+        }
+        let next_revision = self.next_revision()?;
+        let Some(light) = find_node_mut(&mut self.root, id).and_then(Node::as_light_mut) else {
+            return Err(ProjectError::LightNotFound { id });
+        };
+        light.set_params(kind, color, intensity)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Moves mesh vertices to absolute local positions and bumps the revision once.
+    ///
+    /// The batch is validated before anything changes: an empty batch, a repeated index or an
+    /// index outside the mesh rejects the whole call, so a partial move can never reach the
+    /// document. A constructive object has no editable mesh and is refused; it becomes a mesh
+    /// object only through `object.collapse`.
+    pub fn move_mesh_vertices(&mut self, id: Id, moves: &[(u32, [Length; 3])]) -> Result<Revision, ProjectError> {
+        if moves.is_empty() {
+            return Err(ProjectError::NoVertexMoves);
+        }
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotAMeshObject { id });
+        };
+        let Some(mesh) = object.geometry_mut().as_mesh_mut() else {
+            return Err(ProjectError::NotAMeshObject { id });
+        };
+        let count = mesh.positions().len();
+        let mut seen = HashSet::with_capacity(moves.len());
+        let mut resolved = Vec::with_capacity(moves.len());
+        for (vertex, position) in moves {
+            if !seen.insert(*vertex) {
+                return Err(ProjectError::DuplicateVertex { object: id, vertex: *vertex });
+            }
+            let Ok(index) = usize::try_from(*vertex) else {
+                return Err(MeshError::VertexIndexOutOfBounds { vertex: usize::MAX, count }.into());
+            };
+            if index >= count {
+                return Err(MeshError::VertexIndexOutOfBounds { vertex: index, count }.into());
+            }
+            resolved.push((index, *position));
+        }
+        for (index, position) in resolved {
+            mesh.set_position(index, position)?;
+        }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Adds an empty container marked as a furniture component and bumps the revision once.
     ///
     /// The parent may be the root or any nested container. Adding a child below
@@ -1617,6 +1891,11 @@ impl Project {
         let next_revision = self.next_revision()?;
         if !remove_child(&mut self.root, id) {
             return Err(ProjectError::NodeNotFound { id });
+        }
+        // A deleted active camera, or a container that held it, returns the scene to the built-in
+        // camera instead of leaving a dangling reference in the document.
+        if self.active_camera.is_some_and(|camera| self.camera(camera).is_none()) {
+            self.active_camera = None;
         }
         self.revision = next_revision;
         Ok(next_revision)
@@ -1752,6 +2031,9 @@ impl Project {
         match self.node(id)? {
             Node::Container(container) => Some(&container.properties),
             Node::Panel(panel) => Some(&panel.properties),
+            Node::Object(object) => Some(&object.properties),
+            Node::Camera(camera) => Some(&camera.properties),
+            Node::Light(light) => Some(&light.properties),
         }
     }
 
@@ -1797,6 +2079,9 @@ impl Project {
             match node {
                 Node::Container(container) => container.set_property(&change.key, change.value.clone())?,
                 Node::Panel(panel) => panel.set_property(&change.key, change.value.clone())?,
+                Node::Object(object) => object.set_property(&change.key, change.value.clone())?,
+                Node::Camera(camera) => camera.set_property(&change.key, change.value.clone())?,
+                Node::Light(light) => light.set_property(&change.key, change.value.clone())?,
             }
         }
         self.revision = next_revision;
@@ -1815,6 +2100,9 @@ impl Project {
         let removed = match node {
             Node::Container(container) => container.clear_property(key),
             Node::Panel(panel) => panel.clear_property(key),
+            Node::Object(object) => object.clear_property(key),
+            Node::Camera(camera) => camera.clear_property(key),
+            Node::Light(light) => light.clear_property(key),
         };
         if !removed {
             return Err(ProjectError::PropertyNotFound { node: id, key: key.to_owned() });
@@ -1864,6 +2152,21 @@ impl Project {
                             ids.push(panel.id);
                         }
                     }
+                    Node::Object(object) => {
+                        if matches(&object.properties, StructuralKind::Object, query) {
+                            ids.push(object.id);
+                        }
+                    }
+                    Node::Camera(camera) => {
+                        if matches(&camera.properties, StructuralKind::Camera, query) {
+                            ids.push(camera.id);
+                        }
+                    }
+                    Node::Light(light) => {
+                        if matches(&light.properties, StructuralKind::Light, query) {
+                            ids.push(light.id);
+                        }
+                    }
                 }
             }
         }
@@ -1889,13 +2192,16 @@ impl Project {
         self.schema_version = snapshot.schema_version;
         self.next_id = self.next_id.max(snapshot.next_id);
         self.root = snapshot.root.clone();
+        self.active_camera = snapshot.active_camera;
         self.revision = next_revision;
         Ok(next_revision)
     }
 
     /// Compares user-visible content, ignoring the revision and the id allocator.
     pub fn same_content(&self, other: &Project) -> bool {
-        self.schema_version == other.schema_version && self.root == other.root
+        self.schema_version == other.schema_version
+            && self.root == other.root
+            && self.active_camera == other.active_camera
     }
 
     fn next_revision(&self) -> Result<Revision, ProjectError> {
@@ -1962,6 +2268,24 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
                             }
                         }
                     }
+                }
+                Node::Object(object) => {
+                    if !seen.insert(object.id.get()) {
+                        return Err(ProjectError::DuplicateId(object.id));
+                    }
+                    max_id = max_id.max(object.id.get());
+                }
+                Node::Camera(camera) => {
+                    if !seen.insert(camera.id.get()) {
+                        return Err(ProjectError::DuplicateId(camera.id));
+                    }
+                    max_id = max_id.max(camera.id.get());
+                }
+                Node::Light(light) => {
+                    if !seen.insert(light.id.get()) {
+                        return Err(ProjectError::DuplicateId(light.id));
+                    }
+                    max_id = max_id.max(light.id.get());
                 }
             }
         }
@@ -2041,7 +2365,7 @@ fn find_panel_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Panel)>
                     return Some(found);
                 }
             }
-            Node::Panel(_) => {}
+            Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
         }
     }
     None
@@ -2063,7 +2387,7 @@ fn find_panel_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, 
                     return Some(found);
                 }
             }
-            Node::Panel(_) => {}
+            Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
         }
     }
     None
@@ -2159,12 +2483,24 @@ fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> Option<(DVe
                     }
                 }
             }
+            Node::Object(object) => {
+                if let Some((min, max)) = object_bounds_mm(object.geometry()) {
+                    for x in [min.x, max.x] {
+                        for y in [min.y, max.y] {
+                            for z in [min.z, max.z] {
+                                include(relative.transform_point(DVec3::new(x, y, z)));
+                            }
+                        }
+                    }
+                }
+            }
             Node::Container(container) => {
                 if let Some((min, max)) = panel_bounds(&container.children, relative, depth.saturating_add(1)) {
                     include(min);
                     include(max);
                 }
             }
+            Node::Camera(_) | Node::Light(_) => {}
         }
     }
     bounds
@@ -2178,16 +2514,38 @@ fn default_container_pivot(children: &[Node]) -> Pivot {
     Pivot::from_local((min + max) * 0.5).unwrap_or(Pivot::ZERO)
 }
 
+/// The local bounding box of an object's geometry, in millimetres.
+fn object_bounds_mm(geometry: &Geometry) -> Option<(DVec3, DVec3)> {
+    match geometry {
+        Geometry::Mesh(mesh) => {
+            let (min, max) = mesh.bounds_micrometres();
+            let to_point = |values: [i64; 3]| {
+                DVec3::new(values[0] as f64 / 1000.0, values[1] as f64 / 1000.0, values[2] as f64 / 1000.0)
+            };
+            Some((to_point(min), to_point(max)))
+        }
+        Geometry::Constructive(constructive) => {
+            let extrude = constructive.extrude_feature()?;
+            let (min, max) = extrude.contour().bounds_micrometres();
+            let height = extrude.height().micrometres();
+            Some((
+                DVec3::new(min[0] as f64 / 1000.0, min[1] as f64 / 1000.0, 0.0),
+                DVec3::new(max[0] as f64 / 1000.0, max[1] as f64 / 1000.0, height as f64 / 1000.0),
+            ))
+        }
+    }
+}
+
 fn node_height(node: &Node) -> u32 {
     match node {
-        Node::Panel(_) => 1,
+        Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => 1,
         Node::Container(container) => container.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
     }
 }
 
 fn count_nodes(node: &Node) -> u64 {
     match node {
-        Node::Panel(_) => 1,
+        Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => 1,
         Node::Container(container) => {
             1u64.saturating_add(container.children.iter().map(count_nodes).fold(0, u64::saturating_add))
         }
@@ -2217,6 +2575,9 @@ fn assign_new_ids(node: &mut Node, ids: &mut impl Iterator<Item = Id>) -> Result
     let id = ids.next().ok_or(ProjectError::IdSpaceExhausted)?;
     match node {
         Node::Panel(panel) => panel.id = id,
+        Node::Object(object) => object.id = id,
+        Node::Camera(camera) => camera.id = id,
+        Node::Light(light) => light.id = id,
         Node::Container(container) => {
             container.id = id;
             for child in &mut container.children {
@@ -2412,6 +2773,30 @@ pub enum ProjectError {
     /// Two nodes in the tree use the same id.
     #[error("duplicate document id {0}")]
     DuplicateId(Id),
+    /// A geometry payload is invalid.
+    #[error("invalid geometry: {0}")]
+    InvalidGeometry(#[from] MeshError),
+    /// A constructive contour or feature list is invalid.
+    #[error("invalid constructive geometry: {0}")]
+    InvalidConstructive(#[from] ConstructiveError),
+    /// An authored camera could not be built.
+    #[error(transparent)]
+    Camera(#[from] CameraError),
+    /// An authored light could not be built.
+    #[error(transparent)]
+    Light(#[from] LightError),
+    /// The requested node is not an authored camera.
+    #[error("camera {id} not found")]
+    CameraNotFound {
+        /// The missing camera id.
+        id: Id,
+    },
+    /// The requested node is not an authored light.
+    #[error("light {id} not found")]
+    LightNotFound {
+        /// The missing light id.
+        id: Id,
+    },
     /// The node tree is nested more deeply than the supported limit.
     #[error("container nesting exceeds {max} levels")]
     TooDeep {
@@ -2491,6 +2876,29 @@ pub enum ProjectError {
     /// A placement batch contained no entries.
     #[error("no node placements were given")]
     NoPlacements,
+    /// A vertex batch contained no entries.
+    #[error("no mesh vertex moves were given")]
+    NoVertexMoves,
+    /// The same mesh vertex is moved more than once in one batch.
+    #[error("vertex {vertex} of object {object} is moved more than once")]
+    DuplicateVertex {
+        /// The object whose vertex was repeated.
+        object: Id,
+        /// The repeated vertex index.
+        vertex: u32,
+    },
+    /// The node is not a mesh object, so it has no editable vertices.
+    #[error("node {id} is not a mesh object")]
+    NotAMeshObject {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The node is not a constructive object, so it has no contour or feature history.
+    #[error("node {id} is not a constructive object")]
+    NotConstructiveObject {
+        /// The node that was asked.
+        id: Id,
+    },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {
@@ -2649,6 +3057,8 @@ struct ProjectWire {
     #[serde(default)]
     next_id: Option<Id>,
     root: Container,
+    #[serde(default)]
+    active_camera: Option<Id>,
 }
 
 impl TryFrom<ProjectWire> for Project {
@@ -2685,7 +3095,18 @@ impl TryFrom<ProjectWire> for Project {
             Some(next_id) => next_id,
             None => next_id_after(max_id)?,
         };
-        Ok(Self { schema_version: Project::CURRENT_SCHEMA_VERSION, revision: wire.revision, next_id, root })
+        let active_camera = match wire.active_camera {
+            Some(id) if find_node(&root, id).is_some_and(|node| node.as_camera().is_some()) => Some(id),
+            Some(id) => return Err(ProjectError::CameraNotFound { id }),
+            None => None,
+        };
+        Ok(Self {
+            schema_version: Project::CURRENT_SCHEMA_VERSION,
+            revision: wire.revision,
+            next_id,
+            root,
+            active_camera,
+        })
     }
 }
 
@@ -2706,6 +3127,7 @@ fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), 
             match child {
                 Node::Container(container) => walk(&mut container.children, depth.saturating_add(1))?,
                 Node::Panel(panel) => panel.migrate_machining_from_core()?,
+                Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
@@ -2728,7 +3150,7 @@ fn migrate_container_pivots(root: &mut Container, depth: u32) -> Result<(), Proj
                     container.pivot = default_container_pivot(&container.children);
                     walk(&mut container.children, depth.saturating_add(1))?;
                 }
-                Node::Panel(_) => {}
+                Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
@@ -3597,6 +4019,1106 @@ impl TryFrom<PanelRectWire> for PanelRect {
     }
 }
 
+/// Largest accepted number of vertices in one mesh.
+pub const MAX_MESH_VERTICES: usize = 1_000_000;
+
+/// Largest accepted number of polygon faces in one mesh.
+pub const MAX_MESH_FACES: usize = 1_000_000;
+
+/// Largest accepted number of vertices in one polygon face.
+pub const MAX_FACE_VERTICES: usize = 1_024;
+
+/// A rejected mesh.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum MeshError {
+    /// The mesh has no vertices or no faces.
+    #[error("a mesh must have at least one vertex and one face")]
+    Empty,
+    /// The mesh has more vertices than the limit allows.
+    #[error("mesh has {count} vertices, the limit is {max}")]
+    TooManyVertices {
+        /// The supplied vertex count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The mesh has more faces than the limit allows.
+    #[error("mesh has {count} faces, the limit is {max}")]
+    TooManyFaces {
+        /// The supplied face count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A face has too few or too many vertices.
+    #[error("face {face} has {count} vertices, expected between 3 and {max}")]
+    FaceVertexCount {
+        /// The face index.
+        face: usize,
+        /// The supplied vertex count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A face names the same vertex twice.
+    #[error("face {face} repeats vertex {vertex}")]
+    FaceRepeatedVertex {
+        /// The face index.
+        face: usize,
+        /// The repeated vertex index.
+        vertex: u32,
+    },
+    /// A face names a vertex that does not exist.
+    #[error("face {face} refers to vertex {vertex} of {vertices}")]
+    FaceIndexOutOfBounds {
+        /// The face index.
+        face: usize,
+        /// The rejected vertex index.
+        vertex: u32,
+        /// The vertex count of the mesh.
+        vertices: usize,
+    },
+    /// A vertex index is outside the mesh.
+    #[error("vertex {vertex} is outside the {count} vertices of the mesh")]
+    VertexIndexOutOfBounds {
+        /// The rejected vertex index.
+        vertex: usize,
+        /// The vertex count of the mesh.
+        count: usize,
+    },
+    /// A primitive was asked for with a size that is not positive.
+    #[error("primitive size must be positive, got {edge} micrometres")]
+    NonPositiveSize {
+        /// The rejected size in micrometres.
+        edge: i64,
+    },
+}
+
+/// Serialized form of [`Mesh`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeshWire {
+    positions: Vec<[Length; 3]>,
+    faces: Vec<Vec<u32>>,
+}
+
+/// A baked polygon mesh: the geometry payload of a mesh object.
+///
+/// Positions are local coordinates in the object's frame. Faces are polygons, not triangles: the
+/// document keeps quads and larger faces so editing a box does not degrade it, and triangulation
+/// happens only when the mesh is turned into a renderable drawable. A mesh is the source of truth;
+/// it has no feature history, and undo is its only record ([ADR 0037]).
+///
+/// Validation is bounded and total: a hostile file cannot ask for an allocation it did not pay for,
+/// and every index is checked before it is used.
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "MeshWire")]
+pub struct Mesh {
+    positions: Vec<[Length; 3]>,
+    faces: Vec<Vec<u32>>,
+}
+
+impl Mesh {
+    /// Validates and stores a mesh.
+    pub fn new(positions: Vec<[Length; 3]>, faces: Vec<Vec<u32>>) -> Result<Self, MeshError> {
+        if positions.is_empty() || faces.is_empty() {
+            return Err(MeshError::Empty);
+        }
+        if positions.len() > MAX_MESH_VERTICES {
+            return Err(MeshError::TooManyVertices { count: positions.len(), max: MAX_MESH_VERTICES });
+        }
+        if faces.len() > MAX_MESH_FACES {
+            return Err(MeshError::TooManyFaces { count: faces.len(), max: MAX_MESH_FACES });
+        }
+        for (index, face) in faces.iter().enumerate() {
+            if !(3..=MAX_FACE_VERTICES).contains(&face.len()) {
+                return Err(MeshError::FaceVertexCount { face: index, count: face.len(), max: MAX_FACE_VERTICES });
+            }
+            let mut seen = HashSet::with_capacity(face.len());
+            for vertex in face {
+                if !seen.insert(*vertex) {
+                    return Err(MeshError::FaceRepeatedVertex { face: index, vertex: *vertex });
+                }
+                if *vertex as usize >= positions.len() {
+                    return Err(MeshError::FaceIndexOutOfBounds {
+                        face: index,
+                        vertex: *vertex,
+                        vertices: positions.len(),
+                    });
+                }
+            }
+        }
+        Ok(Self { positions, faces })
+    }
+
+    /// The local vertex positions.
+    pub fn positions(&self) -> &[[Length; 3]] {
+        &self.positions
+    }
+
+    /// The polygon faces, as vertex indices.
+    pub fn faces(&self) -> &[Vec<u32>] {
+        &self.faces
+    }
+
+    /// Replaces one vertex position; returns an error for an unknown index.
+    pub fn set_position(&mut self, index: usize, position: [Length; 3]) -> Result<(), MeshError> {
+        let Some(slot) = self.positions.get_mut(index) else {
+            return Err(MeshError::VertexIndexOutOfBounds { vertex: index, count: self.positions.len() });
+        };
+        *slot = position;
+        Ok(())
+    }
+
+    /// The minimum and maximum local corners of the vertex cloud, in micrometres.
+    pub fn bounds_micrometres(&self) -> ([i64; 3], [i64; 3]) {
+        let mut min = [i64::MAX; 3];
+        let mut max = [i64::MIN; 3];
+        for position in &self.positions {
+            for (axis, value) in position.iter().enumerate() {
+                let value = value.micrometres();
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        (min, max)
+    }
+
+    /// Builds a cube of `edge` length centred on the object's local origin.
+    ///
+    /// The cube is the first primitive; its six quads are counter-clockwise seen from outside. An
+    /// odd edge length loses at most one micrometre to integer halving, which no panel rule cares
+    /// about.
+    pub fn cube(edge: Length) -> Result<Self, MeshError> {
+        let half = edge.micrometres() / 2;
+        if half <= 0 {
+            return Err(MeshError::NonPositiveSize { edge: edge.micrometres() });
+        }
+        let corner = |x: i64, y: i64, z: i64| {
+            [Length::from_micrometres(x), Length::from_micrometres(y), Length::from_micrometres(z)]
+        };
+        let positions = vec![
+            corner(-half, -half, -half),
+            corner(half, -half, -half),
+            corner(half, half, -half),
+            corner(-half, half, -half),
+            corner(-half, -half, half),
+            corner(half, -half, half),
+            corner(half, half, half),
+            corner(-half, half, half),
+        ];
+        Self::new(
+            positions,
+            vec![
+                vec![0, 3, 2, 1],
+                vec![4, 5, 6, 7],
+                vec![0, 1, 5, 4],
+                vec![1, 2, 6, 5],
+                vec![2, 3, 7, 6],
+                vec![3, 0, 4, 7],
+            ],
+        )
+    }
+}
+
+impl TryFrom<MeshWire> for Mesh {
+    type Error = MeshError;
+
+    fn try_from(wire: MeshWire) -> Result<Self, Self::Error> {
+        Self::new(wire.positions, wire.faces)
+    }
+}
+
+/// Largest number of points in a constructive contour.
+pub const MAX_CONTOUR_POINTS: usize = 256;
+
+/// Largest number of features in a constructive object.
+pub const MAX_OBJECT_FEATURES: usize = 32;
+
+/// Largest accepted contour coordinate and extrusion height: ten metres.
+pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
+
+/// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContourWire {
+    points: Vec<[Length; 2]>,
+}
+
+/// A closed flat contour in the object's local XY plane.
+///
+/// The points form one polyline: no arcs, no holes. A valid contour has at least three points, is
+/// inside [`MAX_CONTOUR_COORDINATE`], has no repeated consecutive point, encloses a non-zero area
+/// and does not intersect itself. The constructor stores the points counter-clockwise, so face
+/// winding does not depend on how the user drew them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ContourWire")]
+pub struct Contour {
+    points: Vec<[Length; 2]>,
+}
+
+impl Contour {
+    /// Validates a contour and stores it counter-clockwise.
+    pub fn new(mut points: Vec<[Length; 2]>) -> Result<Self, ContourError> {
+        if points.len() < 3 {
+            return Err(ContourError::TooFewPoints { count: points.len() });
+        }
+        if points.len() > MAX_CONTOUR_POINTS {
+            return Err(ContourError::TooManyPoints { count: points.len(), max: MAX_CONTOUR_POINTS });
+        }
+        for (index, point) in points.iter().enumerate() {
+            if point
+                .iter()
+                .any(|value| value.micrometres().unsigned_abs() > MAX_CONTOUR_COORDINATE.micrometres() as u64)
+            {
+                return Err(ContourError::CoordinateOutOfRange { point: index, max: MAX_CONTOUR_COORDINATE });
+            }
+        }
+        for index in 0..points.len() {
+            let next = (index + 1) % points.len();
+            if points.get(index) == points.get(next) {
+                return Err(ContourError::RepeatedPoint { point: next });
+            }
+        }
+        let area2 = contour_area2(&points);
+        if area2 == 0 {
+            return Err(ContourError::ZeroArea);
+        }
+        if area2 < 0 {
+            points.reverse();
+        }
+        if let Some((first, second)) = first_intersection(&points) {
+            return Err(ContourError::SelfIntersecting { first, second });
+        }
+        Ok(Self { points })
+    }
+
+    /// The contour points, counter-clockwise.
+    pub fn points(&self) -> &[[Length; 2]] {
+        &self.points
+    }
+
+    /// The two axis-aligned extents of the contour, in micrometres.
+    pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
+        let mut min = [i64::MAX; 2];
+        let mut max = [i64::MIN; 2];
+        for point in &self.points {
+            for (axis, value) in point.iter().enumerate() {
+                let value = value.micrometres();
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        }
+        (min, max)
+    }
+}
+
+impl TryFrom<ContourWire> for Contour {
+    type Error = ContourError;
+
+    fn try_from(wire: ContourWire) -> Result<Self, Self::Error> {
+        Self::new(wire.points)
+    }
+}
+
+/// Twice the signed area of a contour, in square micrometres.
+fn contour_area2(points: &[[Length; 2]]) -> i128 {
+    let mut total = 0_i128;
+    for index in 0..points.len() {
+        let current = points.get(index).map(|point| [point[0].micrometres(), point[1].micrometres()]);
+        let next = points.get((index + 1) % points.len()).map(|point| [point[0].micrometres(), point[1].micrometres()]);
+        let (Some(current), Some(next)) = (current, next) else {
+            continue;
+        };
+        total += i128::from(current[0]) * i128::from(next[1]) - i128::from(next[0]) * i128::from(current[1]);
+    }
+    total
+}
+
+/// The first pair of non-adjacent edges that touch, as edge indices.
+fn first_intersection(points: &[[Length; 2]]) -> Option<(usize, usize)> {
+    let count = points.len();
+    for first in 0..count {
+        let first_next = (first + 1) % count;
+        for second in (first + 1)..count {
+            let second_next = (second + 1) % count;
+            let adjacent = second == first_next || first_next == second_next || (first == 0 && second_next == 0);
+            if adjacent {
+                continue;
+            }
+            let (Some(a), Some(b), Some(c), Some(d)) =
+                (points.get(first), points.get(first_next), points.get(second), points.get(second_next))
+            else {
+                continue;
+            };
+            let point = |value: &[Length; 2]| [value[0].micrometres(), value[1].micrometres()];
+            if segments_touch(point(a), point(b), point(c), point(d)) {
+                return Some((first, second));
+            }
+        }
+    }
+    None
+}
+
+fn orientation(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
+    (i128::from(b[0]) - i128::from(a[0])) * (i128::from(c[1]) - i128::from(a[1]))
+        - (i128::from(b[1]) - i128::from(a[1])) * (i128::from(c[0]) - i128::from(a[0]))
+}
+
+fn on_segment(a: [i64; 2], b: [i64; 2], point: [i64; 2]) -> bool {
+    point[0] >= a[0].min(b[0]) && point[0] <= a[0].max(b[0]) && point[1] >= a[1].min(b[1]) && point[1] <= a[1].max(b[1])
+}
+
+/// Whether two closed segments share any point, including a collinear overlap.
+fn segments_touch(a: [i64; 2], b: [i64; 2], c: [i64; 2], d: [i64; 2]) -> bool {
+    let abc = orientation(a, b, c);
+    let abd = orientation(a, b, d);
+    let cda = orientation(c, d, a);
+    let cdb = orientation(c, d, b);
+    if ((abc > 0 && abd < 0) || (abc < 0 && abd > 0)) && ((cda > 0 && cdb < 0) || (cda < 0 && cdb > 0)) {
+        return true;
+    }
+    (abc == 0 && on_segment(a, b, c))
+        || (abd == 0 && on_segment(a, b, d))
+        || (cda == 0 && on_segment(c, d, a))
+        || (cdb == 0 && on_segment(c, d, b))
+}
+
+/// A validation failure of a constructive contour.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ContourError {
+    /// The contour has fewer than three points.
+    #[error("a contour needs at least three points, got {count}")]
+    TooFewPoints {
+        /// The supplied point count.
+        count: usize,
+    },
+    /// The contour has more points than the limit allows.
+    #[error("a contour has {count} points, the limit is {max}")]
+    TooManyPoints {
+        /// The supplied point count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// A point lies outside the accepted coordinate range.
+    #[error("contour point {point} is outside \u{00b1}{max}")]
+    CoordinateOutOfRange {
+        /// The point index.
+        point: usize,
+        /// The accepted absolute maximum.
+        max: Length,
+    },
+    /// A point repeats its predecessor.
+    #[error("contour point {point} repeats the previous point")]
+    RepeatedPoint {
+        /// The repeated point index.
+        point: usize,
+    },
+    /// The contour encloses no area.
+    #[error("the contour has zero area")]
+    ZeroArea,
+    /// Two non-adjacent edges touch.
+    #[error("contour edges {first} and {second} cross")]
+    SelfIntersecting {
+        /// The first edge index.
+        first: usize,
+        /// The second edge index.
+        second: usize,
+    },
+}
+
+/// Serialized form of [`Extrude`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtrudeWire {
+    contour: Contour,
+    height: Length,
+}
+
+/// The first feature: a contour extruded along `+Z` from `z = 0` to `z = height`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ExtrudeWire")]
+pub struct Extrude {
+    contour: Contour,
+    height: Length,
+}
+
+impl Extrude {
+    /// Validates the height and stores the feature.
+    pub fn new(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
+        if !height.is_positive() || height.micrometres() > MAX_CONTOUR_COORDINATE.micrometres() {
+            return Err(ConstructiveError::InvalidHeight { height, max: MAX_CONTOUR_COORDINATE });
+        }
+        Ok(Self { contour, height })
+    }
+
+    /// The contour in the object's local plane.
+    pub const fn contour(&self) -> &Contour {
+        &self.contour
+    }
+
+    /// The extrusion height, positive.
+    pub const fn height(&self) -> Length {
+        self.height
+    }
+
+    /// Replaces the contour, keeping the height.
+    pub fn set_contour(&mut self, contour: Contour) {
+        self.contour = contour;
+    }
+}
+
+impl TryFrom<ExtrudeWire> for Extrude {
+    type Error = ConstructiveError;
+
+    fn try_from(wire: ExtrudeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.contour, wire.height)
+    }
+}
+
+/// One step of a constructive object's feature history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Feature {
+    /// Extrusion of a closed contour.
+    Extrude(Extrude),
+}
+
+/// Serialized form of [`Constructive`]; validation happens in its `TryFrom` implementation.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConstructiveWire {
+    features: Vec<Feature>,
+}
+
+/// A constructive geometry payload: an ordered feature history whose mesh is derived.
+///
+/// The contour and feature parameters are the source of truth; the mesh is never stored in the
+/// document and is not editable until [`Project::collapse_object`] bakes it ([ADR 0037]).
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ConstructiveWire")]
+pub struct Constructive {
+    features: Vec<Feature>,
+}
+
+impl Constructive {
+    /// Validates the feature list and stores it.
+    pub fn new(features: Vec<Feature>) -> Result<Self, ConstructiveError> {
+        if features.is_empty() || features.len() > MAX_OBJECT_FEATURES {
+            return Err(ConstructiveError::FeatureCount { count: features.len(), max: MAX_OBJECT_FEATURES });
+        }
+        if !matches!(features.first(), Some(Feature::Extrude(_))) {
+            return Err(ConstructiveError::MissingExtrude);
+        }
+        Ok(Self { features })
+    }
+
+    /// Creates an object with a single extrusion.
+    pub fn extrude(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
+        Self::new(vec![Feature::Extrude(Extrude::new(contour, height)?)])
+    }
+
+    /// The ordered features, at least one.
+    pub fn features(&self) -> &[Feature] {
+        &self.features
+    }
+
+    /// The first extrusion, which every constructive object has.
+    pub fn extrude_feature(&self) -> Option<&Extrude> {
+        match self.features.first() {
+            Some(Feature::Extrude(extrude)) => Some(extrude),
+            None => None,
+        }
+    }
+
+    /// The current contour of the first extrusion.
+    pub fn contour(&self) -> Option<&Contour> {
+        self.extrude_feature().map(Extrude::contour)
+    }
+
+    /// The height of the first extrusion.
+    pub fn height(&self) -> Option<Length> {
+        self.extrude_feature().map(Extrude::height)
+    }
+
+    /// Replaces the contour of the first extrusion, keeping every other feature.
+    pub fn set_contour(&mut self, contour: Contour) -> Result<(), ConstructiveError> {
+        let Some(Feature::Extrude(extrude)) = self.features.first_mut() else {
+            return Err(ConstructiveError::MissingExtrude);
+        };
+        extrude.set_contour(contour);
+        Ok(())
+    }
+}
+
+impl TryFrom<ConstructiveWire> for Constructive {
+    type Error = ConstructiveError;
+
+    fn try_from(wire: ConstructiveWire) -> Result<Self, Self::Error> {
+        Self::new(wire.features)
+    }
+}
+
+/// A validation failure of a constructive object.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ConstructiveError {
+    /// The contour is not a valid closed polyline.
+    #[error(transparent)]
+    Contour(#[from] ContourError),
+    /// The extrusion height is not positive or is too large.
+    #[error("an extrusion height must be positive and at most {max}, got {height}")]
+    InvalidHeight {
+        /// The rejected height.
+        height: Length,
+        /// The accepted maximum.
+        max: Length,
+    },
+    /// The feature list is empty or too long.
+    #[error("a constructive object needs between 1 and {max} features, got {count}")]
+    FeatureCount {
+        /// The supplied feature count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The first feature is not an extrusion.
+    #[error("the first feature of a constructive object must be an extrusion")]
+    MissingExtrude,
+}
+
+/// The geometry payload of an object node.
+///
+/// Exactly one payload is stored. A `Mesh` is edited directly; a [`Constructive`] payload is
+/// rebuilt from its features and is not editable as a mesh until the object is collapsed
+/// ([ADR 0037]).
+///
+/// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Geometry {
+    /// A baked mesh, edited directly.
+    Mesh(Mesh),
+    /// A contour and its feature history; the mesh is derived.
+    Constructive(Constructive),
+}
+
+impl Geometry {
+    /// The mesh, when the payload is a baked mesh.
+    pub const fn as_mesh(&self) -> Option<&Mesh> {
+        match self {
+            Self::Mesh(mesh) => Some(mesh),
+            Self::Constructive(_) => None,
+        }
+    }
+
+    /// The mesh for mutation, when the payload is a baked mesh.
+    pub const fn as_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        match self {
+            Self::Mesh(mesh) => Some(mesh),
+            Self::Constructive(_) => None,
+        }
+    }
+
+    /// The feature history, when the payload is constructive.
+    pub const fn as_constructive(&self) -> Option<&Constructive> {
+        match self {
+            Self::Constructive(constructive) => Some(constructive),
+            Self::Mesh(_) => None,
+        }
+    }
+
+    /// The feature history for mutation, when the payload is constructive.
+    pub const fn as_constructive_mut(&mut self) -> Option<&mut Constructive> {
+        match self {
+            Self::Constructive(constructive) => Some(constructive),
+            Self::Mesh(_) => None,
+        }
+    }
+}
+
+/// A free-form geometry object: a named, placed leaf with a geometry payload.
+///
+/// A panel is not an object: panel rules are manufacturing rules. An object is a leaf in v1, so
+/// several parts are grouped by wrapping them in a container.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Object {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    geometry: Geometry,
+}
+
+impl Object {
+    /// Creates an object with a zero pivot.
+    pub fn new(id: Id, name: impl Into<String>, placement: Placement, geometry: Geometry) -> Self {
+        Self { id, name: name.into(), placement, pivot: Pivot::ZERO, properties: Properties::new(), geometry }
+    }
+
+    /// The stable object id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// The manipulation pivot in the object's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
+    }
+
+    /// The geometry payload.
+    pub const fn geometry(&self) -> &Geometry {
+        &self.geometry
+    }
+
+    /// The geometry payload for mutation.
+    pub const fn geometry_mut(&mut self) -> &mut Geometry {
+        &mut self.geometry
+    }
+
+    /// The typed properties of this object.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
+
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
+    }
+
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
+    }
+}
+
+/// How an authored camera projects the scene.
+///
+/// A perspective camera stores its vertical field of view; an orthographic camera stores the
+/// visible height in its local frame. Both are document data: switching projection is a property
+/// of the camera object, not of the viewport ([ADR 0036]).
+///
+/// [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CameraProjection {
+    /// A perspective view with a vertical field of view.
+    Perspective {
+        /// Vertical field of view, validated to 1°–179°.
+        fov_y: Degrees,
+    },
+    /// An orthographic view showing a fixed height.
+    Orthographic {
+        /// Visible height in the camera's local frame, positive.
+        height: Length,
+    },
+}
+
+impl CameraProjection {
+    /// The default perspective projection: 50° vertically.
+    pub const DEFAULT: Self = Self::Perspective { fov_y: Degrees::from_millidegrees(50_000) };
+
+    /// Whether the projection parameters are inside their accepted ranges.
+    pub fn is_valid(&self) -> bool {
+        match *self {
+            Self::Perspective { fov_y } => (CameraNode::MIN_FOV.millidegrees()..=CameraNode::MAX_FOV.millidegrees())
+                .contains(&fov_y.millidegrees()),
+            Self::Orthographic { height } => {
+                height.is_positive() && height.micrometres() <= CameraNode::MAX_ORTHOGRAPHIC_HEIGHT.micrometres()
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraProjectionWire {
+    kind: ProjectionKindWire,
+    #[serde(default)]
+    fov_y: Option<Degrees>,
+    #[serde(default)]
+    height: Option<Length>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ProjectionKindWire {
+    Perspective,
+    Orthographic,
+}
+
+impl<'de> Deserialize<'de> for CameraProjection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = CameraProjectionWire::deserialize(deserializer)?;
+        match (wire.kind, wire.fov_y, wire.height) {
+            (ProjectionKindWire::Perspective, Some(fov_y), None) => Ok(Self::Perspective { fov_y }),
+            (ProjectionKindWire::Orthographic, None, Some(height)) => Ok(Self::Orthographic { height }),
+            (ProjectionKindWire::Perspective, _, _) => {
+                Err(de::Error::custom("a perspective camera needs exactly the field `fov_y`"))
+            }
+            (ProjectionKindWire::Orthographic, _, _) => {
+                Err(de::Error::custom("an orthographic camera needs exactly the field `height`"))
+            }
+        }
+    }
+}
+
+/// A camera the user authored.
+///
+/// The built-in viewport camera is a default, not a node. An authored camera is a scene object:
+/// it has a parent, a placement, typed properties, selection and undo, and the document may name
+/// one of them as its active camera ([ADR 0036]).
+///
+/// [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct CameraNode {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    projection: CameraProjection,
+}
+
+impl CameraNode {
+    /// Smallest accepted vertical field of view: one degree.
+    pub const MIN_FOV: Degrees = Degrees::from_millidegrees(1_000);
+    /// Largest accepted vertical field of view: 179 degrees.
+    pub const MAX_FOV: Degrees = Degrees::from_millidegrees(179_000);
+    /// Largest accepted orthographic height: one kilometre.
+    pub const MAX_ORTHOGRAPHIC_HEIGHT: Length = Length::from_micrometres(1_000_000_000);
+
+    /// Creates a camera after validating its projection.
+    pub fn new(
+        id: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        projection: CameraProjection,
+    ) -> Result<Self, CameraError> {
+        if !projection.is_valid() {
+            return Err(CameraError::InvalidProjection);
+        }
+        Ok(Self { id, name: name.into(), placement, pivot: Pivot::ZERO, properties: Properties::new(), projection })
+    }
+
+    /// The stable camera id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// The manipulation pivot in the camera's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
+    }
+
+    /// The projection parameters.
+    pub const fn projection(&self) -> CameraProjection {
+        self.projection
+    }
+
+    /// Replaces the projection after validating it.
+    pub fn set_projection(&mut self, projection: CameraProjection) -> Result<(), CameraError> {
+        if !projection.is_valid() {
+            return Err(CameraError::InvalidProjection);
+        }
+        self.projection = projection;
+        Ok(())
+    }
+
+    /// The typed properties of this camera.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
+
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
+    }
+
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
+    }
+}
+
+/// A serialization failure of a camera node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum CameraError {
+    /// The field of view or the orthographic height is outside its range.
+    #[error("camera projection is outside its accepted range")]
+    InvalidProjection,
+}
+
+/// Serialized form of [`CameraNode`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraNodeWire {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    projection: CameraProjection,
+}
+
+impl TryFrom<CameraNodeWire> for CameraNode {
+    type Error = CameraError;
+
+    fn try_from(wire: CameraNodeWire) -> Result<Self, Self::Error> {
+        if !wire.projection.is_valid() {
+            return Err(CameraError::InvalidProjection);
+        }
+        Ok(Self {
+            id: wire.id,
+            name: wire.name,
+            placement: wire.placement,
+            pivot: wire.pivot,
+            properties: wire.properties,
+            projection: wire.projection,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for CameraNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        CameraNodeWire::deserialize(deserializer)?.try_into().map_err(de::Error::custom)
+    }
+}
+
+/// The kinds of light a scene can carry.
+///
+/// A sun lights the whole scene from a direction; a point light radiates from its placement. The
+/// built-in key light is a default, not a node ([ADR 0036]).
+///
+/// [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightKind {
+    /// A directional light, like the sun.
+    Sun,
+    /// A light radiating from a point.
+    Point,
+}
+
+/// A light the user authored.
+///
+/// Like a camera it is a scene object with a parent, placement, properties, selection and undo. The
+/// built-in key light is used when the scene has no light node.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LightNode {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    kind: LightKind,
+    color: [f32; 3],
+    intensity: f32,
+}
+
+impl LightNode {
+    /// Largest accepted intensity.
+    pub const MAX_INTENSITY: f32 = 1_000_000.0;
+
+    /// Creates a light after validating its colour and intensity.
+    pub fn new(
+        id: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        kind: LightKind,
+        color: [f32; 3],
+        intensity: f32,
+    ) -> Result<Self, LightError> {
+        if !valid_light_color(color) {
+            return Err(LightError::InvalidColor);
+        }
+        if !valid_light_intensity(intensity) {
+            return Err(LightError::InvalidIntensity);
+        }
+        Ok(Self {
+            id,
+            name: name.into(),
+            placement,
+            pivot: Pivot::ZERO,
+            properties: Properties::new(),
+            kind,
+            color,
+            intensity,
+        })
+    }
+
+    /// The stable light id.
+    pub const fn id(&self) -> Id {
+        self.id
+    }
+
+    /// The user-visible name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The placement relative to the parent frame.
+    pub const fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// The manipulation pivot in the light's own frame.
+    pub const fn pivot(&self) -> Pivot {
+        self.pivot
+    }
+
+    /// The light kind.
+    pub const fn kind(&self) -> LightKind {
+        self.kind
+    }
+
+    /// The linear RGB colour.
+    pub const fn color(&self) -> [f32; 3] {
+        self.color
+    }
+
+    /// The intensity multiplier.
+    pub const fn intensity(&self) -> f32 {
+        self.intensity
+    }
+
+    /// Replaces the kind, colour and intensity after validating the colour and intensity.
+    pub fn set_params(&mut self, kind: LightKind, color: [f32; 3], intensity: f32) -> Result<(), LightError> {
+        if !valid_light_color(color) {
+            return Err(LightError::InvalidColor);
+        }
+        if !valid_light_intensity(intensity) {
+            return Err(LightError::InvalidIntensity);
+        }
+        self.kind = kind;
+        self.color = color;
+        self.intensity = intensity;
+        Ok(())
+    }
+
+    /// The typed properties of this light.
+    pub const fn properties(&self) -> &Properties {
+        &self.properties
+    }
+
+    /// Stores one validated property.
+    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
+        self.properties.insert(key, value).map(|_| ())
+    }
+
+    /// Removes one property; returns whether it was present.
+    pub fn clear_property(&mut self, key: &str) -> bool {
+        self.properties.remove(key).is_some()
+    }
+}
+
+fn valid_light_color(color: [f32; 3]) -> bool {
+    color.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+}
+
+fn valid_light_intensity(intensity: f32) -> bool {
+    intensity.is_finite() && (0.0..=LightNode::MAX_INTENSITY).contains(&intensity)
+}
+
+/// A serialization failure of a light node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum LightError {
+    /// A colour component is not finite or outside `0.0..=1.0`.
+    #[error("light colour must be finite and inside the unit range")]
+    InvalidColor,
+    /// The intensity is not finite or outside its range.
+    #[error("light intensity must be finite and non-negative")]
+    InvalidIntensity,
+}
+
+/// Serialized form of [`LightNode`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LightNodeWire {
+    id: Id,
+    name: String,
+    placement: Placement,
+    #[serde(default)]
+    pivot: Pivot,
+    #[serde(default)]
+    properties: Properties,
+    kind: LightKind,
+    color: [f32; 3],
+    intensity: f32,
+}
+
+impl TryFrom<LightNodeWire> for LightNode {
+    type Error = LightError;
+
+    fn try_from(wire: LightNodeWire) -> Result<Self, Self::Error> {
+        if !valid_light_color(wire.color) {
+            return Err(LightError::InvalidColor);
+        }
+        if !valid_light_intensity(wire.intensity) {
+            return Err(LightError::InvalidIntensity);
+        }
+        Ok(Self {
+            id: wire.id,
+            name: wire.name,
+            placement: wire.placement,
+            pivot: wire.pivot,
+            properties: wire.properties,
+            kind: wire.kind,
+            color: wire.color,
+            intensity: wire.intensity,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for LightNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        LightNodeWire::deserialize(deserializer)?.try_into().map_err(de::Error::custom)
+    }
+}
+
 /// A child of a container.
 ///
 /// A container is a group or a furniture component; a panel is an atomic leaf. Version-6 files
@@ -3609,6 +5131,12 @@ pub enum Node {
     Container(Container),
     /// A panel.
     Panel(Panel),
+    /// A free-form geometry object.
+    Object(Object),
+    /// An authored camera.
+    Camera(CameraNode),
+    /// An authored light.
+    Light(LightNode),
 }
 
 impl<'de> Deserialize<'de> for Node {
@@ -3634,9 +5162,12 @@ impl<'de> Visitor<'de> for NodeVisitor {
     where
         A: MapAccess<'de>,
     {
-        const FIELDS: &[&str] = &["container", "assembly", "group", "panel"];
+        const FIELDS: &[&str] = &["container", "assembly", "group", "panel", "object", "camera", "light"];
         let mut container: Option<Container> = None;
         let mut panel: Option<Panel> = None;
+        let mut object: Option<Object> = None;
+        let mut camera: Option<CameraNode> = None;
+        let mut light: Option<LightNode> = None;
         while let Some(key) = map.next_key::<String>()? {
             match key.as_str() {
                 "container" | "assembly" | "group" => {
@@ -3655,14 +5186,42 @@ impl<'de> Visitor<'de> for NodeVisitor {
                     }
                     panel = Some(map.next_value()?);
                 }
+                "object" => {
+                    if object.is_some() {
+                        return Err(de::Error::custom("a node must not have two object entries"));
+                    }
+                    object = Some(map.next_value()?);
+                }
+                "camera" => {
+                    if camera.is_some() {
+                        return Err(de::Error::custom("a node must not have two camera entries"));
+                    }
+                    camera = Some(map.next_value()?);
+                }
+                "light" => {
+                    if light.is_some() {
+                        return Err(de::Error::custom("a node must not have two light entries"));
+                    }
+                    light = Some(map.next_value()?);
+                }
                 _ => return Err(de::Error::unknown_field(&key, FIELDS)),
             }
         }
-        match (container, panel) {
-            (Some(container), None) => Ok(Self::Value::Container(container)),
-            (None, Some(panel)) => Ok(Self::Value::Panel(panel)),
-            (Some(_), Some(_)) => Err(de::Error::custom("a node must not be both a container and a panel")),
-            (None, None) => Err(de::Error::custom("a node must be a container or a panel")),
+        let present = usize::from(container.is_some())
+            + usize::from(panel.is_some())
+            + usize::from(object.is_some())
+            + usize::from(camera.is_some())
+            + usize::from(light.is_some());
+        if present > 1 {
+            return Err(de::Error::custom("a node must have exactly one kind"));
+        }
+        match (container, panel, object, camera, light) {
+            (Some(container), None, None, None, None) => Ok(Self::Value::Container(container)),
+            (None, Some(panel), None, None, None) => Ok(Self::Value::Panel(panel)),
+            (None, None, Some(object), None, None) => Ok(Self::Value::Object(object)),
+            (None, None, None, Some(camera), None) => Ok(Self::Value::Camera(camera)),
+            (None, None, None, None, Some(light)) => Ok(Self::Value::Light(light)),
+            _ => Err(de::Error::custom("a node must be a container, a panel, an object, a camera or a light")),
         }
     }
 }
@@ -3679,12 +5238,33 @@ impl From<Panel> for Node {
     }
 }
 
+impl From<Object> for Node {
+    fn from(object: Object) -> Self {
+        Self::Object(object)
+    }
+}
+
+impl From<CameraNode> for Node {
+    fn from(camera: CameraNode) -> Self {
+        Self::Camera(camera)
+    }
+}
+
+impl From<LightNode> for Node {
+    fn from(light: LightNode) -> Self {
+        Self::Light(light)
+    }
+}
+
 impl Node {
-    /// The stable node id, shared by panels and containers.
+    /// The stable node id, shared by every node kind.
     pub const fn id(&self) -> Id {
         match self {
             Self::Container(container) => container.id,
             Self::Panel(panel) => panel.id,
+            Self::Object(object) => object.id,
+            Self::Camera(camera) => camera.id,
+            Self::Light(light) => light.id,
         }
     }
 
@@ -3693,6 +5273,9 @@ impl Node {
         match self {
             Self::Container(container) => &container.name,
             Self::Panel(panel) => &panel.name,
+            Self::Object(object) => &object.name,
+            Self::Camera(camera) => &camera.name,
+            Self::Light(light) => &light.name,
         }
     }
 
@@ -3701,37 +5284,88 @@ impl Node {
         match self {
             Self::Container(container) => container.placement,
             Self::Panel(panel) => panel.placement,
+            Self::Object(object) => object.placement,
+            Self::Camera(camera) => camera.placement,
+            Self::Light(light) => light.placement,
         }
     }
 
-    /// The children of a container, or `None` for a panel.
+    /// The children of a container, or `None` for a leaf.
     pub fn children(&self) -> Option<&[Node]> {
         match self {
             Self::Container(container) => Some(&container.children),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
         }
     }
 
     fn children_mut(&mut self) -> Option<&mut Vec<Node>> {
         match self {
             Self::Container(container) => Some(&mut container.children),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
         }
     }
 
-    /// The nested container, or `None` for a panel.
+    /// The nested container, or `None` for a leaf.
     pub const fn as_container(&self) -> Option<&Container> {
         match self {
             Self::Container(container) => Some(container),
-            Self::Panel(_) => None,
+            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
         }
     }
 
-    /// The panel, or `None` for a container.
+    /// The panel, or `None` for another node kind.
     pub const fn as_panel(&self) -> Option<&Panel> {
         match self {
             Self::Panel(panel) => Some(panel),
-            Self::Container(_) => None,
+            Self::Container(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The geometry object, or `None` for another node kind.
+    pub const fn as_object(&self) -> Option<&Object> {
+        match self {
+            Self::Object(object) => Some(object),
+            Self::Container(_) | Self::Panel(_) | Self::Camera(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The geometry object for mutation, or `None` for another node kind.
+    pub const fn as_object_mut(&mut self) -> Option<&mut Object> {
+        match self {
+            Self::Object(object) => Some(object),
+            Self::Container(_) | Self::Panel(_) | Self::Camera(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The authored camera, or `None` for another node kind.
+    pub const fn as_camera(&self) -> Option<&CameraNode> {
+        match self {
+            Self::Camera(camera) => Some(camera),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The authored camera for mutation, or `None` for another node kind.
+    pub const fn as_camera_mut(&mut self) -> Option<&mut CameraNode> {
+        match self {
+            Self::Camera(camera) => Some(camera),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
+        }
+    }
+
+    /// The authored light for mutation, or `None` for another node kind.
+    pub const fn as_light_mut(&mut self) -> Option<&mut LightNode> {
+        match self {
+            Self::Light(light) => Some(light),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Camera(_) => None,
+        }
+    }
+
+    /// The authored light, or `None` for another node kind.
+    pub const fn as_light(&self) -> Option<&LightNode> {
+        match self {
+            Self::Light(light) => Some(light),
+            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Camera(_) => None,
         }
     }
 
@@ -3740,6 +5374,9 @@ impl Node {
         match self {
             Self::Container(container) => &container.properties,
             Self::Panel(panel) => &panel.properties,
+            Self::Object(object) => &object.properties,
+            Self::Camera(camera) => &camera.properties,
+            Self::Light(light) => &light.properties,
         }
     }
 
@@ -3747,6 +5384,9 @@ impl Node {
         match self {
             Self::Container(container) => container.name = name,
             Self::Panel(panel) => panel.name = name,
+            Self::Object(object) => object.name = name,
+            Self::Camera(camera) => camera.name = name,
+            Self::Light(light) => light.name = name,
         }
     }
 
@@ -3754,6 +5394,9 @@ impl Node {
         match self {
             Self::Container(container) => container.placement = placement,
             Self::Panel(panel) => panel.placement = placement,
+            Self::Object(object) => object.placement = placement,
+            Self::Camera(camera) => camera.placement = placement,
+            Self::Light(light) => light.placement = placement,
         }
     }
 }
@@ -4559,7 +6202,7 @@ mod tests {
     }
 
     #[test]
-    fn world_placement_composes_the_chain_and_lists_panels() {
+    fn world_placement_composes_the_chain_and_lists_geometry() {
         let mut project = sample_project();
         let drawer = Id::new(3).expect("drawer id");
         let front = Id::new(4).expect("front id");
@@ -4588,10 +6231,20 @@ mod tests {
         assert_eq!(project.world_placement(root), Some(Placement::IDENTITY));
         assert_eq!(project.world_placement(Id::new(999).expect("id")), None);
 
-        assert_eq!(project.panel_ids_under(root), Some(vec![shelf, front]));
-        assert_eq!(project.panel_ids_under(drawer), Some(vec![front]));
-        assert_eq!(project.panel_ids_under(shelf), Some(vec![shelf]));
-        assert_eq!(project.panel_ids_under(Id::new(999).expect("id")), None);
+        let cube = project
+            .add_object(
+                drawer,
+                "Bracket",
+                Placement::IDENTITY,
+                Geometry::Mesh(Mesh::cube(Length::from_millimetres(20).expect("size")).expect("cube")),
+            )
+            .expect("add a geometry object");
+
+        assert_eq!(project.geometry_ids_under(root), Some(vec![shelf, front, cube]));
+        assert_eq!(project.geometry_ids_under(drawer), Some(vec![front, cube]));
+        assert_eq!(project.geometry_ids_under(shelf), Some(vec![shelf]));
+        assert_eq!(project.geometry_ids_under(cube), Some(vec![cube]));
+        assert_eq!(project.geometry_ids_under(Id::new(999).expect("id")), None);
     }
 
     #[test]
@@ -4888,6 +6541,191 @@ mod tests {
 
     fn sample_material() -> MaterialId {
         MaterialId::new(1).expect("material id")
+    }
+
+    fn box_mesh() -> Mesh {
+        let p = millimetres;
+        Mesh::new(
+            vec![
+                [p(0), p(0), p(0)],
+                [p(10), p(0), p(0)],
+                [p(10), p(10), p(0)],
+                [p(0), p(10), p(0)],
+                [p(0), p(0), p(10)],
+                [p(10), p(0), p(10)],
+                [p(10), p(10), p(10)],
+                [p(0), p(10), p(10)],
+            ],
+            vec![
+                vec![0, 3, 2, 1],
+                vec![4, 5, 6, 7],
+                vec![0, 1, 5, 4],
+                vec![1, 2, 6, 5],
+                vec![2, 3, 7, 6],
+                vec![3, 0, 4, 7],
+            ],
+        )
+        .expect("valid box mesh")
+    }
+
+    fn sample_object(id: u64) -> Object {
+        Object::new(Id::new(id).expect("id"), format!("Object {id}"), Placement::IDENTITY, Geometry::Mesh(box_mesh()))
+    }
+
+    #[test]
+    fn mesh_rejects_bad_topology() {
+        let p = millimetres;
+        let square = vec![[p(0), p(0), p(0)], [p(1), p(0), p(0)], [p(1), p(1), p(0)]];
+        assert_eq!(Mesh::new(Vec::new(), vec![vec![0, 1, 2]]), Err(MeshError::Empty));
+        assert_eq!(Mesh::new(square.clone(), Vec::new()), Err(MeshError::Empty));
+        assert_eq!(
+            Mesh::new(square.clone(), vec![vec![0, 1]]),
+            Err(MeshError::FaceVertexCount { face: 0, count: 2, max: MAX_FACE_VERTICES })
+        );
+        assert_eq!(
+            Mesh::new(square.clone(), vec![vec![0, 1, 1]]),
+            Err(MeshError::FaceRepeatedVertex { face: 0, vertex: 1 })
+        );
+        assert_eq!(
+            Mesh::new(square, vec![vec![0, 1, 3]]),
+            Err(MeshError::FaceIndexOutOfBounds { face: 0, vertex: 3, vertices: 3 })
+        );
+    }
+
+    #[test]
+    fn mesh_caps_the_vertices_of_one_face() {
+        let p = millimetres;
+        let positions: Vec<[Length; 3]> = (0..=MAX_FACE_VERTICES).map(|index| [p(index as i64), p(0), p(0)]).collect();
+        let face: Vec<u32> = (0..=MAX_FACE_VERTICES as u32).collect();
+        assert_eq!(
+            Mesh::new(positions, vec![face]),
+            Err(MeshError::FaceVertexCount { face: 0, count: MAX_FACE_VERTICES + 1, max: MAX_FACE_VERTICES })
+        );
+    }
+
+    #[test]
+    fn object_round_trips_in_the_current_schema() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let project = Project::new(root).expect("valid project");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let object = project.object(Id::new(5).expect("id")).expect("object");
+        assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        assert!(text.contains(&format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION)));
+        assert!(text.contains("\"object\":{"));
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn object_node_commands_rename_place_duplicate_and_delete() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+
+        project.rename_node(id, "Bracket").expect("rename");
+        assert_eq!(project.object(id).expect("object").name(), "Bracket");
+
+        let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("placement");
+        project.set_node_placement(id, placement).expect("place");
+        assert_eq!(project.object(id).expect("object").placement(), placement);
+
+        let copy = project.duplicate_node(id).expect("duplicate");
+        assert_ne!(copy, id);
+        let copy_object = project.object(copy).expect("copied object");
+        assert_eq!(copy_object.name(), "Bracket copy");
+        assert_eq!(copy_object.geometry(), project.object(id).expect("object").geometry());
+
+        project.remove_node(id).expect("delete");
+        assert!(project.object(id).is_none());
+        assert!(project.object(copy).is_some());
+    }
+
+    #[test]
+    fn mesh_vertices_move_as_one_revision() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+        let before = project.object(id).expect("object").geometry().as_mesh().expect("mesh").positions()[0];
+        let target = [millimetres(10), millimetres(20), millimetres(30)];
+
+        let revision = project.move_mesh_vertices(id, &[(0, target)]).expect("move the vertex");
+
+        assert_eq!(revision.get(), 1);
+        assert_eq!(project.revision().get(), 1);
+        let mesh = project.object(id).expect("object").geometry().as_mesh().expect("mesh");
+        assert_eq!(mesh.positions()[0], target);
+        assert_ne!(before, target);
+        assert_eq!(mesh.positions().len(), 8, "a move changes no topology");
+        assert_eq!(mesh.faces().len(), 6);
+    }
+
+    #[test]
+    fn a_bad_vertex_batch_is_rejected_without_mutating() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let id = Id::new(5).expect("id");
+        let before = project.clone();
+        let target = [millimetres(1), millimetres(2), millimetres(3)];
+
+        assert_eq!(project.move_mesh_vertices(id, &[]), Err(ProjectError::NoVertexMoves));
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, target), (0, target)]),
+            Err(ProjectError::DuplicateVertex { object: id, vertex: 0 })
+        );
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, target), (8, target)]),
+            Err(ProjectError::InvalidGeometry(MeshError::VertexIndexOutOfBounds { vertex: 8, count: 8 }))
+        );
+        assert_eq!(project.revision(), before.revision(), "a rejected batch does not bump the revision");
+        assert!(project.same_content(&before));
+    }
+
+    #[test]
+    fn a_non_mesh_node_has_no_editable_vertices() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_panel(Id::new(2).expect("id"), "Shelf").into()],
+        );
+        let mut project = Project::new(root).expect("valid project");
+        let target = [millimetres(1), millimetres(2), millimetres(3)];
+
+        assert_eq!(
+            project.move_mesh_vertices(Id::new(2).expect("id"), &[(0, target)]),
+            Err(ProjectError::NotAMeshObject { id: Id::new(2).expect("id") })
+        );
+        assert_eq!(
+            project.move_mesh_vertices(Id::new(99).expect("id"), &[(0, target)]),
+            Err(ProjectError::NodeNotFound { id: Id::new(99).expect("id") })
+        );
+        assert_eq!(project.revision(), Revision::ZERO);
+    }
+
+    #[test]
+    fn object_duplicate_id_is_rejected() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_object(5).into(), sample_object(5).into()],
+        );
+        assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(Id::new(5).expect("id"))));
+    }
+
+    #[test]
+    fn query_selects_objects_by_structural_kind() {
+        let root = Container::new(
+            Id::new(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![sample_object(5).into(), sample_panel(Id::new(2).expect("id"), "Shelf").into()],
+        );
+        let project = Project::new(root).expect("valid project");
+        let found = project.query(&NodeQuery::any().with_kind(StructuralKind::Object));
+        assert_eq!(found, vec![Id::new(5).expect("id")]);
     }
 
     #[test]
@@ -5714,7 +7552,11 @@ mod tests {
         let project = sample_project();
         let text = serde_json::to_string(&project).expect("serialize project");
 
-        let newer = text.replacen("\"schema_version\":7", "\"schema_version\":8", 1);
+        let newer = text.replacen(
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION),
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION + 1),
+            1,
+        );
         let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
         assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
 
@@ -6562,5 +8404,336 @@ mod tests {
         assert!(!text.contains("\"group\":"));
         let decoded: Project = serde_json::from_str(&text).expect("round trip");
         assert_eq!(decoded, project);
+    }
+    #[test]
+    fn camera_and_light_nodes_round_trip_in_the_document() {
+        let mut project =
+            Project::new(Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new()))
+                .expect("valid project");
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light = project
+            .add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0, 0.9, 0.8], 2.0)
+            .expect("add light");
+
+        assert_eq!(project.camera(camera).expect("camera").name(), "Camera");
+        assert_eq!(project.light(light).expect("light").kind(), LightKind::Sun);
+        assert_eq!(project.camera(light), None, "a light is not a camera");
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Camera)), vec![camera]);
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Light)), vec![light]);
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"camera\":{"));
+        assert!(text.contains("\"light\":{"));
+        assert!(!text.contains("active_camera"), "an unset active camera is not written");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn contains_node_covers_every_node_kind() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+
+        assert!(project.contains_node(root), "the root owns the document frame");
+        assert!(project.contains_node(Id::new(2).expect("shelf")), "a panel");
+        assert!(project.contains_node(Id::new(3).expect("drawer")), "a container");
+        assert!(project.contains_node(camera), "a camera is a scene node");
+        assert!(project.contains_node(light), "a light is a scene node");
+        assert!(!project.contains_node(Id::new(999).expect("id")), "an unknown id is not a node");
+    }
+
+    #[test]
+    fn a_camera_and_a_light_move_and_hold_properties() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+        let moved = Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+
+        let before = project.revision();
+        let after = project.set_node_placements(&[(camera, moved), (light, moved)]).expect("a camera and a light move");
+        assert_eq!(after, before.checked_next().expect("revision"), "a batch is one revision");
+        assert_eq!(project.camera(camera).expect("camera").placement(), moved);
+        assert_eq!(project.light(light).expect("light").placement(), moved);
+
+        let text = PropertyValue::Text { value: "presentation".to_owned() };
+        let property_revision = project.set_property(camera, "shot", text.clone()).expect("a camera holds properties");
+        assert_eq!(property_revision, after.checked_next().expect("revision"));
+        assert_eq!(project.properties(camera).and_then(|properties| properties.get("shot")), Some(&text));
+    }
+
+    #[test]
+    fn the_active_camera_must_be_a_camera_and_is_cleared_with_it() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let panel = Id::new(2).expect("panel");
+
+        assert_eq!(project.set_active_camera(Some(panel)), Err(ProjectError::CameraNotFound { id: panel }));
+        assert_eq!(
+            project.set_active_camera(Some(Id::new(99).expect("id"))),
+            Err(ProjectError::CameraNotFound { id: Id::new(99).expect("id") })
+        );
+        project.set_active_camera(Some(camera)).expect("activate the camera");
+        assert_eq!(project.active_camera(), Some(camera));
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"active_camera\":"));
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(decoded.active_camera(), Some(camera));
+
+        // A placement or pivot edit keeps the camera active; deleting it falls back to the built-in.
+        project.set_node_placement(camera, Placement::IDENTITY).expect("move the camera");
+        assert_eq!(project.active_camera(), Some(camera));
+
+        // Nesting is allowed; deleting the container that holds the camera clears the reference too.
+        let drawer = Id::new(3).expect("id");
+        let nested = project
+            .add_camera(drawer, "Nested", Placement::IDENTITY, CameraProjection::DEFAULT)
+            .expect("add a nested camera");
+        project.set_active_camera(Some(nested)).expect("still a camera below the drawer");
+        project.remove_node(drawer).expect("delete the drawer");
+        assert_eq!(project.active_camera(), None);
+        assert_eq!(project.camera(nested), None);
+        assert!(project.camera(camera).is_some(), "a sibling camera is untouched");
+    }
+
+    #[test]
+    fn a_duplicated_camera_gets_fresh_ids_and_keeps_the_active_one() {
+        let mut project =
+            Project::new(Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new()))
+                .expect("valid project");
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        project.set_active_camera(Some(camera)).expect("active camera");
+
+        let copy = project.duplicate_node(camera).expect("duplicate");
+        assert_ne!(copy, camera);
+        assert_eq!(project.camera(copy).expect("copy").name(), "Camera copy");
+        assert_eq!(project.active_camera(), Some(camera), "a duplicate does not become active");
+    }
+
+    #[test]
+    fn a_camera_projection_outside_its_range_is_rejected_on_build_and_load() {
+        let id = Id::new(5).expect("id");
+        assert_eq!(
+            CameraNode::new(id, "Camera", Placement::IDENTITY, CameraProjection::Perspective { fov_y: Degrees::ZERO }),
+            Err(CameraError::InvalidProjection)
+        );
+        assert_eq!(
+            CameraNode::new(id, "Camera", Placement::IDENTITY, CameraProjection::Orthographic { height: Length::ZERO }),
+            Err(CameraError::InvalidProjection)
+        );
+
+        let camera = CameraNode::new(id, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let text = serde_json::to_string(&camera).expect("serialize");
+        let too_narrow = text.replace("\"fov_y\":50000", "\"fov_y\":0");
+        assert_ne!(too_narrow, text);
+        assert!(serde_json::from_str::<CameraNode>(&too_narrow).is_err());
+
+        let extra_field = text.replace("\"fov_y\":50000", "\"fov_y\":50000,\"height\":1000");
+        assert_ne!(extra_field, text);
+        assert!(serde_json::from_str::<CameraNode>(&extra_field).is_err(), "a projection carries one parameter set");
+    }
+
+    #[test]
+    fn a_light_colour_or_intensity_outside_its_range_is_rejected_on_build_and_load() {
+        let id = Id::new(6).expect("id");
+        assert_eq!(
+            LightNode::new(id, "Key", Placement::IDENTITY, LightKind::Point, [1.5, 0.0, 0.0], 1.0),
+            Err(LightError::InvalidColor)
+        );
+        assert_eq!(
+            LightNode::new(id, "Key", Placement::IDENTITY, LightKind::Point, [1.0, 1.0, 1.0], f32::NAN),
+            Err(LightError::InvalidIntensity)
+        );
+        assert_eq!(
+            LightNode::new(id, "Key", Placement::IDENTITY, LightKind::Point, [0.0; 3], -1.0),
+            Err(LightError::InvalidIntensity)
+        );
+
+        let light = LightNode::new(id, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("light");
+        let text = serde_json::to_string(&light).expect("serialize");
+        let too_bright = text.replace("\"intensity\":1.0", "\"intensity\":-2.0");
+        assert_ne!(too_bright, text);
+        assert!(serde_json::from_str::<LightNode>(&too_bright).is_err());
+    }
+
+    #[test]
+    fn camera_projection_and_light_params_change_in_one_revision() {
+        let mut project =
+            Project::new(Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new()))
+                .expect("valid project");
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
+        let light =
+            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
+        let not_a_camera = project.root().id();
+
+        let before = project.revision();
+        let orthographic = CameraProjection::Orthographic { height: Length::from_millimetres(2_000).expect("height") };
+        let after = project.set_camera_projection(camera, orthographic).expect("projection");
+        assert_eq!(after, before.checked_next().expect("revision"));
+        assert_eq!(project.camera(camera).expect("camera").projection(), orthographic);
+
+        // A refused value changes neither the projection nor the revision.
+        project
+            .set_camera_projection(camera, CameraProjection::Perspective { fov_y: Degrees::ZERO })
+            .expect_err("a zero field of view is invalid");
+        assert_eq!(project.camera(camera).expect("camera").projection(), orthographic);
+        assert_eq!(project.revision(), after);
+        assert_eq!(
+            project.set_camera_projection(not_a_camera, CameraProjection::DEFAULT),
+            Err(ProjectError::CameraNotFound { id: not_a_camera })
+        );
+
+        project.set_light_params(light, LightKind::Point, [0.5, 0.4, 0.3], 4.0).expect("light params");
+        let light_node = project.light(light).expect("light");
+        assert_eq!(light_node.kind(), LightKind::Point);
+        assert_eq!(light_node.color(), [0.5, 0.4, 0.3]);
+        assert_eq!(light_node.intensity(), 4.0);
+        assert_eq!(
+            project.set_light_params(light, LightKind::Point, [2.0; 3], 1.0),
+            Err(ProjectError::Light(LightError::InvalidColor))
+        );
+        assert_eq!(
+            project.set_light_params(camera, LightKind::Point, [1.0; 3], 1.0),
+            Err(ProjectError::LightNotFound { id: camera })
+        );
+    }
+
+    fn rectangle_contour(width: i64, height: i64) -> Contour {
+        Contour::new(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(width), millimetres(0)],
+            [millimetres(width), millimetres(height)],
+            [millimetres(0), millimetres(height)],
+        ])
+        .expect("rectangle")
+    }
+
+    #[test]
+    fn a_contour_rejects_every_shape_error_at_construction_and_load() {
+        assert_eq!(
+            Contour::new(vec![[millimetres(0), millimetres(0)], [millimetres(1), millimetres(0)]]),
+            Err(ContourError::TooFewPoints { count: 2 })
+        );
+        assert_eq!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(0), millimetres(10)]
+            ]),
+            Err(ContourError::RepeatedPoint { point: 2 })
+        );
+        assert_eq!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(20), millimetres(0)]
+            ]),
+            Err(ContourError::ZeroArea)
+        );
+        assert!(matches!(
+            Contour::new(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(30), millimetres(0)],
+                [millimetres(20), millimetres(20)],
+                [millimetres(10), millimetres(-10)]
+            ]),
+            Err(ContourError::SelfIntersecting { .. })
+        ));
+        let far = Length::from_micrometres(MAX_CONTOUR_COORDINATE.micrometres() + 1);
+        assert_eq!(
+            Contour::new(vec![
+                [far, millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(10)]
+            ]),
+            Err(ContourError::CoordinateOutOfRange { point: 0, max: MAX_CONTOUR_COORDINATE })
+        );
+        let too_many = (0..=MAX_CONTOUR_POINTS)
+            .map(|index| [millimetres(index as i64), millimetres((index % 2) as i64)])
+            .collect::<Vec<_>>();
+        assert!(matches!(Contour::new(too_many), Err(ContourError::TooManyPoints { .. })));
+
+        let too_short = r#"{"points":[[0,0],[10000,0]]}"#;
+        assert!(serde_json::from_str::<Contour>(too_short).is_err(), "load runs the same validation");
+    }
+
+    #[test]
+    fn a_constructive_object_keeps_its_contour_and_collapses_to_a_mesh() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let root = project.root().id();
+        let constructive = Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive");
+        let id = project
+            .add_object(root, "Countertop", Placement::IDENTITY, Geometry::Constructive(constructive.clone()))
+            .expect("object");
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"kind\":\"constructive\""), "the payload is tagged");
+        assert_eq!(serde_json::from_str::<Project>(&text).expect("load"), project, "the history round-trips");
+        assert!(project.object(id).expect("object").geometry().as_mesh().is_none(), "the mesh is derived");
+
+        let wider = rectangle_contour(120, 50);
+        let revision = project.set_object_contour(id, wider.clone()).expect("replace the contour");
+        assert_eq!(revision.get(), 2, "creation was revision one");
+        let object = project.object(id).expect("object");
+        assert_eq!(object.name(), "Countertop");
+        assert_eq!(object.placement(), Placement::IDENTITY);
+        assert_eq!(
+            object.geometry().as_constructive().expect("constructive").contour(),
+            Some(&wider),
+            "the id, name and placement survive a contour edit"
+        );
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, [millimetres(1), millimetres(1), millimetres(1)])]),
+            Err(ProjectError::NotAMeshObject { id })
+        );
+
+        let mesh = Mesh::cube(millimetres(10)).expect("mesh");
+        let revision = project.collapse_object(id, mesh.clone()).expect("collapse");
+        assert_eq!(revision.get(), 3);
+        let object = project.object(id).expect("object");
+        assert_eq!(object.geometry().as_mesh(), Some(&mesh));
+        assert!(object.geometry().as_constructive().is_none(), "collapse drops the history");
+        assert_eq!(project.collapse_object(id, mesh), Err(ProjectError::NotConstructiveObject { id }));
+    }
+
+    #[test]
+    fn a_constructive_object_bounds_use_the_contour_and_height() {
+        let geometry = Geometry::Constructive(
+            Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive"),
+        );
+        let (min, max) = object_bounds_mm(&geometry).expect("bounds");
+        assert!((min - DVec3::ZERO).length() < 1.0e-9);
+        assert!((max - DVec3::new(100.0, 50.0, 18.0)).length() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_bad_extrusion_height_is_rejected_on_build_and_load() {
+        let contour = rectangle_contour(10, 10);
+        assert_eq!(
+            Constructive::extrude(contour.clone(), Length::ZERO),
+            Err(ConstructiveError::InvalidHeight { height: Length::ZERO, max: MAX_CONTOUR_COORDINATE })
+        );
+        let constructive = Constructive::extrude(contour, millimetres(10)).expect("constructive");
+        let text = serde_json::to_string(&constructive).expect("serialize");
+        let too_high = text.replace("\"height\":10000", "\"height\":0");
+        assert_ne!(text, too_high, "the fixture must contain the height in micrometres");
+        assert!(serde_json::from_str::<Constructive>(&too_high).is_err());
     }
 }

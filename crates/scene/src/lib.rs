@@ -56,20 +56,56 @@ pub enum CameraError {
     },
 }
 
+/// How a camera projects the scene onto the viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Projection {
+    /// A perspective view with a vertical field of view in radians.
+    Perspective {
+        /// Vertical field of view in radians, strictly between zero and pi.
+        fov_y: f64,
+    },
+    /// An orthographic view with a fixed visible height.
+    Orthographic {
+        /// Visible height in millimetres.
+        height: f64,
+    },
+}
+
+impl Projection {
+    /// Whether the parameters are finite and inside their accepted range.
+    pub fn is_valid(self) -> bool {
+        match self {
+            Self::Perspective { fov_y } => fov_y.is_finite() && fov_y > 1.0e-6 && fov_y < PI - 1.0e-6,
+            Self::Orthographic { height } => height.is_finite() && height > 0.0,
+        }
+    }
+}
+
+/// An explicit view basis supplied by an authored camera node.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FixedBasis {
+    eye: DVec3,
+    right: DVec3,
+    up: DVec3,
+    forward: DVec3,
+}
+
 /// An orbit camera in a right-handed, Z-up world.
 ///
 /// The camera looks at `target` from a point on a sphere described by `yaw` (around world Z) and
 /// `pitch` (above the XY plane). Physical lengths are millimetres; the camera lives in view state,
-/// never in the document.
+/// never in the document. An authored camera pins an explicit basis with [`Camera::looked_from`];
+/// orbit, pan, zoom and `look_from` then leave it alone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     target: DVec3,
     yaw: f64,
     pitch: f64,
     distance: f64,
-    fov_y: f64,
+    projection: Projection,
     near: f64,
     far: f64,
+    fixed: Option<FixedBasis>,
 }
 
 impl Default for Camera {
@@ -79,9 +115,10 @@ impl Default for Camera {
             yaw: 2.8 * FRAC_PI_8,
             pitch: 30.0 * PI / 180.0,
             distance: 1200.0,
-            fov_y: DEFAULT_FOV_Y,
+            projection: Projection::Perspective { fov_y: DEFAULT_FOV_Y },
             near: 1.0,
             far: MAX_DISTANCE_MM,
+            fixed: None,
         }
     }
 }
@@ -118,13 +155,46 @@ impl Camera {
         self.distance
     }
 
-    /// The vertical field of view in radians.
-    pub const fn fov_y(self) -> f64 {
-        self.fov_y
+    /// How the camera projects the scene.
+    pub const fn projection(self) -> Projection {
+        self.projection
+    }
+
+    /// Pins the camera to an explicit eye position and orthonormal basis.
+    ///
+    /// Used for an authored camera node, whose orientation is document data rather than an orbit.
+    /// Non-finite or non-orthogonal input leaves the orbit view unchanged instead of producing a
+    /// broken matrix.
+    pub fn looked_from(mut self, eye: DVec3, right: DVec3, up: DVec3, forward: DVec3) -> Self {
+        if !eye.is_finite() || !right.is_finite() || !up.is_finite() || !forward.is_finite() {
+            return self;
+        }
+        let (Some(forward), Some(right), Some(up)) =
+            (forward.try_normalize(), right.try_normalize(), up.try_normalize())
+        else {
+            return self;
+        };
+        let orthogonal = right.dot(up).abs() < 0.01 && right.dot(forward).abs() < 0.01 && up.dot(forward).abs() < 0.01;
+        if !orthogonal {
+            return self;
+        }
+        self.fixed = Some(FixedBasis { eye, right, up, forward });
+        self
+    }
+
+    /// Replaces the projection when it is valid, keeping the current one otherwise.
+    pub fn with_projection(mut self, projection: Projection) -> Self {
+        if projection.is_valid() {
+            self.projection = projection;
+        }
+        self
     }
 
     /// The camera position in world space.
     pub fn eye(self) -> DVec3 {
+        if let Some(fixed) = self.fixed {
+            return fixed.eye;
+        }
         let horizontal = self.pitch.cos();
         let offset = DVec3::new(horizontal * self.yaw.cos(), horizontal * self.yaw.sin(), self.pitch.sin());
         self.target + offset * self.distance
@@ -132,16 +202,25 @@ impl Camera {
 
     /// The unit direction from the camera towards its target.
     pub fn forward(self) -> DVec3 {
+        if let Some(fixed) = self.fixed {
+            return fixed.forward;
+        }
         (self.target - self.eye()).try_normalize().unwrap_or(-DVec3::Z)
     }
 
     /// The camera's right vector in world space.
     pub fn right(self) -> DVec3 {
+        if let Some(fixed) = self.fixed {
+            return fixed.right;
+        }
         self.forward().cross(DVec3::Z).try_normalize().unwrap_or(DVec3::X)
     }
 
     /// The camera's up vector in world space.
     pub fn up(self) -> DVec3 {
+        if let Some(fixed) = self.fixed {
+            return fixed.up;
+        }
         self.right().cross(self.forward()).try_normalize().unwrap_or(DVec3::Z)
     }
 
@@ -171,31 +250,57 @@ impl Camera {
         ])
     }
 
-    /// The perspective projection matrix for a viewport with the given aspect ratio.
+    /// The projection matrix for a viewport with the given aspect ratio.
     ///
     /// The matrix matches wgpu's clip-space convention: right-handed view space, depth in `0..1`.
     /// A broken aspect ratio falls back to `1.0` instead of producing NaNs.
     pub fn projection_matrix(self, aspect: f64) -> DMat4 {
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect.clamp(1.0e-4, 1.0e4) } else { 1.0 };
-        let f = 1.0 / (self.fov_y * 0.5).tan();
-        DMat4::from_cols_array(&[
-            f / aspect,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            f,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            self.far / (self.near - self.far),
-            -1.0,
-            0.0,
-            0.0,
-            self.far * self.near / (self.near - self.far),
-            0.0,
-        ])
+        match self.projection {
+            Projection::Perspective { fov_y } => {
+                let f = 1.0 / (fov_y * 0.5).tan();
+                DMat4::from_cols_array(&[
+                    f / aspect,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    f,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    self.far / (self.near - self.far),
+                    -1.0,
+                    0.0,
+                    0.0,
+                    self.far * self.near / (self.near - self.far),
+                    0.0,
+                ])
+            }
+            Projection::Orthographic { height } => {
+                let half_height = (height.max(1.0e-6)) * 0.5;
+                let half_width = half_height * aspect;
+                DMat4::from_cols_array(&[
+                    1.0 / half_width,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0 / half_height,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0 / (self.near - self.far),
+                    0.0,
+                    0.0,
+                    0.0,
+                    self.near / (self.near - self.far),
+                    1.0,
+                ])
+            }
+        }
     }
 
     /// The combined view-projection matrix.
@@ -206,9 +311,9 @@ impl Camera {
     /// Orbits the camera by the given deltas in radians.
     ///
     /// Yaw wraps into `0..TAU`; pitch is clamped just short of the poles. Non-finite deltas are
-    /// ignored.
+    /// ignored. A camera pinned to an authored view does not move.
     pub fn orbit(&mut self, delta_yaw: f64, delta_pitch: f64) {
-        if !delta_yaw.is_finite() || !delta_pitch.is_finite() {
+        if self.fixed.is_some() || !delta_yaw.is_finite() || !delta_pitch.is_finite() {
             return;
         }
         self.yaw = (self.yaw + delta_yaw).rem_euclid(TAU);
@@ -225,9 +330,17 @@ impl Camera {
         let x = if ndc_x.is_finite() { ndc_x.clamp(-NDC_LIMIT, NDC_LIMIT) } else { 0.0 };
         let y = if ndc_y.is_finite() { ndc_y.clamp(-NDC_LIMIT, NDC_LIMIT) } else { 0.0 };
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
-        let half_height = (self.fov_y * 0.5).tan();
-        let direction = self.forward() + self.right() * (x * half_height * aspect) + self.up() * (y * half_height);
-        let origin = self.eye();
+        let (origin, direction) = match self.projection {
+            Projection::Perspective { fov_y } => {
+                let half_height = (fov_y * 0.5).tan();
+                (self.eye(), self.forward() + self.right() * (x * half_height * aspect) + self.up() * (y * half_height))
+            }
+            Projection::Orthographic { height } => {
+                let half_height = (height.max(1.0e-6)) * 0.5;
+                let half_width = half_height * aspect;
+                (self.eye() + self.right() * (x * half_width) + self.up() * (y * half_height), self.forward())
+            }
+        };
         Ray::new(origin, direction).unwrap_or(Ray { origin, direction: self.forward() })
     }
 
@@ -241,6 +354,14 @@ impl Camera {
             return None;
         }
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 1.0 };
+        // An orthographic view has no perspective divide, so a point behind the camera still has a
+        // finite clip position. The view-space depth rejects it explicitly.
+        if matches!(self.projection, Projection::Orthographic { .. }) {
+            let view = self.view_matrix() * point.extend(1.0);
+            if !view.is_finite() || view.z > -self.near {
+                return None;
+            }
+        }
         let clip = self.view_projection(aspect) * point.extend(1.0);
         if !clip.is_finite() || clip.w <= 1.0e-9 {
             return None;
@@ -255,11 +376,14 @@ impl Camera {
     /// The world distance per point is measured at the target, so the scene follows the pointer.
     /// Non-finite input is ignored.
     pub fn pan_pixels(&mut self, delta_x: f64, delta_y: f64, viewport_height: f64) {
-        if !delta_x.is_finite() || !delta_y.is_finite() || !viewport_height.is_finite() {
+        if self.fixed.is_some() || !delta_x.is_finite() || !delta_y.is_finite() || !viewport_height.is_finite() {
             return;
         }
         let height = viewport_height.max(1.0);
-        let world_per_point = 2.0 * self.distance * (self.fov_y * 0.5).tan() / height;
+        let world_per_point = match self.projection {
+            Projection::Perspective { fov_y } => 2.0 * self.distance * (fov_y * 0.5).tan() / height,
+            Projection::Orthographic { height: visible } => visible.max(1.0e-6) / height,
+        };
         self.target += (-self.right() * delta_x + self.up() * delta_y) * world_per_point;
     }
 
@@ -269,7 +393,7 @@ impl Camera {
     /// non-finite direction leaves the camera unchanged. Pitch is clamped to the camera limits, so
     /// top and bottom views stop five degrees short of the pole and keep a defined up vector.
     pub fn look_from(&mut self, direction: DVec3) {
-        if !direction.is_finite() {
+        if self.fixed.is_some() || !direction.is_finite() {
             return;
         }
         let Some(direction) = direction.try_normalize() else {
@@ -286,7 +410,7 @@ impl Camera {
     /// A factor below one moves closer; values outside the supported range are clamped and invalid
     /// factors are ignored.
     pub fn zoom(&mut self, factor: f64) {
-        if !factor.is_finite() || factor <= 0.0 {
+        if self.fixed.is_some() || !factor.is_finite() || factor <= 0.0 {
             return;
         }
         self.distance = (self.distance * factor).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
@@ -539,6 +663,21 @@ impl SceneFrame {
         }
         frame
     }
+
+    /// A copy of the frame with one drawable's local mesh replaced.
+    ///
+    /// This is a drag preview for sub-object editing: the shell builds a mesh with the moved
+    /// vertices and swaps it in for one frame, so the document and the renderer cache stay untouched
+    /// until the command commits. An unknown id leaves the frame unchanged.
+    pub fn with_drawable_mesh(&self, id: Id, mesh: Arc<MeshData>) -> Self {
+        let mut frame = self.clone();
+        for drawable in &mut frame.drawables {
+            if drawable.id == id {
+                drawable.mesh = mesh.clone();
+            }
+        }
+        frame
+    }
 }
 
 /// Linear RGB colour mixed into the selected drawable.
@@ -718,6 +857,51 @@ mod tests {
     }
 
     #[test]
+    fn an_orthographic_camera_projects_without_perspective() {
+        let camera = Camera::default().with_projection(Projection::Orthographic { height: 100.0 });
+        let aspect = 2.0;
+        let eye = camera.eye();
+        let point = eye + camera.forward() * 500.0 + camera.right() * 100.0;
+        let ndc = camera.project_ndc(point, aspect).expect("a point in front of the camera");
+        assert!((ndc.x - 1.0).abs() < 1.0e-9, "ndc was {ndc:?}");
+        assert!(ndc.y.abs() < 1.0e-9);
+
+        let centre = camera.ray_ndc(0.0, 0.0, aspect);
+        let right = camera.ray_ndc(1.0, 0.0, aspect);
+        assert_close(centre.direction(), camera.forward());
+        assert_close(right.direction(), camera.forward());
+        assert!((right.origin() - centre.origin()).dot(camera.right()) > 99.0, "rays are parallel and offset");
+
+        assert!(camera.project_ndc(eye - camera.forward() * 10.0, aspect).is_none(), "behind is rejected");
+
+        let projection = camera.projection_matrix(aspect);
+        let near = projection * DVec4::new(0.0, 0.0, -camera.near, 1.0);
+        let far = projection * DVec4::new(0.0, 0.0, -camera.far, 1.0);
+        assert!((near.z / near.w - 0.0).abs() < 1.0e-9);
+        assert!((far.z / far.w - 1.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_fixed_view_keeps_its_basis_and_ignores_navigation() {
+        let mut camera = Camera::default().looked_from(DVec3::new(1.0, 2.0, 3.0), DVec3::X, DVec3::Y, -DVec3::Z);
+        assert_close(camera.eye(), DVec3::new(1.0, 2.0, 3.0));
+        assert_close(camera.forward(), -DVec3::Z);
+        assert_close(camera.right(), DVec3::X);
+        assert_close(camera.up(), DVec3::Y);
+
+        let before = camera;
+        camera.orbit(1.0, 1.0);
+        camera.zoom(0.5);
+        camera.pan_pixels(10.0, 10.0, 800.0);
+        camera.look_from(DVec3::X);
+        assert_eq!(camera, before, "an authored view is not navigated by the viewport");
+
+        let orbit = Camera::default();
+        assert_eq!(orbit.looked_from(DVec3::NAN, DVec3::X, DVec3::Y, DVec3::Z), orbit);
+        assert_eq!(orbit.looked_from(DVec3::ZERO, DVec3::X, DVec3::X, DVec3::Z), orbit);
+    }
+
+    #[test]
     fn scene_accepts_drawables() {
         let mut frame = SceneFrame::default();
         let mesh = Arc::new(MeshData::default());
@@ -831,6 +1015,25 @@ mod tests {
         assert_eq!(frame.with_world_rotation(&[], DVec3::ZERO, quarter_turn), frame);
         assert_eq!(frame.with_world_rotation(&[turned], DVec3::new(f64::NAN, 0.0, 0.0), quarter_turn), frame);
         assert_eq!(frame.with_world_rotation(&[turned], DVec3::ZERO, DQuat::from_xyzw(2.0, 0.0, 0.0, 0.0)), frame);
+    }
+
+    #[test]
+    fn a_mesh_preview_replaces_only_the_named_drawable() {
+        let edited = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(edited, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        frame.push(Drawable::new(other, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+
+        let mut replacement = (*quad_mesh()).clone();
+        replacement.positions[0] = [9.0, 9.0, 9.0];
+        let replacement = Arc::new(replacement);
+        let preview = frame.with_drawable_mesh(edited, replacement.clone());
+
+        assert_eq!(preview.drawables()[0].mesh, replacement);
+        assert_eq!(preview.drawables()[1].mesh, quad_mesh());
+        assert_eq!(frame.drawables()[0].mesh, quad_mesh(), "the base frame keeps its mesh");
+        assert_eq!(frame.with_drawable_mesh(Id::new(99).expect("id"), replacement), frame);
     }
 
     #[test]

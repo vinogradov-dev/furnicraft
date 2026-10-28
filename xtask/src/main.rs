@@ -58,6 +58,7 @@ const CRATES: &[CrateRule] = &[
     // The only crate allowed to depend on truck.
     CrateRule { name: TRUCK_ADAPTER, layer: 2, forbidden: UI_GPU_DEPS },
     CrateRule { name: "furnicraft-param", layer: 2, forbidden: UI_GPU_DEPS },
+    CrateRule { name: "furnicraft-project", layer: 2, forbidden: UI_GPU_DEPS },
     CrateRule { name: "furnicraft-mesh", layer: 3, forbidden: UI_GPU_DEPS },
     CrateRule { name: "furnicraft-scene", layer: 4, forbidden: UI_GPU_DEPS },
     // The renderer draws the scene; it must stay egui-free (the app owns the

@@ -1244,6 +1244,7 @@ dependencies = [
  "furnicraft-mesh",
  "furnicraft-model",
  "furnicraft-param",
+ "furnicraft-project",
  "furnicraft-render",
  "furnicraft-scene",
  "furnicraft-testkit",
@@ -1327,6 +1328,17 @@ dependencies = [
  "furnicraft-kernel-truck",
  "furnicraft-model",
  "furnicraft-units",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "furnicraft-project"
+version = "0.1.0"
+dependencies = [
+ "furnicraft-model",
+ "furnicraft-units",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

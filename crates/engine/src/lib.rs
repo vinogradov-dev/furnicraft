@@ -16,21 +16,29 @@
 
 mod commands;
 mod diagnostics;
+pub mod mesh_cmds;
 pub mod node_cmds;
+pub mod object_cmds;
 pub mod panel_cmds;
 mod resolve;
+pub mod scene_cmds;
 mod session;
 
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
+pub use mesh_cmds::{MESH_VERTICES_MOVE_ID, MESH_VERTICES_MOVE_LABEL, MeshVertexMove, MeshVerticesMove};
 pub use node_cmds::{
     AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter, NodePivotSet,
     NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear, NodePropertySet,
     NodePropertySetMany, NodeRename, NodeUngroup,
+};
+pub use object_cmds::{
+    ObjectCollapse, ObjectContourReplace, ObjectExtrudeCreate, ObjectPrimitiveCreate, PrimitiveKind,
 };
 pub use panel_cmds::{
     CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
     PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
     PanelResize,
 };
+pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
 pub use session::Session;

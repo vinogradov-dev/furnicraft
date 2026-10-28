@@ -40,6 +40,7 @@ crates/render          L5  wgpu renderer
 crates/scene           L4  renderer-agnostic frame description, camera, lights, grid
 crates/mesh            L3  evaluation cache: revision -> solid and triangle mesh
 crates/param           L2  document features -> kernel calls
+crates/project         L2  scene file envelope: read, write, atomic save, preserved sections
 crates/kernel-truck    L2  geometry kernel adapter implemented with truck
 crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tessellation
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials
@@ -112,10 +113,10 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 
 ### 4.10 Space and views
 
-- The document stores model-space data: the node tree, placements, stored pivots, geometry features and materials. It never stores a camera, a viewport, a selection, a hover highlight or a node's open state.
+- The document stores model-space data: the node tree, placements, stored pivots, geometry features, materials, and the camera and light **objects** the user authored, together with the active camera. The built-in camera and light are defaults, not nodes. The document never stores a viewport, a selection, a hover highlight, a node's open state or the navigation of a viewport camera.
 - A `Placement` is a rigid transform relative to the parent frame. World transforms are composed from the root; scale and shear are not placements.
 - A placement stores a unit quaternion. The inspector presents it as intrinsic XYZ Euler angles in degrees (ADR 0024); the rotate gizmo writes the quaternion directly. Both gizmos act at one stored pivot expressed in the node's own frame (`Project::pivot_local` / `pivot_world`): a panel starts at its local zero, a container created with children starts at the centre of its local panel bounds, an empty container at its own origin, and the root is always zero and not editable. The pivot is document data edited by `node.pivot.set` / `node.pivot.center`; it never follows a resize or a reparent (ADR 0026). The rotate rings are world X/Y/Z aligned and do not turn with the node; a drag pre-multiplies the parent-frame turn onto the quaternion. A turn about a non-zero pivot also adjusts the translation so the pivot stays fixed; at a zero pivot the translation is untouched (ADR 0027). Move/Rotate mode is view state.
-- View state (camera, projection, grid, shading, selection, hover) lives in the session or the shell. Named views are the only optional exception and are presentation metadata.
+- View state — viewport navigation, projection, grid, shading, selection, hover, open containers — lives in the session or the shell (ADR 0029). Cameras and lights the user adds are scene objects with undo (ADR 0036). Named views are the only optional exception and are presentation metadata.
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene. Picking returns document `Id`s, never mesh indices or pointers.
 - A panel's local frame has its zero at the minimum corner; faces are `A` (at `z = thickness`) and `B` (at `z = 0`), vertices run counter-clockwise from the zero corner, and edge `i` joins vertex `i` to `i + 1`. Vertex and edge ids are stable and never reused; their numbers are labels, not keys. Machining is stored in panel-local coordinates; an edge reference is a topology reference, not a second coordinate system.
 - Manipulation goes through a command; the UI never writes a placement directly.

@@ -1,0 +1,58 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 7,
+    "revision": 5,
+    "next_id": 4,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0, 1.0]
+      },
+      "pivot": [0, 0, 0],
+      "children": [
+        {
+          "container": {
+            "id": 2,
+            "name": "Cabinet",
+            "placement": {
+              "translation": [0.0, 0.0, 0.0],
+              "rotation": [0.0, 0.0, 0.0, 1.0]
+            },
+            "pivot": [300000, 200000, 9000],
+            "children": [
+              {
+                "panel": {
+                  "id": 3,
+                  "name": "Side",
+                  "nominal_size": { "length": 600000, "width": 400000 },
+                  "material": 1,
+                  "last_known_thickness": 18000,
+                  "placement": {
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0, 1.0]
+                  },
+                  "pivot": [0, 0, 0],
+                  "machining": [],
+                  "edge_banding": [],
+                  "corner_banding": [],
+                  "band_order": [],
+                  "corner_features": [],
+                  "edge_bows": [],
+                  "properties": {}
+                }
+              }
+            ],
+            "properties": {
+              "component": { "kind": "bool", "value": true }
+            }
+          }
+        }
+      ],
+      "properties": {}
+    }
+  }
+}

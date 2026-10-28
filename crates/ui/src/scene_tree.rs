@@ -75,6 +75,10 @@ impl Selection {
 pub(crate) enum TreeAction {
     CreatePanel { parent: Id },
     CreateAssembly { parent: Id },
+    CreateObject { parent: Id },
+    CreateExtrude { parent: Id },
+    CreateCamera { parent: Id },
+    CreateLight { parent: Id },
     Duplicate { node: Id },
     Delete { node: Id },
     Group { nodes: Vec<Id> },
@@ -126,6 +130,18 @@ fn show_toolbar(
         }
         if ui.button("+ Assembly").clicked() {
             actions.push(TreeAction::CreateAssembly { parent });
+        }
+        if ui.button("+ Cube").clicked() {
+            actions.push(TreeAction::CreateObject { parent });
+        }
+        if ui.button("+ Extrude").clicked() {
+            actions.push(TreeAction::CreateExtrude { parent });
+        }
+        if ui.button("+ Camera").clicked() {
+            actions.push(TreeAction::CreateCamera { parent });
+        }
+        if ui.button("+ Light").clicked() {
+            actions.push(TreeAction::CreateLight { parent });
         }
         ui.separator();
         if ui.add_enabled(can_group, egui::Button::new("Group")).clicked() {
@@ -244,6 +260,49 @@ fn show_node(
             show_container(ui, project, container, selection, actions, depth, has_panel_material);
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, actions),
+        Node::Object(object) => show_object(ui, object, selection, actions),
+        Node::Camera(camera) => show_leaf(ui, camera.id(), camera.name(), "camera", selection, actions),
+        Node::Light(light) => show_leaf(ui, light.id(), light.name(), "light", selection, actions),
+    }
+}
+
+/// A camera or a light row: a named leaf with a kind tag and the usual duplicate/delete actions.
+fn show_leaf(ui: &mut Ui, id: Id, name: &str, kind: &str, selection: &mut Selection, actions: &mut Vec<TreeAction>) {
+    let label = RichText::new(format!("{name}  [{kind}]"));
+    let response = ui.selectable_label(selection.contains(id), label);
+    if response.clicked() {
+        select(ui, selection, id);
+    }
+    response.context_menu(|ui| object_menu(ui, id, actions));
+}
+
+fn show_object(
+    ui: &mut Ui,
+    object: &furnicraft_model::Object,
+    selection: &mut Selection,
+    actions: &mut Vec<TreeAction>,
+) {
+    let id = object.id();
+    let kind = match object.geometry() {
+        furnicraft_model::Geometry::Mesh(_) => "mesh",
+        furnicraft_model::Geometry::Constructive(_) => "contour",
+    };
+    let label = RichText::new(format!("{}  [{kind}]", object.name()));
+    let response = ui.selectable_label(selection.contains(id), label);
+    if response.clicked() {
+        select(ui, selection, id);
+    }
+    response.context_menu(|ui| object_menu(ui, id, actions));
+}
+
+fn object_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
+    if ui.button("Duplicate").clicked() {
+        actions.push(TreeAction::Duplicate { node: id });
+        ui.close();
+    }
+    if ui.button("Delete").clicked() {
+        actions.push(TreeAction::Delete { node: id });
+        ui.close();
     }
 }
 
@@ -279,6 +338,10 @@ fn container_menu(
     }
     if ui.button("Add assembly").clicked() {
         actions.push(TreeAction::CreateAssembly { parent: id });
+        ui.close();
+    }
+    if ui.button("Add cube").clicked() {
+        actions.push(TreeAction::CreateObject { parent: id });
         ui.close();
     }
     if !is_root {
@@ -328,6 +391,7 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
                     return Some(id);
                 }
             }
+            Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
         }
     }
     None
@@ -337,7 +401,7 @@ fn first_panel_in(children: &[Node]) -> Option<Id> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Id, Node, Panel, PanelNominalSize, Placement};
+    use furnicraft_model::{CameraProjection, Id, LightKind, Node, Panel, PanelNominalSize, Placement};
     use furnicraft_testkit::sample_project;
 
     use super::*;
@@ -431,6 +495,24 @@ mod tests {
         selection.replace(Id::new(3).expect("id"));
         selection.retain_existing(&project);
         assert!(selection.contains(Id::new(3).expect("id")));
+    }
+
+    #[test]
+    fn selection_keeps_authored_cameras_and_lights() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera =
+            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let light = project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("light");
+
+        let mut selection = Selection::default();
+        selection.replace_all(vec![camera, light]);
+        selection.retain_existing(&project);
+        assert_eq!(
+            selection.ids(),
+            &[camera, light],
+            "a camera and a light are scene nodes, so the next frame keeps them selected"
+        );
     }
 
     #[test]
