@@ -33,13 +33,15 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0026](0026-the-manipulation-pivot-is-stored-node-data.md) | The manipulation pivot is stored, editable node data | Accepted; supersedes 0025 |
 | [0027](0027-the-rotate-gizmo-uses-world-aligned-rings.md) | The rotate gizmo uses world-aligned rings | Accepted; batch commit extended by 0033 |
 | [0028](0028-the-assistant-is-a-client-of-the-command-registry.md) | The assistant is a client of the command registry | Accepted |
-| [0029](0029-view-state-belongs-to-the-session.md) | View state belongs to the session | Accepted |
+| [0029](0029-view-state-belongs-to-the-session.md) | View state belongs to the session | Accepted; camera and light objects carved out by 0036 |
 | [0030](0030-construction-knowledge-is-code.md) | Construction knowledge is code, not prose | Superseded by 0034 |
 | [0031](0031-external-resources-keep-their-own-system-of-record.md) | External resources keep their own system of record | Accepted |
 | [0032](0032-an-order-keeps-its-versions-as-folders.md) | An order keeps its versions as numbered folders | Accepted |
 | [0033](0033-a-multi-selection-is-placed-by-one-command.md) | A multi-selection is placed by one command | Accepted |
 | [0034](0034-nodes-carry-typed-properties.md) | Nodes carry typed properties; containers are one kind | Accepted; supersedes 0021 and 0030 |
 | [0035](0035-furniture-types-form-a-numbered-tree.md) | Furniture types form a numbered tree | Accepted |
+| [0036](0036-cameras-and-lights-are-scene-objects.md) | Cameras and lights are scene objects | Accepted |
+| [0037](0037-a-geometry-object-is-a-mesh-or-a-feature-history.md) | A geometry object is a baked mesh or a feature history | Accepted |
 
 ## Format
 

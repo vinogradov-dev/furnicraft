@@ -9,11 +9,13 @@ FurniCraft is a native, free and open-source 3D editor for parametric cabinet fu
 **In scope, in order of arrival:**
 
 1. A document model for cabinet furniture: model space and placements, containers and components, panels, machined features, edge banding, materials, hardware, typed properties and furniture types.
-2. Classification and queries: every object carries a numeric furniture type and typed properties, so parts lists, reports and CNC rules are derived by query. Parametric construction arrives later as user scripts, not built-in product builders.
-3. 3D viewport: camera views, orbit/pan/zoom, shading, selection and picking, a floor grid, dimensions.
-4. Editing: create and edit panels, assemblies, materials and hardware through commands, with undo/redo.
-5. Output: cutting lists per material and sheet, panel drawings, and eventually CNC programs.
-6. Assistance: an optional built-in assistant, Faber, that reads the project, dispatches the same
+2. Geometry objects beside the furniture parts: a mesh built from a primitive and edited directly, or a solid grown from a flat contour through a saved feature history and collapsed to a mesh when the user is done with it.
+3. Classification and queries: every object carries a numeric furniture type and typed properties, so parts lists, reports and CNC rules are derived by query. Parametric construction arrives later as user scripts, not built-in product builders.
+4. 3D viewport: camera views, orbit/pan/zoom, shading, selection and picking, a floor grid, dimensions.
+5. Camera and light objects, and a versioned scene file that saves the whole scene. Orders and their versions stay with the order program, never in the file.
+6. Editing: create and edit panels, assemblies, materials and hardware through commands, with undo/redo.
+7. Output: cutting lists per material and sheet, panel drawings, and eventually CNC programs.
+8. Assistance: an optional built-in assistant, Faber, that reads the project, dispatches the same
    commands a person uses, and can run headless jobs over existing orders.
 
 **Not in scope:** web or browser builds, cloud storage, collaboration, real-time rendering for presentation, free-form organic modelling, and import of third-party CAD formats at this stage.
@@ -24,7 +26,7 @@ The model is intentionally described at the level of vocabulary and responsibili
 
 ### Document (`Project`)
 
-The root of a saved file: the node tree, the material catalogue, the property and furniture-type data, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision, next id and root container; catalogues and settings follow.
+The root of a saved scene: the node tree, material references and their fallbacks, the property and furniture-type data, the camera and light objects, document-level settings (default units, grain conventions) and a schema version. Serialized with `serde`; must keep older files loading. The first M1 skeleton stores the schema version, revision, next id and root container; catalogues and settings follow. The document is one section of the scene file; the envelope around it is described under "Scene file" below.
 
 ### `Id` and `Revision`
 
@@ -57,9 +59,21 @@ stable and opaque, labels are registry data, and a query matches a prefix: `30` 
 encoded in the code. The registry lives in [`docs/domain/furntypes.md`](docs/domain/furntypes.md);
 see [ADR 0035](docs/decisions/0035-furniture-types-form-a-numbered-tree.md).
 
+### `Geometry` object
+
+A named, placed node with free-form geometry, beside the panels and containers. It holds exactly one
+payload: a **baked mesh** (positions and polygon faces, edited directly, undo is its only history) or a
+**feature history** (an ordered list beginning with an extruded flat contour; the mesh is derived and
+never saved). A constructive object rebuilds from its contour and is not editable as a mesh until
+`object.collapse` bakes it, which is one undoable command and cannot be reversed after undo expires.
+Features reference their inputs, never a derived face: fillet and chamfer on a generated face wait for
+a persistent-naming design. A panel is not a geometry object; panel rules are manufacturing rules.
+See [`docs/domain/geometry.md`](docs/domain/geometry.md) and
+[ADR 0037](docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md).
+
 ### `Placement`
 
-A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the node tree to produce world transforms. The document stores placements; it never stores a camera or a viewport. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently. The inspector presents that quaternion as intrinsic XYZ Euler angles in degrees, while the rotate gizmo writes the quaternion directly. See [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md).
+A rigid transform relative to the parent frame: translation and rotation. Scale and shear are not part of a placement. Placements compose down the node tree to produce world transforms. The document stores placements and the camera and light objects; it never stores a viewport or its navigation. In v1 the rotation is a unit quaternion; non-finite or non-unit values are rejected on load instead of being normalised silently. The inspector presents that quaternion as intrinsic XYZ Euler angles in degrees, while the rotate gizmo writes the quaternion directly. See [ADR 0024](docs/decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md).
 
 ### Commands
 
@@ -95,19 +109,31 @@ Every object can be selected by structural kind, `FurnType` subtree and property
 
 A catalogue entry: kind (chipboard, MDF, solid wood, plywood, HPL), nominal thickness, sheet size, decor/colour and grain availability. Panels reference materials by `MaterialId`; changing a material's thickness must not rewrite the panel's nominal size.
 
+### Scene file
+
+A saved scene is a UTF-8 JSON envelope with the extension `.fcs`: `format` (`furnicraft.scene`),
+`format_version` for the framing, and one `document` payload that carries its own `schema`. The
+envelope owns the versions, protects unknown top-level sections and lets the document layout change
+without touching the framing. The file holds the scene — objects, camera and light objects, the active
+camera, settings — and never the material catalogue, derived meshes, diagnostics, undo history,
+selection, viewport state or any order data. Saving is atomic: a temporary file replaces the target
+only after it is complete. See [`docs/domain/scene-file.md`](docs/domain/scene-file.md).
+
 ## Domain specifications
 
 Detailed, normative descriptions live in `docs/domain/`:
 
 - [`panels.md`](docs/domain/panels.md) — the panel as an atomic group, local frame, nominal/core/overall sizes, edge banding, order and corners.
 - [`materials.md`](docs/domain/materials.md) — material records, the external catalogue and its future database structure.
-- [`document.md`](docs/domain/document.md) — the scene file, loading, fallbacks, diagnostics, schema and migrations.
+- [`document.md`](docs/domain/document.md) — the document, its nodes, loading, fallbacks, diagnostics, schema and migrations.
+- [`geometry.md`](docs/domain/geometry.md) — objects with a baked mesh or a feature history, evaluation and collapse.
+- [`scene-file.md`](docs/domain/scene-file.md) — the envelope, its versions, what it stores and how it is written.
 - [`furntypes.md`](docs/domain/furntypes.md) — the numeric furniture-type registry, encoding and query examples.
 
 ## Architectural principles
 
 - **Data is separate from rendering.** `model` is serializable data; meshes and scene descriptions are derived in `mesh` and `scene`; only `render` touches `wgpu`. No GPU type ever appears in the document.
-- **Space is data; views are state.** The document stores placements and the node tree. Cameras, viewports, grids, shading, selection and per-node open state are session or UI state.
+- **Space is data; views are state.** The document stores placements, the node tree, and the camera and light objects the user adds. Viewport navigation, grids, shading, selection and per-node open state are session or UI state.
 - **The kernel is behind a port.** `model` and `param` use `furnicraft-kernel` types and traits; only `kernel-truck` knows the third-party B-rep engine.
 - **Pure Rust dependencies.** No dependency may compile or vendor C/C++/Objective-C sources. Platform bindings that load an OS-provided library through Rust FFI are allowed; they must not add native build steps. `cargo xtask layers` checks the dependency graph for known C-vendoring crates.
 - **Commands change data.** Every document mutation is a command in `engine` with a stable id and a `Result`; the UI dispatches commands and never writes to the model directly. This is what makes undo/redo, tests and future automation possible.
@@ -132,8 +158,8 @@ FurniCraft separates the model from the way it is viewed.
 
 ### Views
 
-- The document stores placements, each node's manipulation pivot and, optionally, named views (camera bookmarks).
-- Camera, projection, grid, shading, selection and hover are session/view state; they are never document data.
+- The document stores placements, each node's manipulation pivot, camera and light objects, and the active camera. A scene may have none of the latter.
+- Viewport navigation, projection, grid, shading, selection, hover and open containers are session state; they are never document data. The built-in camera and key light are defaults, not objects. See [ADR 0029](docs/decisions/0029-view-state-belongs-to-the-session.md) and [ADR 0036](docs/decisions/0036-cameras-and-lights-are-scene-objects.md).
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene; its camera is session view state. Several viewports may show the same document.
 - Picking ray-casts the scene's world-space triangles and maps a screen position to a document `Id` (object, face, later edge); the session stores the resulting selection. See [ADR 0018](docs/decisions/0018-picking-ray-casts-the-scene.md) and [ADR 0029](docs/decisions/0029-view-state-belongs-to-the-session.md).
 - The floor grid has X, Y and a short Z axis at the origin, and a corner orientation widget shows the six world directions. Clicking one snaps the camera to look from that side; clicking the current side flips to the opposite. Both are view state. See [ADR 0019](docs/decisions/0019-standard-views-from-a-corner-widget.md).
@@ -166,8 +192,9 @@ before.
   file, its records and the files produced for it; every version is a numbered folder holding the
   complete file set, and only one is sent to production (ADR 0032). External side effects such as
   ordering materials require a person's confirmation (ADR 0031).
-- View state — selection, open containers and cameras — belongs to the session, so every client
-  shares the user's context (ADR 0029).
+- View state — selection, open containers and viewport navigation — belongs to the session, so every
+  client shares the user's context (ADR 0029). Cameras and lights the user adds are scene objects
+  (ADR 0036).
 
 Open questions: what API the material and order programs expose locally and whether they ship with
 FurniCraft; where the workshop profile lives; whether reference retrieval (catalogues, norms, past
@@ -225,16 +252,17 @@ A crate may depend only on crates in lower layers. `kernel-truck` is the only cr
 | M4 | Panel geometry | Panel outline, thickness, rectangular through and blind cutouts with an entry face, holes generated by hardware, chamfers/roundovers, shaped-cutter sweeps and edge banding, with volume and tessellation tests |
 | M5 | Editing | `egui` shell, command registry, undo/redo, scene tree with atomic panels, components and groups, create/place/select, closed-container viewport picking with an open mode, Blender-like axes and orientation widget, move/rotate, multi-node placement as one undo entry |
 | M6 | Properties and classification | Every node carries typed properties; `Assembly`/`Group` become one container with a component marker; a numeric `FurnType` registry and prefix queries select objects by type; reports derive from queries |
-| M7 | Hardware and joinery | Hardware catalogue, anchor points, generated holes, collision warnings |
-| M8 | Output | Cutting lists per material and sheet, panel drawings, CNC export |
-| M9 | Assistant | Faber runs as a client of the command registry: disabled by default, read-only first, one undo step per task, a whole task runnable by a scripted model without a network, and a headless job over a saved project |
+| M7 | Objects and the scene file | Geometry objects with a baked mesh and with a feature history, mesh editing gated to the mesh payload, `object.collapse`, camera and light objects, and a versioned `.fcs` scene file with a migration and a golden file per schema |
+| M8 | Hardware and joinery | Hardware catalogue, anchor points, generated holes, collision warnings |
+| M9 | Output | Cutting lists per material and sheet, panel drawings, CNC export |
+| M10 | Assistant | Faber runs as a client of the command registry: disabled by default, read-only first, one undo step per task, a whole task runnable by a scripted model without a network, and a headless job over a saved project |
 
 ## Open model questions (M1)
 
 These are deliberately unresolved. Do not pick an answer inside an unrelated task; design them together.
 
-- **View state.** What, if anything, is persisted in the document (only named views?) and what lives in the session?
-- **Selection.** In v1, can the user select objects and faces only, or edges too? How are faces identified after a rebuild?
+- **Named views.** Cameras are document objects (ADR 0036); whether named views return as bookmarks over them, or are dropped, is open.
+- **Selection.** In v1, can the user select objects and faces only, or edges too? How are faces identified after a rebuild? Mesh element references are indices valid within one revision (ADR 0037).
 - **Hardware anchoring.** Does hardware attach to a panel face and a coordinate, to an existing machined feature (a hole), or to an edge? How are multi-panel fittings (hinges, runners) expressed? Generated holes themselves are always stored in core-local coordinates.
 - **Derived versus edited.** Which panels are produced by a prototype script, which are hand-placed, and what happens when a parameter changes under a hand-edited panel?
 - **Reusable assemblies.** v1 uses unique tree nodes. Whether a later version adds shared definitions and instances is still open.
@@ -243,4 +271,5 @@ These are deliberately unresolved. Do not pick an answer inside an unrelated tas
 - **Property schema.** User properties are free-form until a schema/catalogue exists; decide whether the catalogue is per project or per workshop, and how a script declares the properties it writes.
 - **User scripts.** Product prototypes are scripts, not built-in builders. The sandbox, the language, the unit boundary and the failure policy (missing script/DB is a warning, never a load failure) are undecided.
 - **Invariants.** Panel-owned cutouts outside the core and overlapping cutouts are command errors in v1; loading a scene keeps machining that no longer fits as a problem panel instead of rejecting the file. ADR 0009 replaces these v1 rules in stage 3 with a union of through cutouts, boundary notches and a connected-core invariant; the union layer is the in-house `geom::region` module (ADR 0012). Panel larger than the sheet and overlapping hardware-generated holes remain open.
-- **Schema.** Versioning strategy and migrations for the document format.
+- **Persistent naming.** Features reference their inputs only (ADR 0037); fillet and chamfer on a face generated by an earlier feature wait for a naming design.
+- **Scene file.** The envelope and its versions are specified in [`docs/domain/scene-file.md`](docs/domain/scene-file.md); the binary form, autosave and asset storage remain open.

@@ -4,26 +4,26 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Where we are
 
-- Milestone: M6 — Properties and classification. M5 editing is done: the scene tree, node editing,
-  typed placement, viewport picking, the orientation widget, both gizmos, the stored pivot and
-  multi-node placement as one undo entry. The model design for M6 is accepted and implemented:
-  `Container` is the only container kind, every node carries typed properties, a component is a
-  marker rather than a node kind, and `FurnType` is a six-digit tree (`GG.TT.VV`) with `000000`
-  unclassified (ADRs 0034–0035, `docs/domain/furntypes.md`).
-- Working on: save and load, now that schema v7 carries the final node shape.
-- Direction: properties and classification come before save/load, so the first project files carry
-  the final shape. Parametric products are user prototype scripts over these properties, not
-  built-in builders; scripts are deferred.
+- Milestone: M7 — Objects and the scene file. M6 is done: `Container` is the only container kind,
+  every node carries typed properties, a component is a marker rather than a node kind, and
+  `FurnType` is a six-digit tree (ADRs 0034–0035, `docs/domain/furntypes.md`).
+- M7 starts with the paper design, now written: the scene file envelope
+  (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
+  light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
+- Working on: the first implementation step — a geometry object node with a baked mesh, schema v8.
+- Direction: objects and the scene file come before hardware, so saved files carry the final node
+  shape. Save/load lands right after the first object and before mesh editing, so every later schema
+  bump is a migration with a golden file.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
-  it needs save/load and the property/type commands before it is useful. View state moves to the
-  session (0029) before the agent crate exists.
+  it needs save/load and the property/type commands before it is useful.
 - Gate: `cargo xtask ci` — green
 - Branches: `dev` is the working branch for new tasks; `main` holds only verified work, merged with
   `--no-ff` after a green gate (AGENTS 6.2)
 
 ## Done
 
+- `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
 - `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
 - `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)
 - `docs: record multi-node placement` (ADR 0033)
@@ -100,12 +100,17 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Save and load, with the project store outside `engine`, then the order bundle and pinning.
-2. An engine `node.select`-style query command and saved reports over the same `NodeQuery`; the
-   scene tree already selects by furniture type, but a report needs a stored query and columns.
-3. The furniture-type picker and tree in the inspector; type labels now come from
-   `docs/domain/furntypes.md`, and the card edits the raw code.
-4. Viewport multi-select (Ctrl+click) and snapping for the gizmos.
+1. A geometry object node with a baked mesh, schema v8: model, validation, `Node::Object`, generic node
+   commands, triangulation into the frame, `object.primitive.create` (box) and the scene-tree action.
+2. The project store and the `.fcs` envelope: read, write, atomic save, golden files v7 and v8, then
+   the File menu, the dirty marker from `saved_revision` and the error dialog.
+3. Mesh editing: a sub-object session mode, vertex and face picking, `mesh.vertices.move` and the
+   gizmo drag as one undo entry; mesh tools disabled on a constructive object.
+4. Camera and light nodes, schema v9, with `camera.create`, `light.create`, `scene.active_camera.set`
+   and gizmo icons that make them selectable.
+5. A constructive object with one `Extrude` feature, `object.contour.replace`, the contour table in
+   the inspector and `object.collapse`.
+6. Viewport multi-select, copy/paste and gizmo snapping.
 
 ## Open questions
 
@@ -133,12 +138,20 @@ Updated: 2026-10-28. Rewrite this file at the end of every task; never append a 
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
   connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
+- Where the project store lives: a new `furnicraft-project` crate between `model` and `scene`, or a
+  module owned by the shell; decide when the envelope lands, and register it in the layer map and
+  `PROJECT.md` in the same change.
+- Whether visibility and lock are document data or session state.
+- Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 
 ## Known debt
 
 - Selection and open containers still live in `ui::Editor` and the camera in the shell, although
-  ADR 0029 places them in the session. They have not moved yet.
+  ADR 0029 places them in the session. They have not moved yet. Cameras and lights are not document
+  nodes yet: the camera is a shell value and the key light is a constant.
+- There is no geometry object: the document, the scene tree, picking and the inspector know only
+  containers and panels, so a mesh or a contour cannot be created.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made

@@ -1,6 +1,6 @@
 # 0029. View state belongs to the session
 
-- Status: Accepted
+- Status: Accepted; camera and light objects carved out by 0036
 - Date: 2026-10-27
 
 ## Context
@@ -43,5 +43,7 @@ answer about a scene the user is not looking at.
 ## Related
 
 - [0028](0028-the-assistant-is-a-client-of-the-command-registry.md) needs this context.
+- [0036](0036-cameras-and-lights-are-scene-objects.md) keeps navigation in the session but makes
+  camera and light **objects** document data.
 - `AGENTS.md` §4.10 (space and views), §4.1 (everything is a command).
 - `PROJECT.md` › Crate map, `furnicraft-engine` row.

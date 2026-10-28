@@ -4,6 +4,8 @@ Status: domain specification. This document describes the scene file: what it st
 
 Related documents:
 
+- [Scene file](scene-file.md) — the envelope that holds the document on disk.
+- [Geometry objects](geometry.md) — objects with a baked mesh or a feature history.
 - [Panels and edge banding](panels.md) — panel, its dimensions, banding and commands.
 - [Materials and catalogue](materials.md) — material records and the catalogue.
 
@@ -12,8 +14,10 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 [0007](../decisions/0007-edge-banding-v1.md),
 [0008](../decisions/0008-panel-diagnostics.md),
 [0022](../decisions/0022-closed-containers-pick-as-one-object.md),
-[0034](../decisions/0034-nodes-carry-typed-properties.md) and
-[0035](../decisions/0035-furniture-types-form-a-numbered-tree.md).
+[0034](../decisions/0034-nodes-carry-typed-properties.md),
+[0035](../decisions/0035-furniture-types-form-a-numbered-tree.md),
+[0036](../decisions/0036-cameras-and-lights-are-scene-objects.md) and
+[0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md).
 
 ## 1. Terms
 
@@ -29,9 +33,11 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 - schema version;
 - revision;
 - id allocator;
-- node tree (panels and containers);
+- node tree (containers, panels, geometry objects, camera and light objects);
 - each node's typed properties, including a furniture type;
 - each node's manipulation pivot, in its own frame;
+- the active camera, and camera and light parameters;
+- geometry payloads: a baked mesh, or the features of a constructive object;
 - panels:
   - id;
   - name;
@@ -94,13 +100,31 @@ container defines the world frame and cannot be deleted, moved, grouped or ungro
 [ADR 0027](../decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md) and
 [ADR 0034](../decisions/0034-nodes-carry-typed-properties.md).
 
+### 2.2. Geometry, camera and light nodes
+
+Beside containers and panels the tree holds **geometry objects** and **camera** and **light**
+objects. A geometry object carries either a baked mesh or an ordered feature history; the two are
+never mixed, and only a mesh object accepts mesh editing ([Geometry objects](geometry.md),
+[ADR 0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
+
+A camera or a light is an ordinary node with a name, a placement, properties, selection and undo; the
+document also stores which camera is active. The built-in camera and the built-in key light are
+defaults, not nodes: they cannot be selected or deleted and are used when the scene has none
+([ADR 0036](../decisions/0036-cameras-and-lights-are-scene-objects.md)). A scene with no camera and
+no light is valid.
+
 ## 3. What the scene file does not store
 
 - the material catalogue;
-- meshes and other derived geometry;
+- meshes and other derived geometry; a constructive object stores its features, and the evaluated
+  mesh is rebuilt on load;
 - colours, brushes and textures;
 - diagnostics and "problem panel" states;
-- camera, viewport, selection and other view state;
+- viewport navigation, selection, hover, open containers, grid, shading and projection — they belong
+  to the session, not to the document ([ADR 0029](../decisions/0029-view-state-belongs-to-the-session.md));
+- the undo and redo history;
+- anything about an order: number, customer, version or status; the order program owns them
+  ([Scene file](scene-file.md) §4);
 - panel thickness as a user-editable parameter; it comes from the material, and the file stores only a fallback.
 
 ## 4. Scene loading
@@ -217,6 +241,7 @@ At minimum:
 
 ## 11. Open questions
 
-1. Scene file format: JSON until a binary format appears?
+1. Binary or compressed form of the scene file, once meshes make it large; the JSON envelope is
+   described in [Scene file](scene-file.md).
 2. How to synchronise the scene with a real database when the mock file is replaced by one.
 3. Whether the scene should store a snapshot of the material name for the card when the catalogue is unavailable.
