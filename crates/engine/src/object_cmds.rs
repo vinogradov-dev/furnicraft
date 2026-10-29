@@ -321,7 +321,7 @@ mod tests {
 
     fn rectangle(width: i64, height: i64) -> Contour {
         let millimetres = |value| Length::from_millimetres(value).expect("length");
-        Contour::new(vec![
+        Contour::from_polygon(vec![
             [millimetres(0), millimetres(0)],
             [millimetres(width), millimetres(0)],
             [millimetres(width), millimetres(height)],

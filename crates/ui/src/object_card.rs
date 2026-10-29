@@ -217,7 +217,11 @@ impl ObjectCard {
         section(ui, "object.geometry", "Geometry", true, |ui| {
             ui.label(RichText::new(summary.kind).strong());
             if let Some(contour) = &summary.contour {
-                ui.label(format!("Contour points  {}", contour.points().len()));
+                let arcs = contour.segments().iter().filter(|segment| segment.is_arc()).count();
+                ui.label(format!("Contour segments  {}", contour.segments().len()));
+                if arcs > 0 {
+                    ui.label(format!("Arcs  {arcs}"));
+                }
                 if let Some(height) = summary.height {
                     ui.label(format!("Height  {height}"));
                 }
@@ -296,15 +300,25 @@ impl ObjectCard {
     }
 
     /// Draws the contour editor; returns the parsed replacement when Apply was pressed.
+    ///
+    /// The text editor writes corners, so it is only shown for a line-only ring; a ring with an arc
+    /// cannot be described by corners and says so instead of silently dropping the arc.
     fn contour_section(&mut self, ui: &mut Ui, summary: &ObjectSummary) -> Option<Result<Contour, String>> {
-        summary.contour.as_ref()?;
+        let contour = summary.contour.as_ref()?;
+        if !contour.is_line_only() {
+            ui.separator();
+            section(ui, "object.contour", "Contour", true, |ui| {
+                ui.label("This contour has arcs; corners cannot describe it, so the text editor is off.");
+            });
+            return None;
+        }
         let draft = self.contour_draft.as_mut()?;
         let mut apply = false;
         ui.separator();
         section(ui, "object.contour", "Contour", true, |ui| {
             ui.label(format!(
                 "{} points; one per line as `X, Y` in millimetres.",
-                summary.contour.as_ref().map_or(0, |contour| contour.points().len())
+                contour_corners(contour).map_or(0, |corners| corners.len())
             ));
             ui.add(TextEdit::multiline(&mut draft.text).desired_rows(6).desired_width(220.0));
             if ui.button("Apply contour").clicked() {
@@ -367,7 +381,27 @@ fn format_position(position: [Length; 3]) -> String {
 }
 
 fn format_contour(contour: &Contour) -> String {
-    contour.points().iter().map(|point| format!("{}, {}", point[0], point[1])).collect::<Vec<_>>().join("\n")
+    contour_corners(contour)
+        .unwrap_or_default()
+        .iter()
+        .map(|point| format!("{}, {}", point[0], point[1]))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The corner points of a line-only ring, in travel order; `None` when a segment is an arc.
+///
+/// The text editor writes corners, so a ring with an arc has no corner list to show: sampling it
+/// would silently replace the arc with straight lines on the next Apply.
+fn contour_corners(contour: &Contour) -> Option<Vec<[Length; 2]>> {
+    contour
+        .segments()
+        .iter()
+        .map(|segment| match segment {
+            furnicraft_model::ContourSegment::Line { start, .. } => Some(*start),
+            furnicraft_model::ContourSegment::Arc { .. } => None,
+        })
+        .collect()
 }
 
 /// Parses one `X, Y` line per contour point, in millimetres.
@@ -387,7 +421,7 @@ fn contour_from_text(text: &str) -> Result<Contour, String> {
             .map_err(|error| format!("Line {}: {error}.", index.saturating_add(1)))?;
         points.push([x, y]);
     }
-    Contour::new(points).map_err(|error| format!("{error}."))
+    Contour::from_polygon(points).map_err(|error| format!("{error}."))
 }
 
 fn rename_object(session: &mut Session, node: Id, name: String) -> Result<(), String> {
@@ -419,7 +453,7 @@ mod tests {
 
     fn rectangle(width: i64, height: i64) -> Contour {
         let millimetres = |value| Length::from_millimetres(value).expect("length");
-        Contour::new(vec![
+        Contour::from_polygon(vec![
             [millimetres(0), millimetres(0)],
             [millimetres(width), millimetres(0)],
             [millimetres(width), millimetres(height)],
@@ -468,7 +502,7 @@ mod tests {
         assert_eq!(summary.kind, "Constructive");
         assert_eq!(summary.contour, Some(rectangle(100, 50)));
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
-        assert!(summary.contour.as_ref().is_some_and(|contour| contour.points().len() == 4));
+        assert!(summary.contour.as_ref().is_some_and(|contour| contour.segments().len() == 4));
     }
 
     #[test]
@@ -500,6 +534,30 @@ mod tests {
         assert!(contour_from_text("wide, 0\n100, 0\n100, 50").is_err(), "text must parse");
         assert!(contour_from_text("0 0\n100 0\n100 50").is_err(), "a comma separates the axes");
         assert!(contour_from_text("0, 0\n30, 0\n20, 20\n10, -10").is_err(), "a self-intersecting contour is refused");
+    }
+
+    #[test]
+    fn a_contour_with_an_arc_has_no_corner_text() {
+        use furnicraft_model::ContourSegment;
+        use furnicraft_units::Degrees;
+
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let contour = Contour::new(vec![
+            arc,
+            ContourSegment::line([Length::ZERO, millimetres(100)], [Length::ZERO, Length::ZERO]).expect("line"),
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
+        ])
+        .expect("a quarter disc");
+        assert!(!contour.is_line_only());
+        assert_eq!(contour_corners(&contour), None, "corners cannot describe the arc");
+        assert_eq!(format_contour(&contour), "", "the text editor has nothing to show");
     }
 
     #[test]

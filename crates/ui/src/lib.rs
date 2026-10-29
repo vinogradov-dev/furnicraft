@@ -408,7 +408,7 @@ impl Editor {
                     .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
                 let height = Length::from_millimetres(NEW_EXTRUDE_HEIGHT_MM)
                     .ok_or_else(|| "The default extrusion height does not fit a length.".to_owned())?;
-                let contour = Contour::new(vec![
+                let contour = Contour::from_polygon(vec![
                     [Length::ZERO, Length::ZERO],
                     [length, Length::ZERO],
                     [length, width],
@@ -871,7 +871,7 @@ mod tests {
         let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
         assert_eq!(
             contour,
-            &Contour::new(vec![
+            &Contour::from_polygon(vec![
                 [millimetres(0), millimetres(0)],
                 [millimetres(600), millimetres(0)],
                 [millimetres(600), millimetres(400)],

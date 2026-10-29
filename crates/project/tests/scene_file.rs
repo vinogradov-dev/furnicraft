@@ -17,6 +17,7 @@ const V7: &str = include_str!("golden/scene-v7.fcs");
 const V8: &str = include_str!("golden/scene-v8.fcs");
 const V9: &str = include_str!("golden/scene-v9.fcs");
 const V10: &str = include_str!("golden/scene-v10.fcs");
+const V11: &str = include_str!("golden/scene-v11.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -48,7 +49,9 @@ impl Drop for TempDir {
 
 #[test]
 fn every_golden_file_loads_and_round_trips() {
-    for (name, text) in [("version 7", V7), ("version 8", V8), ("version 9", V9), ("version 10", V10)] {
+    for (name, text) in
+        [("version 7", V7), ("version 8", V8), ("version 9", V9), ("version 10", V10), ("version 11", V11)]
+    {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
             scene.document().schema_version(),
@@ -100,18 +103,39 @@ fn a_version_nine_file_loads_cameras_lights_and_the_active_camera() {
 }
 
 #[test]
-fn a_version_ten_file_loads_a_constructive_object() {
+fn a_version_ten_file_loads_a_constructive_object_with_a_line_ring() {
     let scene = SceneFile::parse(V10).expect("version 10");
     let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
     assert_eq!(object.name(), "Countertop");
     let constructive = object.geometry().as_constructive().expect("a constructive payload");
     let contour = constructive.contour().expect("the contour");
-    assert_eq!(contour.points().len(), 4);
+    assert_eq!(contour.segments().len(), 4, "the point list migrates to a ring of lines");
+    assert!(contour.is_line_only(), "a version 10 contour has no arcs");
+    assert_eq!(contour.sampled_points(50.0).expect("the corners").len(), 4);
     assert_eq!(constructive.height(), Some(furnicraft_units::Length::from_millimetres(18).expect("height")));
     assert!(object.geometry().as_mesh().is_none(), "the mesh of a constructive object is derived, not stored");
 
     let rewritten = scene.to_json().expect("serialize");
     let again = SceneFile::parse(&rewritten).expect("the rewritten version 10 file loads");
+    assert_eq!(again.document(), scene.document());
+}
+
+#[test]
+fn a_version_eleven_file_loads_a_contour_with_an_arc() {
+    let scene = SceneFile::parse(V11).expect("version 11");
+    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
+    let contour = object
+        .geometry()
+        .as_constructive()
+        .and_then(furnicraft_model::Constructive::contour)
+        .expect("the contour must load");
+    assert_eq!(contour.segments().len(), 5, "four lines and one round corner");
+    assert_eq!(contour.segments().iter().filter(|segment| segment.is_arc()).count(), 1);
+    assert!(!contour.is_line_only(), "the arc survives the load");
+
+    let rewritten = scene.to_json().expect("serialize");
+    assert!(rewritten.contains("\"arc\""), "the arc is written back as a segment");
+    let again = SceneFile::parse(&rewritten).expect("the rewritten version 11 file loads");
     assert_eq!(again.document(), scene.document());
 }
 

@@ -1,0 +1,99 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 11,
+    "revision": 0,
+    "next_id": 3,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        {
+          "object": {
+            "id": 2,
+            "name": "Countertop",
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "properties": {},
+            "geometry": {
+              "kind": "constructive",
+              "features": [
+                {
+                  "kind": "extrude",
+                  "contour": {
+                    "segments": [
+                      {
+                        "kind": "line",
+                        "start": [0, 0],
+                        "end": [600000, 0]
+                      },
+                      {
+                        "kind": "line",
+                        "start": [600000, 0],
+                        "end": [600000, 350000]
+                      },
+                      {
+                        "kind": "arc",
+                        "center": [550000, 350000],
+                        "radius": 50000,
+                        "start_angle": 0,
+                        "sweep": 90000
+                      },
+                      {
+                        "kind": "line",
+                        "start": [550000, 400000],
+                        "end": [0, 400000]
+                      },
+                      {
+                        "kind": "line",
+                        "start": [0, 400000],
+                        "end": [0, 0]
+                      }
+                    ]
+                  },
+                  "height": 18000
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {}
+    }
+  }
+}

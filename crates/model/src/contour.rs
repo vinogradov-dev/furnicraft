@@ -67,6 +67,33 @@ impl ContourSegment {
         Ok(segment)
     }
 
+    /// Whether this segment is a circular arc.
+    pub const fn is_arc(self) -> bool {
+        matches!(self, Self::Arc { .. })
+    }
+
+    /// The same curve with the opposite direction of travel.
+    ///
+    /// A ring is stored counter-clockwise, so a contour drawn clockwise reverses every segment.
+    pub fn reversed(self) -> Result<Self, ContourSegmentError> {
+        match self {
+            Self::Line { start, end } => Self::line(end, start),
+            Self::Arc { center, radius, start_angle, sweep } => {
+                let end_angle = start_angle
+                    .millidegrees()
+                    .checked_add(sweep.millidegrees())
+                    .map(Degrees::from_millidegrees)
+                    .ok_or(ContourSegmentError::NonFinite)?;
+                let reversed_sweep = sweep
+                    .millidegrees()
+                    .checked_neg()
+                    .map(Degrees::from_millidegrees)
+                    .ok_or(ContourSegmentError::NonFinite)?;
+                Self::arc(center, radius, end_angle, reversed_sweep)
+            }
+        }
+    }
+
     /// The start point in the contour plane.
     pub fn start(self) -> Result<[Length; 2], ContourSegmentError> {
         point_to_document(self.to_geom()?.start())
@@ -214,8 +241,8 @@ fn point_to_geometry(point: [Length; 2]) -> Result<DVec2, ContourSegmentError> {
     Ok(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()))
 }
 
-/// Converts geometry millimetres to document micrometres.
-fn point_to_document(point: DVec2) -> Result<[Length; 2], ContourSegmentError> {
+/// Converts geometry millimetres to document micrometres, rounded.
+pub(crate) fn point_to_document(point: DVec2) -> Result<[Length; 2], ContourSegmentError> {
     Ok([length_to_document(point.x)?, length_to_document(point.y)?])
 }
 
