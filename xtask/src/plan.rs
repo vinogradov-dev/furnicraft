@@ -35,7 +35,7 @@ pub struct State {
     pub task: String,
     /// `idle` or `doing`.
     pub status: String,
-    /// The commit the plan was last written against.
+    /// The commit the plan was last written against; `HEAD` while the plan edit is uncommitted.
     pub base: String,
     /// The last update date.
     pub updated: String,

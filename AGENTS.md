@@ -215,8 +215,9 @@ The commit closes the operation; the plan files close it too, in the same change
 
 1. Mark the task `[x]` in `plan/BACKLOG.md` with the short hash of the commit that delivers it. When a
    task needs several commits, mark it on the last one.
-2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `base` = the new commit,
-   `updated` = today) and a new `Next` paragraph. Never append to it.
+2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `updated` = today, `base` =
+   the commit whose tree the plan describes — `HEAD` when the plan edit is its own commit, the parent
+   when the edit rides in the commit it describes) and a new `Next` paragraph. Never append to it.
 3. Delete `plan/SESSION.md`; set `state=idle`.
 4. Move a newly discovered gap to `plan/debt.md` and an owner decision to `plan/questions.md`. Neither
    file grows unless something new is found; do not re-copy entries that are already there.
