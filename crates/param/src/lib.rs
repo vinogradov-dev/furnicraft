@@ -36,6 +36,8 @@ const CONTOUR_SAMPLE_TOLERANCE_MM: f64 = 0.05;
 const MAX_JOINT_EXTENSION_MM: f64 = 50.0;
 /// Tolerance for two points at a joint that should coincide, in millimetres.
 const JOINT_TOLERANCE_MM: f64 = 1.0e-6;
+/// Chord tolerance used when a document contour becomes a kernel polyline, in micrometres.
+const CONTOUR_SAMPLE_TOLERANCE_MICROMETRES: f64 = 50.0;
 
 /// An error raised while evaluating a parametric feature.
 #[derive(Debug, Error)]
@@ -55,6 +57,9 @@ pub enum ParamError {
     /// The contour cannot be sampled for the polygon-only kernel profile.
     #[error(transparent)]
     ContourSampling(#[from] ContourError),
+    /// The contour of a constructive object is invalid.
+    #[error("the contour of a constructive object is invalid: {0}")]
+    ConstructiveContour(#[from] furnicraft_model::ContourError),
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
@@ -79,14 +84,14 @@ pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, Para
         return Err(ParamError::UnsupportedConstructive);
     };
     let contour = extrude.contour();
-    let points = contour.points();
+    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).map_err(ParamError::from)?;
     let count = u32::try_from(points.len()).map_err(|_| ParamError::UnsupportedConstructive)?;
     let height = extrude.height();
     let mut positions = Vec::with_capacity(points.len().saturating_mul(2));
-    for point in points {
+    for point in &points {
         positions.push([point[0], point[1], Length::ZERO]);
     }
-    for point in points {
+    for point in &points {
         positions.push([point[0], point[1], height]);
     }
     let mut faces = Vec::with_capacity(points.len().saturating_add(2));
@@ -1790,7 +1795,7 @@ mod tests {
         if clockwise {
             points.reverse();
         }
-        Contour::new(points).expect("contour")
+        Contour::from_polygon(points).expect("contour")
     }
 
     /// Signed volume of a polygon mesh through the divergence theorem; positive for outward faces.
@@ -1835,5 +1840,36 @@ mod tests {
         let constructive = Constructive::new(vec![Feature::Extrude(extrude.clone()), Feature::Extrude(extrude)])
             .expect("two features are valid data");
         assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::UnsupportedConstructive)));
+    }
+
+    #[test]
+    fn a_contour_with_a_round_corner_extrudes_with_the_disc_area() {
+        // A quarter disc of radius 100 mm: the arc sweeps 90 degrees about the origin and two lines
+        // close the ring along the axes, so the area is pi r^2 / 4.
+        use furnicraft_model::ContourSegment;
+        use furnicraft_units::Degrees;
+
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let contour = Contour::new(vec![
+            arc,
+            ContourSegment::line([Length::ZERO, millimetres(100)], [Length::ZERO, Length::ZERO]).expect("line"),
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
+        ])
+        .expect("a quarter disc");
+        let constructive = Constructive::extrude(contour, millimetres(10)).expect("constructive");
+        let mesh = build_constructive_mesh(&constructive).expect("mesh");
+        assert!(mesh.positions().len() > 6, "the arc contributes interior points");
+        let expected = std::f64::consts::PI * 100.0 * 100.0 / 4.0 * 10.0;
+        assert!(
+            (signed_volume(&mesh) - expected).abs() < expected * 1.0e-3,
+            "volume was {}, expected about {expected}",
+            signed_volume(&mesh)
+        );
     }
 }

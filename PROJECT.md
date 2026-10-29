@@ -68,8 +68,9 @@ never saved). A constructive object rebuilds from its contour and is not editabl
 `object.collapse` bakes it, which is one undoable command and cannot be reversed after undo expires.
 Features reference their inputs, never a derived face: fillet and chamfer on a generated face wait for
 a persistent-naming design. A panel is not a geometry object; panel rules are manufacturing rules.
-See [`docs/domain/geometry.md`](docs/domain/geometry.md) and
-[ADR 0037](docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md).
+See [`docs/domain/geometry.md`](docs/domain/geometry.md),
+[ADR 0037](docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md) and
+[ADR 0040](docs/decisions/0040-a-constructive-contour-is-a-ring-of-segments.md).
 
 ### `Placement`
 

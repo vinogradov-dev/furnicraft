@@ -706,7 +706,7 @@ mod tests {
         use furnicraft_model::{Constructive, Contour};
 
         let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
-        let contour = Contour::new(vec![
+        let contour = Contour::from_polygon(vec![
             [millimetres(0), millimetres(0)],
             [millimetres(600), millimetres(0)],
             [millimetres(600), millimetres(400)],
