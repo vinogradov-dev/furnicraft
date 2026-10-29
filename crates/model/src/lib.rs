@@ -31,10 +31,12 @@ use serde_json::Value;
 use thiserror::Error;
 
 mod catalog;
+mod contour;
 mod panel_contour;
 mod panel_features;
 
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
+pub use contour::{ContourSegment, ContourSegmentError};
 pub use panel_contour::{ContourPath, PanelContourError, SegmentSource};
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 

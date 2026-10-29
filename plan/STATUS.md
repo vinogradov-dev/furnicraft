@@ -10,17 +10,14 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: viewport multi-select, copy/paste and gizmo snapping. The last task added face
-  selection and face moves to the mesh editor: the object card switches between Vertices and Faces,
-  a click ray-picks the nearest polygon so an occluded face never wins, a selected face is tinted
-  over the viewport, and a drag moves the union of all selected face vertices once through the same
-  vertex gizmo and `mesh.vertices.move`. Before that, camera and light drags became live: a glyph
-  follows the pointer in the same frame as the axis handles, and the frame lighting follows a moved
-  sun or point light. A drag applies the same rigid transform as the drawables to every camera or
-  light below a moved node, the renderer takes a lighting override so only the uniform changes, and
-  a camera or light drag no longer re-uploads geometry. The camera glyph is twice as long and its
-  node zero is now the cone apex, with the base plane one glyph length ahead; an orthographic camera
-  keeps a near rectangle at the apex.
+- Working on: the contour-first shape base. Step A1 of that plan is done:
+  `furnicraft_model::ContourSegment` stores a directed line or circular arc in micrometres and
+  millidegrees, validates every value and converts to and from the geometry layer at one boundary.
+  Next is step A2: `Contour` keeps segments instead of points, so a constructive object can carry
+  an arc. The previous task added face selection and face moves to the mesh editor: the object card
+  switches between Vertices and Faces, a click ray-picks the nearest polygon so an occluded face
+  never wins, a selected face is tinted over the viewport, and a drag moves the union of all
+  selected face vertices once through the same vertex gizmo and `mesh.vertices.move`.
 - Before that, cameras and lights became readable in the viewport and the scene was lit by authored
   point lights. A camera icon is a frustum along its view (a second rectangle for an orthographic
   camera), a point light is a star and a sun adds a dashed arrow along its travel direction; every
@@ -52,10 +49,11 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
   validated batch, the object card starts a sub-object mode and switches between the two element
   kinds, and the vertex gizmo previews a drag and dispatches one command on release. Escape cancels
   a drag, then leaves the mode. Edge selection and face extrusion are still open.
-- Direction: objects and the scene file come before hardware, so saved files carry the final node
-  shape. The workspace can round-trip a scene by hand, a created cube can be shaped by moving its
-  vertices or faces, a countertop is extruded from a contour and stays editable, and cameras and
-  lights are scene objects.
+- Direction: the shape base comes first: flat contours with arcs, contour operations, a sketch on a
+  chosen plane, and two panel variants (parametric rectangular and contour). Hardware, output and the
+  assistant wait until a panel can be given the shape a cabinet actually needs. The workspace can
+  round-trip a scene by hand, a created cube can be shaped by moving its vertices or faces, a
+  countertop is extruded from a contour and stays editable, and cameras and lights are scene objects.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -65,6 +63,7 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(model): add the contour segment type` (a directed line or arc in micrometres and millidegrees, validated on construction and on load, converted to and from the geometry layer at one boundary)
 - `feat(ui): select and move mesh faces` (one element mode at a time, vertex/face switch in the object card, nearest-polygon ray picking, selected-face tint, face moves through the shared vertex gizmo with a deduplicated vertex union)
 - `feat(app): preview camera and light drags live` (glyphs and lighting follow the pointer, nested cameras and lights under a moved node, lighting override in the renderer, no geometry upload for icon-only drags, camera glyph at 2× length with its zero at the cone apex)
 - `feat(render): shade with authored point lights and inverse-square falloff` (point power in watts, `1/(4πd²)` falloff, eight lights per frame, fixed viewport exposure, `Power (W)` card with a 1000 W default on kind switch, naga shader validation)
@@ -157,11 +156,14 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Viewport multi-select, copy/paste and gizmo snapping.
-2. More constructive features and a viewport contour editor (booleans and fillets need the input
-   reference rule from ADR 0037); Extrude by the selected mesh face comes after the owner settles its
-   semantics.
-3. A scene exposure and tone mapping, then shadow maps, so point lights can produce a realistic
+1. Contour shape base, phase A: A2 `Contour` on segments, A3 arcs in the document, A4 stable element
+   ids, A5 edit math, A6 commands, A7 docs.
+2. Phase B contour operations (fillet, chamfer, offset), then phase C sketch on a plane with vertex
+   and grid snapping and the translation/rotation steps, then phase D two panel variants and the
+   three creation modes.
+3. Phase E 2D primitives and phase F revolution/sweep from a contour; 2D booleans (phase G) come
+   last, after a decision spike on the math.
+4. A scene exposure and tone mapping, then shadow maps, so point lights can produce a realistic
    picture instead of clipped highlights.
 
 ## Open questions
