@@ -10,15 +10,21 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: face picking and face moves in the mesh editor. The last task made cameras and lights
-  readable in the viewport and lit the scene with authored point lights. A camera icon is now a body
-  with a frustum along its view (a second rectangle for an orthographic camera), a point light is a
-  star and a sun adds a dashed arrow along its travel direction; every glyph line is pickable, not
-  only its centre. Point lights contribute their world position, linear colour and power in watts
-  with inverse-square falloff, up to eight in tree order, while the sun keeps its unitless multiplier
-  and no distance falloff. The viewport uses a fixed exposure (`1000 W` at one metre shades a white
-  surface at about half intensity); a scene exposure and a tone mapper come with the render
-  milestone. ADR 0039 records the units and the limit.
+- Working on: face picking and face moves in the mesh editor. The last task made camera and light
+  drags live: a glyph follows the pointer in the same frame as the axis handles, and the frame
+  lighting follows a moved sun or point light. A drag applies the same rigid transform as the
+  drawables to every camera or light below a moved node, the renderer takes a lighting override so
+  only the uniform changes, and a camera or light drag no longer re-uploads geometry. The camera
+  glyph is twice as long and its node zero is now the cone apex, with the base plane one glyph
+  length ahead; an orthographic camera keeps a near rectangle at the apex.
+- Before that, cameras and lights became readable in the viewport and the scene was lit by authored
+  point lights. A camera icon is a frustum along its view (a second rectangle for an orthographic
+  camera), a point light is a star and a sun adds a dashed arrow along its travel direction; every
+  glyph line is pickable, not only its centre. Point lights contribute their world position, linear
+  colour and power in watts with inverse-square falloff, up to eight in tree order, while the sun
+  keeps its unitless multiplier and no distance falloff. The viewport uses a fixed exposure (`1000 W`
+  at one metre shades a white surface at about half intensity); a scene exposure and a tone mapper
+  come with the render milestone. ADR 0039 records the units and the limit.
 - Before that, the constructive object: `object.extrude.create` builds a closed contour with one
   `Extrude` feature,
   `object.contour.replace` edits it, the inspector card edits the contour and the height, and
@@ -55,6 +61,7 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(app): preview camera and light drags live` (glyphs and lighting follow the pointer, nested cameras and lights under a moved node, lighting override in the renderer, no geometry upload for icon-only drags, camera glyph at 2× length with its zero at the cone apex)
 - `feat(render): shade with authored point lights and inverse-square falloff` (point power in watts, `1/(4πd²)` falloff, eight lights per frame, fixed viewport exposure, `Power (W)` card with a 1000 W default on kind switch, naga shader validation)
 - `feat(app): draw camera and light icons with their direction` (camera body and frustum, orthographic box, point-light star, sun direction arrow, pickable glyph lines)
 - `fix(model): include cameras and lights in contains_node` (one root fix for the one-frame selection of a new camera/light, `NodeNotFound` on rename/properties/placement and the missing gizmo target; regression tests in model, engine, UI and app)
@@ -231,10 +238,11 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.
 - Move and Rotate act on the top-most selected nodes; the viewport has no Ctrl+click multi-select
   yet, so a multi-selection comes from the scene tree.
-- The gizmo preview rebuilds every drawable's world vertices on each pointer move. An incremental
-  transform buffer per drawable can replace the full upload when a large cabinet makes it visible. A
-  vertex drag also re-tessellates the edited mesh on every pointer move instead of moving only the
-  affected triangle vertices.
+- The gizmo preview rebuilds every drawable's world vertices on each pointer move. Camera and light
+  drags already skip the upload, but a geometry drag still does not. An incremental transform buffer
+  per drawable can replace the full upload when a large cabinet makes it visible. A vertex drag also
+  re-tessellates the edited mesh on every pointer move instead of moving only the affected triangle
+  vertices.
 - The orientation widget is hidden in a viewport smaller than its own size plus margins; there is no
   menu fallback for the six views yet.
 - The selection highlight re-uploads every mesh when the selection changes; an incremental colour
