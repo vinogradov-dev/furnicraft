@@ -8,13 +8,27 @@ This file is the constitution. Where a task or a habit conflicts with it, this f
 
 ## 1. Orientation
 
-Start every session with `plan/STATUS.md`: where the project stands, what is in flight and what comes
-next. Then read the documents below that the task needs.
+Opening a session is cheap by design: read the plan, not the codebase. Start with
+`cargo xtask status` (or `plan/STATUS.md`, whose first line is the same state). Then:
+
+1. `plan/STATUS.md` — the `STATE:` line and the `Next` section.
+2. `plan/SESSION.md` — only when `state=doing`; it names the live step and the next command.
+3. `plan/BACKLOG.md` — the task id in `STATE:` and the files its `files:` hint names. Read those
+   files and their direct callers. **Do not scan the workspace**; if the hint is wrong, fix the hint.
+4. Only then the documents the task itself needs.
+
+`plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
+area, never read them at start. `plan/archive/done.md` is history; `git log --oneline` replaces it.
+
+Answering "what happens next" means quoting `STATE` and the `Now` section of the backlog — not
+re-deriving the state from the code.
 
 | Read | Why |
 |---|---|
 | `PROJECT.md` | Vision, domain vocabulary, crate map, milestones |
-| `plan/STATUS.md` | Current milestone, the task in flight and the next one; rewritten after every task |
+| `plan/STATUS.md` | `STATE` line, where we are, index of the other plan files; rewritten after every task |
+| `plan/BACKLOG.md` | One line per task: id, order, status, file hint |
+| `plan/SESSION.md` | The live task while `state=doing`; template in `plan/SESSION.template.md` |
 | `docs/decisions/` | Why the kernel, the units, the vendored crate and the panel frame are what they are |
 | `BRIEF.md` | The owner's goals, constraints and preferences (Russian) |
 | `crates/<name>/src/lib.rs` | Each crate's doc comment states its layer and job |
@@ -162,8 +176,14 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` and `cargo xtask layers`, in that order, stopping at the first failure. Run the
-steps individually while iterating (see below); run `cargo fmt --all` to fix formatting, the gate only checks it.
+`cargo test --workspace`, `cargo xtask layers` and `cargo xtask plan`, in that order, stopping at the
+first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
+formatting, the gate only checks it.
+
+`cargo xtask plan` fails when the plan files contradict each other: `STATE` naming a task the backlog
+does not have or has finished, `state=doing` without a `plan/SESSION.md` for that task, `state=idle`
+with a `[~]` task or a leftover session note, a duplicated task id, a `[x]` task without a commit
+hash. An over-long `STATUS.md` or `SESSION.md` is a warning.
 
 Then check by hand:
 
@@ -176,7 +196,7 @@ Then check by hand:
 - [ ] New dependencies are pure Rust: no C/C++ sources, no `cc`/`cmake` build of native code, no C-vendoring `-sys` crate; `cargo xtask layers` passes the C-vendoring check.
 - [ ] Public items have doc comments; a crate's `//!` comment still describes what it does.
 - [ ] Keep the tree building at every step: a half-finished workspace blocks everyone.
-- [ ] `plan/STATUS.md` reflects the new state: milestone, what changed, the next task.
+- [ ] The plan is updated (see 6.1) and `cargo xtask plan` passes.
 - [ ] The completed operation is committed; that commit is a working checkpoint.
 
 While iterating, run less: `cargo test -p <crate> --lib --tests` and `cargo clippy -p <crate> --all-targets`. The gate above is the final check.
@@ -190,6 +210,20 @@ Commit after every coherent, fully verified unit of work — not at the end of a
 - A scaffold that does not build or pass tests is not a completed operation; keep it with the first working step.
 - Stage explicit paths and review `git diff --cached` before committing. Never use `git add -A` blindly.
 - Commit messages and bodies are in English, in the project's Conventional Commits style.
+
+The commit closes the operation; the plan files close it too, in the same change:
+
+1. Mark the task `[x]` in `plan/BACKLOG.md` with the short hash of the commit that delivers it. When a
+   task needs several commits, mark it on the last one.
+2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `base` = the new commit,
+   `updated` = today) and a new `Next` paragraph. Never append to it.
+3. Delete `plan/SESSION.md`; set `state=idle`.
+4. Move a newly discovered gap to `plan/debt.md` and an owner decision to `plan/questions.md`. Neither
+   file grows unless something new is found; do not re-copy entries that are already there.
+
+Starting a task is the mirror image: copy `plan/SESSION.template.md` to `plan/SESSION.md`, fill it in,
+set `state=doing` and `[~]` on that one task, and update `SESSION.md` after every meaningful step and
+after every green gate run — a session that dies must not lose more than the current sub-step.
 
 ### 6.2 Branch workflow
 
@@ -231,4 +265,9 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `BRIEF.md` — the owner's original brief; do not edit it to match the code.
 - `ATTRIBUTION.md` — vendored and bundled third-party components, their licenses and modifications.
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
-- `plan/STATUS.md` — where the project stands and what comes next; rewritten at the end of every task, never appended to.
+- `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
+- `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
+- `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
+- `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
+- `plan/questions.md` — decisions waiting for the owner.
+- `plan/archive/done.md` — the history the old status file carried; `git log --oneline` is the live record.

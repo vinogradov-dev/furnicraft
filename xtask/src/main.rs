@@ -1,6 +1,6 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|ci>`
+//! Usage: `cargo xtask <layers|plan|status|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
+
+mod plan;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -82,6 +84,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
         Some("layers") => report(check_layers()),
+        Some("plan") => report_plan(check_plan()),
+        Some("status") => print_status(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
             print_usage();
@@ -97,9 +101,11 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <layers|ci>");
+    println!("usage: cargo xtask <layers|plan|status|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
-    println!("  ci        run the whole gate: fmt, clippy, tests, layers");
+    println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
+    println!("  status    print the current task and what follows, for a session start");
+    println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
 }
 
 /// Runs the gate in order and returns the process exit code.
@@ -127,11 +133,51 @@ fn run_ci() -> i32 {
         }
     }
 
-    if report(check_layers()) == 0 {
-        println!("ci: ok");
-        0
-    } else {
-        1
+    if report(check_layers()) != 0 {
+        return 1;
+    }
+    if report_plan(check_plan()) != 0 {
+        return 1;
+    }
+    println!("ci: ok");
+    0
+}
+
+/// Checks the plan files in the workspace root.
+fn check_plan() -> Result<plan::Summary, Vec<String>> {
+    let workspace = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+    let (summary, warnings) = plan::check(workspace)?;
+    for warning in &warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(summary)
+}
+
+/// Prints what the plan files say, without failing on a warning.
+fn print_status() -> i32 {
+    match check_plan() {
+        Ok(summary) => {
+            plan::print(&summary);
+            0
+        }
+        Err(violations) => report_plan(Err(violations)),
+    }
+}
+
+fn report_plan(result: Result<plan::Summary, Vec<String>>) -> i32 {
+    match result {
+        Ok(summary) => {
+            println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
+            println!("plan: ok");
+            0
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            eprintln!("plan: FAILED ({} violation(s))", violations.len());
+            1
+        }
     }
 }
 
