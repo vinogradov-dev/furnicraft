@@ -1,9 +1,10 @@
-//! Vertex picking for sub-object mesh editing.
+//! Sub-object picking for mesh editing.
 //!
 //! A mesh object's vertices are projected with the viewport camera and tested in screen space, the
-//! same way the gizmo handles are hit-tested. Picking returns a vertex index of one object, never a
-//! mesh pointer or a triangle index; the caller keeps the document immutable and only changes view
-//! state.
+//! same way the gizmo handles are hit-tested. A face is picked by the nearest ray hit against its
+//! polygon, so an occluded face never wins over the one in front. Picking returns an index of one
+//! object, never a mesh pointer or a triangle index; the caller keeps the document immutable and
+//! only changes view state.
 //!
 //! The object's world placement is composed once per pick rather than once per vertex, so a large
 //! mesh does not walk the node tree for every index.
@@ -11,10 +12,10 @@
 use eframe::egui::{Pos2, Rect};
 use furnicraft_geom::DVec3;
 use furnicraft_model::{Id, Mesh, Placement, Project};
-use furnicraft_scene::Camera;
+use furnicraft_scene::{Camera, ray_triangle};
 use furnicraft_units::Length;
 
-use crate::gizmo_math::screen_point;
+use crate::gizmo_math::{ray_to, screen_point};
 
 /// Radius around a projected vertex that counts as a hit, in viewport points.
 pub(crate) const VERTEX_PICK_RADIUS: f32 = 10.0;
@@ -49,6 +50,56 @@ pub(crate) fn pick_vertex(camera: Camera, viewport: Rect, project: &Project, obj
         }
     }
     best.map(|(_, vertex)| vertex)
+}
+
+/// The nearest polygon face under `pointer`, if any.
+///
+/// Each polygon is fan-triangulated for the hit test but the polygon index is returned, so editing
+/// keeps quads and larger faces intact. A tie goes to the lower index, which keeps picking
+/// deterministic when two coplanar faces share an edge.
+pub(crate) fn pick_face(camera: Camera, viewport: Rect, project: &Project, object: Id, pointer: Pos2) -> Option<u32> {
+    let (placement, mesh) = vertex_frame(project, object)?;
+    let ray = ray_to(pointer, viewport, camera);
+    let mut nearest = f64::INFINITY;
+    let mut hit = None;
+    for (index, face) in mesh.faces().iter().enumerate() {
+        let Ok(face_index) = u32::try_from(index) else {
+            continue;
+        };
+        let Some(first) = face.first().copied() else {
+            continue;
+        };
+        let Some(origin) = world_position(placement, mesh, first) else {
+            continue;
+        };
+        let Some(rest) = face.get(1..) else {
+            continue;
+        };
+        for pair in rest.windows(2) {
+            let (Some(&left), Some(&right)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            let (Some(left), Some(right)) =
+                (world_position(placement, mesh, left), world_position(placement, mesh, right))
+            else {
+                continue;
+            };
+            if let Some(distance) = ray_triangle(ray, origin, left, right)
+                && distance < nearest
+            {
+                nearest = distance;
+                hit = Some(face_index);
+            }
+        }
+    }
+    hit
+}
+
+/// One vertex of a mesh in world space.
+fn world_position(placement: Placement, mesh: &Mesh, vertex: u32) -> Option<DVec3> {
+    let index = usize::try_from(vertex).ok()?;
+    let local = *mesh.positions().get(index)?;
+    Some(to_world(placement, local))
 }
 
 /// Applies the object's world placement to a vertex stored in micrometres.
@@ -158,5 +209,56 @@ mod tests {
             Some(0),
             "a vertex behind the camera never wins a pick"
         );
+    }
+
+    #[test]
+    fn picking_returns_the_polygon_face_under_the_pointer() {
+        let (project, cube) = cube_project();
+        let camera = camera();
+        let viewport = viewport();
+
+        let top = face_screen(camera, viewport, &project, cube, 1).expect("top face is visible");
+        assert_eq!(pick_face(camera, viewport, &project, cube, top), Some(1));
+
+        // The bottom face sits behind the top one from this camera, so the nearer polygon wins even
+        // though the pointer is over the bottom face's centre.
+        let bottom = face_screen(camera, viewport, &project, cube, 0).expect("bottom face projects");
+        assert_ne!(
+            pick_face(camera, viewport, &project, cube, bottom),
+            Some(0),
+            "an occluded face never wins over the one in front"
+        );
+
+        assert_eq!(pick_face(camera, viewport, &project, cube, Pos2::new(2.0, 2.0)), None);
+        assert_eq!(pick_face(camera, viewport, &project, Id::new(99).expect("id"), top), None);
+    }
+
+    #[test]
+    fn a_face_behind_the_camera_is_not_picked() {
+        let camera = camera();
+        let behind = camera.eye() - camera.forward() * 200.0;
+        let positions = vec![
+            [millimetres(behind.x), millimetres(behind.y), millimetres(behind.z)],
+            [millimetres(behind.x + 100.0), millimetres(behind.y), millimetres(behind.z)],
+            [millimetres(behind.x), millimetres(behind.y + 100.0), millimetres(behind.z)],
+        ];
+        let mesh = Mesh::new(positions, vec![vec![0, 1, 2]]).expect("mesh");
+        let mut project = sample_project();
+        let root = project.root().id();
+        let object = project.add_object(root, "Behind", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("object");
+
+        assert_eq!(pick_face(camera, viewport(), &project, object, viewport().center()), None);
+    }
+
+    /// The screen position of one face's centre, without using picking.
+    fn face_screen(camera: Camera, viewport: Rect, project: &Project, object: Id, face: u32) -> Option<Pos2> {
+        let (placement, mesh) = vertex_frame(project, object)?;
+        let polygon = mesh.faces().get(usize::try_from(face).ok()?)?;
+        let mut sum = DVec3::ZERO;
+        for vertex in polygon {
+            sum += world_position(placement, mesh, *vertex)?;
+        }
+        let count = f64::from(u32::try_from(polygon.len()).ok()?);
+        screen_point(camera, viewport, sum / count)
     }
 }

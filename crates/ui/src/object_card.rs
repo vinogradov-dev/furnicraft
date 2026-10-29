@@ -15,8 +15,19 @@ use furnicraft_model::{Contour, Geometry, Id, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
-use crate::mesh_edit::MeshEdit;
+use crate::mesh_edit::{MeshEdit, MeshElement};
 use crate::section::section;
+
+/// What the object card asks the editor to do with the mesh-edit session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MeshEditAction {
+    /// Nothing was pressed.
+    None,
+    /// Enter or leave sub-object editing.
+    Toggle,
+    /// Switch between vertex and face selection.
+    Element(MeshElement),
+}
 
 /// Most selected vertices the card lists with their positions; the count covers the rest.
 const MAX_LISTED_VERTICES: usize = 12;
@@ -89,8 +100,8 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
 impl ObjectCard {
     /// Draws the card for the selected object and dispatches accepted edits.
     ///
-    /// Returns whether the user asked to start or finish vertex editing; the editor owns the mode
-    /// and validates that the object is a mesh before it starts.
+    /// Returns what the user asked to do with sub-object editing; the editor owns the mode and
+    /// validates that the object is a mesh before it starts.
     pub(crate) fn show(
         &mut self,
         ui: &mut Ui,
@@ -98,14 +109,14 @@ impl ObjectCard {
         object_id: Id,
         mesh_edit: Option<&MeshEdit>,
         single_selection: bool,
-    ) -> bool {
+    ) -> MeshEditAction {
         let Some(summary) = object_summary(session.project(), object_id) else {
             self.draft = None;
             self.contour_draft = None;
             self.confirm_collapse = false;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return false;
+            return MeshEditAction::None;
         };
         if self.draft.as_ref().is_none_or(|draft| draft.object != object_id) {
             self.error = None;
@@ -126,7 +137,7 @@ impl ObjectCard {
 
         let (rename, name_error) = self.name_section(ui, &summary);
         self.geometry_section(ui, &summary);
-        let toggle = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
+        let action = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
         let contour_result = self.contour_section(ui, &summary);
         let (collapse, cancel) = if is_mesh { (false, false) } else { self.collapse_section(ui, single_selection) };
 
@@ -142,7 +153,7 @@ impl ObjectCard {
                 Err(error) => self.error = Some(error),
             }
             ui.ctx().request_repaint();
-            return toggle;
+            return action;
         }
         if let Some(result) = contour_result {
             match result.and_then(|contour| replace_contour(session, object_id, contour)) {
@@ -153,7 +164,7 @@ impl ObjectCard {
                 Err(error) => self.error = Some(error),
             }
             ui.ctx().request_repaint();
-            return toggle;
+            return action;
         }
         if cancel {
             self.confirm_collapse = false;
@@ -174,7 +185,7 @@ impl ObjectCard {
             ui.separator();
             ui.colored_label(Color32::LIGHT_RED, error);
         }
-        toggle
+        action
     }
 
     fn name_section(&mut self, ui: &mut Ui, summary: &ObjectSummary) -> (Option<String>, Option<String>) {
@@ -227,32 +238,61 @@ impl ObjectCard {
         summary: &ObjectSummary,
         mesh_edit: Option<&MeshEdit>,
         single_selection: bool,
-    ) -> bool {
+    ) -> MeshEditAction {
         ui.separator();
-        let mut toggle = false;
+        let mut action = MeshEditAction::None;
         section(ui, "object.mesh_edit", "Mesh editing", true, |ui| {
             if summary.contour.is_some() {
-                ui.label("Collapse the object to a mesh before editing its vertices.");
+                ui.label("Collapse the object to a mesh before editing its elements.");
             } else if single_selection {
                 let editing = mesh_edit.is_some_and(|edit| edit.object() == object_id);
                 let label = if editing { "Done" } else { "Edit mesh" };
-                toggle = ui.button(label).clicked();
+                if ui.button(label).clicked() {
+                    action = MeshEditAction::Toggle;
+                }
+                if let Some(edit) = mesh_edit.filter(|edit| edit.object() == object_id) {
+                    let current = edit.element();
+                    let mut choice = current;
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut choice, MeshElement::Vertex, "Vertices");
+                        ui.selectable_value(&mut choice, MeshElement::Face, "Faces");
+                    });
+                    if choice != current {
+                        action = MeshEditAction::Element(choice);
+                    }
+                }
             } else {
-                ui.label("Select only this object to edit its vertices.");
+                ui.label("Select only this object to edit its mesh.");
             }
             if let Some(edit) = mesh_edit.filter(|edit| edit.object() == object_id) {
-                ui.label(format!("Selected vertices  {}", edit.vertices().len()));
-                let positions = selected_positions(session.project(), object_id, edit.vertices());
-                for (vertex, position) in positions.iter().take(MAX_LISTED_VERTICES) {
-                    ui.label(format!("v{vertex}  {}", format_position(*position)));
+                match edit.element() {
+                    MeshElement::Vertex => {
+                        ui.label(format!("Selected vertices  {}", edit.vertices().len()));
+                        let positions = selected_positions(session.project(), object_id, edit.vertices());
+                        for (vertex, position) in positions.iter().take(MAX_LISTED_VERTICES) {
+                            ui.label(format!("v{vertex}  {}", format_position(*position)));
+                        }
+                        if positions.len() > MAX_LISTED_VERTICES {
+                            ui.label(format!("… and {} more", positions.len() - MAX_LISTED_VERTICES));
+                        }
+                        ui.label("Click a vertex in the viewport; Shift or Ctrl adds it to the selection.");
+                    }
+                    MeshElement::Face => {
+                        ui.label(format!("Selected faces  {}", edit.faces().len()));
+                        let listed: Vec<String> =
+                            edit.faces().iter().take(MAX_LISTED_VERTICES).map(|face| format!("f{face}")).collect();
+                        if !listed.is_empty() {
+                            ui.label(listed.join("  "));
+                        }
+                        if edit.faces().len() > MAX_LISTED_VERTICES {
+                            ui.label(format!("… and {} more", edit.faces().len() - MAX_LISTED_VERTICES));
+                        }
+                        ui.label("Click a face in the viewport; Shift or Ctrl adds it to the selection.");
+                    }
                 }
-                if positions.len() > MAX_LISTED_VERTICES {
-                    ui.label(format!("… and {} more", positions.len() - MAX_LISTED_VERTICES));
-                }
-                ui.label("Click a vertex in the viewport; Shift or Ctrl adds it to the selection.");
             }
         });
-        toggle
+        action
     }
 
     /// Draws the contour editor; returns the parsed replacement when Apply was pressed.

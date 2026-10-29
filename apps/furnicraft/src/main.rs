@@ -40,7 +40,7 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
-use furnicraft_ui::Editor;
+use furnicraft_ui::{Editor, MeshElement};
 
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
@@ -58,6 +58,9 @@ const ZOOM_PER_SCROLL_POINT: f64 = 0.004;
 /// Colour and radius of an unselected mesh vertex marker.
 const MESH_VERTEX_COLOR: egui::Color32 = egui::Color32::from_rgb(226, 226, 226);
 const MESH_VERTEX_RADIUS: f32 = 4.0;
+
+/// Translucent fill of a selected face.
+const MESH_FACE_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 41, 11, 70);
 
 /// Which transform gizmo the viewport shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,6 +300,20 @@ impl FurniCraftApp {
         preview_nodes(self.session.project(), self.editor.selected_nodes(), self.preview())
     }
 
+    /// The vertices the active sub-object selection moves.
+    ///
+    /// Vertex mode is the stored list; face mode is the union of every selected polygon, so the
+    /// gizmo, the preview and the dispatched command all see one deduplicated set.
+    fn mesh_selection_vertices(&self, object: Id) -> Vec<u32> {
+        let Some(edit) = self.editor.mesh_edit() else {
+            return Vec::new();
+        };
+        let Some(mesh) = self.session.project().object(object).and_then(|object| object.geometry().as_mesh()) else {
+            return Vec::new();
+        };
+        edit.selected_vertices(mesh)
+    }
+
     /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
     fn apply_gizmo_commit(&mut self, commit: PlacementCommit) -> Result<(), String> {
         let request = NodePlacementSetMany {
@@ -365,6 +382,9 @@ impl FurniCraftApp {
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         let mesh_object = self.editor.mesh_edit().map(|edit| edit.object());
+        // Face mode moves the union of the selected faces, so both sub-object modes feed the same
+        // vertex gizmo and dispatch the same vertex command.
+        let mesh_vertices = mesh_object.map(|object| self.mesh_selection_vertices(object)).unwrap_or_default();
         // Vertex editing owns the pointer: the object gizmo would move the whole mesh under the
         // user's hand, so it is neither updated nor painted until the mode ends.
         let vertex_update = if let Some(object) = mesh_object {
@@ -372,7 +392,7 @@ impl FurniCraftApp {
                 camera: self.scene.camera,
                 project: self.session.project(),
                 object,
-                vertices: self.editor.mesh_edit().map(|edit| edit.vertices()).unwrap_or_default(),
+                vertices: &mesh_vertices,
             };
             self.vertex_gizmo.update(ui, &response, rect, target, pointer_over_widget)
         } else {
@@ -485,14 +505,31 @@ impl FurniCraftApp {
             && rect.height() > 0.0
         {
             if let Some(object) = mesh_object {
-                let hit = mesh_pick::pick_vertex(self.scene.camera, rect, self.session.project(), object, pointer);
+                let element = self.editor.mesh_edit().map(|edit| edit.element()).unwrap_or_default();
                 let additive = ui.input(|input| input.modifiers.shift || input.modifiers.ctrl);
-                match hit {
-                    Some(vertex) => {
-                        self.editor.select_mesh_vertex(vertex, additive);
+                match element {
+                    MeshElement::Vertex => {
+                        let hit =
+                            mesh_pick::pick_vertex(self.scene.camera, rect, self.session.project(), object, pointer);
+                        match hit {
+                            Some(vertex) => {
+                                self.editor.select_mesh_vertex(vertex, additive);
+                            }
+                            None if !additive => self.editor.clear_mesh_vertices(),
+                            None => {}
+                        }
                     }
-                    None if !additive => self.editor.clear_mesh_vertices(),
-                    None => {}
+                    MeshElement::Face => {
+                        let hit =
+                            mesh_pick::pick_face(self.scene.camera, rect, self.session.project(), object, pointer);
+                        match hit {
+                            Some(face) => {
+                                self.editor.select_mesh_face(face, additive);
+                            }
+                            None if !additive => self.editor.clear_mesh_faces(),
+                            None => {}
+                        }
+                    }
                 }
                 ui.ctx().request_repaint();
             } else if let Some(id) =
@@ -544,7 +581,7 @@ impl FurniCraftApp {
             self.editor.selected_nodes(),
             &previewed,
         );
-        self.paint_mesh_vertices(ui, rect);
+        self.paint_mesh_selection(ui, rect);
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
@@ -556,7 +593,7 @@ impl FurniCraftApp {
                 camera: self.scene.camera,
                 project: self.session.project(),
                 object,
-                vertices: self.editor.mesh_edit().map(|edit| edit.vertices()).unwrap_or_default(),
+                vertices: &mesh_vertices,
             };
             self.vertex_gizmo.paint(ui, rect, target);
         } else {
@@ -573,36 +610,83 @@ impl FurniCraftApp {
         }
     }
 
-    /// Paints every vertex of the object being edited, with the selected ones highlighted.
+    /// Paints the selected sub-object elements over the viewport image.
     ///
-    /// Markers are drawn by the egui painter over the viewport image, so sub-object mode needs no
-    /// renderer change and leaves the uploaded scene untouched.
-    fn paint_mesh_vertices(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+    /// Markers and face fills are drawn by the egui painter, so sub-object mode needs no renderer
+    /// change and leaves the uploaded scene untouched. In vertex mode every vertex is shown with
+    /// the selected ones highlighted; in face mode only the selected faces are tinted.
+    fn paint_mesh_selection(&self, ui: &mut egui::Ui, rect: egui::Rect) {
         let Some(edit) = self.editor.mesh_edit() else {
             return;
         };
         let Some((placement, mesh)) = mesh_pick::vertex_frame(self.session.project(), edit.object()) else {
             return;
         };
-        let selected: HashSet<u32> = edit.vertices().iter().copied().collect();
         let preview = self.vertex_gizmo.preview();
         let painter = ui.painter().with_clip_rect(rect);
-        for (index, local) in mesh.positions().iter().enumerate() {
-            let Ok(vertex) = u32::try_from(index) else {
-                continue;
-            };
-            // A marker follows the preview during a drag, so the dots stay inside the moved mesh
-            // instead of lagging at the old positions until the release.
-            let local = preview.as_ref().and_then(|preview| preview.moved(vertex, *local)).unwrap_or(*local);
-            let world = mesh_pick::to_world(placement, local);
-            let Some(position) = gizmo_math::screen_point(self.scene.camera, rect, world) else {
-                continue;
-            };
-            let is_selected = selected.contains(&vertex);
-            let radius = if is_selected { MESH_VERTEX_RADIUS + 1.0 } else { MESH_VERTEX_RADIUS };
-            let color = if is_selected { gizmo_math::ACTIVE_COLOR } else { MESH_VERTEX_COLOR };
-            painter.circle_filled(position, radius, color);
-            painter.circle_stroke(position, radius, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)));
+        match edit.element() {
+            MeshElement::Vertex => {
+                let selected: HashSet<u32> = edit.vertices().iter().copied().collect();
+                for (index, local) in mesh.positions().iter().enumerate() {
+                    let Ok(vertex) = u32::try_from(index) else {
+                        continue;
+                    };
+                    // A marker follows the preview during a drag, so the dots stay inside the moved
+                    // mesh instead of lagging at the old positions until the release.
+                    let local = preview.as_ref().and_then(|preview| preview.moved(vertex, *local)).unwrap_or(*local);
+                    let world = mesh_pick::to_world(placement, local);
+                    let Some(position) = gizmo_math::screen_point(self.scene.camera, rect, world) else {
+                        continue;
+                    };
+                    let is_selected = selected.contains(&vertex);
+                    let radius = if is_selected { MESH_VERTEX_RADIUS + 1.0 } else { MESH_VERTEX_RADIUS };
+                    let color = if is_selected { gizmo_math::ACTIVE_COLOR } else { MESH_VERTEX_COLOR };
+                    painter.circle_filled(position, radius, color);
+                    painter.circle_stroke(
+                        position,
+                        radius,
+                        egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)),
+                    );
+                }
+            }
+            MeshElement::Face => {
+                for face in edit.faces() {
+                    let Ok(index) = usize::try_from(*face) else {
+                        continue;
+                    };
+                    let Some(polygon) = mesh.faces().get(index) else {
+                        continue;
+                    };
+                    let mut points = Vec::with_capacity(polygon.len());
+                    let mut complete = true;
+                    for vertex in polygon {
+                        let Ok(vertex_index) = usize::try_from(*vertex) else {
+                            complete = false;
+                            break;
+                        };
+                        let Some(local) = mesh.positions().get(vertex_index) else {
+                            complete = false;
+                            break;
+                        };
+                        let local =
+                            preview.as_ref().and_then(|preview| preview.moved(*vertex, *local)).unwrap_or(*local);
+                        let world = mesh_pick::to_world(placement, local);
+                        let Some(position) = gizmo_math::screen_point(self.scene.camera, rect, world) else {
+                            complete = false;
+                            break;
+                        };
+                        points.push(position);
+                    }
+                    if !complete || points.len() < 3 {
+                        continue;
+                    }
+                    painter.add(egui::Shape::convex_polygon(
+                        points,
+                        MESH_FACE_FILL,
+                        egui::Stroke::new(1.5, gizmo_math::ACTIVE_COLOR),
+                    ));
+                }
+            }
         }
     }
 
@@ -629,7 +713,13 @@ impl FurniCraftApp {
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut reset = false;
-            let mesh_selection = self.editor.mesh_edit().map(|edit| edit.vertices().len());
+            let mesh_selection = self.editor.mesh_edit().map(|edit| {
+                let count = match edit.element() {
+                    MeshElement::Vertex => edit.vertices().len(),
+                    MeshElement::Face => edit.faces().len(),
+                };
+                (edit.element(), count)
+            });
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
@@ -640,10 +730,10 @@ impl FurniCraftApp {
                 ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
                 ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
                 ui.separator();
-                if let Some(count) = mesh_selection {
-                    ui.label(format!("Mesh edit · {count} vertices selected"));
+                if let Some((element, count)) = mesh_selection {
+                    ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
                     ui.separator();
-                    ui.label("LMB select vertex  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
+                    ui.label("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
                 } else {
                     ui.label(
                         "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",

@@ -48,14 +48,14 @@ use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
 use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
-use crate::object_card::ObjectCard;
+use crate::object_card::{MeshEditAction, ObjectCard};
 use crate::panel_card::PanelCard;
 use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
-pub use mesh_edit::MeshEdit;
+pub use mesh_edit::{MeshEdit, MeshElement};
 
 /// Default length of a newly created panel, in millimetres.
 const NEW_PANEL_LENGTH_MM: i64 = 600;
@@ -160,8 +160,38 @@ impl Editor {
         }
     }
 
+    /// Selects a face, replacing the selection or adding to it.
+    ///
+    /// Returns `false` when the editor is not in mesh mode. The caller only passes indices that
+    /// were picked from the edited mesh, so the index is not validated here.
+    pub fn select_mesh_face(&mut self, face: u32, additive: bool) -> bool {
+        let Some(edit) = self.mesh_edit.as_mut() else {
+            return false;
+        };
+        if additive {
+            edit.toggle_face(face);
+        } else {
+            edit.select_face(face);
+        }
+        true
+    }
+
+    /// Clears the face selection while staying in mesh mode.
+    pub fn clear_mesh_faces(&mut self) {
+        if let Some(edit) = self.mesh_edit.as_mut() {
+            edit.clear_faces();
+        }
+    }
+
+    /// Switches between vertex and face selection.
+    pub fn set_mesh_element(&mut self, element: MeshElement) {
+        if let Some(edit) = self.mesh_edit.as_mut() {
+            edit.set_element(element);
+        }
+    }
+
     /// Leaves mesh mode when its object vanished or the selection moved elsewhere, and drops
-    /// vertex indices that the current mesh no longer has.
+    /// vertex and face indices that the current mesh no longer has.
     pub fn retain_mesh_edit(&mut self, project: &Project) {
         let Some(object) = self.mesh_edit.as_ref().map(MeshEdit::object) else {
             return;
@@ -170,12 +200,13 @@ impl Editor {
             self.mesh_edit = None;
             return;
         }
-        let count = project
+        let (vertices, faces) = project
             .object(object)
             .and_then(|object| object.geometry().as_mesh())
-            .map_or(0, |mesh| mesh.positions().len());
+            .map_or((0, 0), |mesh| (mesh.positions().len(), mesh.faces().len()));
         if let Some(edit) = self.mesh_edit.as_mut() {
-            edit.retain_vertices(count);
+            edit.retain_vertices(vertices);
+            edit.retain_faces(faces);
         }
     }
 
@@ -301,13 +332,17 @@ impl Editor {
             self.card.show(ui, session, Some(primary));
         } else if session.project().object(primary).is_some() {
             let single_selection = self.selection.ids().len() == 1;
-            let toggle = self.object_card.show(ui, session, primary, self.mesh_edit.as_ref(), single_selection);
-            if toggle {
-                if self.mesh_edit.is_some() {
-                    self.end_mesh_edit();
-                } else {
-                    self.start_mesh_edit(session.project());
+            let action = self.object_card.show(ui, session, primary, self.mesh_edit.as_ref(), single_selection);
+            match action {
+                MeshEditAction::None => {}
+                MeshEditAction::Toggle => {
+                    if self.mesh_edit.is_some() {
+                        self.end_mesh_edit();
+                    } else {
+                        self.start_mesh_edit(session.project());
+                    }
                 }
+                MeshEditAction::Element(element) => self.set_mesh_element(element),
             }
         } else if session.project().camera(primary).is_some() {
             self.camera_card.show(ui, session, primary);
@@ -623,6 +658,49 @@ mod tests {
 
         editor.clear_mesh_vertices();
         assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([].as_slice()));
+    }
+
+    #[test]
+    fn face_selection_replaces_toggles_and_prunes_stale_indices() {
+        let (project, cube) = cube_project();
+        let mut editor = Editor::new();
+        assert!(!editor.select_mesh_face(0, false), "not in mesh mode");
+
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::element), Some(MeshElement::Vertex));
+        editor.set_mesh_element(MeshElement::Face);
+        assert_eq!(editor.mesh_edit().map(MeshEdit::element), Some(MeshElement::Face));
+
+        assert!(editor.select_mesh_face(2, false));
+        assert!(editor.select_mesh_face(4, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([2, 4].as_slice()));
+        assert!(editor.select_mesh_face(2, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([4].as_slice()));
+
+        assert!(editor.select_mesh_face(6, true));
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([4, 6].as_slice()));
+        editor.retain_mesh_edit(&project);
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([4].as_slice()), "face 6 is outside the cube");
+
+        editor.clear_mesh_faces();
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([].as_slice()));
+    }
+
+    #[test]
+    fn switching_element_clears_the_selection_of_the_other_kind() {
+        let (project, cube) = cube_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+
+        assert!(editor.select_mesh_vertex(1, false));
+        editor.set_mesh_element(MeshElement::Face);
+        assert_eq!(editor.mesh_edit().map(MeshEdit::vertices), Some([].as_slice()));
+
+        assert!(editor.select_mesh_face(0, false));
+        editor.set_mesh_element(MeshElement::Vertex);
+        assert_eq!(editor.mesh_edit().map(MeshEdit::faces), Some([].as_slice()));
     }
 
     #[test]

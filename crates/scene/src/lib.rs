@@ -745,7 +745,10 @@ fn world_vertex(mesh: &MeshData, index: u32, transform: DMat4) -> Option<DVec3> 
 }
 
 /// Möller–Trumbore intersection; returns the positive distance along the ray.
-fn ray_triangle(ray: Ray, v0: DVec3, v1: DVec3, v2: DVec3) -> Option<f64> {
+///
+/// Shared with viewport sub-object picking, which tests the polygons of an unsimplified mesh
+/// before anything is tessellated for the renderer.
+pub fn ray_triangle(ray: Ray, v0: DVec3, v1: DVec3, v2: DVec3) -> Option<f64> {
     let edge1 = v1 - v0;
     let edge2 = v2 - v0;
     let p = ray.direction.cross(edge2);
