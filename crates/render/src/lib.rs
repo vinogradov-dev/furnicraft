@@ -16,7 +16,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{Grid, SceneFrame};
+use furnicraft_scene::{Grid, Lighting, MAX_POINT_LIGHTS, SceneFrame};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
@@ -82,6 +82,10 @@ struct CameraUniform {
     camera_position: [f32; 4],
     light_direction: [f32; 4],
     light_color: [f32; 4],
+    point_count: [u32; 4],
+    point_position: [[f32; 4]; MAX_POINT_LIGHTS],
+    /// Linear RGB and, in `a`, the radiant power in watts.
+    point_color: [[f32; 4]; MAX_POINT_LIGHTS],
 }
 
 struct GpuMesh {
@@ -357,6 +361,7 @@ impl ViewportRenderer {
         let camera = frame.camera;
         let eye = camera.eye();
         let light = frame.lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
+        let (point_count, point_position, point_color) = point_uniforms(&frame.lighting);
         let uniform = CameraUniform {
             view_projection: camera.view_projection(aspect).as_mat4().to_cols_array_2d(),
             camera_position: [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
@@ -367,6 +372,9 @@ impl ViewportRenderer {
                 frame.lighting.key_color[2],
                 frame.lighting.ambient.clamp(0.0, 1.0),
             ],
+            point_count,
+            point_position,
+            point_color,
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
 
@@ -574,6 +582,22 @@ fn sanitize_color(color: [f32; 4]) -> [f32; 4] {
     if color.iter().all(|component| component.is_finite()) { color } else { [0.8, 0.8, 0.8, 1.0] }
 }
 
+/// Packs the point lights into the fixed uniform arrays, stopping at the frame budget.
+fn point_uniforms(lighting: &Lighting) -> ([u32; 4], [[f32; 4]; MAX_POINT_LIGHTS], [[f32; 4]; MAX_POINT_LIGHTS]) {
+    let mut positions = [[0.0; 4]; MAX_POINT_LIGHTS];
+    let mut colors = [[0.0; 4]; MAX_POINT_LIGHTS];
+    let mut count = 0usize;
+    for (index, point) in lighting.points.iter().take(MAX_POINT_LIGHTS).enumerate() {
+        let position = if point.position.is_finite() { point.position } else { DVec3::ZERO };
+        let color = if point.color.iter().all(|component| component.is_finite()) { point.color } else { [1.0; 3] };
+        let power = if point.power.is_finite() && point.power >= 0.0 { point.power } else { 0.0 };
+        positions[index] = [position.x as f32, position.y as f32, position.z as f32, 0.0];
+        colors[index] = [color[0], color[1], color[2], power];
+        count += 1;
+    }
+    ([count as u32, 0, 0, 0], positions, colors)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -655,5 +679,31 @@ mod tests {
         let grid = Grid { spacing_mm: 1.0, extent_mm: f64::MAX, major_every: 1, ..Grid::default() };
         let vertices = grid_vertices(&grid);
         assert_eq!(vertices.len(), (2 * MAX_GRID_DIVISIONS as usize + 1) * 4);
+    }
+
+    #[test]
+    fn point_lights_fill_the_uniform_and_stop_at_the_budget() {
+        let mut lighting = Lighting::default();
+        for index in 0..MAX_POINT_LIGHTS + 2 {
+            lighting.points.push(furnicraft_scene::PointLight {
+                position: DVec3::new(index as f64, 0.0, 0.0),
+                color: [0.25, 0.5, 0.75],
+                power: 1000.0,
+            });
+        }
+
+        let (count, positions, colors) = point_uniforms(&lighting);
+        assert_eq!(count[0] as usize, MAX_POINT_LIGHTS);
+        assert_eq!(positions[0], [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(positions[MAX_POINT_LIGHTS - 1], [(MAX_POINT_LIGHTS - 1) as f32, 0.0, 0.0, 0.0]);
+        assert_eq!(colors[0], [0.25, 0.5, 0.75, 1000.0]);
+    }
+
+    #[test]
+    fn the_scene_shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(include_str!("scene.wgsl")).expect("the scene shader parses");
+        let mut validator =
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
+        validator.validate(&module).expect("the scene shader validates");
     }
 }

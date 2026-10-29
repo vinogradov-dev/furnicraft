@@ -10,8 +10,17 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: face picking and face moves in the mesh editor. The last task added the constructive
-  object: `object.extrude.create` builds a closed contour with one `Extrude` feature,
+- Working on: face picking and face moves in the mesh editor. The last task made cameras and lights
+  readable in the viewport and lit the scene with authored point lights. A camera icon is now a body
+  with a frustum along its view (a second rectangle for an orthographic camera), a point light is a
+  star and a sun adds a dashed arrow along its travel direction; every glyph line is pickable, not
+  only its centre. Point lights contribute their world position, linear colour and power in watts
+  with inverse-square falloff, up to eight in tree order, while the sun keeps its unitless multiplier
+  and no distance falloff. The viewport uses a fixed exposure (`1000 W` at one metre shades a white
+  surface at about half intensity); a scene exposure and a tone mapper come with the render
+  milestone. ADR 0039 records the units and the limit.
+- Before that, the constructive object: `object.extrude.create` builds a closed contour with one
+  `Extrude` feature,
   `object.contour.replace` edits it, the inspector card edits the contour and the height, and
   `object.collapse` bakes the derived mesh in one undoable step. Schema 10 carries the payload, a
   version 9 object still loads as a baked mesh, and the v10 golden keeps the contract. The viewport
@@ -27,7 +36,8 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
   camera, the viewport draws through the active camera (perspective or orthographic) while
   navigation is disabled, and authored cameras and lights have pickable viewport icons. The frame is
   lit by the first authored sun light (direction from its world rotation, colour times intensity)
-  and falls back to the built-in key light when the scene has no sun.
+  and falls back to the built-in key light when the scene has no sun; point lights were saved but did
+  not light the frame until the lighting task above.
 - Before that, mesh editing is complete for vertices: `mesh.vertices.move` takes a validated batch,
   the object card starts a sub-object mode, and the vertex gizmo previews a drag and dispatches one
   command on release. Escape cancels a drag, then leaves the mode. Face picking and face moves are
@@ -45,6 +55,8 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(render): shade with authored point lights and inverse-square falloff` (point power in watts, `1/(4πd²)` falloff, eight lights per frame, fixed viewport exposure, `Power (W)` card with a 1000 W default on kind switch, naga shader validation)
+- `feat(app): draw camera and light icons with their direction` (camera body and frustum, orthographic box, point-light star, sun direction arrow, pickable glyph lines)
 - `fix(model): include cameras and lights in contains_node` (one root fix for the one-frame selection of a new camera/light, `NodeNotFound` on rename/properties/placement and the missing gizmo target; regression tests in model, engine, UI and app)
 - `feat: create, edit and collapse contour extrusion objects` (`object.extrude.create`, `object.contour.replace`, `object.collapse`, schema 10, v10 golden, contour and height card, constructive evaluation in the viewport, panels and objects in selection highlight and gizmo preview)
 - `feat: create, edit and render authored cameras and lights` (`camera.create`, `light.create`, `scene.active_camera.set`, `camera.projection.set`, `light.params.set`, camera and light inspector cards, tree create actions, camera mapping and orthographic projection in `furnicraft-scene`, navigation disabled through an active camera)
@@ -137,6 +149,8 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 2. Viewport multi-select, copy/paste and gizmo snapping.
 3. More constructive features and a viewport contour editor (booleans and fillets need the input
    reference rule from ADR 0037).
+4. A scene exposure and tone mapping, then shadow maps, so point lights can produce a realistic
+   picture instead of clipped highlights.
 
 ## Open questions
 
@@ -172,10 +186,12 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 - Selection and open containers still live in `ui::Editor` and the view camera in the shell, although
   ADR 0029 places them in the session. They have not moved yet. Cameras and lights are document nodes
-  with viewport icons. The frame uses the first authored sun light; point lights are saved and
-  undoable but do not light the frame yet, because the renderer has one directional key light and no
-  falloff model. An authored camera uses the scene default near and far planes because the model does
-  not store them.
+  with viewport icons. The frame uses the first authored sun light plus up to eight point lights; a
+  ninth and later point light is stored but does not shade the viewport, and there is no culling by
+  importance or distance. Point brightness uses a fixed shader exposure rather than a scene exposure,
+  so a close or very powerful lamp clips its highlights; there is no tone mapper and there are no
+  shadows. An authored camera uses the scene default near and far planes because the model does not
+  store them.
 - An authored camera pins the view and disables navigation, so the only way back to the navigable view
   is clearing the active camera in the inspector; a viewport-level "leave camera view" control is not
   implemented.

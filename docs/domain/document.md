@@ -116,10 +116,14 @@ no light is valid.
 A camera looks down its local `-Z` with `+Y` up, and its projection is either a perspective vertical
 field of view or an orthographic visible height. A sun light emits along its local `-Z`; a point
 light radiates from its origin. The frame is lit by the first sun light in tree order, whose world
-rotation gives the direction and whose colour is scaled by its intensity; a scene without a sun keeps
-the built-in key light. While an active camera is set the viewport draws through it and navigation is
-disabled, because orbiting would move a camera the document owns. Clearing the active camera returns
-the viewport to the built-in, navigable camera.
+rotation gives the direction and whose colour is scaled by its intensity; the intensity is a
+multiplier with no distance falloff, because a sun is directional. Every point light adds its world
+position, colour and power, at most eight in tree order; its intensity is radiant power in watts and
+the renderer applies inverse-square falloff with no hard range cutoff
+([ADR 0039](../decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md)). A scene
+without a sun keeps the built-in key light, and point lights add to that key. While an active camera
+is set the viewport draws through it and navigation is disabled, because orbiting would move a camera
+the document owns. Clearing the active camera returns the viewport to the built-in, navigable camera.
 
 ## 3. What the scene file does not store
 

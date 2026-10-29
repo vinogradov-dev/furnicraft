@@ -504,8 +504,32 @@ impl Default for Grid {
     }
 }
 
-/// The key light and ambient term used to shade solid drawables.
+/// The largest number of point lights one frame can shade.
+///
+/// A frame has one directional key light and this many point lights, which keeps the uniform small
+/// and the fragment loop bounded. Further point lights are stored in the document but do not light
+/// the viewport.
+pub const MAX_POINT_LIGHTS: usize = 8;
+
+/// A point light in world space.
+///
+/// The power is in watts, following Blender's point-light unit: a light of 1000 W at one metre
+/// shades a white surface at about half intensity under the viewport's fixed exposure. The
+/// renderer applies inverse-square falloff and no hard range cutoff ([ADR 0039]).
+///
+/// [ADR 0039]: ../docs/decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointLight {
+    /// World-space origin.
+    pub position: DVec3,
+    /// Linear RGB colour.
+    pub color: [f32; 3],
+    /// Radiant power in watts.
+    pub power: f32,
+}
+
+/// The key light, point lights and ambient term used to shade solid drawables.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Lighting {
     /// Unit direction from a surface towards the key light, in world space.
     pub key_direction: DVec3,
@@ -513,6 +537,8 @@ pub struct Lighting {
     pub key_color: [f32; 3],
     /// Fraction of the surface colour visible without direct light.
     pub ambient: f32,
+    /// Point lights in tree order, at most [`MAX_POINT_LIGHTS`] of them when built from a scene.
+    pub points: Vec<PointLight>,
 }
 
 impl Default for Lighting {
@@ -521,6 +547,7 @@ impl Default for Lighting {
             key_direction: DVec3::new(-0.35, 0.55, 0.75).try_normalize().unwrap_or(DVec3::Z),
             key_color: [1.0, 0.97, 0.92],
             ambient: 0.32,
+            points: Vec::new(),
         }
     }
 }

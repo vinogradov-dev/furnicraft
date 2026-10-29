@@ -18,7 +18,9 @@ use furnicraft_model::{
     Project, StructuralKind,
 };
 use furnicraft_param::{build_constructive_mesh, build_panel_parts_with};
-use furnicraft_scene::{Camera, DEFAULT_FOV_Y, Drawable, Lighting, Projection, SceneFrame};
+use furnicraft_scene::{
+    Camera, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Projection, SceneFrame,
+};
 use furnicraft_units::Length;
 
 /// Colours for the sample panels, in linear RGB.
@@ -195,27 +197,50 @@ pub fn evaluate(kernel: &mut TruckKernel, session: &Session) -> Result<Evaluated
     Ok(EvaluatedScene { frame: evaluation.frame, bounds: evaluation.bounds })
 }
 
-/// The frame lighting from the first authored sun light, if the scene has one.
+/// The frame lighting from the authored lights.
 ///
-/// A sun emits along its local `-Z`, so the direction from a surface towards it is the node's
-/// world rotation applied to `+Z`. The authored colour is multiplied by the intensity. A scene
-/// with only point lights, or none, keeps the built-in key light: a point light needs a falloff
-/// model the frame does not have yet.
+/// The first sun becomes the key light: it emits along its local `-Z`, so the direction from a
+/// surface towards it is the node's world rotation applied to `+Z`, and its colour is multiplied by
+/// the intensity. Every point light contributes its world position and power, up to
+/// [`MAX_POINT_LIGHTS`] in tree order. A scene with no authored light keeps the built-in key light;
+/// so does a scene with point lights but no sun, because the point lights only add to the key.
 pub fn authored_lighting(project: &Project) -> Option<Lighting> {
-    let id = project
-        .query(&NodeQuery::any().with_kind(StructuralKind::Light))
-        .into_iter()
-        .find(|id| project.light(*id).is_some_and(|light| light.kind() == LightKind::Sun))?;
-    let light = project.light(id)?;
-    let world = project.world_placement(id)?;
-    let direction = (world.rotation() * DVec3::Z).try_normalize()?;
-    let intensity = light.intensity();
-    let color = light.color();
-    Some(Lighting {
-        key_direction: direction,
-        key_color: [color[0] * intensity, color[1] * intensity, color[2] * intensity],
-        ambient: Lighting::default().ambient,
-    })
+    let mut lighting = Lighting::default();
+    let mut any_authored = false;
+    let mut key_set = false;
+    for id in project.query(&NodeQuery::any().with_kind(StructuralKind::Light)) {
+        let Some(light) = project.light(id) else {
+            continue;
+        };
+        let Some(world) = project.world_placement(id) else {
+            continue;
+        };
+        match light.kind() {
+            LightKind::Sun if !key_set => {
+                let Some(direction) = (world.rotation() * DVec3::Z).try_normalize() else {
+                    continue;
+                };
+                let intensity = light.intensity();
+                let color = light.color();
+                lighting.key_direction = direction;
+                lighting.key_color = [color[0] * intensity, color[1] * intensity, color[2] * intensity];
+                key_set = true;
+                any_authored = true;
+            }
+            LightKind::Sun => {}
+            LightKind::Point => {
+                if lighting.points.len() < MAX_POINT_LIGHTS {
+                    lighting.points.push(PointLight {
+                        position: world.translation(),
+                        color: light.color(),
+                        power: light.intensity(),
+                    });
+                }
+                any_authored = true;
+            }
+        }
+    }
+    any_authored.then_some(lighting)
 }
 
 /// Mutable state shared by one scene evaluation.
@@ -445,14 +470,18 @@ mod tests {
 
     #[test]
     fn an_authored_sun_lights_the_frame_through_its_world_rotation() {
-        // A scene without a light, or with only a point light, keeps the built-in key light.
+        // A scene without a light keeps the built-in key light; a point light adds to that key.
         let mut project = sample_project();
         assert_eq!(authored_lighting(&project), None);
         let root = project.root().id();
         project
-            .add_light(root, "Fill", Placement::IDENTITY, LightKind::Point, [0.2, 0.3, 0.4], 0.5)
+            .add_light(root, "Fill", Placement::IDENTITY, LightKind::Point, [0.2, 0.3, 0.4], 1000.0)
             .expect("point light");
-        assert_eq!(authored_lighting(&project), None, "a point light has no falloff model yet");
+        let lighting = authored_lighting(&project).expect("a point light lights the frame");
+        assert_eq!(lighting.key_color, Lighting::default().key_color, "a point-only scene keeps the built-in key");
+        assert_eq!(lighting.points.len(), 1);
+        assert_eq!(lighting.points[0].power, 1000.0);
+        assert_eq!(lighting.points[0].color, [0.2, 0.3, 0.4]);
 
         let spin = DQuat::from_rotation_y(FRAC_PI_2);
         let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), spin).expect("placement");
@@ -482,6 +511,51 @@ mod tests {
             lighting.key_direction.dot(DVec3::Y) > 1.0 - 1.0e-9,
             "the parent turn and the light turn compose: {lighting:?}"
         );
+    }
+
+    #[test]
+    fn point_lights_use_their_world_position_and_a_frame_shades_at_most_eight() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        for index in 1..=10 {
+            let placement =
+                Placement::new(DVec3::new(index as f64 * 100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+            project
+                .add_light(root, format!("Point {index}"), placement, LightKind::Point, [1.0; 3], 1000.0)
+                .expect("point light");
+        }
+
+        let lighting = authored_lighting(&project).expect("the point lights light the frame");
+        assert_eq!(lighting.points.len(), MAX_POINT_LIGHTS, "the fragment loop has a fixed budget");
+        for (index, point) in lighting.points.iter().enumerate() {
+            assert_eq!(point.position, DVec3::new((index + 1) as f64 * 100.0, 0.0, 0.0));
+            assert_eq!(point.power, 1000.0);
+        }
+    }
+
+    #[test]
+    fn a_point_light_adds_its_parent_placement() {
+        let group = Container::new(
+            id(2).expect("id"),
+            "Group",
+            Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement"),
+            Vec::new(),
+        );
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, vec![Node::Container(group)]);
+        let mut project = Project::new(root).expect("project");
+        project
+            .add_light(
+                id(2).expect("id"),
+                "Fill",
+                Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement"),
+                LightKind::Point,
+                [1.0; 3],
+                1000.0,
+            )
+            .expect("nested point light");
+
+        let lighting = authored_lighting(&project).expect("the point light lights the frame");
+        assert_eq!(lighting.points[0].position, DVec3::new(110.0, 0.0, 0.0));
     }
 
     #[test]
