@@ -205,6 +205,16 @@ pub fn evaluate(kernel: &mut TruckKernel, session: &Session) -> Result<Evaluated
 /// [`MAX_POINT_LIGHTS`] in tree order. A scene with no authored light keeps the built-in key light;
 /// so does a scene with point lights but no sun, because the point lights only add to the key.
 pub fn authored_lighting(project: &Project) -> Option<Lighting> {
+    authored_lighting_with(project, &[])
+}
+
+/// The frame lighting with previewed world placements for moved light nodes.
+///
+/// A gizmo drag never mutates the document, so the frame it renders must take the same previewed
+/// placements the drawables use. An entry in `previewed` wins over the document's world placement;
+/// it lets a sun direction and a point light position follow the pointer before the command that
+/// commits the drag.
+pub fn authored_lighting_with(project: &Project, previewed: &[(Id, Placement)]) -> Option<Lighting> {
     let mut lighting = Lighting::default();
     let mut any_authored = false;
     let mut key_set = false;
@@ -212,7 +222,7 @@ pub fn authored_lighting(project: &Project) -> Option<Lighting> {
         let Some(light) = project.light(id) else {
             continue;
         };
-        let Some(world) = project.world_placement(id) else {
+        let Some(world) = previewed_world(project, id, previewed) else {
             continue;
         };
         match light.kind() {
@@ -241,6 +251,15 @@ pub fn authored_lighting(project: &Project) -> Option<Lighting> {
         }
     }
     any_authored.then_some(lighting)
+}
+
+/// A node's world placement, preferring a previewed one during a drag.
+pub fn previewed_world(project: &Project, id: Id, previewed: &[(Id, Placement)]) -> Option<Placement> {
+    previewed
+        .iter()
+        .find(|(node, _)| *node == id)
+        .map(|(_, placement)| *placement)
+        .or_else(|| project.world_placement(id))
 }
 
 /// Mutable state shared by one scene evaluation.
@@ -556,6 +575,43 @@ mod tests {
 
         let lighting = authored_lighting(&project).expect("the point light lights the frame");
         assert_eq!(lighting.points[0].position, DVec3::new(110.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_previewed_placement_lights_the_frame_before_the_command_lands() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let sun = project
+            .add_light(
+                root,
+                "Sun",
+                Placement::new(DVec3::ZERO, DQuat::IDENTITY).expect("placement"),
+                LightKind::Sun,
+                [1.0; 3],
+                1.0,
+            )
+            .expect("sun");
+        let point = project
+            .add_light(
+                root,
+                "Fill",
+                Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement"),
+                LightKind::Point,
+                [1.0; 3],
+                1000.0,
+            )
+            .expect("point light");
+
+        let base = authored_lighting_with(&project, &[]).expect("authored lighting");
+        assert_eq!(base.points[0].position, DVec3::new(100.0, 0.0, 0.0));
+
+        // A quarter turn about X aims the sun's emission along -Y, so the light comes from +Y.
+        let turned = Placement::new(DVec3::ZERO, DQuat::from_rotation_x(-FRAC_PI_2)).expect("placement");
+        let moved = Placement::new(DVec3::new(300.0, 40.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let previewed = authored_lighting_with(&project, &[(sun, turned), (point, moved)]).expect("previewed lighting");
+        assert!(previewed.key_direction.dot(DVec3::Y) > 1.0 - 1.0e-9, "the previewed sun lights from +Y");
+        assert_eq!(previewed.points[0].position, DVec3::new(300.0, 40.0, 0.0));
+        assert_eq!(previewed.points[0].power, 1000.0, "a preview does not change the power");
     }
 
     #[test]

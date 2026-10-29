@@ -283,6 +283,31 @@ pub(crate) enum Preview<'a> {
     },
 }
 
+impl Preview<'_> {
+    /// The drawable ids the preview moves.
+    pub(crate) fn drawables(&self) -> &[Id] {
+        match self {
+            Self::Translation { drawables, .. } | Self::Rotation { drawables, .. } => drawables,
+        }
+    }
+
+    /// The world placement a node would have if the preview were committed.
+    ///
+    /// A camera or a light has no drawable, so the scene frame cannot preview it through its
+    /// geometry. The same rigid transform that moves the drawables is applied to the node's world
+    /// placement instead: a translation shifts it and a rotation turns it about the drag pivot.
+    /// Returns `None` when the result is not a valid placement.
+    pub(crate) fn moved_world(&self, world: Placement) -> Option<Placement> {
+        match self {
+            Self::Translation { delta, .. } => Placement::new(world.translation() + delta, world.rotation()).ok(),
+            Self::Rotation { pivot, rotation, .. } => {
+                let translation = *pivot + *rotation * (world.translation() - *pivot);
+                Placement::new(translation, (*rotation * world.rotation()).normalize()).ok()
+            }
+        }
+    }
+}
+
 /// Bit-exact identity of a preview, used to skip an unchanged re-upload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewKey {
@@ -601,6 +626,31 @@ mod tests {
         assert!(
             target(&project, &[camera]).drawables().is_empty(),
             "an icon stands for itself and has no geometry to preview"
+        );
+    }
+
+    #[test]
+    fn a_preview_moves_a_camera_or_light_world_placement_like_a_drawable() {
+        let turn = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        let start = Placement::new(DVec3::new(100.0, 200.0, 300.0), turn).expect("placement");
+
+        let move_delta = DVec3::new(10.0, -20.0, 5.0);
+        let moved = Preview::Translation { drawables: &[], delta: move_delta }
+            .moved_world(start)
+            .expect("a translated placement");
+        assert_eq!(moved.translation(), DVec3::new(110.0, 180.0, 305.0));
+        assert_eq!(moved.rotation(), turn, "a translation keeps the rotation");
+
+        let pivot = DVec3::new(50.0, 0.0, 0.0);
+        let z_turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let turned = Preview::Rotation { drawables: &[], pivot, rotation: z_turn }
+            .moved_world(start)
+            .expect("a turned placement");
+        let expected = pivot + z_turn * (start.translation() - pivot);
+        assert!((turned.translation() - expected).length() < 1.0e-9);
+        assert!(
+            turned.rotation().dot(z_turn * turn).abs() > 1.0 - 1.0e-9,
+            "a world turn is pre-multiplied onto the stored rotation"
         );
     }
 

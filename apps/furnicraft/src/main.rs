@@ -36,7 +36,7 @@ use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
 use furnicraft_engine::{MeshVertexMove, MeshVerticesMove, NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::object_mesh;
-use furnicraft_model::{Id, Project, Revision};
+use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
@@ -273,11 +273,28 @@ impl FurniCraftApp {
     ///
     /// A finished or cancelled drag also lands here with no preview, which restores the base
     /// upload. The key comparison keeps a still pointer from rebuilding the geometry every frame.
+    /// A camera or light drag moves no drawable, so it only updates the lighting uniform and the
+    /// glyphs; uploading the unchanged geometry again would cost a full vertex pass per frame.
     fn sync_preview(&mut self) -> Result<(), String> {
         if self.preview_key() == self.uploaded_preview {
             return Ok(());
         }
+        if let Some(preview) = self.preview()
+            && preview.drawables().is_empty()
+        {
+            self.uploaded_preview = self.preview_key();
+            return Ok(());
+        }
         self.upload_scene()
+    }
+
+    /// World placements the active drag previews for cameras and lights.
+    ///
+    /// A camera or a light has no drawable, so the scene frame cannot carry its preview. This list
+    /// lets the icon layer and the lighting follow the pointer in the same frame as the axis
+    /// handles instead of waiting for the command that lands on release.
+    fn previewed_scene_placements(&self) -> Vec<(Id, Placement)> {
+        preview_nodes(self.session.project(), self.editor.selected_nodes(), self.preview())
     }
 
     /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
@@ -397,6 +414,9 @@ impl FurniCraftApp {
         if let Err(error) = self.sync_preview() {
             self.last_error = Some(error);
         }
+        // A camera or a light has no drawable, so its glyph and its contribution to the frame are
+        // driven by this list rather than by the uploaded geometry.
+        let previewed = self.previewed_scene_placements();
         let dragging = if mesh_object.is_some() {
             self.vertex_gizmo.is_dragging()
         } else {
@@ -475,7 +495,9 @@ impl FurniCraftApp {
                     None => {}
                 }
                 ui.ctx().request_repaint();
-            } else if let Some(id) = scene_gizmo::pick(self.scene.camera, rect, self.session.project(), pointer) {
+            } else if let Some(id) =
+                scene_gizmo::pick(self.scene.camera, rect, self.session.project(), pointer, &previewed)
+            {
                 // A camera or light icon has no mesh to ray-pick; it selects the node itself, not the
                 // container above it.
                 self.editor.select_node(Some(id));
@@ -498,14 +520,30 @@ impl FurniCraftApp {
             }
         }
 
-        self.renderer.render(&self.render_state.device, &self.render_state.queue, &self.scene);
+        // A drag preview commits nothing, but the frame can still follow a moved light: the shader
+        // reads one uniform, so a sun direction or a point-light position updates without a mesh
+        // rebuild. With no moved light the base lighting is already correct.
+        let lighting = if previewed.is_empty() {
+            self.scene.lighting.clone()
+        } else {
+            scene_build::authored_lighting_with(self.session.project(), &previewed)
+                .unwrap_or_else(|| self.scene.lighting.clone())
+        };
+        self.renderer.render_with_lighting(&self.render_state.device, &self.render_state.queue, &self.scene, &lighting);
         ui.painter().with_clip_rect(rect).image(
             self.texture_id,
             rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        scene_gizmo::paint(ui, rect, self.scene.camera, self.session.project(), self.editor.selected_nodes());
+        scene_gizmo::paint(
+            ui,
+            rect,
+            self.scene.camera,
+            self.session.project(),
+            self.editor.selected_nodes(),
+            &previewed,
+        );
         self.paint_mesh_vertices(ui, rect);
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
@@ -634,6 +672,52 @@ impl FurniCraftApp {
     }
 }
 
+/// World placements a drag previews for cameras and lights.
+///
+/// Only top-most moved nodes matter: a moved container carries its whole subtree. Cameras and
+/// lights below any of those nodes get the preview's rigid transform applied to their world
+/// placement; a preview with no moved camera or light returns an empty list.
+fn preview_nodes(project: &Project, selection: &[Id], preview: Option<Preview<'_>>) -> Vec<(Id, Placement)> {
+    let Some(preview) = preview else {
+        return Vec::new();
+    };
+    let moved: Vec<Id> = gizmo_math::move_targets(project, selection).into_iter().map(|target| target.node).collect();
+    if moved.is_empty() {
+        return Vec::new();
+    }
+    let mut placements = Vec::new();
+    for kind in [StructuralKind::Camera, StructuralKind::Light] {
+        for id in project.query(&NodeQuery::any().with_kind(kind)) {
+            if !is_under_any(project, id, &moved) {
+                continue;
+            }
+            let Some(world) = project.world_placement(id) else {
+                continue;
+            };
+            if let Some(previewed) = preview.moved_world(world) {
+                placements.push((id, previewed));
+            }
+        }
+    }
+    placements
+}
+
+/// Whether `node` is one of `ancestors` or sits below one of them.
+///
+/// The drag preview applies one rigid transform to a top-most moved node and everything below it,
+/// so a camera or a light inside a moved container has to follow the same transform.
+fn is_under_any(project: &Project, mut node: Id, ancestors: &[Id]) -> bool {
+    loop {
+        if ancestors.contains(&node) {
+            return true;
+        }
+        match project.parent_of(node) {
+            Some(parent) => node = parent,
+            None => return false,
+        }
+    }
+}
+
 /// A copy of the frame with one object's dragged vertices at their previewed positions.
 ///
 /// The mesh is cloned, the selected vertices are offset and the clone is tessellated for this frame
@@ -716,4 +800,131 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use furnicraft_geom::{DQuat, DVec3};
+    use furnicraft_model::{CameraProjection, LightKind};
+    use furnicraft_testkit::sample_project;
+
+    use super::*;
+
+    /// Root (1): shelf (2), drawer (3) with front (4), rig (5) carrying a camera and a light.
+    struct Fixture {
+        project: Project,
+        rig: Id,
+        camera: Id,
+        light: Id,
+    }
+
+    fn fixture() -> Fixture {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let rig = project
+            .add_component(
+                root,
+                "Rig",
+                Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement"),
+            )
+            .expect("rig");
+        let camera = project
+            .add_camera(
+                rig,
+                "Camera",
+                Placement::new(DVec3::new(0.0, 20.0, 0.0), DQuat::IDENTITY).expect("placement"),
+                CameraProjection::DEFAULT,
+            )
+            .expect("camera");
+        let light = project
+            .add_light(
+                rig,
+                "Fill",
+                Placement::new(DVec3::new(0.0, 0.0, 30.0), DQuat::IDENTITY).expect("placement"),
+                LightKind::Point,
+                [1.0; 3],
+                1000.0,
+            )
+            .expect("light");
+        Fixture { project, rig, camera, light }
+    }
+
+    #[test]
+    fn no_preview_moves_no_camera_or_light() {
+        let fixture = fixture();
+        assert!(
+            preview_nodes(&fixture.project, &[fixture.rig], None).is_empty(),
+            "without a drag the document is the only truth"
+        );
+    }
+
+    #[test]
+    fn moving_a_container_previews_the_cameras_and_lights_inside_it() {
+        let fixture = fixture();
+        let delta = DVec3::new(10.0, -5.0, 2.0);
+        let preview = Preview::Translation { drawables: &[], delta };
+        let moved = preview_nodes(&fixture.project, &[fixture.rig], Some(preview));
+        assert_eq!(moved.len(), 2, "the camera and the light both follow the rig");
+        for (node, placement) in moved {
+            let world = fixture.project.world_placement(node).expect("world placement");
+            assert_eq!(placement.translation(), world.translation() + delta, "node {node:?} keeps the rig's shift");
+            assert_eq!(placement.rotation(), world.rotation(), "a translation keeps the rotation");
+        }
+    }
+
+    #[test]
+    fn turning_a_container_turns_the_nested_icon_about_the_preview_pivot() {
+        let fixture = fixture();
+        let pivot = DVec3::new(100.0, 0.0, 0.0);
+        let rotation = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let preview = Preview::Rotation { drawables: &[], pivot, rotation };
+        let moved = preview_nodes(&fixture.project, &[fixture.rig], Some(preview));
+        assert_eq!(moved.len(), 2);
+        for (node, placement) in moved {
+            let world = fixture.project.world_placement(node).expect("world placement");
+            let expected = pivot + rotation * (world.translation() - pivot);
+            assert!(
+                (placement.translation() - expected).length() < 1.0e-9,
+                "node {node:?} turns about the preview pivot"
+            );
+            assert!(
+                placement.rotation().dot(rotation * world.rotation()).abs() > 1.0 - 1.0e-9,
+                "the world turn is pre-multiplied onto the stored rotation"
+            );
+        }
+    }
+
+    #[test]
+    fn a_selected_camera_is_previewed_without_a_container() {
+        let fixture = fixture();
+        let delta = DVec3::new(0.0, 0.0, -7.0);
+        let preview = Preview::Translation { drawables: &[], delta };
+        let moved = preview_nodes(&fixture.project, &[fixture.camera], Some(preview));
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].0, fixture.camera, "only the selected camera moves");
+        let world = fixture.project.world_placement(fixture.camera).expect("world placement");
+        assert_eq!(moved[0].1.translation(), world.translation() + delta);
+    }
+
+    #[test]
+    fn a_preview_of_a_node_without_icons_lists_nothing() {
+        let fixture = fixture();
+        let preview = Preview::Translation { drawables: &[], delta: DVec3::X };
+        assert!(
+            preview_nodes(&fixture.project, &[Id::new(2).expect("id")], Some(preview)).is_empty(),
+            "the shelf carries neither a camera nor a light"
+        );
+    }
+
+    #[test]
+    fn is_under_any_walks_up_to_the_moved_ancestor() {
+        let fixture = fixture();
+        assert!(is_under_any(&fixture.project, fixture.camera, &[fixture.rig]));
+        assert!(is_under_any(&fixture.project, fixture.rig, &[fixture.rig]));
+        assert!(is_under_any(&fixture.project, Id::new(4).expect("id"), &[Id::new(3).expect("id")]));
+        assert!(!is_under_any(&fixture.project, Id::new(2).expect("id"), &[Id::new(3).expect("id")]));
+        assert!(!is_under_any(&fixture.project, fixture.camera, &[fixture.light]));
+    }
 }

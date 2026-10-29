@@ -357,20 +357,34 @@ impl ViewportRenderer {
     /// The camera and lighting are read from the frame, so orbit, pan and zoom cost one uniform
     /// write rather than a geometry upload.
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &SceneFrame) {
+        self.render_with_lighting(device, queue, frame, &frame.lighting);
+    }
+
+    /// Draws the frame with lighting that may differ from the uploaded scene.
+    ///
+    /// A drag preview commits nothing, but the uniform can still follow a moved light: a sun
+    /// direction or a point-light position updates here without touching geometry buffers.
+    pub fn render_with_lighting(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &SceneFrame,
+        lighting: &Lighting,
+    ) {
         let aspect = f64::from(self.size[0]) / f64::from(self.size[1].max(1));
         let camera = frame.camera;
         let eye = camera.eye();
-        let light = frame.lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
-        let (point_count, point_position, point_color) = point_uniforms(&frame.lighting);
+        let light = lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
+        let (point_count, point_position, point_color) = point_uniforms(lighting);
         let uniform = CameraUniform {
             view_projection: camera.view_projection(aspect).as_mat4().to_cols_array_2d(),
             camera_position: [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
             light_direction: [light.x as f32, light.y as f32, light.z as f32, 0.0],
             light_color: [
-                frame.lighting.key_color[0],
-                frame.lighting.key_color[1],
-                frame.lighting.key_color[2],
-                frame.lighting.ambient.clamp(0.0, 1.0),
+                lighting.key_color[0],
+                lighting.key_color[1],
+                lighting.key_color[2],
+                lighting.ambient.clamp(0.0, 1.0),
             ],
             point_count,
             point_position,

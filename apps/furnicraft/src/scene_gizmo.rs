@@ -2,7 +2,7 @@
 //!
 //! A camera or a light has no shaded mesh, so the viewport cannot pick it through a ray against a
 //! drawable. Instead it projects the node's world frame and paints a glyph that shows its kind and
-//! its direction: a camera body with a frustum along its view, a star for a light, and a dashed
+//! its direction: a camera frustum whose apex is the node's zero, a star for a light, and a dashed
 //! arrow for a sun. A click on the glyph, including its frustum or rays, returns the node id
 //! ([ADR 0036]). Picking stays in screen space and never touches the document.
 //!
@@ -16,8 +16,11 @@ use furnicraft_scene::{Camera, Projection};
 
 use crate::gizmo_math::{distance_to_segment, screen_point};
 
-/// Length of a camera glyph from its body to its apex, in screen points.
+/// Length of a camera glyph from its apex to its base, in screen points.
 const ICON_SIZE_POINTS: f64 = 30.0;
+
+/// A camera glyph is twice as long as a light ray, so its direction reads at a glance.
+const CAMERA_ICON_SIZE_POINTS: f64 = ICON_SIZE_POINTS * 2.0;
 
 /// Radius around an icon centre that counts as a click, in points.
 const ICON_PICK_RADIUS: f32 = 10.0;
@@ -67,7 +70,7 @@ pub(crate) struct SceneIcon {
     pub(crate) kind: IconKind,
     /// The projected world origin, in viewport points.
     pub(crate) position: Pos2,
-    /// The aimed-at point: a camera apex or a sun arrow tip.
+    /// The aimed-at point: a camera base centre or a sun arrow tip.
     pub(crate) tip: Option<Pos2>,
     /// The filled camera body, when the glyph has one.
     body: Option<[Pos2; 4]>,
@@ -78,11 +81,20 @@ pub(crate) struct SceneIcon {
 }
 
 /// Projects every authored camera and light that is in front of the camera.
-pub(crate) fn icons(camera: Camera, viewport: egui::Rect, project: &Project) -> Vec<SceneIcon> {
+///
+/// `previewed` carries the world placements of cameras and lights inside the nodes an active drag
+/// moves. It wins over the document so a glyph follows the pointer in the same frame as the axis
+/// handles; an empty slice reads the document.
+pub(crate) fn icons(
+    camera: Camera,
+    viewport: egui::Rect,
+    project: &Project,
+    previewed: &[(Id, Placement)],
+) -> Vec<SceneIcon> {
     let mut icons = Vec::new();
     for (kind, structural) in [(IconKind::Camera, StructuralKind::Camera), (IconKind::Light, StructuralKind::Light)] {
         for id in project.query(&NodeQuery::any().with_kind(structural)) {
-            let Some(world) = project.world_placement(id) else {
+            let Some(world) = previewed_world(project, id, previewed) else {
                 continue;
             };
             let Some(position) = screen_point(camera, viewport, world.translation()) else {
@@ -100,10 +112,20 @@ pub(crate) fn icons(camera: Camera, viewport: egui::Rect, project: &Project) -> 
     icons
 }
 
-/// Builds the camera body and its frustum.
+/// A node's world placement, preferring a previewed one during a drag.
+fn previewed_world(project: &Project, id: Id, previewed: &[(Id, Placement)]) -> Option<Placement> {
+    previewed
+        .iter()
+        .find(|(node, _)| *node == id)
+        .map(|(_, placement)| *placement)
+        .or_else(|| project.world_placement(id))
+}
+
+/// Builds the camera frustum.
 ///
-/// The body is a rectangle in the camera's local XY plane; the frustum opens along its local `-Z`.
-/// A perspective camera ends in one apex, an orthographic camera in a second rectangle, so the two
+/// The node's zero is the apex of the view cone, so the glyph grows along the camera's local `-Z`
+/// and its base plane sits one icon length ahead. A perspective camera ends in one apex; an
+/// orthographic camera opens from a near rectangle at the origin to a second rectangle, so the two
 /// projections read differently on screen.
 fn camera_icon(camera: Camera, viewport: egui::Rect, id: Id, world: Placement, position: Pos2) -> Option<SceneIcon> {
     let origin = world.translation();
@@ -111,40 +133,38 @@ fn camera_icon(camera: Camera, viewport: egui::Rect, id: Id, world: Placement, p
     let right = rotation * DVec3::X;
     let up = rotation * DVec3::Y;
     let forward = rotation * -DVec3::Z;
-    let size = icon_world_size(camera, viewport, origin);
+    let size = icon_world_size(camera, viewport, origin, CAMERA_ICON_SIZE_POINTS);
     if !size.is_finite() || size <= 0.0 {
         return None;
     }
 
     let half_width = size * 0.16;
     let half_height = size * 0.12;
-    let back = [
-        origin + right * half_width + up * half_height,
-        origin - right * half_width + up * half_height,
-        origin - right * half_width - up * half_height,
-        origin + right * half_width - up * half_height,
+    let centre = origin + forward * size;
+    let base = [
+        centre + right * half_width + up * half_height,
+        centre - right * half_width + up * half_height,
+        centre - right * half_width - up * half_height,
+        centre + right * half_width - up * half_height,
     ];
-    let apex = origin + forward * size;
-    let mut world_segments = vec![(back[0], back[1]), (back[1], back[2]), (back[2], back[3]), (back[3], back[0])];
-    let tip_world = if matches!(camera.projection(), Projection::Orthographic { .. }) {
-        let front = back.map(|corner| corner + forward * size);
-        world_segments.extend(back.iter().zip(front.iter()).map(|(start, end)| (*start, *end)));
-        world_segments.extend([(front[0], front[1]), (front[1], front[2]), (front[2], front[3]), (front[3], front[0])]);
-        origin + forward * size + up * half_height
+    let mut world_segments = vec![(base[0], base[1]), (base[1], base[2]), (base[2], base[3]), (base[3], base[0])];
+    if matches!(camera.projection(), Projection::Orthographic { .. }) {
+        let near = base.map(|corner| corner - forward * size);
+        world_segments.extend([(near[0], near[1]), (near[1], near[2]), (near[2], near[3]), (near[3], near[0])]);
+        world_segments.extend(near.iter().zip(base.iter()).map(|(start, end)| (*start, *end)));
     } else {
-        world_segments.extend(back.into_iter().map(|corner| (corner, apex)));
-        apex
-    };
+        world_segments.extend(base.into_iter().map(|corner| (corner, origin)));
+    }
 
-    let projected_back: [Pos2; 4] = project_points(camera, viewport, &back)?.try_into().ok()?;
-    let tip = screen_point(camera, viewport, tip_world)?;
+    let projected_body: [Pos2; 4] = project_points(camera, viewport, &base)?.try_into().ok()?;
+    let tip = screen_point(camera, viewport, centre)?;
     let segments = project_segments(camera, viewport, &world_segments);
     Some(SceneIcon {
         id,
         kind: IconKind::Camera,
         position,
         tip: Some(tip),
-        body: Some(projected_back),
+        body: Some(projected_body),
         circle: None,
         segments,
     })
@@ -170,7 +190,7 @@ fn light_icon(
     let tip = match light.kind() {
         LightKind::Sun => {
             let travel = world.rotation() * -DVec3::Z;
-            let size = icon_world_size(camera, viewport, world.translation());
+            let size = icon_world_size(camera, viewport, world.translation(), ICON_SIZE_POINTS);
             screen_point(camera, viewport, world.translation() + travel * size).and_then(|end| {
                 let delta = end - position;
                 let length = delta.length();
@@ -194,15 +214,15 @@ fn light_icon(
     Some(SceneIcon { id, kind: IconKind::Light, position, tip, body: None, circle: Some(LIGHT_RADIUS), segments })
 }
 
-/// A world size that projects to roughly [`ICON_SIZE_POINTS`] at the node's depth.
-fn icon_world_size(camera: Camera, viewport: egui::Rect, origin: DVec3) -> f64 {
-    let points = viewport.height().max(1.0) as f64;
+/// A world size that projects to roughly `points` screen points at the node's depth.
+fn icon_world_size(camera: Camera, viewport: egui::Rect, origin: DVec3, points: f64) -> f64 {
+    let height = viewport.height().max(1.0) as f64;
     match camera.projection() {
         Projection::Perspective { fov_y } => {
             let distance = (origin - camera.eye()).length().max(1.0);
-            2.0 * distance * (fov_y * 0.5).tan() / points * ICON_SIZE_POINTS
+            2.0 * distance * (fov_y * 0.5).tan() / height * points
         }
-        Projection::Orthographic { height } => height / points * ICON_SIZE_POINTS,
+        Projection::Orthographic { height: visible } => visible / height * points,
     }
 }
 
@@ -261,9 +281,15 @@ fn hit_distance(icon: &SceneIcon, pointer: Pos2) -> Option<f32> {
 ///
 /// An icon is small and easy to miss behind a large panel, so it is tested before the mesh ray.
 /// A tie goes to the first icon in tree order, keeping the result deterministic.
-pub(crate) fn pick(camera: Camera, viewport: egui::Rect, project: &Project, pointer: Pos2) -> Option<Id> {
+pub(crate) fn pick(
+    camera: Camera,
+    viewport: egui::Rect,
+    project: &Project,
+    pointer: Pos2,
+    previewed: &[(Id, Placement)],
+) -> Option<Id> {
     let mut best: Option<(f32, Id)> = None;
-    for icon in icons(camera, viewport, project) {
+    for icon in icons(camera, viewport, project, previewed) {
         let Some(distance) = hit_distance(&icon, pointer) else {
             continue;
         };
@@ -275,9 +301,16 @@ pub(crate) fn pick(camera: Camera, viewport: egui::Rect, project: &Project, poin
 }
 
 /// Paints every camera and light icon over the viewport image.
-pub(crate) fn paint(ui: &Ui, viewport: egui::Rect, camera: Camera, project: &Project, selection: &[Id]) {
+pub(crate) fn paint(
+    ui: &Ui,
+    viewport: egui::Rect,
+    camera: Camera,
+    project: &Project,
+    selection: &[Id],
+    previewed: &[(Id, Placement)],
+) {
     let painter = ui.painter().with_clip_rect(viewport);
-    for icon in icons(camera, viewport, project) {
+    for icon in icons(camera, viewport, project, previewed) {
         let selected = selection.contains(&icon.id);
         let color = match icon.kind {
             IconKind::Camera => CAMERA_COLOR,
@@ -338,7 +371,7 @@ mod tests {
     #[test]
     fn both_kinds_project_to_icons_and_pick_by_screen_distance() {
         let (project, camera_id, light_id) = scene_project();
-        let icons = icons(camera(), viewport(), &project);
+        let icons = icons(camera(), viewport(), &project, &[]);
         assert_eq!(icons.len(), 2);
         assert_eq!(icons[0].id, camera_id);
         assert_eq!(icons[0].kind, IconKind::Camera);
@@ -347,13 +380,13 @@ mod tests {
         assert!(icons[1].circle.is_some(), "a light shows a circle");
 
         // A click on the icon hits the exact node, not its parent container.
-        assert_eq!(pick(camera(), viewport(), &project, icons[0].position), Some(camera_id));
-        assert_eq!(pick(camera(), viewport(), &project, icons[1].position), Some(light_id));
-        assert_eq!(pick(camera(), viewport(), &project, Pos2::new(5.0, 5.0)), None);
+        assert_eq!(pick(camera(), viewport(), &project, icons[0].position, &[]), Some(camera_id));
+        assert_eq!(pick(camera(), viewport(), &project, icons[1].position, &[]), Some(light_id));
+        assert_eq!(pick(camera(), viewport(), &project, Pos2::new(5.0, 5.0), &[]), None);
     }
 
     #[test]
-    fn a_camera_icon_points_along_its_view_direction_and_picks_at_the_tip() {
+    fn a_camera_icon_points_along_its_view_direction_and_picks_at_its_base() {
         let mut project = sample_project();
         let root = project.root().id();
         let turn = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
@@ -366,11 +399,61 @@ mod tests {
             )
             .expect("camera");
 
-        let icons = icons(camera(), viewport(), &project);
+        let icons = icons(camera(), viewport(), &project, &[]);
         let icon = icons.iter().find(|icon| icon.id == id).expect("camera icon");
-        let tip = icon.tip.expect("a perspective camera has an apex");
+        let tip = icon.tip.expect("a camera has an aimed-at base");
         assert!(tip.x < icon.position.x - 5.0, "turning the camera about Y points its frustum to screen left");
-        assert_eq!(pick(camera(), viewport(), &project, tip), Some(id), "a click on the apex picks the camera");
+        assert_eq!(pick(camera(), viewport(), &project, tip, &[]), Some(id), "a click on the base picks the camera");
+    }
+
+    #[test]
+    fn the_camera_node_zero_is_the_apex_and_the_glyph_opens_forward() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let placement = Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let id = project.add_camera(root, "Camera", placement, CameraProjection::DEFAULT).expect("camera");
+
+        let icons = icons(camera(), viewport(), &project, &[]);
+        let icon = icons.iter().find(|icon| icon.id == id).expect("camera icon");
+        let origin = screen_point(camera(), viewport(), placement.translation()).expect("origin in front");
+        assert!((icon.position - origin).length() < 1.0e-3, "the icon anchor is the node's zero");
+
+        // A perspective glyph draws four edges from the base rectangle back to the apex, which is
+        // the node origin; no other point of the glyph sits there.
+        let edges_to_origin = icon.segments.iter().filter(|(_, end)| (*end - origin).length() < 1.0e-3).count();
+        assert_eq!(edges_to_origin, 4, "the cone converges on the node origin, not on a body plane");
+
+        // The base plane is one icon length ahead along the camera's local `-Z`.
+        let tip = icon.tip.expect("a camera has an aimed-at base");
+        let forward = placement.rotation() * -DVec3::Z;
+        let size = icon_world_size(camera(), viewport(), placement.translation(), CAMERA_ICON_SIZE_POINTS);
+        let expected =
+            screen_point(camera(), viewport(), placement.translation() + forward * size).expect("base centre in front");
+        assert!((tip - expected).length() < 1.0e-3, "the aimed-at point is the centre of the base plane");
+        assert!(size > 0.0, "the base plane is ahead of the apex");
+    }
+
+    #[test]
+    fn a_previewed_placement_moves_the_icon_before_the_command_lands() {
+        let (project, _, light_id) = scene_project();
+        let world = project.world_placement(light_id).expect("light world");
+        let before = icons(camera(), viewport(), &project, &[])
+            .into_iter()
+            .find(|icon| icon.id == light_id)
+            .expect("light icon")
+            .position;
+
+        let delta = DVec3::new(150.0, 0.0, 0.0);
+        let moved = Placement::new(world.translation() + delta, world.rotation()).expect("placement");
+        let after = icons(camera(), viewport(), &project, &[(light_id, moved)])
+            .into_iter()
+            .find(|icon| icon.id == light_id)
+            .expect("light icon")
+            .position;
+
+        let expected = screen_point(camera(), viewport(), world.translation() + delta).expect("moved origin in front");
+        assert!((after - expected).length() < 1.0e-3, "the icon follows the previewed world placement");
+        assert!((after - before).length() > 10.0, "the preview moved the icon on screen");
     }
 
     #[test]
@@ -383,7 +466,7 @@ mod tests {
         let point =
             project.add_light(root, "Fill", Placement::IDENTITY, LightKind::Point, [1.0; 3], 1.0).expect("point light");
 
-        let icons = icons(camera(), viewport(), &project);
+        let icons = icons(camera(), viewport(), &project, &[]);
         let sun_icon = icons.iter().find(|icon| icon.id == sun).expect("sun icon");
         let point_icon = icons.iter().find(|icon| icon.id == point).expect("point icon");
         let tip = sun_icon.tip.expect("a sun has a direction arrow");
@@ -398,7 +481,7 @@ mod tests {
         project
             .set_node_placement(camera_id, Placement::new(behind, DQuat::IDENTITY).expect("placement"))
             .expect("move the camera");
-        let icons = icons(camera(), viewport(), &project);
+        let icons = icons(camera(), viewport(), &project, &[]);
         assert!(icons.iter().all(|icon| icon.id != camera_id));
     }
 }
