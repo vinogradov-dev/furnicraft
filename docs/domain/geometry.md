@@ -12,8 +12,9 @@ Related documents:
 
 Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-node-data.md),
 [0029](../decisions/0029-view-state-belongs-to-the-session.md),
-[0034](../decisions/0034-nodes-carry-typed-properties.md) and
-[0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md).
+[0034](../decisions/0034-nodes-carry-typed-properties.md),
+[0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md) and
+[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md).
 
 ## 1. Two authoring paths
 
@@ -64,11 +65,19 @@ direct mesh editing, so its contour stays the only way to change it.
 ## 4. Constructive payload
 
 - `features`: an ordered list. The first feature is `Extrude`.
-- `Extrude { contour, height }` takes a closed polyline in the object's local XY plane and extrudes it
+- `Extrude { contour, height }` takes a closed ring in the object's local XY plane and extrudes it
   along `+Z` from `z = 0` by `height`.
-- A contour is a list of 2D `Length` points, at least three, with no repeated consecutive point and a
-  non-zero area. In v1 it is a polyline: no arcs and no holes, and a self-intersecting contour is
-  rejected.
+- A contour is a ring of directed **segments**, at least three. A segment is a straight line between
+  two points or a circular arc with a centre, a positive radius, a start angle and a non-zero sweep
+  of at most one turn. Every value is stored in document units: micrometres and millidegrees.
+- The ring must be closed — each segment's end is the next segment's start, rounded to the
+  micrometre — and must enclose a non-zero area. The constructor stores it counter-clockwise, so the
+  face winding does not depend on how the user drew it.
+- A contour that touches or crosses itself is rejected; the test runs on a chord polyline sampled
+  from the curve, so an arc that crosses a line or another arc is caught as well. Arcs and lines may
+  meet at any angle; a tangent-continuous joint is not required.
+- A shaped ring has no holes yet and its arcs are sampled into the kernel profile within a chord
+  tolerance. A version 10 file stored a plain point list; it loads as a ring of lines.
 - Later features — a boolean with another object, a chamfer, a fillet — are added to the same list.
   None of them may reference a face or an edge of the evaluated result
   ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
@@ -136,6 +145,9 @@ At minimum:
 - validation rejects an out-of-bounds face index, a degenerate face, a non-finite coordinate and a
   file above the vertex cap;
 - an extruded contour has the volume of its area times its height;
+- a contour with an arc loads, round-trips, and extrudes to the volume of its analytic area;
+- an open ring, a ring that does not meet its neighbour and a ring that crosses itself are rejected
+  on construction and on load;
 - replacing the contour changes the mesh and keeps the id, name and placement;
 - collapse produces the same mesh as the evaluation, clears the features and is one undo entry;
 - `mesh.vertices.move` on a constructive object is refused;
@@ -145,7 +157,8 @@ At minimum:
 
 ## 10. Open questions
 
-- Arcs in a contour and holes in a profile: the polyline is v1 only.
+- Arcs in a profile: the kernel profile is a polyline, so an arc is sampled; the document keeps the arc.
+- Holes in a profile.
 - Booleans between two objects, and what the operands look like in the tree.
 - Fillet and chamfer: they need a face or an edge of the result, so they wait for a naming design.
 - Multi-body objects versus one object per solid.

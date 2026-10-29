@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-29. Rewrite this file at the end of every task; never append a log.
+Updated: 2026-10-30. Rewrite this file at the end of every task; never append a log.
 
 ## Where we are
 
@@ -13,8 +13,12 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - Working on: the contour-first shape base. Step A1 of that plan is done:
   `furnicraft_model::ContourSegment` stores a directed line or circular arc in micrometres and
   millidegrees, validates every value and converts to and from the geometry layer at one boundary.
-  Next is step A2: `Contour` keeps segments instead of points, so a constructive object can carry
-  an arc. The previous task added face selection and face moves to the mesh editor: the object card
+  Step A2 is done too: `Contour` is a ring of segments, schema 11 writes them, a version 10 point list
+  loads as a ring of lines, self-intersection is checked on a chord polyline so an arc that cuts a
+  line or another arc is caught, and the extrusion samples the ring within a chord tolerance. Next is
+  step A3: arcs in the object card and a viewport contour editor, since the corner text box now
+  refuses a ring that holds an arc.
+- The previous task added face selection and face moves to the mesh editor: the object card
   switches between Vertices and Faces, a click ray-picks the nearest polygon so an occluded face
   never wins, a selected face is tinted over the viewport, and a drag moves the union of all
   selected face vertices once through the same vertex gizmo and `mesh.vertices.move`.
@@ -63,6 +67,7 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(model): store a constructive contour as segments` (schema 11, a version 10 point list loads as a ring of lines, a v11 golden with a round corner, exact integer area for a line-only ring, self-intersection on a per-segment chord polyline with bounds and pair budgets, sampling bounded by tolerance, the extrusion evaluates the sampled ring, the card shows segment and arc counts and disables the corner text box for an arc)
 - `feat(model): add the contour segment type` (a directed line or arc in micrometres and millidegrees, validated on construction and on load, converted to and from the geometry layer at one boundary)
 - `feat(ui): select and move mesh faces` (one element mode at a time, vertex/face switch in the object card, nearest-polygon ray picking, selected-face tint, face moves through the shared vertex gizmo with a deduplicated vertex union)
 - `feat(app): preview camera and light drags live` (glyphs and lighting follow the pointer, nested cameras and lights under a moved node, lighting override in the renderer, no geometry upload for icon-only drags, camera glyph at 2× length with its zero at the cone apex)
@@ -156,8 +161,8 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Contour shape base, phase A: A2 `Contour` on segments, A3 arcs in the document, A4 stable element
-   ids, A5 edit math, A6 commands, A7 docs.
+1. Contour shape base, phase A: A3 arcs in the object card and a viewport contour editor, A4 stable
+   element ids, A5 edit math, A6 commands, A7 docs.
 2. Phase B contour operations (fillet, chamfer, offset), then phase C sketch on a plane with vertex
    and grid snapping and the translation/rotation steps, then phase D two panel variants and the
    three creation modes.
@@ -210,11 +215,15 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
   is clearing the active camera in the inspector; a viewport-level "leave camera view" control is not
   implemented.
 - A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text lines in
-  the object card, not in the viewport; there are no booleans, fillets or other feature kinds yet.
+  the object card, not in the viewport, and a ring that holds an arc has no editor at all until the
+  sketch phase; there are no booleans, fillets or other feature kinds yet.
   Collapse is a one-way door and only undo brings the history back. Mesh editing selects and moves
   vertices and whole faces; there is no edge selection and no face extrusion yet. A cube is created
   at the parent origin and centred on it, so half of a default cube sits below the floor until it is
   moved.
+- A contour's self-intersection test samples each segment into chords; a crossing finer than 0.1 mm
+  inside an arc can slip through. An exact segment-pair test can replace it when the sketch editor
+  needs the last tenth of a millimetre.
 - Vertex markers and face fills are painted over the viewport image without an occlusion test, so a
   vertex on the far side of the mesh is visible and selectable through it. A depth readback or a
   pick pass can hide the back vertices when the first large mesh makes it matter. Vertex picking and
