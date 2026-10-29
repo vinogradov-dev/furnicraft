@@ -1,9 +1,11 @@
 //! The selected light card.
 //!
 //! A light is a scene object ([ADR 0036]): the card renames it and edits its kind, colour and
-//! intensity. Values stay in the card until Apply, so one edit is one undo entry.
+//! intensity or power. Values stay in the card until Apply, so one edit is one undo entry. A sun
+//! intensity is a multiplier; a point power is in watts ([ADR 0039]).
 //!
 //! [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
+//! [ADR 0039]: ../docs/decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md
 
 use egui::{DragValue, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
@@ -13,6 +15,12 @@ use furnicraft_model::{Id, LightKind, LightNode};
 
 use crate::command::{dispatch, json};
 use crate::section::section;
+
+/// Default point-light power in watts when a sun is switched to a point light.
+const DEFAULT_POINT_POWER: f32 = 1000.0;
+
+/// A sun intensity below this reads as a multiplier, not as a wattage.
+const SUN_TO_POINT_THRESHOLD: f32 = 100.0;
 
 /// Persistent state of the light card.
 #[derive(Debug, Default)]
@@ -77,10 +85,14 @@ impl LightCard {
         let mut apply = false;
         ui.separator();
         section(ui, "light.params", "Light", true, |ui| {
+            let mut kind_changed = false;
             ui.horizontal(|ui| {
-                ui.radio_value(&mut draft.kind, LightKind::Sun, "Sun");
-                ui.radio_value(&mut draft.kind, LightKind::Point, "Point");
+                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Sun, "Sun").changed();
+                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Point, "Point").changed();
             });
+            if kind_changed && draft.kind == LightKind::Point {
+                draft.intensity = power_for_point_switch(draft.intensity);
+            }
             ui.horizontal(|ui| {
                 ui.label("Colour");
                 for (component, value) in ["R", "G", "B"].into_iter().zip(draft.color.iter_mut()) {
@@ -89,10 +101,14 @@ impl LightCard {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Intensity");
+                // A sun stores an irradiance multiplier; a point light stores radiant power in watts
+                // ([ADR 0039]). The two units get their own label and drag speed.
+                let (label, speed) =
+                    if draft.kind == LightKind::Point { ("Power (W)", 10.0) } else { ("Intensity", 0.05) };
+                ui.label(label);
                 ui.add(
                     DragValue::new(&mut draft.intensity)
-                        .speed(0.05)
+                        .speed(speed)
                         .range(0.0..=LightNode::MAX_INTENSITY)
                         .fixed_decimals(2),
                 );
@@ -133,6 +149,11 @@ impl LightCard {
     }
 }
 
+/// A sun intensity is a small multiplier; a point light needs a lamp-sized power in watts.
+fn power_for_point_switch(intensity: f32) -> f32 {
+    if intensity < SUN_TO_POINT_THRESHOLD { DEFAULT_POINT_POWER } else { intensity }
+}
+
 /// Builds the command request, refusing a value that is not finite or is outside its range.
 fn params_from_draft(draft: &Draft) -> Result<LightParamsSet, String> {
     let color = draft.color;
@@ -140,7 +161,8 @@ fn params_from_draft(draft: &Draft) -> Result<LightParamsSet, String> {
         return Err("Colour components must be between 0 and 1.".to_owned());
     }
     if !draft.intensity.is_finite() || !(0.0..=LightNode::MAX_INTENSITY).contains(&draft.intensity) {
-        return Err(format!("Intensity must be between 0 and {}.", LightNode::MAX_INTENSITY));
+        let unit = if draft.kind == LightKind::Point { "Power" } else { "Intensity" };
+        return Err(format!("{unit} must be between 0 and {}.", LightNode::MAX_INTENSITY));
     }
     Ok(LightParamsSet { light: draft.light, kind: draft.kind, color, intensity: draft.intensity })
 }
@@ -209,6 +231,14 @@ mod tests {
         let bad_intensity = Draft { color: [1.0; 3], intensity: f32::NAN, ..bad_color };
         assert!(params_from_draft(&bad_intensity).is_err());
         assert_eq!(session.project().revision(), before);
+    }
+
+    #[test]
+    fn switching_a_sun_to_a_point_light_uses_a_lamp_sized_power() {
+        assert_eq!(power_for_point_switch(1.0), DEFAULT_POINT_POWER, "a sun multiplier becomes a lamp");
+        assert_eq!(power_for_point_switch(2.5), DEFAULT_POINT_POWER);
+        assert_eq!(power_for_point_switch(250.0), 250.0, "a value already in watts is kept");
+        assert_eq!(power_for_point_switch(1000.0), 1000.0);
     }
 
     #[test]

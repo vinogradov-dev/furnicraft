@@ -43,6 +43,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0036](0036-cameras-and-lights-are-scene-objects.md) | Cameras and lights are scene objects | Accepted |
 | [0037](0037-a-geometry-object-is-a-mesh-or-a-feature-history.md) | A geometry object is a baked mesh or a feature history | Accepted |
 | [0038](0038-the-scene-file-lives-in-its-own-crate.md) | The scene file lives in its own crate | Accepted |
+| [0039](0039-point-lights-use-watts-and-inverse-square-falloff.md) | Point lights use watts and inverse-square falloff | Accepted |
 
 ## Format
 

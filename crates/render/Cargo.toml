@@ -14,3 +14,7 @@ furnicraft-geom = { workspace = true }
 furnicraft-scene = { workspace = true }
 thiserror = { workspace = true }
 wgpu = { workspace = true }
+
+[dev-dependencies]
+# Parses and validates `scene.wgsl` in tests; already in the tree through `wgpu`.
+naga = { version = "30", features = ["wgsl-in"] }
