@@ -10,13 +10,17 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 - M7 starts with the paper design, now written: the scene file envelope
   (`docs/domain/scene-file.md`), the two geometry models (`docs/domain/geometry.md`), camera and
   light objects (ADR 0036) and the mesh-or-history object (ADR 0037).
-- Working on: face picking and face moves in the mesh editor. The last task made camera and light
-  drags live: a glyph follows the pointer in the same frame as the axis handles, and the frame
-  lighting follows a moved sun or point light. A drag applies the same rigid transform as the
-  drawables to every camera or light below a moved node, the renderer takes a lighting override so
-  only the uniform changes, and a camera or light drag no longer re-uploads geometry. The camera
-  glyph is twice as long and its node zero is now the cone apex, with the base plane one glyph
-  length ahead; an orthographic camera keeps a near rectangle at the apex.
+- Working on: viewport multi-select, copy/paste and gizmo snapping. The last task added face
+  selection and face moves to the mesh editor: the object card switches between Vertices and Faces,
+  a click ray-picks the nearest polygon so an occluded face never wins, a selected face is tinted
+  over the viewport, and a drag moves the union of all selected face vertices once through the same
+  vertex gizmo and `mesh.vertices.move`. Before that, camera and light drags became live: a glyph
+  follows the pointer in the same frame as the axis handles, and the frame lighting follows a moved
+  sun or point light. A drag applies the same rigid transform as the drawables to every camera or
+  light below a moved node, the renderer takes a lighting override so only the uniform changes, and
+  a camera or light drag no longer re-uploads geometry. The camera glyph is twice as long and its
+  node zero is now the cone apex, with the base plane one glyph length ahead; an orthographic camera
+  keeps a near rectangle at the apex.
 - Before that, cameras and lights became readable in the viewport and the scene was lit by authored
   point lights. A camera icon is a frustum along its view (a second rectangle for an orthographic
   camera), a point light is a star and a sun adds a dashed arrow along its travel direction; every
@@ -44,14 +48,14 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
   lit by the first authored sun light (direction from its world rotation, colour times intensity)
   and falls back to the built-in key light when the scene has no sun; point lights were saved but did
   not light the frame until the lighting task above.
-- Before that, mesh editing is complete for vertices: `mesh.vertices.move` takes a validated batch,
-  the object card starts a sub-object mode, and the vertex gizmo previews a drag and dispatches one
-  command on release. Escape cancels a drag, then leaves the mode. Face picking and face moves are
-  still open.
+- Before that, mesh editing is complete for vertices and faces: `mesh.vertices.move` takes a
+  validated batch, the object card starts a sub-object mode and switches between the two element
+  kinds, and the vertex gizmo previews a drag and dispatches one command on release. Escape cancels
+  a drag, then leaves the mode. Edge selection and face extrusion are still open.
 - Direction: objects and the scene file come before hardware, so saved files carry the final node
   shape. The workspace can round-trip a scene by hand, a created cube can be shaped by moving its
-  vertices, a countertop is extruded from a contour and stays editable, and cameras and lights are
-  scene objects.
+  vertices or faces, a countertop is extruded from a contour and stays editable, and cameras and
+  lights are scene objects.
 - Assistant: the architecture is recorded (ADRs 0028–0032, 0034) but not implemented. Faber is a
   client of the command registry, reads and queries the scene as data, and is disabled by default;
   it needs save/load and the property/type commands before it is useful.
@@ -61,6 +65,7 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Done
 
+- `feat(ui): select and move mesh faces` (one element mode at a time, vertex/face switch in the object card, nearest-polygon ray picking, selected-face tint, face moves through the shared vertex gizmo with a deduplicated vertex union)
 - `feat(app): preview camera and light drags live` (glyphs and lighting follow the pointer, nested cameras and lights under a moved node, lighting override in the renderer, no geometry upload for icon-only drags, camera glyph at 2× length with its zero at the cone apex)
 - `feat(render): shade with authored point lights and inverse-square falloff` (point power in watts, `1/(4πd²)` falloff, eight lights per frame, fixed viewport exposure, `Power (W)` card with a 1000 W default on kind switch, naga shader validation)
 - `feat(app): draw camera and light icons with their direction` (camera body and frustum, orthographic box, point-light star, sun direction arrow, pickable glyph lines)
@@ -152,11 +157,11 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
 
 ## Next
 
-1. Face picking and face moves in the mesh editor.
-2. Viewport multi-select, copy/paste and gizmo snapping.
-3. More constructive features and a viewport contour editor (booleans and fillets need the input
-   reference rule from ADR 0037).
-4. A scene exposure and tone mapping, then shadow maps, so point lights can produce a realistic
+1. Viewport multi-select, copy/paste and gizmo snapping.
+2. More constructive features and a viewport contour editor (booleans and fillets need the input
+   reference rule from ADR 0037); Extrude by the selected mesh face comes after the owner settles its
+   semantics.
+3. A scene exposure and tone mapping, then shadow maps, so point lights can produce a realistic
    picture instead of clipped highlights.
 
 ## Open questions
@@ -204,14 +209,15 @@ Updated: 2026-10-29. Rewrite this file at the end of every task; never append a 
   implemented.
 - A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text lines in
   the object card, not in the viewport; there are no booleans, fillets or other feature kinds yet.
-  Collapse is a one-way door and only undo brings the history back. Mesh editing moves vertices only;
-  there is no face or edge selection. A cube is created at the parent origin and centred on it, so
-  half of a default cube sits below the floor until it is moved.
-- Vertex markers are painted over the viewport image without an occlusion test, so a vertex on the
-  far side of the mesh is visible and selectable through it. A depth readback or a pick pass can
-  hide the back vertices when the first large mesh makes it matter. Picking and marker painting also
-  walk every vertex of the edited mesh each frame; a large mesh needs a spatial index or a GPU id
-  pass.
+  Collapse is a one-way door and only undo brings the history back. Mesh editing selects and moves
+  vertices and whole faces; there is no edge selection and no face extrusion yet. A cube is created
+  at the parent origin and centred on it, so half of a default cube sits below the floor until it is
+  moved.
+- Vertex markers and face fills are painted over the viewport image without an occlusion test, so a
+  vertex on the far side of the mesh is visible and selectable through it. A depth readback or a
+  pick pass can hide the back vertices when the first large mesh makes it matter. Vertex picking and
+  marker painting also walk every vertex of the edited mesh each frame; a large mesh needs a spatial
+  index or a GPU id pass. Face picking walks every polygon and its fan triangles each click.
 - Command specs expose only an id and a label; there is no parameter schema for a model, a CLI or
   generated documentation.
 - History records one entry per command. A drag of a whole selection is one command, but a task made
