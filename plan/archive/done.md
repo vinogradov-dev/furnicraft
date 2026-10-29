@@ -1,0 +1,97 @@
+# Completed operations, archive
+
+Append-only history of finished tasks up to the point where `plan/STATUS.md` stopped carrying it.
+**Nothing is added here any more**: a completed operation is a commit, and `git log --oneline` is the
+record (see `AGENTS.md` §6.1). This file only preserves what the old status file held.
+
+- `feat(model): store a constructive contour as segments` (schema 11, a version 10 point list loads as a ring of lines, a v11 golden with a round corner, exact integer area for a line-only ring, self-intersection on a per-segment chord polyline with bounds and pair budgets, sampling bounded by tolerance, the extrusion evaluates the sampled ring, the card shows segment and arc counts and disables the corner text box for an arc)
+- `feat(model): add the contour segment type` (a directed line or arc in micrometres and millidegrees, validated on construction and on load, converted to and from the geometry layer at one boundary)
+- `feat(ui): select and move mesh faces` (one element mode at a time, vertex/face switch in the object card, nearest-polygon ray picking, selected-face tint, face moves through the shared vertex gizmo with a deduplicated vertex union)
+- `feat(app): preview camera and light drags live` (glyphs and lighting follow the pointer, nested cameras and lights under a moved node, lighting override in the renderer, no geometry upload for icon-only drags, camera glyph at 2× length with its zero at the cone apex)
+- `feat(render): shade with authored point lights and inverse-square falloff` (point power in watts, `1/(4πd²)` falloff, eight lights per frame, fixed viewport exposure, `Power (W)` card with a 1000 W default on kind switch, naga shader validation)
+- `feat(app): draw camera and light icons with their direction` (camera body and frustum, orthographic box, point-light star, sun direction arrow, pickable glyph lines)
+- `fix(model): include cameras and lights in contains_node` (one root fix for the one-frame selection of a new camera/light, `NodeNotFound` on rename/properties/placement and the missing gizmo target; regression tests in model, engine, UI and app)
+- `feat: create, edit and collapse contour extrusion objects` (`object.extrude.create`, `object.contour.replace`, `object.collapse`, schema 10, v10 golden, contour and height card, constructive evaluation in the viewport, panels and objects in selection highlight and gizmo preview)
+- `feat: create, edit and render authored cameras and lights` (`camera.create`, `light.create`, `scene.active_camera.set`, `camera.projection.set`, `light.params.set`, camera and light inspector cards, tree create actions, camera mapping and orthographic projection in `furnicraft-scene`, navigation disabled through an active camera)
+- `feat(model): add camera and light nodes and the active camera` (schema 9, validated projections and light values, tree rows, v9 golden, delete clears a dangling active camera)
+- `feat(app): drag mesh vertices with a vertex gizmo` (shared axis handles, mesh preview in the scene frame, one `mesh.vertices.move` per drag, Escape cancels, markers follow the preview)
+- `feat(ui): select mesh vertices in a sub-object mode` (editor mesh mode, screen-space vertex picking and markers, object-card toggle, Escape exit)
+- `feat(engine): move mesh vertices as one command` (`mesh.vertices.move`, `Project::move_mesh_vertices`, index validation, undo/redo tests)
+- `feat(app): add the File menu over the scene store` (New, Open, Save, Save As, dirty marker, preserved sections, empty scene)
+- `feat(project): read and write the scene-file envelope` (`furnicraft-project` crate, atomic save, preserved top-level sections, golden files v7 and v8)
+- `feat: create and draw cube geometry objects` (`object.primitive.create`, `Mesh::cube`, `object_mesh` triangulation, object drawable, "+ Cube" tree action, object inspector card)
+- `feat(model): add geometry objects with a baked mesh` (schema v8, `Mesh` validation, `Object` node, tree queries, duplicate and delete)
+- `docs: define the scene file, cameras and lights, and the two geometry models` (ADRs 0036–0037, `docs/domain/scene-file.md`, `docs/domain/geometry.md`)
+- `feat: unify containers and carry typed properties on every node` (schema v7, `FurnType`, property commands, properties card, type selection)
+- `docs: define furniture types and node properties` (ADRs 0034–0035, `docs/domain/furntypes.md`)
+- `docs: record multi-node placement` (ADR 0033)
+- `feat(app): move and turn the whole selection with one command`
+- `feat(engine): add the node.placement.set_many command`
+- `feat(model): place a batch of nodes atomically`
+- `docs: record order versions as numbered folders` (ADR 0032)
+- `docs: record the assistant architecture` (ADRs 0028–0031, `AGENTS.md` §4.11, `PROJECT.md`)
+- `docs: record the stored pivot and world-aligned rotate rings`
+- `feat(app): rotate with world-aligned rings about the stored pivot`
+- `feat(ui): edit the node pivot in the inspector`
+- `feat(engine): add pivot commands`
+- `feat(model): store and edit the manipulation pivot`
+- `docs: record the shared manipulation pivot`
+- `feat(app): pivot both gizmos at the first corner of the local bounds`
+- `feat(model): expose the manipulation pivot in local and world space`
+- `feat(ui): group inspector properties into collapsible sections`
+- `docs: record the rotation representation and gizmo`
+- `feat(app): rotate the selection with a rotate gizmo`
+- `feat(scene): preview a world rotation`
+- `feat(ui): edit rotation in the placement card`
+- `feat(model): present placement rotation as XYZ Euler angles`
+- `feat(units): add degrees for human-readable angles`
+- `feat: split assemblies from groups and pick closed containers`
+- `docs: record the translate gizmo`
+- `feat(app): move the selection with a translate gizmo`
+- `feat(scene): project, drag along an axis and preview a translation`
+- `feat(model): resolve world placements and collect panels under a node`
+- `docs: record the view axes and the orientation widget`
+- `feat(app): add the corner orientation widget`
+- `feat(app): rework orientation widget, viewport mouse controls and default camera/light`
+- `docs: record CPU ray picking and the viewport selection`
+- `feat(app): pick nodes in the viewport`
+- `feat(ui): expose viewport selection to the editor`
+- `feat(scene): ray-cast drawables and tint the selection`
+- `docs: document local placement editing`
+- `feat(ui): edit node placement in the inspector`
+- `feat(model): expose placement translation as exact lengths`
+- `docs: define the scene-tree authoring roadmap`
+- `feat(ui): add the scene tree with groups and node actions`
+- `feat(engine): add scene node commands`
+- `feat(model): edit, group and ungroup scene nodes`
+- `docs: record arc band joints`
+- `feat(param): trim arc band joints against their neighbours`
+- `feat(geom): intersect lines and arcs analytically`
+- `feat(param): trim band joints in application order`
+- `feat(model): band by contour segment in one order`
+- `fix(ui): keep typed corner numbers until the edit ends`
+- `fix(model): remove corner banding with its segment`
+- `feat(model): let geometry edits ignore banding and machining`
+- `feat(geom): trace region rings from rectangles`
+- `feat(model): union through cutouts and reject a split core`
+- `feat(geom): add rectangle union, subtraction and connectivity`
+- `feat(model): move panel machining to the nominal panel frame`
+- `feat: add tangent-path banding and shaped panel strips`
+- `feat(model): add contour corner features and bowed edges`
+- `feat(geom): add line and arc contour offsets`
+- `fix(param): place included banding inside the nominal frame`
+- `docs(decisions): define the contour-first panel model`
+- `feat(ui): add the outliner and panel card`
+- `feat(units): parse millimetre text`
+- `feat(app): add the sample material catalogue`
+- `feat(engine): resolve panel geometry from the catalogue`
+- `feat(engine): rename panels`
+- `feat(param): build edge bands and expose panel diagnostics`
+- `feat(engine): add catalogue-aware panel material commands`
+- `feat(model): store panel nominal geometry and materials`
+- `feat(model): add the material catalogue`
+- `docs(decisions): define panel, material and banding model`
+- `docs(decisions): add architecture decision records`
+- `docs(vendor): add rules for vendored code`
+- `docs: add the agent status file`
+- `build(xtask): add the ci gate`
