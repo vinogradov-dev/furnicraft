@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A3 state=idle base=HEAD updated=2026-10-30
+STATE: milestone=M7 phase=D task=D1 state=doing base=HEAD updated=2026-10-30
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -20,6 +20,11 @@ plan is broken.
   and the file all read that one representation.
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
+- A contour panel is created from a contour selected in the scene, never converted from a rectangle.
+  Its banding is per ring segment; it has no bows, no corner features and no parametric cutouts, only
+  a cutout by an arbitrary contour. The card does not edit its outline: a dedicated mode edits a
+  working copy and applies one command on exit, and the card is otherwise read-only. The panel model
+  (D1) comes first, then the edit math (A5), the mode (A3), the commands (A6) and the card (D2).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
 - The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
   `STATUS`/`BACKLOG`/`SESSION`, ships templates, the agent section, the README and MIT/Apache-2.0
@@ -29,9 +34,10 @@ plan is broken.
 
 ## Next
 
-A3 is the first open task: a ring with an arc still has no editor, and the card disables its corner
-text box. A5 — the edit math over the segment ring — is the base for that editor, and A6 turns it into
-`object.contour.*` commands. P1–P3 in `plan/BACKLOG.md` continue the gate itself, now inside
+D1 is the first open task: the panel's outline becomes a rectangle or a contour ring, banding follows
+the ring, and the document schema moves to 13. A5 is the edit math over that ring and A3 the mode
+that uses it; A6 turns the apply into a command, D2 removes the rectangle-only controls from the card,
+D3 adds a contour cutout. P1–P3 in `plan/BACKLOG.md` continue the gate itself, now inside
 `state-contract`, starting with `status` printing the resume block.
 
 ## Index

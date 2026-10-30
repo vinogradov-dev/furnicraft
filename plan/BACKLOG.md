@@ -16,22 +16,31 @@ L is scene lighting.
 
 ## Now
 
-- `[ ]` **A3** arcs in the object card and a viewport contour editor — a ring with an arc has no editor
-  yet. `files: crates/ui/src/object_card.rs, crates/ui/src/lib.rs`
+- `[~]` **D1** a panel created from a contour selected in the scene: its outline is either the nominal
+  rectangle or a contour ring, edge banding follows the ring segments, schema 13; a rectangular panel
+  never converts, the creation command picks the variant.
+  `files: crates/model/src/lib.rs, crates/model/src/panel_contour.rs`
 - `[ ]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring.
   `files: crates/model/src/lib.rs, crates/geom/src/contour.rs`
+- `[ ]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
+  in the viewport with handles and a preview, leave by applying one command or by cancelling.
+  `files: crates/ui, apps/furnicraft`
 
 ## Next
 
-- `[ ]` **A6** contour edit commands in `furnicraft-engine` (`object.contour.*`), one undo entry each.
-  `files: crates/engine/src/object_cmds.rs`
-- `[ ]` **A7** document the contour editing model in `docs/domain/geometry.md` and an ADR.
-  `files: docs/domain/geometry.md, docs/decisions/`
+- `[ ]` **A6** contour edit commands: `panel.outline.set` and `object.contour.replace`, one undo entry
+  per apply. `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
+- `[ ]` **D2** the card of a contour panel: thickness, material and banding per ring segment; no bows,
+  no corner features, no parametric cutouts; an `Edit contour` button.
+  `files: crates/ui/src/panel_card.rs`
+- `[ ]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the outline,
+  through and blind, tool built by extrusion. `files: crates/model, crates/param`
+- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
+  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 - `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
 - `[ ]` **B2** offset a contour inward and outward as a new ring. `files: crates/geom/src/contour.rs`
 - `[ ]` **C1** a sketch on a chosen plane: grid, vertex snapping, translation and rotation steps.
   `files: crates/ui, apps/furnicraft`
-- `[ ]` **D1** a contour panel variant beside the rectangular one. `files: crates/model, crates/param`
 - `[ ]` **L1** scene exposure and tone mapping, then shadow maps, so point lights stop clipping.
   `files: crates/render`
 - `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
