@@ -15,7 +15,7 @@ use furnicraft_units::{Degrees, Length};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::MAX_CONTOUR_COORDINATE;
+use crate::{ContourSegmentId, MAX_CONTOUR_COORDINATE};
 
 /// One directed segment of a planar contour.
 ///
@@ -165,6 +165,34 @@ impl ContourSegment {
             }
         }
         Ok(())
+    }
+}
+
+/// One element of a contour ring: a segment and the stable id it carries in that ring.
+///
+/// The id belongs to the ring, not to the curve. The same line or arc value can sit in two rings,
+/// and the edit math builds candidate curves before they have an id, so [`ContourSegment`] stays a
+/// pure curve value and the id is paired with it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContourSegmentEntry {
+    id: ContourSegmentId,
+    segment: ContourSegment,
+}
+
+impl ContourSegmentEntry {
+    /// Pairs a segment with its id.
+    pub const fn new(id: ContourSegmentId, segment: ContourSegment) -> Self {
+        Self { id, segment }
+    }
+
+    /// The stable id, unique inside the ring and never reused.
+    pub const fn id(self) -> ContourSegmentId {
+        self.id
+    }
+
+    /// The curve.
+    pub const fn segment(self) -> ContourSegment {
+        self.segment
     }
 }
 
