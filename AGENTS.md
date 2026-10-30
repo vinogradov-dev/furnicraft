@@ -281,6 +281,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
+- `cargo xtask dashboard` prints the state with the file each section comes from.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/questions.md` — decisions waiting for the owner.
 - `plan/archive/done.md` — the history the old status file carried; `git log --oneline` is the live record.
