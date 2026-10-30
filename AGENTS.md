@@ -181,9 +181,13 @@ first failure. Run the steps individually while iterating (see below); run `carg
 formatting, the gate only checks it.
 
 `cargo xtask plan` fails when the plan files contradict each other: `STATE` naming a task the backlog
-does not have or has finished, `state=doing` without a `plan/SESSION.md` for that task, `state=idle`
-with a `[~]` task or a leftover session note, a duplicated task id, a `[x]` task without a commit
-hash. An over-long `STATUS.md` or `SESSION.md` is a warning.
+does not have, has finished, or keeps outside `## Now`; `state=doing` without exactly one `[~]` task
+in `## Now` and a `plan/SESSION.md` carrying `task:`, `goal:`, `now:` and `run:`; `state=idle` with a
+`[~]` task or a leftover session note; a duplicated task id; a `[x]` task outside `## Done`, or a
+`## Done` entry that is not `[x]`; a finished task without a commit hash that exists; a task line
+without a `**bold**` id; a task without a `files:` hint, or a hint naming a path that does not exist;
+a `base` that is not an ancestor of `HEAD`; a `STATUS.md` or `SESSION.md` over its line budget.
+`HEAD` is a legal `base` while the plan edit itself is still uncommitted.
 
 Then check by hand:
 
