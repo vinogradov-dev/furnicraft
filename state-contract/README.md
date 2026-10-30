@@ -16,7 +16,9 @@ The contract is three files under `plan/`:
 
 `state_contract::check(root)` parses them, cross-checks them and returns a `Summary`, or every
 violation as a readable sentence. `state_contract::status(root)` returns the block a task runner
-prints at the start of a session: the state line, the current task and the next three.
+prints at the start of a session: the state line, the current task and the next three. The check also
+reads `README.md`, when the project has one, and rejects a status line or a milestone there: a README
+describes the product, the state lives in `plan/STATUS.md`.
 
 ## Why
 
@@ -65,6 +67,7 @@ session note without `now:` turns a resume into a rewrite.
 | budget | `STATUS.md` over 70 lines, `SESSION.md` over 50 — a warning nobody reads is not a check |
 | history | a done task without a commit hash, or a hash that is not a commit in the repository |
 | base | `base` is not a commit, or is not an ancestor of `HEAD`; `HEAD` itself is legal while the plan edit is uncommitted |
+| readme | `README.md` carries a `Status:` line or an `M<digit>` milestone: a README describes the product, the state lives in `plan/STATUS.md` |
 
 The `files:` hint may wrap onto an indented continuation line, and a task marker may be wrapped in
 backticks for rendering; both forms parse.

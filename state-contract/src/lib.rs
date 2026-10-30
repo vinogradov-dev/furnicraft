@@ -31,7 +31,7 @@ use std::path::Path;
 pub use git::{Git, ProcessGit};
 pub use parse::parse_backlog;
 pub use status::render;
-pub use validate::{MAX_SESSION_LINES, MAX_STATUS_LINES, analyze};
+pub use validate::{MAX_SESSION_LINES, MAX_STATUS_LINES, README_RULE, analyze};
 
 /// What the plan files say right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +125,11 @@ pub fn check_with(root: &Path, git: &dyn Git) -> Result<Summary, Vec<String>> {
     };
     if let Some(summary) = &summary {
         violations.extend(workspace_violations(root, summary, git));
+    }
+    match std::fs::read_to_string(root.join("README.md")) {
+        Ok(readme) => violations.extend(validate::readme_violations(&readme)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => violations.push(format!("cannot read `README.md`: {error}")),
     }
     match summary {
         Some(summary) if violations.is_empty() => Ok(summary),
