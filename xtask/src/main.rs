@@ -146,11 +146,7 @@ fn run_ci() -> i32 {
 /// Checks the plan files in the workspace root.
 fn check_plan() -> Result<plan::Summary, Vec<String>> {
     let workspace = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
-    let (summary, warnings) = plan::check(workspace)?;
-    for warning in &warnings {
-        eprintln!("warning: {warning}");
-    }
-    Ok(summary)
+    plan::check(workspace)
 }
 
 /// Prints what the plan files say, without failing on a warning.

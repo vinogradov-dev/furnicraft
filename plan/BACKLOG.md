@@ -1,15 +1,18 @@
 # Backlog
 
-One line per task, stable id in front. `[ ]` open, `[~]` in progress (exactly one, and it must match
-`plan/SESSION.md`), `[x]` done with the commit that closed it. A finished task is removed from `[~]`
-and marked `[x]`; older entries are kept as a short tail so the current position reads at a glance.
+One entry per task, stable id in front; a long entry may wrap onto indented lines. `[ ]` open, `[~]`
+in progress (exactly one, in `## Now`, matching `plan/SESSION.md`), `[x]` done and in `## Done` with
+the commit that closed it. Older entries are kept as a short tail so the current position reads at a
+glance.
 
-The `files:` hint names where the work starts. It is a hint, not a boundary: read those files and their
-callers, not the workspace.
+The `files:` hint names where the work starts and is required on every unfinished task: each path
+must exist, so name a directory for a file the task creates. The hint is a hint, not a boundary: read
+those files and their callers, not the workspace.
 
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
-variants, E 2D primitives, F revolution and sweep, G 2D booleans.
+variants, E 2D primitives, F revolution and sweep, G 2D booleans; P is the plan and `xtask` itself,
+L is scene lighting.
 
 ## Now
 
@@ -31,6 +34,13 @@ variants, E 2D primitives, F revolution and sweep, G 2D booleans.
 - `[ ]` **D1** a contour panel variant beside the rectangular one. `files: crates/model, crates/param`
 - `[ ]` **L1** scene exposure and tone mapping, then shadow maps, so point lights stop clipping.
   `files: crates/render`
+- `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
+  `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
+  `files: xtask/src/plan.rs, xtask/src/main.rs`
+- `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
+  `files: xtask/src/plan.rs`
+- `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
+  the gate once the backlog has settled. `files: xtask/src/plan.rs`
 
 ## Done
 
