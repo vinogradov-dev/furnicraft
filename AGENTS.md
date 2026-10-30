@@ -20,8 +20,7 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
 area, never read them at start. `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
-Answering "what happens next" means quoting `STATE` and the `Now` section of the backlog — not
-re-deriving the state from the code.
+Answering "what next" has its own procedure (§1.1); it never re-derives the state from the code.
 
 | Read | Why |
 |---|---|
@@ -33,6 +32,31 @@ re-deriving the state from the code.
 | `BRIEF.md` | The owner's goals, constraints and preferences (Russian) |
 | `crates/<name>/src/lib.rs` | Each crate's doc comment states its layer and job |
 | `xtask/src/main.rs` | The layer map that `cargo xtask layers` enforces |
+
+### 1.1 Answering "what next"
+
+Any request for the next step — in whatever words — is answered from the plan files alone, in this
+order. Stop at the first case that applies.
+
+1. **An interrupted session.** `state=doing`, `plan/SESSION.md` exists, `STATE: base` differs from
+   `HEAD`, and `steps` still has an open item. Say so and offer to continue, quoting the note's
+   `task:`, `now:`, `blocked:` and `run:`. Resume at `now:` instead of starting the task over.
+2. **A task left in progress.** `state=idle` but `## Now` still holds a `[~]` task. Ask whether to
+   continue it or put it back to `[ ]`; do not pick the next task silently.
+3. **A contradiction.** A `[x]` without a commit hash, a `base` that is not an ancestor of `HEAD`, a
+   `files:` path that does not exist, a `SESSION.md` without `goal`/`now`/`run`. Report what is
+   broken and stop: "what next" read from a broken plan is worse than none. `cargo xtask plan` names
+   every case.
+4. **Only then** answer from `STATE` and `## Now`: the current task, its `files:`, and the one after
+   it. Short.
+
+A session does not read the workspace at large, the conversation history, `git diff` or `git log`.
+The diff is a fallback for one case only — `SESSION.md` is missing or contradicts `STATE` — and even
+then only for the paths the task names. The plan file is the memory: a fresh session that cannot
+resume from it means the note was incomplete, not that the next session should reconstruct it.
+
+Success looks like this: the answer needs no code read, no history and no diff, and an interrupted
+session continues from `now:` instead of starting from zero.
 
 ## 2. Non-negotiable constraints
 
