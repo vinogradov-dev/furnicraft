@@ -7,9 +7,8 @@
 //! the same change.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::{Command, Stdio};
-
-mod plan;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -78,6 +77,9 @@ const CRATES: &[CrateRule] = &[
     // Development-only helpers may use anything; product crates may only reach
     // them through a dev-dependency (see `DEV_ONLY`).
     CrateRule { name: "furnicraft-testkit", layer: 9, forbidden: &[] },
+    // The plan gate is a generic tool: at L0 it can depend on no product crate
+    // at all, which is exactly the rule the extracted crate must keep.
+    CrateRule { name: "state-contract", layer: 0, forbidden: UI_GPU_DEPS },
 ];
 
 fn main() {
@@ -143,24 +145,28 @@ fn run_ci() -> i32 {
     0
 }
 
+/// The workspace root, one level above `xtask`.
+fn workspace_root() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+}
+
 /// Checks the plan files in the workspace root.
-fn check_plan() -> Result<plan::Summary, Vec<String>> {
-    let workspace = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
-    plan::check(workspace)
+fn check_plan() -> Result<state_contract::Summary, Vec<String>> {
+    state_contract::check(workspace_root())
 }
 
 /// Prints what the plan files say, without failing on a warning.
 fn print_status() -> i32 {
-    match check_plan() {
-        Ok(summary) => {
-            plan::print(&summary);
+    match state_contract::status(workspace_root()) {
+        Ok(text) => {
+            print!("{text}");
             0
         }
         Err(violations) => report_plan(Err(violations)),
     }
 }
 
-fn report_plan(result: Result<plan::Summary, Vec<String>>) -> i32 {
+fn report_plan(result: Result<state_contract::Summary, Vec<String>>) -> i32 {
     match result {
         Ok(summary) => {
             println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
@@ -435,6 +441,18 @@ mod tests {
             violations.iter().any(|violation| violation.contains("is not registered in the crate rules")),
             "{violations:?}"
         );
+    }
+
+    #[test]
+    fn the_plan_gate_crate_must_not_depend_on_the_product() {
+        let violations = collect(&[package("state-contract", &[("furnicraft-model", None)])]);
+        assert!(
+            violations.iter().any(|violation| violation.contains("a crate may only depend on lower layers")),
+            "{violations:?}"
+        );
+
+        let clean = collect(&[package("state-contract", &[])]);
+        assert!(clean.is_empty(), "{clean:?}");
     }
 
     #[test]

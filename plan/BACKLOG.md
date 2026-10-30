@@ -36,11 +36,11 @@ L is scene lighting.
   `files: crates/render`
 - `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
   `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
-  `files: xtask/src/plan.rs, xtask/src/main.rs`
+  `files: state-contract/src/status.rs, xtask/src/main.rs`
 - `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
-  `files: xtask/src/plan.rs`
+  `files: state-contract/src/validate.rs`
 - `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
-  the gate once the backlog has settled. `files: xtask/src/plan.rs`
+  the gate once the backlog has settled. `files: state-contract/src/validate.rs`
 
 ## Done
 

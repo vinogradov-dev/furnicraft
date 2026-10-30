@@ -84,6 +84,7 @@ crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tes
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials
 crates/units, geom     L0  lengths (micrometres), angles (millidegrees), vectors, frames, bounds, meshes
 crates/testkit         dev-only test helpers (may depend on anything)
+state-contract         tool  plan gate: parses and checks STATUS/BACKLOG/SESSION, reusable
 xtask                  workspace checks; not part of the product
 ```
 
