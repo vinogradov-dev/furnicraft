@@ -88,6 +88,7 @@ fn main() {
         Some("layers") => report(check_layers()),
         Some("plan") => report_plan(check_plan()),
         Some("status") => print_status(),
+        Some("dashboard") => print_dashboard(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
             print_usage();
@@ -103,10 +104,11 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <layers|plan|status|ci>");
+    println!("usage: cargo xtask <layers|plan|status|dashboard|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
     println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
     println!("  status    print the current task and what follows, for a session start");
+    println!("  dashboard print a styled overview of the plan; each section names its source file");
     println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
 }
 
@@ -163,6 +165,24 @@ fn print_status() -> i32 {
             0
         }
         Err(violations) => report_plan(Err(violations)),
+    }
+}
+
+/// Prints the styled overview; every section names the file it was read from. A thin wrapper:
+/// all the layout lives in `state_contract::dashboard`.
+fn print_dashboard() -> i32 {
+    let opts = state_contract::DashboardOptions::default();
+    match state_contract::dashboard(workspace_root(), &opts) {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("plan: {violation}");
+            }
+            violations.len() as i32
+        }
     }
 }
 

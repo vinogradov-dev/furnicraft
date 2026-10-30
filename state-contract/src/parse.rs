@@ -167,14 +167,14 @@ fn bold(text: &str) -> Option<String> {
 }
 
 /// The `files:` hint at the end of a task line.
-fn files_hint(text: &str) -> Option<String> {
+pub(crate) fn files_hint(text: &str) -> Option<String> {
     let (_, hint) = text.rsplit_once("files:")?;
     let hint = hint.trim().trim_end_matches('`').trim();
     (!hint.is_empty()).then(|| hint.to_owned())
 }
 
 /// The task text without its trailing `files:` hint.
-fn strip_files(text: &str) -> &str {
+pub(crate) fn strip_files(text: &str) -> &str {
     match text.rsplit_once("files:") {
         Some((text, _)) => text.trim_end().trim_end_matches('`').trim_end(),
         None => text,
