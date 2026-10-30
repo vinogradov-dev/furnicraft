@@ -922,7 +922,7 @@ impl Project {
     /// a version 10 point list loads as a ring of lines, so the shape is unchanged. Version 12 gives
     /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
     /// with ids `1..n`.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 12;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 13;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -3265,18 +3265,37 @@ impl Container {
     }
 }
 
+/// Where a panel's outline comes from.
+///
+/// A panel is created either as the nominal rectangle or from a contour selected in the scene; the
+/// variant never changes afterwards. The rectangle may carry corner features and bows, the contour
+/// ring may not, because its corners and edges are the ring itself.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PanelOutline {
+    /// The nominal rectangle, optionally shaped by corner features and bows.
+    #[default]
+    Rect,
+    /// A closed contour ring anchored at the panel-local zero corner.
+    Contour {
+        /// The ring of directed lines and arcs, counter-clockwise.
+        contour: Contour,
+    },
+}
+
 /// A flat panel in the product tree.
 ///
-/// The document stores the nominal outline, the selected material and fallbacks, not the resolved
-/// core. The core origin, core size, overall size and effective thickness are derived by
-/// [`Panel::geometry`] from the panel, its edge banding and the catalogue value supplied by the
-/// caller. The panel-local frame stays anchored at the nominal minimum corner.
+/// The document stores the outline, the selected material and fallbacks, not the resolved core. The
+/// core origin, core size, overall size and effective thickness are derived by [`Panel::geometry`]
+/// from the panel, its edge banding and the catalogue value supplied by the caller. The panel-local
+/// frame stays anchored at the outline's minimum corner.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "PanelWire")]
 pub struct Panel {
     id: Id,
     name: String,
     nominal_size: PanelNominalSize,
+    outline: PanelOutline,
     material: Option<MaterialId>,
     last_known_thickness: Length,
     placement: Placement,
@@ -3316,6 +3335,7 @@ impl Panel {
             id,
             name: name.into(),
             nominal_size,
+            outline: PanelOutline::Rect,
             material,
             last_known_thickness,
             placement,
@@ -3328,6 +3348,58 @@ impl Panel {
             edge_bows: Vec::new(),
             properties: Properties::new(),
         })
+    }
+
+    /// Creates a panel whose outline is a contour ring.
+    ///
+    /// The ring must be anchored at the panel-local zero corner: its bounds start at `0, 0`. The
+    /// nominal size is taken from those bounds, so the caller does not pass a separate size. A ring
+    /// that is not anchored, or is larger than a panel may be, is an error the user can read.
+    pub fn new_contour(
+        id: Id,
+        name: impl Into<String>,
+        contour: Contour,
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Self, PanelError> {
+        validate_dimension("thickness", last_known_thickness, Self::MAX_THICKNESS)?;
+        let nominal_size = contour_nominal_size(&contour)?;
+        Ok(Self {
+            id,
+            name: name.into(),
+            nominal_size,
+            outline: PanelOutline::Contour { contour },
+            material,
+            last_known_thickness,
+            placement,
+            pivot: Pivot::ZERO,
+            machining: Vec::new(),
+            edge_banding: Vec::new(),
+            corner_banding: Vec::new(),
+            band_order: Vec::new(),
+            corner_features: Vec::new(),
+            edge_bows: Vec::new(),
+            properties: Properties::new(),
+        })
+    }
+
+    /// Where the outline comes from: the nominal rectangle or a contour ring.
+    pub const fn outline(&self) -> &PanelOutline {
+        &self.outline
+    }
+
+    /// Whether the outline is a contour ring rather than the nominal rectangle.
+    pub const fn is_contour(&self) -> bool {
+        matches!(self.outline, PanelOutline::Contour { .. })
+    }
+
+    /// The contour ring, when the panel was created from one.
+    pub const fn outline_contour(&self) -> Option<&Contour> {
+        match &self.outline {
+            PanelOutline::Contour { contour } => Some(contour),
+            PanelOutline::Rect => None,
+        }
     }
 
     /// Banded segments in application order; the last one is drawn on top.
@@ -3356,6 +3428,8 @@ impl Panel {
     }
 
     /// The nominal panel length and width.
+    ///
+    /// For a contour panel this is the size of the ring's bounds, which start at the panel zero.
     pub const fn nominal_size(&self) -> PanelNominalSize {
         self.nominal_size
     }
@@ -3448,6 +3522,11 @@ impl Panel {
         !self.corner_features.is_empty() || !self.edge_bows.is_empty()
     }
 
+    /// Whether the panel has a shaped outline: a contour ring or a corner feature or a bow.
+    pub fn has_shaped_outline(&self) -> bool {
+        self.is_contour() || self.has_contour_features()
+    }
+
     /// The corner treatment on a vertex, if present.
     pub fn corner_feature(&self, corner: VertexId) -> Option<CornerFeature> {
         self.corner_features.iter().copied().find(|feature| feature.corner() == corner)
@@ -3501,6 +3580,17 @@ impl Panel {
         F: Fn(&BandingSpec) -> Length,
     {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
+
+        if let Some(contour) = self.outline_contour() {
+            let (min, max) = contour.bounds_micrometres();
+            let length = max[0].checked_sub(min[0]).ok_or(PanelGeometryError::Contour)?;
+            let width = max[1].checked_sub(min[1]).ok_or(PanelGeometryError::Contour)?;
+            let origin = [Length::from_micrometres(min[0]), Length::from_micrometres(min[1])];
+            let size = [Length::from_micrometres(length), Length::from_micrometres(width)];
+            // Banding is not resolved for a contour ring yet, so the core and the finished outline
+            // share the ring's bounds and the core origin is the ring's minimum corner.
+            return PanelGeometry::new(origin[0], origin[1], size[0], size[1], thickness, size[0], size[1]);
+        }
 
         if self.has_contour_features() {
             let core =
@@ -3591,7 +3681,7 @@ impl Panel {
     /// The legacy core origin is derived from the included bottom and left banding fallbacks. A
     /// panel with a shaped contour has no stored core origin, so its machining is left unchanged.
     fn migrate_machining_from_core(&mut self) -> Result<(), ProjectError> {
-        if self.machining.is_empty() || self.has_contour_features() {
+        if self.machining.is_empty() || self.has_shaped_outline() {
             return Ok(());
         }
         let mut core_x = Length::ZERO;
@@ -3717,6 +3807,34 @@ pub enum PanelError {
         /// The rejected corner.
         corner: VertexId,
     },
+    /// A contour outline does not start at the panel-local zero corner.
+    #[error("panel contour starts at {start:?} micrometres, not at the panel zero corner")]
+    ContourNotAnchored {
+        /// The minimum corner of the ring, in micrometres.
+        start: [i64; 2],
+    },
+    /// A contour outline is not a usable panel size.
+    #[error("panel contour measures {length} by {width} micrometres, which is not a usable panel size")]
+    ContourSize {
+        /// The ring's extent along X, in micrometres.
+        length: i64,
+        /// The ring's extent along Y, in micrometres.
+        width: i64,
+    },
+    /// A contour panel stores a nominal size that its ring does not have.
+    #[error("panel contour bounds are {contour:?}, but the panel stores {stored:?}")]
+    ContourSizeMismatch {
+        /// The size the panel stores.
+        stored: PanelNominalSize,
+        /// The size of the ring's bounds.
+        contour: PanelNominalSize,
+    },
+    /// A contour panel stored corner features or bows, which describe a rectangle.
+    #[error("a contour panel cannot carry corner features or bows")]
+    ContourWithFeatures,
+    /// A contour panel stored banding against rectangle edges.
+    #[error("a contour panel cannot carry banding until banding follows the ring")]
+    ContourWithBanding,
 }
 
 /// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
@@ -3727,6 +3845,8 @@ struct PanelWire {
     name: String,
     #[serde(default)]
     nominal_size: Option<PanelNominalSize>,
+    #[serde(default)]
+    outline: PanelOutline,
     #[serde(default)]
     material: Option<MaterialId>,
     #[serde(default)]
@@ -3774,6 +3894,7 @@ impl TryFrom<PanelWire> for Panel {
                     || !wire.band_order.is_empty()
                     || !wire.corner_features.is_empty()
                     || !wire.edge_bows.is_empty()
+                    || wire.outline != PanelOutline::Rect
                 {
                     return Err(PanelError::AmbiguousSize);
                 }
@@ -3789,7 +3910,20 @@ impl TryFrom<PanelWire> for Panel {
 
         validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
         validate_corner_banding(&wire.corner_banding)?;
+        if let PanelOutline::Contour { contour } = &wire.outline {
+            if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
+                return Err(PanelError::ContourWithFeatures);
+            }
+            if !edge_banding.is_empty() || !wire.corner_banding.is_empty() || !wire.band_order.is_empty() {
+                return Err(PanelError::ContourWithBanding);
+            }
+            let contour_size = contour_nominal_size(contour)?;
+            if contour_size != nominal_size {
+                return Err(PanelError::ContourSizeMismatch { stored: nominal_size, contour: contour_size });
+            }
+        }
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
+        panel.outline = wire.outline;
         panel.pivot = wire.pivot;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
@@ -3800,6 +3934,22 @@ impl TryFrom<PanelWire> for Panel {
         panel.properties = wire.properties;
         Ok(panel)
     }
+}
+
+/// The nominal size a contour ring occupies, refusing a ring that is not anchored at zero.
+///
+/// The ring is the outline of the panel, so its minimum corner is the panel-local zero and its
+/// bounds are the nominal size. The constructor and the file reader both go through this check, so
+/// a hand-edited file cannot anchor a panel somewhere else.
+fn contour_nominal_size(contour: &Contour) -> Result<PanelNominalSize, PanelError> {
+    let (min, max) = contour.bounds_micrometres();
+    if min != [0, 0] {
+        return Err(PanelError::ContourNotAnchored { start: min });
+    }
+    let length = max[0].checked_sub(min[0]).ok_or(PanelError::ContourSize { length: max[0], width: max[1] })?;
+    let width = max[1].checked_sub(min[1]).ok_or(PanelError::ContourSize { length: max[0], width: max[1] })?;
+    PanelNominalSize::new(Length::from_micrometres(length), Length::from_micrometres(width))
+        .map_err(|_| PanelError::ContourSize { length, width })
 }
 
 /// Keeps one entry per band record and appends records that older files did not order.
@@ -7301,6 +7451,102 @@ mod tests {
         let project = Project::new(root).expect("valid project");
         let found = project.query(&NodeQuery::any().with_kind(StructuralKind::Object));
         assert_eq!(found, vec![Id::new(5).expect("id")]);
+    }
+
+    #[test]
+    fn a_panel_created_from_a_contour_keeps_its_ring() {
+        let contour = rectangle_contour(700, 500);
+        let panel = Panel::new_contour(
+            Id::new(2).expect("id"),
+            "Shelf",
+            contour.clone(),
+            None,
+            sample_thickness(),
+            Placement::IDENTITY,
+        )
+        .expect("contour panel");
+
+        assert!(panel.is_contour());
+        assert_eq!(panel.outline_contour(), Some(&contour));
+        assert_eq!(panel.nominal_size(), sample_nominal(), "the nominal size is the ring's bounds");
+        assert!(!panel.has_contour_features(), "a ring is not shaped by corner features");
+        assert!(!panel.has_banding());
+
+        let geometry = panel.geometry_with_fallbacks().expect("contour geometry");
+        assert_eq!(geometry.core_x(), Length::ZERO);
+        assert_eq!(geometry.core_length(), millimetres(700));
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        let text = serde_json::to_string(&panel).expect("serialize panel");
+        assert!(text.contains("\"kind\":\"contour\""), "the ring is written as a contour outline: {text}");
+        let decoded: Panel = serde_json::from_str(&text).expect("deserialize panel");
+        assert_eq!(decoded, panel);
+    }
+
+    #[test]
+    fn a_contour_panel_rejects_a_ring_that_does_not_start_at_zero() {
+        let moved = Contour::from_polygon(vec![
+            [millimetres(10), millimetres(10)],
+            [millimetres(110), millimetres(10)],
+            [millimetres(110), millimetres(60)],
+            [millimetres(10), millimetres(60)],
+        ])
+        .expect("ring");
+
+        assert_eq!(
+            Panel::new_contour(Id::new(2).expect("id"), "Moved", moved, None, sample_thickness(), Placement::IDENTITY),
+            Err(PanelError::ContourNotAnchored { start: [10_000, 10_000] })
+        );
+    }
+
+    #[test]
+    fn a_contour_panel_refuses_the_rectangle_controls_on_load() {
+        let panel = Panel::new_contour(
+            Id::new(2).expect("id"),
+            "Shelf",
+            rectangle_contour(700, 500),
+            None,
+            sample_thickness(),
+            Placement::IDENTITY,
+        )
+        .expect("contour panel");
+        let text = serde_json::to_string(&panel).expect("serialize panel");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("json");
+
+        let mut sized = value.clone();
+        sized["nominal_size"]["length"] = serde_json::json!(800_000);
+        let error = serde_json::from_value::<Panel>(sized).expect_err("the size must match the ring");
+        assert!(error.to_string().contains("contour bounds"), "error was {error}");
+
+        let mut shaped = value.clone();
+        shaped["corner_features"] =
+            serde_json::json!([{ "corner": 2, "feature": { "kind": "radius", "radius": 25_000 } }]);
+        let error = serde_json::from_value::<Panel>(shaped).expect_err("a ring has no corners to shape");
+        assert!(error.to_string().contains("corner features or bows"), "error was {error}");
+
+        let mut banded = value;
+        banded["edge_banding"] = serde_json::json!([{
+            "edge": 1,
+            "material": 1,
+            "included_in_size": true,
+            "last_known_thickness": 2_000,
+            "last_known_width": 20_000,
+        }]);
+        let error = serde_json::from_value::<Panel>(banded).expect_err("rectangle banding is not a ring");
+        assert!(error.to_string().contains("banding follows the ring"), "error was {error}");
+    }
+
+    #[test]
+    fn a_panel_file_without_an_outline_loads_as_a_rectangle() {
+        let text = serde_json::to_string(&sample_panel(Id::new(2).expect("id"), "Shelf")).expect("serialize panel");
+        let mut value: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(value["outline"], serde_json::json!({ "kind": "rect" }));
+        value.as_object_mut().expect("panel object").remove("outline");
+
+        let panel: Panel = serde_json::from_value(value).expect("a panel without an outline is a rectangle");
+        assert!(!panel.is_contour());
+        assert_eq!(panel.nominal_size(), sample_nominal());
+        assert_eq!(panel.outline_contour(), None);
     }
 
     #[test]
