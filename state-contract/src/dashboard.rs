@@ -174,17 +174,9 @@ fn render_tasks(body: &mut String, tasks: &[(TaskStatus, String, String, Option<
         let _ = writeln!(body, "{painted} {id}  {}", truncate(text, inner.saturating_sub(id.len() + 6)));
         if let Some(files) = files {
             let shown = truncate(files, inner - 9);
-            let _ = writeln!(body, "         {}", paint(&shown, Some(DIM)));
+            let _ = writeln!(body, "         {}", paint(&shown, if color { Some(DIM) } else { None }));
         }
     }
-}
-
-/// The `## ` sections of a markdown file, without the hashes.
-fn markdown_sections(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| line.trim().strip_prefix("## "))
-        .map(|heading| heading.trim().to_owned())
-        .collect()
 }
 
 /// The top-level `- ` bullets of a markdown file, wrapped lines joined onto their bullet.
@@ -288,27 +280,6 @@ fn display_width(text: &str) -> usize {
     width
 }
 
-/// Strips every ANSI escape sequence from `text`, leaving the plain characters a test can match.
-#[cfg(test)]
-fn strip_ansi(text: &str) -> String {
-    let mut plain = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
-                    chars.next();
-                }
-                chars.next();
-            }
-            continue;
-        }
-        plain.push(ch);
-    }
-    plain
-}
-
 /// Truncates `text` to `width` display columns, ending it with `…`; ANSI codes pass through whole.
 fn truncate(text: &str, width: usize) -> String {
     if display_width(text) <= width {
@@ -346,6 +317,42 @@ fn truncate(text: &str, width: usize) -> String {
     format!("{kept}…")
 }
 
+/// Trims a section header to `width` display columns without an ellipsis: the box rule that follows
+/// is what fills the line, and cutting off mid-word with `…` would only hide the source path.
+fn truncate_head(text: &str, width: usize) -> String {
+    if display_width(text) <= width {
+        return text.to_owned();
+    }
+    let mut kept = String::new();
+    let mut used = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            kept.push(ch);
+            if chars.peek() == Some(&'[') {
+                kept.push(chars.next().expect("just peeked"));
+                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
+                    kept.push(chars.next().expect("just peeked"));
+                }
+                if let Some(final_ch) = chars.next() {
+                    kept.push(final_ch);
+                }
+            }
+            continue;
+        }
+        if used + 1 > width {
+            break;
+        }
+        kept.push(ch);
+        used += 1;
+    }
+    // Never leave a dangling reset behind a cut escape sequence: close every open color.
+    if kept.contains('\x1b') && !kept.ends_with(RESET) {
+        kept.push_str(RESET);
+    }
+    kept
+}
+
 /// Accumulates the boxed sections and joins them with blank lines.
 struct Boxed {
     width: usize,
@@ -366,9 +373,11 @@ impl Boxed {
         let source = paint(path, self.color.then_some(DIM));
         let mut head = format!(" {label} ─ {source} ");
         if let Some(marker) = marker {
-            let _ = write!(head, " {} ", paint(marker, self.color.then_some(RED)));
+            // Bold red: the flag must stand out inside the header line.
+            let painted = paint(&paint(marker, self.color.then_some(RED)), self.color.then_some(BOLD));
+            let _ = write!(head, "{painted} ");
         }
-        let head = truncate(&head, inner);
+        let head = truncate_head(&head, inner);
         let filler = "─".repeat(inner.saturating_sub(display_width(&head)));
         let _ = writeln!(text, "┌{}{}┐", head, filler);
 
@@ -451,6 +460,11 @@ mod tests {
         FakeGit { head: Some("fedcba9") }
     }
 
+    /// A repository whose `HEAD` equals the plan's `base`: nothing has landed since the plan edit.
+    fn head_same() -> FakeGit {
+        FakeGit { head: Some("abc1234") }
+    }
+
     #[test]
     fn an_idle_plan_shows_no_session_block() {
         let root = project("idle", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG)]);
@@ -487,7 +501,7 @@ mod tests {
             &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/SESSION.md", NOTE)],
         );
         let text = dashboard_with(&root, &opts(80, true), &head_ahead()).expect("the plan parses");
-        assert!(text.contains("┌ SESSION ─ plan/SESSION.md \x1b[1m\x1b[31mINTERRUPTED\x1b[0m"), "{text}");
+        assert!(text.contains("\x1b[31mINTERRUPTED\x1b[0m"), "the marker is red: {text}");
         let plain = dashboard_with(&root, &opts(80, false), &head_ahead()).expect("the plan parses");
         assert!(plain.contains("INTERRUPTED"), "the marker survives --no-color: {plain}");
         assert!(!plain.contains('\x1b'), "no escape codes without color: {plain:?}");
@@ -563,13 +577,22 @@ mod tests {
         );
         let colored = dashboard_with(&root, &opts(80, true), &head_ahead()).expect("the plan parses");
         assert!(colored.contains("\x1b[33m[~]\x1b[0m"), "the doing marker is yellow: {colored}");
-        assert!(colored.contains("\x1b[32m[x]\x1b[0m"), "a done marker is green: {colored}");
+        // The overview shows `Now` and `Next`; the closed `[x]` markers stay in `plan/BACKLOG.md`,
+        // so green is checked against a done task placed in `## Now` by hand.
+        let done_now = BACKLOG.replace("- `[~]` **D1**", "- `[x]` **D1**");
+        let done_root = project(
+            "done-color",
+            &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", &done_now), ("plan/SESSION.md", NOTE)],
+        );
+        let done_colored = dashboard_with(&done_root, &opts(80, true), &head_ahead()).expect("the plan parses");
+        assert!(done_colored.contains("\x1b[32m[x]\x1b[0m"), "a done marker is green: {done_colored}");
         assert!(colored.contains("\x1b[2mplan/STATUS.md\x1b[0m"), "the path is dim: {colored}");
 
         let plain = dashboard_with(&root, &opts(80, false), &head_ahead()).expect("the plan parses");
         assert!(!plain.contains('\x1b'), "--no-color must print plain text: {plain:?}");
         assert!(plain.contains("[~] D1"), "{plain}");
         let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&done_root);
     }
 
     #[test]
@@ -593,7 +616,7 @@ mod tests {
     fn the_next_section_is_labeled_by_the_backlog_it_came_from() {
         let root = project("sections", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG)]);
         let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
-        assert!(markdown_sections(BACKLOG).contains(&"Now".to_owned()));
+        assert!(text.contains("┌ NOW ─ plan/BACKLOG.md"), "{text}");
         assert!(text.contains("┌ NEXT ─ plan/BACKLOG.md"), "{text}");
         assert!(text.contains("[ ] A5  contour edit math"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
