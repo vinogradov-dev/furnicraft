@@ -273,6 +273,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 ## 9. Where things are tracked
 
 - `PROJECT.md` — product, domain vocabulary, crate map, milestones, open model questions.
+- `README.md` — the product and how to build it. Development status lives only in `plan/STATUS.md`; README must not repeat it. If they disagree, `STATUS.md` wins and README is wrong.
 - `AGENTS.md` — this file: the rules.
 - `BRIEF.md` — the owner's original brief; do not edit it to match the code.
 - `ATTRIBUTION.md` — vendored and bundled third-party components, their licenses and modifications.

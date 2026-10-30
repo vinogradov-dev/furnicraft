@@ -13,6 +13,8 @@ pub const MAX_SESSION_LINES: usize = 50;
 const NOW_SECTION: &str = "Now";
 /// The section that holds finished tasks.
 const DONE_SECTION: &str = "Done";
+/// The one place development state may live.
+pub const README_RULE: &str = "README must not carry development status; it lives in plan/STATUS.md";
 
 /// Checks the three plan files against each other, without touching the filesystem or git.
 pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Summary, Vec<String>> {
@@ -91,6 +93,32 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     }
 
     if violations.is_empty() { Ok(Summary { state, tasks }) } else { Err(violations) }
+}
+
+/// A `README.md` that carries a status line or a milestone is a second source of truth, and the
+/// stale one. `plan/STATUS.md` is the only place development state lives.
+pub fn readme_violations(readme: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if readme.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("**Status:**") || line.starts_with("Status:")
+    }) {
+        violations.push(README_RULE.to_owned());
+    }
+    if let Some(token) = milestone(readme) {
+        violations.push(format!("{README_RULE}: it names the milestone `{token}`"));
+    }
+    violations
+}
+
+/// The first `M<digit>` milestone token in `text`, ignoring the inside of a longer word.
+fn milestone(text: &str) -> Option<&str> {
+    text.match_indices('M').find_map(|(offset, _)| {
+        let rest = &text[offset + 1..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let preceded_by_word = text[..offset].chars().next_back().is_some_and(|ch| ch.is_alphanumeric());
+        (digits > 0 && !preceded_by_word).then(|| &text[offset..offset + 1 + digits])
+    })
 }
 
 /// A plan file over its line budget is an error: an ignored warning is how the plan rots.
@@ -315,6 +343,29 @@ mod tests {
         assert!(stale.contains("not an ancestor"), "{stale}");
         let unknown = base_violation("nope", Some("db8374d"), false, false).expect("an unknown commit must fail");
         assert!(unknown.contains("not a commit"), "{unknown}");
+    }
+
+    #[test]
+    fn a_readme_may_describe_the_product_but_not_the_state() {
+        let clean = "# FurniCraft\n\nA native editor. Build it with `cargo run -p furnicraft`.\n\
+                     The state lives in `plan/STATUS.md`.\n";
+        assert!(readme_violations(clean).is_empty(), "a product README is fine");
+
+        for line in ["**Status:** M0 — scaffold", "Status: early"] {
+            let readme = format!("# Project\n\n{line}\n");
+            let violations = readme_violations(&readme);
+            assert!(violations.iter().any(|violation| violation == README_RULE), "{violations:?}");
+        }
+
+        let milestone = readme_violations("# Project\n\nWe are at M7 now.\n");
+        assert!(milestone.iter().any(|violation| violation.starts_with(README_RULE)), "{milestone:?}");
+        assert!(milestone.iter().any(|violation| violation.contains("`M7`")), "{milestone:?}");
+    }
+
+    #[test]
+    fn a_milestone_inside_a_longer_word_is_not_a_status() {
+        assert!(readme_violations("An AMD64 build and a 16M2 room.\n").is_empty());
+        assert_eq!(milestone("phase M10 starts"), Some("M10"));
     }
 
     #[test]

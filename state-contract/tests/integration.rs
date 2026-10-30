@@ -160,6 +160,22 @@ fn an_over_long_status_file_fails() {
 }
 
 #[test]
+fn a_readme_without_a_status_passes_and_one_with_it_fails() {
+    let summary = check_with(&fixture("readme-clean"), &FakeGit::repository()).expect("a product README is fine");
+    assert_eq!(summary.state.task, "T1");
+
+    let error = check_with(&fixture("readme-status"), &FakeGit::repository())
+        .expect_err("a README carrying the development status must fail");
+    assert!(error.iter().any(|violation| violation.contains("must not carry development status")), "{error:?}");
+    assert!(error.iter().any(|violation| violation.contains("`M7`")), "the milestone is named: {error:?}");
+}
+
+#[test]
+fn a_fixture_without_a_readme_still_passes() {
+    check_with(&fixture("good"), &FakeGit::repository()).expect("a README is optional");
+}
+
+#[test]
 fn head_is_a_legal_base_in_a_real_repository() {
     let status = "STATE: milestone=M1 phase=A task=T1 state=idle base=HEAD updated=2026-01-01\n";
     let Some(root) = scratch_repository("head", status, PLAN_BACKLOG) else {
