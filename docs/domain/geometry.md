@@ -70,6 +70,9 @@ direct mesh editing, so its contour stays the only way to change it.
 - A contour is a ring of directed **segments**, at least three. A segment is a straight line between
   two points or a circular arc with a centre, a positive radius, a start angle and a non-zero sweep
   of at most one turn. Every value is stored in document units: micrometres and millidegrees.
+- Every segment carries a stable id, unique inside its ring and never reused. An edit keeps the id of
+  every segment it does not touch, so a command names a segment instead of an index; a fresh ring
+  numbers its segments from one and keeps a counter for the next id.
 - The ring must be closed — each segment's end is the next segment's start, rounded to the
   micrometre — and must enclose a non-zero area. The constructor stores it counter-clockwise, so the
   face winding does not depend on how the user drew it.

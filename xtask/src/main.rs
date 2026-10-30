@@ -1,12 +1,13 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|ci>`
+//! Usage: `cargo xtask <layers|plan|status|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
 //! the same change.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 /// Dependencies that the domain side of the workspace must never pull in.
@@ -76,12 +77,17 @@ const CRATES: &[CrateRule] = &[
     // Development-only helpers may use anything; product crates may only reach
     // them through a dev-dependency (see `DEV_ONLY`).
     CrateRule { name: "furnicraft-testkit", layer: 9, forbidden: &[] },
+    // The plan gate is a generic tool: at L0 it can depend on no product crate
+    // at all, which is exactly the rule the extracted crate must keep.
+    CrateRule { name: "state-contract", layer: 0, forbidden: UI_GPU_DEPS },
 ];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
         Some("layers") => report(check_layers()),
+        Some("plan") => report_plan(check_plan()),
+        Some("status") => print_status(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
             print_usage();
@@ -97,9 +103,11 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <layers|ci>");
+    println!("usage: cargo xtask <layers|plan|status|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
-    println!("  ci        run the whole gate: fmt, clippy, tests, layers");
+    println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
+    println!("  status    print the current task and what follows, for a session start");
+    println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
 }
 
 /// Runs the gate in order and returns the process exit code.
@@ -127,11 +135,51 @@ fn run_ci() -> i32 {
         }
     }
 
-    if report(check_layers()) == 0 {
-        println!("ci: ok");
-        0
-    } else {
-        1
+    if report(check_layers()) != 0 {
+        return 1;
+    }
+    if report_plan(check_plan()) != 0 {
+        return 1;
+    }
+    println!("ci: ok");
+    0
+}
+
+/// The workspace root, one level above `xtask`.
+fn workspace_root() -> &'static Path {
+    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+}
+
+/// Checks the plan files in the workspace root.
+fn check_plan() -> Result<state_contract::Summary, Vec<String>> {
+    state_contract::check(workspace_root())
+}
+
+/// Prints what the plan files say, without failing on a warning.
+fn print_status() -> i32 {
+    match state_contract::status(workspace_root()) {
+        Ok(text) => {
+            print!("{text}");
+            0
+        }
+        Err(violations) => report_plan(Err(violations)),
+    }
+}
+
+fn report_plan(result: Result<state_contract::Summary, Vec<String>>) -> i32 {
+    match result {
+        Ok(summary) => {
+            println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
+            println!("plan: ok");
+            0
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            eprintln!("plan: FAILED ({} violation(s))", violations.len());
+            1
+        }
     }
 }
 
@@ -393,6 +441,18 @@ mod tests {
             violations.iter().any(|violation| violation.contains("is not registered in the crate rules")),
             "{violations:?}"
         );
+    }
+
+    #[test]
+    fn the_plan_gate_crate_must_not_depend_on_the_product() {
+        let violations = collect(&[package("state-contract", &[("furnicraft-model", None)])]);
+        assert!(
+            violations.iter().any(|violation| violation.contains("a crate may only depend on lower layers")),
+            "{violations:?}"
+        );
+
+        let clean = collect(&[package("state-contract", &[])]);
+        assert!(clean.is_empty(), "{clean:?}");
     }
 
     #[test]
