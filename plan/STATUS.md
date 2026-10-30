@@ -1,10 +1,11 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A3 state=idle base=ea3153a updated=2026-10-30
+STATE: milestone=M7 phase=A task=A3 state=idle base=HEAD updated=2026-10-30
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
-"what next" from `STATE` and the `Now` section of the backlog. `cargo xtask status` prints both.
+"what next" from `STATE` and the `Now` section of the backlog. `cargo xtask status` prints both;
+`AGENTS.md` §1.1 orders that answer when a session was interrupted or the plan is broken.
 
 ## Where we are
 
@@ -19,14 +20,18 @@ only the files named by the current task in `plan/BACKLOG.md`. Do not scan the w
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
+- The plan gate now enforces its own contract: `task=` outside `## Now`, a missing or dead `files:`
+  hint, a session note without `task`/`goal`/`now`/`run`, a `base` that does not lead to `HEAD`, a
+  wrapped hint nobody could parse, or a file over its line budget all fail `cargo xtask plan`.
 - Gate: `cargo xtask ci` — green. Branches: work on `dev`, merge to `main` with `--no-ff` after a
   green gate (AGENTS §6.2).
 
 ## Next
 
-A3 is the first open task: a contour that holds an arc still has no editor, and the card disables its
-corner text box. A4 landed, so A5 — the edit math over the segment ring — is unblocked and is the
-natural base for that editor; A6 then turns it into `object.contour.*` commands.
+A3 is the first open task: a ring with an arc still has no editor, and the card disables its corner
+text box. A5 — the edit math over the segment ring — is the base for that editor, and A6 turns it into
+`object.contour.*` commands. The plan tooling continues in `plan/BACKLOG.md` as P1–P3, starting with
+`cargo xtask status` printing the resume block so an interrupted session needs no `git` call.
 
 ## Index
 
