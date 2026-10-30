@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::parse::{backlog_entries, parse_state, session_field};
+use crate::parse::{backlog_entries, parse_state, parse_task_line, session_field};
 use crate::{Git, ProcessGit, TaskStatus};
 
 /// The backlog tasks one section shows at most; the full list stays in `plan/BACKLOG.md`.
@@ -174,7 +174,7 @@ fn render_tasks(body: &mut String, tasks: &[(TaskStatus, String, String, Option<
         let _ = writeln!(body, "{painted} {id}  {}", truncate(text, inner.saturating_sub(id.len() + 6)));
         if let Some(files) = files {
             let shown = truncate(files, inner - 9);
-            let _ = writeln!(body, "         {}", paint(&shown, DIM));
+            let _ = writeln!(body, "         {}", paint(&shown, Some(DIM)));
         }
     }
 }
@@ -211,7 +211,7 @@ fn markdown_bullets(text: &str) -> Vec<String> {
 /// One `[tag]` count per tag found in the file, in order of appearance.
 fn tag_counts(text: &str) -> Vec<String> {
     let mut counts: Vec<(String, usize)> = Vec::new();
-    for (_, tag) in text.match_indices('[').filter_map(|(offset, _)| {
+    for tag in text.match_indices('[').filter_map(|(offset, _)| {
         let rest = &text[offset + 1..];
         let end = rest.find(']')?;
         let tag = &rest[..end];
@@ -267,9 +267,51 @@ fn status_color(status: TaskStatus, color: bool) -> Option<&'static str> {
     }
 }
 
-/// Truncates `text` to `width` display columns, ending it with `…`.
+/// The visible width of `text`: ANSI escape sequences take no columns on screen.
+fn display_width(text: &str) -> usize {
+    let mut width = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // An escape sequence: ESC, then `[`, optional digits and `;`, then a final letter.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
+                    chars.next();
+                }
+                chars.next();
+            }
+            continue;
+        }
+        width += 1;
+    }
+    width
+}
+
+/// Strips every ANSI escape sequence from `text`, leaving the plain characters a test can match.
+#[cfg(test)]
+fn strip_ansi(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
+                    chars.next();
+                }
+                chars.next();
+            }
+            continue;
+        }
+        plain.push(ch);
+    }
+    plain
+}
+
+/// Truncates `text` to `width` display columns, ending it with `…`; ANSI codes pass through whole.
 fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
+    if display_width(text) <= width {
         return text.to_owned();
     }
     if width == 0 {
@@ -278,7 +320,29 @@ fn truncate(text: &str, width: usize) -> String {
     if width == 1 {
         return "…".to_owned();
     }
-    let kept: String = text.chars().take(width - 1).collect();
+    let mut kept = String::new();
+    let mut used = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            kept.push(ch);
+            if chars.peek() == Some(&'[') {
+                kept.push(chars.next().expect("just peeked"));
+                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
+                    kept.push(chars.next().expect("just peeked"));
+                }
+                if let Some(final_ch) = chars.next() {
+                    kept.push(final_ch);
+                }
+            }
+            continue;
+        }
+        if used + 1 >= width {
+            break;
+        }
+        kept.push(ch);
+        used += 1;
+    }
     format!("{kept}…")
 }
 
@@ -305,14 +369,14 @@ impl Boxed {
             let _ = write!(head, " {} ", paint(marker, self.color.then_some(RED)));
         }
         let head = truncate(&head, inner);
-        let filler = "─".repeat(inner.saturating_sub(head.chars().count()));
+        let filler = "─".repeat(inner.saturating_sub(display_width(&head)));
         let _ = writeln!(text, "┌{}{}┐", head, filler);
 
         let mut content = String::new();
         body(&mut content);
         for line in content.lines() {
             let line = truncate(line, inner);
-            let pad = " ".repeat(inner.saturating_sub(line.chars().count()));
+            let pad = " ".repeat(inner.saturating_sub(display_width(&line)));
             let _ = writeln!(text, "│ {line}{pad} │");
         }
         let _ = writeln!(text, "└{}┘", "─".repeat(inner));
@@ -342,7 +406,9 @@ mod tests {
         }
 
         fn commit_exists(&self, hash: &str) -> bool {
-            hash == "HEAD" && self.head.is_some()
+            // The scratch fixtures name commits that live only in the fixture text; a repository
+            // would know them, so every well-formed hash is treated as present.
+            !hash.is_empty()
         }
 
         fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
@@ -404,12 +470,13 @@ mod tests {
             "doing",
             &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/SESSION.md", NOTE)],
         );
-        let text = dashboard_with(&root, &opts(80, false), &head_ahead()).expect("the plan parses");
+        let text = dashboard_with(&root, &opts(80, false), &head_same()).expect("the plan parses");
         assert!(text.contains("┌ SESSION ─ plan/SESSION.md"), "{text}");
-        assert!(!text.contains("INTERRUPTED"), "HEAD equal to the base is not an interruption: {text}");
-        for line in ["task: D1", "now: `nominal_contour`", "blocked: nothing", "run: cargo test", "resume: read"] {
+        assert!(!text.contains("INTERRUPTED"), "a base equal to HEAD is not an interruption: {text}");
+        for line in ["task: D1", "blocked: nothing", "run: cargo test", "resume: read"] {
             assert!(text.contains(line), "the session block must carry `{line}`: {text}");
         }
+        assert!(text.contains("nominal_contour"), "the `now:` field names the symbol it stopped at: {text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -467,15 +534,33 @@ mod tests {
         let root = project("wide", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG)]);
         let narrow = dashboard_with(&root, &opts(40, false), &FakeGit { head: None }).expect("the plan parses");
         for line in narrow.lines() {
-            assert!(line.chars().count() <= 40, "line over the width: {:?}", line.chars().count());
+            assert!(display_width(line) <= 40, "line over the width: {:?}", display_width(line));
         }
         assert!(narrow.contains("…"), "a truncated line ends with the ellipsis: {narrow}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
+    fn an_ansi_colored_line_is_measured_without_its_escape_codes() {
+        // A colored header must keep the box at exactly `width` visible columns.
+        let root = project(
+            "colorbox",
+            &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/SESSION.md", NOTE)],
+        );
+        let text = dashboard_with(&root, &opts(60, true), &head_ahead()).expect("the plan parses");
+        for line in text.lines() {
+            assert!(display_width(line) <= 60, "colored line over the width: {:?}", display_width(line));
+        }
+        assert!(text.contains("\x1b["), "the output is styled: {text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn color_wraps_the_marker_but_no_color_prints_plain_text() {
-        let root = project("color", &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", BACKLOG)]);
+        let root = project(
+            "color",
+            &[("plan/STATUS.md", DOING_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/SESSION.md", NOTE)],
+        );
         let colored = dashboard_with(&root, &opts(80, true), &head_ahead()).expect("the plan parses");
         assert!(colored.contains("\x1b[33m[~]\x1b[0m"), "the doing marker is yellow: {colored}");
         assert!(colored.contains("\x1b[32m[x]\x1b[0m"), "a done marker is green: {colored}");

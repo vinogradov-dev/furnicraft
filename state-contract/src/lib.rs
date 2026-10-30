@@ -21,6 +21,7 @@
 //! }
 //! ```
 
+mod dashboard;
 mod git;
 mod parse;
 mod status;
@@ -28,6 +29,7 @@ mod validate;
 
 use std::path::Path;
 
+pub use dashboard::{DashboardOptions, dashboard, dashboard_with};
 pub use git::{Git, ProcessGit};
 pub use parse::parse_backlog;
 pub use status::render;
