@@ -15,8 +15,6 @@ variants, E 2D primitives, F revolution and sweep, G 2D booleans.
 
 - `[ ]` **A3** arcs in the object card and a viewport contour editor — a ring with an arc has no editor
   yet. `files: crates/ui/src/object_card.rs, crates/ui/src/lib.rs`
-- `[ ]` **A4** stable element ids for contour segments, so a command names a segment, not an index.
-  `files: crates/model/src/contour.rs, crates/model/src/lib.rs`
 - `[ ]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring.
   `files: crates/model/src/lib.rs, crates/geom/src/contour.rs`
 
@@ -36,5 +34,6 @@ variants, E 2D primitives, F revolution and sweep, G 2D booleans.
 
 ## Done
 
+- `[x]` **A4** stable ids for contour segments — `ea3153a`
 - `[x]` **A2** contour as a ring of segments — `0833b4c`
 - `[x]` **A1** the contour segment type — `e7551ca`

@@ -217,7 +217,7 @@ impl ObjectCard {
         section(ui, "object.geometry", "Geometry", true, |ui| {
             ui.label(RichText::new(summary.kind).strong());
             if let Some(contour) = &summary.contour {
-                let arcs = contour.segments().iter().filter(|segment| segment.is_arc()).count();
+                let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
                 ui.label(format!("Contour segments  {}", contour.segments().len()));
                 if arcs > 0 {
                     ui.label(format!("Arcs  {arcs}"));
@@ -396,9 +396,8 @@ fn format_contour(contour: &Contour) -> String {
 fn contour_corners(contour: &Contour) -> Option<Vec<[Length; 2]>> {
     contour
         .segments()
-        .iter()
         .map(|segment| match segment {
-            furnicraft_model::ContourSegment::Line { start, .. } => Some(*start),
+            furnicraft_model::ContourSegment::Line { start, .. } => Some(start),
             furnicraft_model::ContourSegment::Arc { .. } => None,
         })
         .collect()

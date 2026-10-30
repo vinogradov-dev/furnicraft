@@ -18,6 +18,7 @@ const V8: &str = include_str!("golden/scene-v8.fcs");
 const V9: &str = include_str!("golden/scene-v9.fcs");
 const V10: &str = include_str!("golden/scene-v10.fcs");
 const V11: &str = include_str!("golden/scene-v11.fcs");
+const V12: &str = include_str!("golden/scene-v12.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -49,9 +50,14 @@ impl Drop for TempDir {
 
 #[test]
 fn every_golden_file_loads_and_round_trips() {
-    for (name, text) in
-        [("version 7", V7), ("version 8", V8), ("version 9", V9), ("version 10", V10), ("version 11", V11)]
-    {
+    for (name, text) in [
+        ("version 7", V7),
+        ("version 8", V8),
+        ("version 9", V9),
+        ("version 10", V10),
+        ("version 11", V11),
+        ("version 12", V12),
+    ] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
             scene.document().schema_version(),
@@ -130,12 +136,33 @@ fn a_version_eleven_file_loads_a_contour_with_an_arc() {
         .and_then(furnicraft_model::Constructive::contour)
         .expect("the contour must load");
     assert_eq!(contour.segments().len(), 5, "four lines and one round corner");
-    assert_eq!(contour.segments().iter().filter(|segment| segment.is_arc()).count(), 1);
+    assert_eq!(contour.segments().filter(|segment| segment.is_arc()).count(), 1);
     assert!(!contour.is_line_only(), "the arc survives the load");
 
     let rewritten = scene.to_json().expect("serialize");
     assert!(rewritten.contains("\"arc\""), "the arc is written back as a segment");
+    assert!(rewritten.contains("\"id\": 1"), "a version 11 ring is saved with fresh segment ids");
     let again = SceneFile::parse(&rewritten).expect("the rewritten version 11 file loads");
+    assert_eq!(again.document(), scene.document());
+}
+
+#[test]
+fn a_version_twelve_file_loads_segment_ids_and_their_counter() {
+    let scene = SceneFile::parse(V12).expect("version 12");
+    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
+    let contour = object
+        .geometry()
+        .as_constructive()
+        .and_then(furnicraft_model::Constructive::contour)
+        .expect("the contour must load");
+    let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 2, 3, 4, 5], "the stored ids are kept, not renumbered");
+    assert_eq!(contour.next_segment_id().get(), 6);
+    assert!(contour.segment(furnicraft_model::ContourSegmentId::new(3).expect("id")).is_some_and(|s| s.is_arc()));
+
+    let rewritten = scene.to_json().expect("serialize");
+    assert!(rewritten.contains("\"next_segment_id\": 6"), "the counter survives a save");
+    let again = SceneFile::parse(&rewritten).expect("the rewritten version 12 file loads");
     assert_eq!(again.document(), scene.document());
 }
 
