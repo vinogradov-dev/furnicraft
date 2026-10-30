@@ -76,6 +76,12 @@ add it there and give it a test next to the others. A check that needs the files
 in `check_with` and takes a `&dyn Git` (`src/git.rs`) so its test needs no repository: implement the
 trait for a fake with a `head`, a commit list and an ancestor list.
 
+## Used by
+
+FurniCraft — a native cabinet-furniture editor in Rust — is the first consumer: `cargo xtask plan` calls
+`state_contract::check`, `cargo xtask status` calls `state_contract::status`, and its `AGENTS.md` §1.1
+points at `templates/AGENTS.section.md`.
+
 ## License
 
 MIT OR Apache-2.0.
