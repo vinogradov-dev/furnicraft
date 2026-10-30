@@ -1,0 +1,20 @@
+[package]
+name = "state-contract"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "A plan gate: parses and validates STATUS, BACKLOG and SESSION notes for any project"
+keywords = ["plan", "agents", "ci"]
+categories = ["development-tools"]
+
+# The point of the crate is that it stands alone: no dependencies at all. The tests use only the
+# standard library as well.
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

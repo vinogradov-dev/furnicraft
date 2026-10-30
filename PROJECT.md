@@ -224,6 +224,7 @@ only when the crates exist.
 | L8 | `apps/furnicraft` | Composition root: `eframe` window, input, `egui` ↔ `wgpu` paint callback, constructs `TruckKernel` and evaluates the sample document | ui, engine, render, scene, model, param, mesh, kernel, kernel-truck, geom, units, eframe |
 | dev | `furnicraft-testkit` | Fixtures and helpers for tests | model, units |
 | tool | `xtask` | Workspace checks (`cargo xtask layers`) | serde_json |
+| tool | `state-contract` | Plan gate: parses and validates `STATUS`/`BACKLOG`/`SESSION` for any project; reusable, zero dependencies | — |
 
 ```text
 apps/furnicraft        composition root (window, input, egui <-> wgpu, TruckKernel)
