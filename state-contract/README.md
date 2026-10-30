@@ -20,6 +20,15 @@ prints at the start of a session: the state line, the current task and the next 
 reads `README.md`, when the project has one, and rejects a status line or a milestone there: a README
 describes the product, the state lives in `plan/STATUS.md`.
 
+## Usage
+
+`cargo run -p state-contract -- dashboard` shows the current state with source paths: every section
+(`STATE`, `NOW`, `NEXT`, `SESSION`, `QUESTIONS`, `DEBT`) names the file it was read from; sections for
+missing files are omitted. Flags: `--root <path>` (default `.`), `--width <n>` (default 80, longer
+lines truncate with `…`), `--no-color` (ANSI is on only when stdout is a terminal). A session that
+looks interrupted — `state=doing`, a `plan/SESSION.md`, `base != HEAD` and open `[ ]` steps — carries
+a red `INTERRUPTED` marker in its header.
+
 ## Why
 
 An agent starts with no memory of the previous session. The plan files are that memory; the gate is
