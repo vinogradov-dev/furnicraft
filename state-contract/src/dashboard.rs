@@ -367,7 +367,10 @@ impl Boxed {
 
     /// Appends one framed section; `marker` is the red flag inside the header, when there is one.
     fn section(&mut self, title: &str, path: &str, marker: Option<&str>, body: impl FnOnce(&mut String)) {
-        let inner = self.width.saturating_sub(4);
+        // The frame costs two columns: `┌` and `┐`. A header line is `┌ text ┐`, so its inner field
+        // is `width - 2`; a body line is `│ ` + text + pad + ` │`, whose field is two narrower.
+        let inner = self.width.saturating_sub(2).max(1);
+        let body_inner = inner.saturating_sub(2).max(1);
         let mut text = String::new();
         let label = paint(title, self.color.then_some(BOLD));
         let source = paint(path, self.color.then_some(DIM));
@@ -384,8 +387,8 @@ impl Boxed {
         let mut content = String::new();
         body(&mut content);
         for line in content.lines() {
-            let line = truncate(line, inner);
-            let pad = " ".repeat(inner.saturating_sub(display_width(&line)));
+            let line = truncate(line, body_inner);
+            let pad = " ".repeat(body_inner.saturating_sub(display_width(&line)));
             let _ = writeln!(text, "│ {line}{pad} │");
         }
         let _ = writeln!(text, "└{}┘", "─".repeat(inner));
@@ -551,6 +554,43 @@ mod tests {
             assert!(display_width(line) <= 40, "line over the width: {:?}", display_width(line));
         }
         assert!(narrow.contains("…"), "a truncated line ends with the ellipsis: {narrow}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_line_of_a_plain_box_is_exactly_the_requested_width() {
+        // The padding counts characters, not display columns: `·` and `─` must each cost one column.
+        let root = project(
+            "boxwidth",
+            &[
+                ("plan/STATUS.md", IDLE_STATUS),
+                ("plan/BACKLOG.md", BACKLOG),
+                ("plan/questions.md", "# Open questions\n\n- Folder naming · version statuses.\n"),
+            ],
+        );
+        let text = dashboard_with(&root, &opts(50, false), &FakeGit { head: None }).expect("the plan parses");
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            assert_eq!(line.chars().count(), 50, "line is not flush at the width: {line:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_line_of_a_colored_box_is_exactly_the_requested_width() {
+        // With ANSI on, the same rule holds over display columns: escape codes take no space.
+        let root = project(
+            "colorwidth",
+            &[
+                ("plan/STATUS.md", DOING_STATUS),
+                ("plan/BACKLOG.md", BACKLOG),
+                ("plan/SESSION.md", NOTE),
+                ("plan/questions.md", "# Open questions\n\n- Folder naming · version statuses.\n"),
+            ],
+        );
+        let text = dashboard_with(&root, &opts(50, true), &head_ahead()).expect("the plan parses");
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            assert_eq!(display_width(line), 50, "colored line is not flush at the width: {line:?}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
