@@ -238,16 +238,36 @@ pub fn parse_map(text: &str) -> Vec<MapRow> {
     rows
 }
 
-/// The cells of one table line: outer pipes stripped, each cell trimmed of spaces and backticks.
+/// The cells of one table line: outer pipes stripped, each cell trimmed of spaces, with every
+/// inline-code span unwrapped — `` `path` (`anchor`) `` reads as `path (anchor)`, so no cell can
+/// carry a stray backtick.
 fn split_cells(line: &str) -> Vec<String> {
-    line.trim()
-        .strip_prefix('|')
-        .unwrap_or(line.trim())
-        .strip_suffix('|')
-        .unwrap_or(line.trim().strip_prefix('|').unwrap_or(line.trim()))
-        .split('|')
-        .map(|cell| cell.trim().trim_matches('`').trim().to_owned())
-        .collect()
+    let trimmed = line.trim();
+    let body = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let body = body.strip_suffix('|').unwrap_or(body);
+    body.split('|').map(|cell| unwrap_code(cell.trim())).collect()
+}
+
+/// Replaces every balanced `` `code` `` span in `text` by its contents; an unpaired backtick stays.
+fn unwrap_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('`') {
+        let (before, after) = rest.split_at(start);
+        out.push_str(before);
+        match after[1..].find('`') {
+            Some(end) => {
+                out.push_str(&after[1..end + 1]);
+                rest = &after[end + 2..];
+            }
+            None => {
+                out.push_str(&after[1..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
 }
 
 /// The value of a non-empty `key:` line of a session note.
@@ -322,9 +342,13 @@ mod tests {
         let rows = parse_map(text);
         assert_eq!(rows.len(), 2, "the row without a `Where` is skipped: {rows:?}");
         assert_eq!(rows[0].feature, "Contour ring");
-        assert_eq!(rows[0].where_, "crates/model/src/lib.rs (`ContourRing`)");
+        assert_eq!(
+            rows[0].where_, "crates/model/src/lib.rs (ContourRing)",
+            "inline code is unwrapped, no stray backtick"
+        );
+        assert!(!rows[0].where_.contains('`'), "{:?}", rows[0].where_);
         assert_eq!(rows[1].feature, "Panel commands", "surrounding whitespace is trimmed");
-        assert_eq!(rows[1].where_, "crates/engine/src/panel_cmds.rs (`panel.*`)");
+        assert_eq!(rows[1].where_, "crates/engine/src/panel_cmds.rs (panel.*)");
     }
 
     #[test]

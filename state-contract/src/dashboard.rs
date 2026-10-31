@@ -565,11 +565,12 @@ mod tests {
         let map = "# Map\n\n| Feature | Where | Notes |\n|---|---|---|\n\
                    | Contour ring | `crates/model/src/lib.rs` (`ContourRing`, `assemble`) | ~4600 lines |\n\
                    | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |\n";
-        let root = project("map", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
+        let root =
+            project("map", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
         let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
         assert!(text.contains("┌ MAP ─ plan/map.md"), "{text}");
-        assert!(text.contains("Contour ring — crates/model/src/lib.rs (`ContourRing`, `assemble`)"), "{text}");
-        assert!(text.contains("Panel commands — crates/engine/src/panel_cmds.rs (`panel.*`)"), "{text}");
+        assert!(text.contains("Contour ring — crates/model/src/lib.rs (ContourRing, assemble)"), "{text}");
+        assert!(text.contains("Panel commands — crates/engine/src/panel_cmds.rs (panel.*)"), "{text}");
         assert!(!text.contains("~4600"), "the `Notes` column stays out of the block: {text}");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -578,7 +579,11 @@ mod tests {
     fn an_empty_or_headerless_map_prints_no_block() {
         let root = project(
             "map-empty",
-            &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", "# Map\n\nNothing yet.\n")],
+            &[
+                ("plan/STATUS.md", IDLE_STATUS),
+                ("plan/BACKLOG.md", BACKLOG),
+                ("plan/map.md", "# Map\n\nNothing yet.\n"),
+            ],
         );
         let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
         assert!(!text.contains("MAP"), "a map with no table rows prints no block: {text}");
@@ -589,7 +594,8 @@ mod tests {
     fn long_map_rows_are_truncated_at_the_width() {
         let map = "| Feature | Where | Notes |\n|---|---|---|\n\
                    | A very long feature name indeed | `crates/model/src/some_deeply_nested_module.rs` (`a_long_anchor`) | — |\n";
-        let root = project("map-cut", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
+        let root =
+            project("map-cut", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
         let text = dashboard_with(&root, &opts(40, false), &FakeGit { head: None }).expect("the plan parses");
         assert!(text.contains("┌ MAP ─ plan/map.md"), "{text}");
         assert!(text.contains('…'), "a row longer than the width is cut with an ellipsis: {text}");
@@ -601,12 +607,16 @@ mod tests {
 
     #[test]
     fn a_colored_map_wraps_its_header_but_no_color_stays_plain() {
-        let map = "| Feature | Where | Notes |\n|---|---|---|\n| Ring | `crates/model/src/lib.rs` (`ContourRing`) | — |\n";
+        let map =
+            "| Feature | Where | Notes |\n|---|---|---|\n| Ring | `crates/model/src/lib.rs` (`ContourRing`) | — |\n";
         let files = [("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)];
         let root = project("map-color", &files);
         let colored = dashboard_with(&root, &opts(80, true), &FakeGit { head: None }).expect("the plan parses");
         assert!(colored.contains("\x1b[1mMAP\x1b[0m"), "the header title is bold: {colored}");
-        assert!(colored.contains("│ Ring — crates/model/src/lib.rs (`ContourRing`)"), "the body line carries no escapes: {colored}");
+        assert!(
+            colored.contains("│ Ring — crates/model/src/lib.rs (ContourRing)"),
+            "the body line carries no escapes: {colored}"
+        );
         let plain = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
         assert!(plain.contains("┌ MAP ─ plan/map.md"), "--no-color still prints the block: {plain}");
         assert!(!plain.contains('\x1b'), "no escape codes without color: {plain:?}");
