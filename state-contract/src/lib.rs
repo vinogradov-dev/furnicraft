@@ -31,7 +31,7 @@ use std::path::Path;
 
 pub use dashboard::{DashboardOptions, dashboard, dashboard_with};
 pub use git::{Git, ProcessGit};
-pub use parse::{MapRow, parse_backlog, parse_map};
+pub use parse::parse_backlog;
 pub use status::render;
 pub use validate::{MAX_SESSION_LINES, MAX_STATUS_LINES, README_RULE, analyze};
 

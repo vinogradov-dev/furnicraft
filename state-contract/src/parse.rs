@@ -193,7 +193,7 @@ fn clean_path(path: &str) -> &str {
 
 /// One row of the `plan/map.md` feature table: the feature and where it lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MapRow {
+pub(crate) struct MapRow {
     /// The feature name, as the first column spells it.
     pub feature: String,
     /// The path plus the anchor in parentheses; what to grep for.
@@ -205,7 +205,7 @@ pub struct MapRow {
 /// The header row must mention both `Feature` and `Where`; anything else — prose lines, other
 /// tables, the `Notes` column — is ignored. Leading and trailing pipes and surrounding whitespace
 /// are tolerated, backticks around cells are stripped, and a row with an empty `Where` is skipped.
-pub fn parse_map(text: &str) -> Vec<MapRow> {
+pub(crate) fn parse_map(text: &str) -> Vec<MapRow> {
     let mut rows = Vec::new();
     let mut columns: Option<(usize, usize)> = None;
     for line in text.lines() {

@@ -7,7 +7,7 @@ as a `MAP` block.
 
 | Feature | Where | Notes |
 |---|---|---|
-| Contour ring, segment ids | `crates/model/src/lib.rs` (`Contour`, `ContourSegmentId`, `assemble`) | ~10300 lines; search the anchor |
+| Contour ring, segment ids | `crates/model/src/lib.rs` (`ContourRing`, `ContourSegmentId`, `assemble`) | ~4600 lines; search the anchor |
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`) | whole file |
 | Contour segment value type | `crates/model/src/contour.rs` (`ContourSegment`, Line/Arc) | whole file |
 | Contour geometry math | `crates/geom/src/contour.rs` (`offset`, `trimmed`, `intersections_with`, `sample`) | whole file |
