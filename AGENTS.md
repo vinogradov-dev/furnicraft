@@ -17,6 +17,8 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
    files and their direct callers. **Do not scan the workspace**; if the hint is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
+Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the whole file.
+
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
 area, never read them at start. `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
@@ -281,6 +283,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
+- `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
 - `cargo xtask dashboard` prints the state with the file each section comes from.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/questions.md` — decisions waiting for the owner.

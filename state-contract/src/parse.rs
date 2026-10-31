@@ -191,6 +191,85 @@ fn clean_path(path: &str) -> &str {
     path.trim().trim_end_matches(['`', '.', ',', ';']).trim().trim_start_matches('`').trim()
 }
 
+/// One row of the `plan/map.md` feature table: the feature and where it lives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapRow {
+    /// The feature name, as the first column spells it.
+    pub feature: String,
+    /// The path plus the anchor in parentheses; what to grep for.
+    pub where_: String,
+}
+
+/// Parses the Markdown table in `plan/map.md`: one [`MapRow`] per data row.
+///
+/// The header row must mention both `Feature` and `Where`; anything else — prose lines, other
+/// tables, the `Notes` column — is ignored. Leading and trailing pipes and surrounding whitespace
+/// are tolerated, backticks around cells are stripped, and a row with an empty `Where` is skipped.
+pub fn parse_map(text: &str) -> Vec<MapRow> {
+    let mut rows = Vec::new();
+    let mut columns: Option<(usize, usize)> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Only pipe-delimited lines belong to a table; prose between tables is ignored.
+        if !trimmed.starts_with('|') && !trimmed.ends_with('|') {
+            continue;
+        }
+        let cells: Vec<String> = split_cells(trimmed);
+        if let Some((feature, where_)) = columns {
+            // A separator row (`|---|---|`) has only dashes and colons in every cell: skip it.
+            if cells.iter().all(|cell| cell.is_empty() || cell.chars().all(|c| matches!(c, '-' | ':'))) {
+                continue;
+            }
+            let feature = cells.get(feature).cloned().unwrap_or_default();
+            let where_ = cells.get(where_).cloned().unwrap_or_default();
+            // A row without an anchor is no use to a reader looking for a place to start.
+            if !where_.is_empty() {
+                rows.push(MapRow { feature, where_ });
+            }
+            continue;
+        }
+        // The first table whose header names both columns is *the* map table; earlier ones lose.
+        let lower: Vec<String> = cells.iter().map(|cell| cell.to_lowercase()).collect();
+        if let (Some(f), Some(w)) = (lower.iter().position(|c| c == "feature"), lower.iter().position(|c| c == "where"))
+        {
+            columns = Some((f, w));
+        }
+    }
+    rows
+}
+
+/// The cells of one table line: outer pipes stripped, each cell trimmed of spaces, with every
+/// inline-code span unwrapped — `` `path` (`anchor`) `` reads as `path (anchor)`, so no cell can
+/// carry a stray backtick.
+fn split_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let body = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let body = body.strip_suffix('|').unwrap_or(body);
+    body.split('|').map(|cell| unwrap_code(cell.trim())).collect()
+}
+
+/// Replaces every balanced `` `code` `` span in `text` by its contents; an unpaired backtick stays.
+fn unwrap_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('`') {
+        let (before, after) = rest.split_at(start);
+        out.push_str(before);
+        match after[1..].find('`') {
+            Some(end) => {
+                out.push_str(&after[1..end + 1]);
+                rest = &after[end + 2..];
+            }
+            None => {
+                out.push_str(&after[1..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
+}
+
 /// The value of a non-empty `key:` line of a session note.
 pub(crate) fn session_field(session: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
@@ -250,5 +329,33 @@ mod tests {
         assert_eq!(session_field(note, "now").as_deref(), Some("the arc arm"));
         assert_eq!(session_field(note, "goal"), None, "an empty field is not a value");
         assert_eq!(session_field(note, "resume"), None);
+    }
+
+    #[test]
+    fn a_map_table_yields_one_row_per_feature() {
+        let text = "# Map\n\nProse before the table.\n\n\
+                    | Feature | Where | Notes |\n\
+                    |---|---|---|\n\
+                    | Contour ring | `crates/model/src/lib.rs` (`ContourRing`) | ~4600 lines |\n\
+                    |  Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) |  small  |\n\
+                    | No anchor here |  | — |\n";
+        let rows = parse_map(text);
+        assert_eq!(rows.len(), 2, "the row without a `Where` is skipped: {rows:?}");
+        assert_eq!(rows[0].feature, "Contour ring");
+        assert_eq!(
+            rows[0].where_, "crates/model/src/lib.rs (ContourRing)",
+            "inline code is unwrapped, no stray backtick"
+        );
+        assert!(!rows[0].where_.contains('`'), "{:?}", rows[0].where_);
+        assert_eq!(rows[1].feature, "Panel commands", "surrounding whitespace is trimmed");
+        assert_eq!(rows[1].where_, "crates/engine/src/panel_cmds.rs (panel.*)");
+    }
+
+    #[test]
+    fn a_map_without_its_header_is_no_rows() {
+        let missing_header = "| Anything | Else |\n|---|---|\n| a | b |\n";
+        assert!(parse_map(missing_header).is_empty(), "a table without `Feature`/`Where` is not the map");
+        assert!(parse_map("").is_empty(), "an empty file has no rows");
+        assert!(parse_map("# Map\n\nNo table at all.\n").is_empty(), "prose alone has no rows");
     }
 }
