@@ -16,6 +16,7 @@ now: the exact sub-step in progress, with the symbol or file
 blocked: nothing | what it waits for
 run: the command that shows the current state (test, clippy, a manual check)
 resume: the first action a fresh session takes, as a command or a concrete edit
+map: the plan/map.md row to start from, one anchor line (optional)
 decisions: choices made during the task that a reader would otherwise re-litigate
 ```
 
@@ -30,3 +31,4 @@ Rules:
 - `run` must be a command a fresh session can execute immediately;
 - when the task is committed, mark it `[x]` in `plan/BACKLOG.md` with the commit hash, rewrite
   `plan/STATUS.md` (new `STATE` line and `Next`), and delete this file.
+- `map:` is optional; when present, it names the `plan/map.md` row the next session starts from.

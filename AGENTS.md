@@ -17,6 +17,9 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
    files and their direct callers. **Do not scan the workspace**; if the hint is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
+Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the
+whole file. If the anchor is wrong or missing, fix the row — the map is a contract, not a suggestion.
+
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
 area, never read them at start. `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
@@ -232,6 +235,8 @@ The commit closes the operation; the plan files close it too, in the same change
 3. Delete `plan/SESSION.md`; set `state=idle`.
 4. Move a newly discovered gap to `plan/debt.md` and an owner decision to `plan/questions.md`. Neither
    file grows unless something new is found; do not re-copy entries that are already there.
+5. If the feature moved (a new module, a rename), update its row in `plan/map.md`; if the feature is
+   new, add a row. A stale row is a defect the reader fixes.
 
 Starting a task is the mirror image: copy `plan/SESSION.template.md` to `plan/SESSION.md`, fill it in,
 set `state=doing` and `[~]` on that one task, and update `SESSION.md` after every meaningful step and
@@ -281,6 +286,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
+- `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
 - `cargo xtask dashboard` prints the state with the file each section comes from.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/questions.md` — decisions waiting for the owner.

@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::parse::{backlog_entries, parse_state, parse_task_line, session_field};
+use crate::parse::{backlog_entries, parse_map, parse_state, parse_task_line, session_field};
 use crate::{Git, ProcessGit, TaskStatus};
 
 /// The backlog tasks one section shows at most; the full list stays in `plan/BACKLOG.md`.
@@ -47,6 +47,7 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     };
     let questions = read_optional(root, "plan/questions.md")?;
     let debt = read_optional(root, "plan/debt.md")?;
+    let map = read_optional(root, "plan/map.md")?;
 
     let state = parse_state(&status)?;
     let head = git.head();
@@ -120,6 +121,18 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
         if !counts.is_empty() {
             out.section("DEBT", "plan/debt.md", None, |body| {
                 let _ = writeln!(body, "{}", counts.join(" · "));
+            });
+        }
+    }
+
+    // The feature map is an optional starting point: no file, or no table rows, means no block.
+    if let Some(map) = map.as_deref() {
+        let rows = parse_map(map);
+        if !rows.is_empty() {
+            out.section("MAP", "plan/map.md", None, |body| {
+                for row in &rows {
+                    let _ = writeln!(body, "{} — {}", row.feature, row.where_);
+                }
             });
         }
     }
@@ -543,6 +556,70 @@ mod tests {
         let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
         assert!(!text.contains("QUESTIONS"), "{text}");
         assert!(!text.contains("DEBT"), "{text}");
+        assert!(!text.contains("MAP"), "a missing plan/map.md omits the map section too: {text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_map_file_becomes_a_block_of_feature_rows() {
+        let map = "# Map\n\n| Feature | Where | Notes |\n|---|---|---|\n\
+                   | Contour ring | `crates/model/src/lib.rs` (`ContourRing`, `assemble`) | ~4600 lines |\n\
+                   | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |\n";
+        let root =
+            project("map", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
+        let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
+        assert!(text.contains("┌ MAP ─ plan/map.md"), "{text}");
+        assert!(text.contains("Contour ring — crates/model/src/lib.rs (ContourRing, assemble)"), "{text}");
+        assert!(text.contains("Panel commands — crates/engine/src/panel_cmds.rs (panel.*)"), "{text}");
+        assert!(!text.contains("~4600"), "the `Notes` column stays out of the block: {text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_or_headerless_map_prints_no_block() {
+        let root = project(
+            "map-empty",
+            &[
+                ("plan/STATUS.md", IDLE_STATUS),
+                ("plan/BACKLOG.md", BACKLOG),
+                ("plan/map.md", "# Map\n\nNothing yet.\n"),
+            ],
+        );
+        let text = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
+        assert!(!text.contains("MAP"), "a map with no table rows prints no block: {text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn long_map_rows_are_truncated_at_the_width() {
+        let map = "| Feature | Where | Notes |\n|---|---|---|\n\
+                   | A very long feature name indeed | `crates/model/src/some_deeply_nested_module.rs` (`a_long_anchor`) | — |\n";
+        let root =
+            project("map-cut", &[("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)]);
+        let text = dashboard_with(&root, &opts(40, false), &FakeGit { head: None }).expect("the plan parses");
+        assert!(text.contains("┌ MAP ─ plan/map.md"), "{text}");
+        assert!(text.contains('…'), "a row longer than the width is cut with an ellipsis: {text}");
+        for line in text.lines().filter(|line| !line.is_empty()) {
+            assert_eq!(display_width(line), 40, "every box line keeps the requested width: {line:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_colored_map_wraps_its_header_but_no_color_stays_plain() {
+        let map =
+            "| Feature | Where | Notes |\n|---|---|---|\n| Ring | `crates/model/src/lib.rs` (`ContourRing`) | — |\n";
+        let files = [("plan/STATUS.md", IDLE_STATUS), ("plan/BACKLOG.md", BACKLOG), ("plan/map.md", map)];
+        let root = project("map-color", &files);
+        let colored = dashboard_with(&root, &opts(80, true), &FakeGit { head: None }).expect("the plan parses");
+        assert!(colored.contains("\x1b[1mMAP\x1b[0m"), "the header title is bold: {colored}");
+        assert!(
+            colored.contains("│ Ring — crates/model/src/lib.rs (ContourRing)"),
+            "the body line carries no escapes: {colored}"
+        );
+        let plain = dashboard_with(&root, &opts(80, false), &FakeGit { head: None }).expect("the plan parses");
+        assert!(plain.contains("┌ MAP ─ plan/map.md"), "--no-color still prints the block: {plain}");
+        assert!(!plain.contains('\x1b'), "no escape codes without color: {plain:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

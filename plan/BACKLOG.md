@@ -18,7 +18,7 @@ L is scene lighting.
 
 - `[ ]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
   in the viewport with handles and a preview, leave by applying one command or by cancelling.
-  `files: crates/ui, apps/furnicraft`
+  `files: crates/ui/src/panel_card.rs, crates/ui/src/object_card.rs, apps/furnicraft`
 
 ## Next
 
