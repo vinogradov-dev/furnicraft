@@ -4,6 +4,7 @@ One row per feature: where it lives and the anchor to grep for. Before reading a
 the feature here and read the range around its anchor, not the whole file. Update a row only when
 the feature moves — a new module or a rename — not after every task. The dashboard prints this file
 as a `MAP` block.
+The plan gate does not check this file; a stale row is a defect the reader fixes.
 
 | Feature | Where | Notes |
 |---|---|---|
