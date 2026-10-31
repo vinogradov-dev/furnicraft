@@ -350,6 +350,8 @@ impl PanelCard {
                         show_corner_band_row(ui, session, panel, panel_id, corner, &band, actions);
                     }
                 }
+                // The contour panel card is task D2; until then a ring band is not offered here.
+                SegmentSource::Ring(_) => {}
             }
         }
 
@@ -387,6 +389,7 @@ impl PanelCard {
                                     material: material.id(),
                                     included_in_size: false,
                                 }),
+                                SegmentSource::Ring(_) => {}
                             }
                         }
                     }
@@ -597,10 +600,17 @@ fn segment_exists(panel: &Panel, source: SegmentSource) -> bool {
     match source {
         SegmentSource::Edge(edge) => matches!(edge.get(), 1..=4),
         SegmentSource::Corner(corner) => panel.corner_feature(corner).is_some(),
+        SegmentSource::Ring(segment) => {
+            panel.outline_contour().is_some_and(|contour| contour.index_of(segment).is_some())
+        }
     }
 }
 
 fn available_band_segments(panel: &Panel) -> Vec<SegmentSource> {
+    // A contour panel's banding is per ring segment and belongs to its own card (task D2).
+    if panel.is_contour() {
+        return Vec::new();
+    }
     let mut available = Vec::new();
     for edge in RectEdge::ALL {
         let edge = edge.id();
@@ -621,6 +631,7 @@ fn segment_label(panel: &Panel, source: SegmentSource) -> String {
     match source {
         SegmentSource::Edge(edge) => edge_label(edge.get()).to_owned(),
         SegmentSource::Corner(corner) => corner_segment_label(panel, corner),
+        SegmentSource::Ring(segment) => format!("Segment {}", segment.get()),
     }
 }
 
@@ -640,6 +651,7 @@ fn band_key(source: SegmentSource) -> u64 {
     match source {
         SegmentSource::Edge(edge) => u64::from(edge.get()),
         SegmentSource::Corner(corner) => 1_000 + u64::from(corner.get()),
+        SegmentSource::Ring(segment) => 2_000 + u64::from(segment.get()),
     }
 }
 

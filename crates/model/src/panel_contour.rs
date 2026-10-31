@@ -11,9 +11,33 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    BandingSpec, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel, PanelNominalSize, RectCorner,
-    RectEdge, VertexId,
+    BandingSpec, ContourSegmentId, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel,
+    PanelNominalSize, RectCorner, RectEdge, RingBanding, VertexId,
 };
+
+/// The ring of a contour panel as the nominal outline, with one source per segment.
+///
+/// The stored ring is already the finished shape, so nothing is offset or rebuilt here. The size is
+/// re-derived rather than trusted: a resize candidate that no longer matches the ring is an error,
+/// because a contour panel is sized by its ring and cannot be stretched to a rectangle.
+fn ring_segments(
+    ring: &crate::Contour,
+    nominal_size: PanelNominalSize,
+) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
+    let (min, max) = ring.bounds_micrometres();
+    let length = max[0].saturating_sub(min[0]);
+    let width = max[1].saturating_sub(min[1]);
+    if min != [0, 0] || length != nominal_size.length().micrometres() || width != nominal_size.width().micrometres() {
+        return Err(PanelContourError::RingSizeMismatch { start: min, length, width });
+    }
+    let mut segments = Vec::with_capacity(ring.entries().len());
+    let mut sources = Vec::with_capacity(ring.entries().len());
+    for entry in ring.entries() {
+        segments.push(entry.segment().to_geom()?);
+        sources.push(SegmentSource::Ring(entry.id()));
+    }
+    Ok((Contour::new(segments, true)?, sources))
+}
 
 /// Why a panel's nominal contour cannot be built.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -21,6 +45,9 @@ pub enum PanelContourError {
     /// A line, arc or closed contour is not geometrically valid.
     #[error(transparent)]
     Geometry(#[from] ContourError),
+    /// A stored ring segment cannot become a geometry segment.
+    #[error(transparent)]
+    Segment(#[from] crate::ContourSegmentError),
     /// Corner treatments consume the whole edge between them.
     #[error("corner features leave no straight edge on edge {edge}")]
     FeatureOverlap {
@@ -45,19 +72,38 @@ pub enum PanelContourError {
         /// The rejected edge.
         edge: EdgeId,
     },
+    /// The requested ring segment is not part of the panel outline.
+    #[error("segment {segment} is not part of the panel outline")]
+    UnsupportedRingSegment {
+        /// The rejected ring segment.
+        segment: ContourSegmentId,
+    },
+    /// A contour panel's stored ring no longer matches the nominal size it stores.
+    #[error("the contour panel ring starts at {start:?} micrometres and spans {length} by {width} micrometres")]
+    RingSizeMismatch {
+        /// The ring's minimum corner, in micrometres.
+        start: [i64; 2],
+        /// The ring's extent along X, in micrometres.
+        length: i64,
+        /// The ring's extent along Y, in micrometres.
+        width: i64,
+    },
 }
 
 /// Where one nominal contour segment comes from.
 ///
 /// The same value identifies a banded segment in [`Panel::band_order`], so it is serialized with the
-/// panel.
+/// panel. A rectangular outline names its four edges and its corner treatments; a contour ring
+/// names the ring segment itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SegmentSource {
-    /// A straight or bowed edge.
+    /// A straight or bowed edge of the nominal rectangle.
     Edge(EdgeId),
-    /// A corner radius or chamfer.
+    /// A corner radius or chamfer of the nominal rectangle.
     Corner(VertexId),
+    /// One segment of a contour ring, addressed by its stable id inside that ring.
+    Ring(ContourSegmentId),
 }
 
 /// A maximal tangent-continuous chain of nominal contour segments.
@@ -113,6 +159,9 @@ impl Panel {
     /// Positive bow sagitta is outward. The outline is counter-clockwise and its bounds are the
     /// nominal rectangle extended by outward bows; a radius or chamfer does not move the rectangle
     /// bounds unless it consumes a whole side, which is rejected.
+    ///
+    /// A contour panel has no rectangle to build: its ring *is* the outline, so this converts the
+    /// stored ring to millimetres unchanged.
     pub fn nominal_contour(&self) -> Result<Contour, PanelContourError> {
         self.nominal_contour_for(self.nominal_size())
     }
@@ -172,6 +221,14 @@ impl Panel {
         Ok(self.contour_paths()?.into_iter().find(|path| path.edge_ids().any(|candidate| candidate == edge)))
     }
 
+    /// Finds the tangent-continuous path that contains a ring segment.
+    pub fn path_containing_ring_segment(
+        &self,
+        segment: ContourSegmentId,
+    ) -> Result<Option<ContourPath>, PanelContourError> {
+        Ok(self.contour_paths()?.into_iter().find(|path| path.sources().contains(&SegmentSource::Ring(segment))))
+    }
+
     /// Adds or replaces banding on one edge segment.
     ///
     /// A banding belongs to its segment; neighbouring segments of the same tangent path keep their
@@ -192,6 +249,30 @@ impl Panel {
         Ok(self.edge_banding.len() != before)
     }
 
+    /// Adds or replaces banding on one segment of a contour ring.
+    ///
+    /// A ring segment is already its own segment, so nothing is grouped or copied to neighbours: one
+    /// record belongs to one [`ContourSegmentId`] and disappears with it when the outline is edited.
+    pub fn apply_ring_banding(&mut self, band: RingBanding) -> Result<(), PanelContourError> {
+        let segment = band.segment();
+        if self.outline_contour().is_none() || self.path_containing_ring_segment(segment)?.is_none() {
+            return Err(PanelContourError::UnsupportedRingSegment { segment });
+        }
+        self.ring_banding.retain(|existing| existing.segment() != segment);
+        self.ring_banding.push(band);
+        Ok(())
+    }
+
+    /// Removes banding from one ring segment.
+    pub fn clear_ring_banding(&mut self, segment: ContourSegmentId) -> Result<bool, PanelContourError> {
+        if self.outline_contour().is_none() || self.path_containing_ring_segment(segment)?.is_none() {
+            return Err(PanelContourError::UnsupportedRingSegment { segment });
+        }
+        let before = self.ring_banding.len();
+        self.ring_banding.retain(|existing| existing.segment() != segment);
+        Ok(self.ring_banding.len() != before)
+    }
+
     /// The banding on one contour segment, if any.
     pub fn segment_banding(&self, source: SegmentSource) -> Option<BandingSpec> {
         match source {
@@ -199,6 +280,7 @@ impl Panel {
                 self.edge_banding.iter().find(|band| band.edge() == edge).map(EdgeBanding::spec)
             }
             SegmentSource::Corner(corner) => self.corner_banding_at(corner).map(|band| band.spec()),
+            SegmentSource::Ring(segment) => self.ring_banding_at(segment).map(|band| band.spec()),
         }
     }
 
@@ -344,8 +426,12 @@ impl Panel {
     }
 
     /// Whether a path has banding on some but not all of its edges, or conflicting specs.
+    ///
+    /// A ring path has no edges to disagree: each ring segment owns its own record, so it never
+    /// carries a conflict.
     pub fn path_banding_conflict(&self, path: &ContourPath) -> bool {
-        if path.lone_corner().is_some() {
+        if path.lone_corner().is_some() || path.sources().iter().any(|source| matches!(source, SegmentSource::Ring(_)))
+        {
             return false;
         }
         let mut seen = None;
@@ -367,6 +453,9 @@ impl Panel {
         &self,
         nominal_size: PanelNominalSize,
     ) -> Result<(Contour, Vec<SegmentSource>), PanelContourError> {
+        if let Some(ring) = self.outline_contour() {
+            return ring_segments(ring, nominal_size);
+        }
         let length = nominal_size.length().millimetres_f64();
         let width = nominal_size.width().millimetres_f64();
         let corners =

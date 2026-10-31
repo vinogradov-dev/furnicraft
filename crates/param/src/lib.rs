@@ -22,8 +22,8 @@
 use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, Constructive, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Mesh,
-    MeshError, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
+    BandingSpec, Constructive, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide,
+    Machining, Mesh, MeshError, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -106,16 +106,17 @@ pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, Para
     Ok(Mesh::new(positions, faces)?)
 }
 
-/// Builds the solid body of a rectangular panel in its local frame.
+/// Builds the solid body of a panel in its local frame.
 ///
 /// The panel frame is anchored at the nominal minimum corner. The core starts at
 /// `(core_x, core_y)` and has its length along `+X`, its width along `+Y` and its thickness along
-/// `+Z`. Panel-owned cutouts are nominal panel-local, so their tool bodies are placed directly at
+/// `+Z`. A rectangular panel extrudes its core rectangle; a contour panel extrudes the ring itself.
+/// Panel-owned cutouts are nominal panel-local, so their tool bodies are placed directly at
 /// the stored coordinates without a core-origin translation. A through cutout removes the full
 /// thickness, while a blind cutout removes material from its entry face. The caller owns the
 /// returned handle and must eventually release it through [`SolidKernel::clear`].
 pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
-    if panel.has_contour_features() {
+    if panel.has_shaped_outline() {
         let body = build_shaped_body_with(kernel, panel, geometry, &EdgeBandProfile::from_spec)?;
         return subtract_machining(kernel, panel, geometry, body);
     }
@@ -156,6 +157,8 @@ pub enum BandSource {
     Edge(EdgeId),
     /// The band follows a lone chamfer.
     Corner(VertexId),
+    /// The band follows one segment of a contour ring.
+    Ring(ContourSegmentId),
 }
 
 /// One evaluated banding body.
@@ -166,7 +169,7 @@ pub struct BandPart {
 }
 
 impl BandPart {
-    /// The edge or chamfer this band covers.
+    /// The edge, chamfer or ring segment this band covers.
     pub const fn source(self) -> BandSource {
         self.source
     }
@@ -271,9 +274,10 @@ where
 
 /// Builds the panel body and its bands with catalogue-resolved profiles.
 ///
-/// Rectangular panels keep the v1 band rectangles and corner extension order. Shaped panels build a
-/// core outline from per-path offsets and one strip per tangent-continuous path, so the body and the
-/// visible band share the same resolved thickness without a boolean.
+/// Rectangular panels keep the v1 band rectangles and corner extension order. Shaped panels,
+/// including a contour-ring panel, build a core outline from per-segment offsets and one strip per
+/// tangent-continuous path, so the body and the visible band share the same resolved thickness
+/// without a boolean.
 pub fn build_panel_parts_with<F>(
     kernel: &mut dyn SolidKernel,
     panel: &Panel,
@@ -283,7 +287,7 @@ pub fn build_panel_parts_with<F>(
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
-    if panel.has_contour_features() {
+    if panel.has_shaped_outline() {
         let body = build_shaped_body_with(kernel, panel, geometry, &band_profile)?;
         let body = subtract_machining(kernel, panel, geometry, body)?;
         let bands = build_shaped_bands(kernel, panel, geometry, &band_profile)?;
@@ -627,6 +631,7 @@ fn band_source(source: SegmentSource) -> BandSource {
     match source {
         SegmentSource::Edge(edge) => BandSource::Edge(edge),
         SegmentSource::Corner(corner) => BandSource::Corner(corner),
+        SegmentSource::Ring(segment) => BandSource::Ring(segment),
     }
 }
 
@@ -713,7 +718,7 @@ mod tests {
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
         Container, Contour, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Extrude,
-        Feature, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
+        Feature, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge, RingBanding,
     };
     use furnicraft_units::Length;
 
@@ -775,6 +780,25 @@ mod tests {
     fn sample_panel() -> Panel {
         Panel::new(Id::new(1).expect("id"), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
             .expect("valid panel")
+    }
+
+    /// The L-shaped ring shared by the contour-panel tests.
+    fn contour_ring() -> Contour {
+        Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [millimetres(400), Length::ZERO],
+            [millimetres(400), millimetres(200)],
+            [millimetres(700), millimetres(200)],
+            [millimetres(700), millimetres(500)],
+            [Length::ZERO, millimetres(500)],
+        ])
+        .expect("L-shaped ring")
+    }
+
+    /// A 700 x 500 panel whose ring is L-shaped, so its bounds differ from its area.
+    fn contour_panel() -> Panel {
+        Panel::new_contour(Id::new(1).expect("id"), "Ring", contour_ring(), None, millimetres(18), Placement::IDENTITY)
+            .expect("valid contour panel")
     }
 
     fn panel_with_corner(kind: CornerFeatureKind) -> Panel {
@@ -1250,6 +1274,51 @@ mod tests {
         let measure = kernel.measure(body).expect("panel measure");
         let expected = (700.0 * 500.0 - 0.5 * 20.0 * 10.0) * 18.0;
         assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
+    #[test]
+    fn build_panel_extrudes_the_contour_ring_not_its_bounds() {
+        let panel = contour_panel();
+        let mut kernel = TruckKernel::new();
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("ring body");
+        let volume = kernel.measure(body).expect("body measure").volume;
+        let expected = (700.0 * 500.0 - 300.0 * 200.0) * 18.0;
+        assert!((volume - expected).abs() < expected * 1.0e-6, "volume was {volume}, expected {expected}");
+        kernel.clear();
+    }
+
+    #[test]
+    fn a_ring_band_builds_its_strip_and_trims_the_core() {
+        let ring = contour_ring();
+        let segment = ring.entries().first().expect("segment").id();
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let panel_id = project
+            .add_panel_contour(project.root().id(), "Ring", &ring, None, millimetres(18), Placement::IDENTITY)
+            .expect("contour panel");
+        project
+            .set_ring_banding(
+                panel_id,
+                RingBanding::new(segment, MaterialId::new(1).expect("material"), true, millimetres(2), millimetres(20))
+                    .expect("ring band"),
+            )
+            .expect("set ring banding");
+        let panel = project.panel(panel_id).expect("panel").clone();
+        assert_eq!(panel.band_order(), &[SegmentSource::Ring(segment)]);
+        let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
+        let mut kernel = TruckKernel::new();
+        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+            .expect("ring panel parts");
+        assert_eq!(parts.bands().len(), 1);
+        assert_eq!(parts.bands()[0].source(), BandSource::Ring(segment));
+        let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
+        let band_volume = kernel.measure(parts.bands()[0].body()).expect("band measure").volume;
+        assert!(body_volume < nominal_volume, "the included ring band did not trim the core");
+        assert!(
+            (body_volume + band_volume - nominal_volume).abs() < nominal_volume * 1.0e-3,
+            "body {body_volume} + band {band_volume} vs nominal {nominal_volume}"
+        );
+        kernel.clear();
     }
 
     #[test]

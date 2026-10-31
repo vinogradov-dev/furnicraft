@@ -53,6 +53,82 @@ impl PanelCreate {
 /// The `panel.create` command.
 pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL, create_enabled, create_run);
 
+/// Stable id of the contour-panel creation command.
+pub const CONTOUR_CREATE_ID: &str = "panel.contour.create";
+
+/// User-facing label of the contour-panel creation command.
+pub const CONTOUR_CREATE_LABEL: &str = "Create contour panel";
+
+/// Parameters for `panel.contour.create`.
+///
+/// `source` is a constructive object in the scene: the new panel takes that object's contour ring
+/// as its outline. The command always creates a panel; an existing panel never changes variant.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelContourCreate {
+    /// Id of the container that receives the panel.
+    pub parent: Id,
+    /// User-visible panel name; it must contain a non-whitespace character.
+    pub name: String,
+    /// Constructive object whose contour becomes the panel outline.
+    pub source: Id,
+    /// Panel-body material from the session catalogue.
+    pub material: MaterialId,
+    /// Placement relative to the parent container.
+    pub placement: Placement,
+}
+
+impl PanelContourCreate {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: CONTOUR_CREATE_ID, message: error.to_string() })
+    }
+
+    fn validate_name(&self) -> Result<(), CommandError> {
+        if self.name.trim().is_empty() {
+            return Err(CommandError::InvalidParams {
+                command: CONTOUR_CREATE_ID,
+                message: "panel name must not be empty".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The `panel.contour.create` command.
+pub(crate) const CONTOUR_CREATE: CommandSpec =
+    CommandSpec::new(CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, contour_create_enabled, contour_create_run);
+
+fn contour_create_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelContourCreate::parse(params) else {
+        return false;
+    };
+    params.validate_name().is_ok()
+        && session.catalog().panel_material(params.material).is_some()
+        && session.project().validate_panel_contour(params.parent, params.source).is_ok()
+}
+
+fn contour_create_run(
+    project: &mut Project,
+    catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelContourCreate::parse(params)?;
+    params.validate_name()?;
+    let material =
+        catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
+    let contour = project.object_contour(params.source)?.clone();
+    let id = project.add_panel_contour(
+        params.parent,
+        params.name,
+        &contour,
+        Some(params.material),
+        material.nominal_thickness(),
+        params.placement,
+    )?;
+    Ok(CommandOutcome::created(id))
+}
+
 fn create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelCreate::parse(params) else {
         return false;
