@@ -16,10 +16,6 @@ L is scene lighting.
 
 ## Now
 
-- `[~]` **D1** a panel created from a contour selected in the scene: its outline is either the nominal
-  rectangle or a contour ring, edge banding follows the ring segments, schema 13; a rectangular panel
-  never converts, the creation command picks the variant.
-  `files: crates/model/src/lib.rs, crates/model/src/panel_contour.rs`
 - `[ ]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring.
   `files: crates/model/src/lib.rs, crates/geom/src/contour.rs`
 - `[ ]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
@@ -53,6 +49,7 @@ L is scene lighting.
 
 ## Done
 
+- `[x]` **D1** a panel whose outline is a contour ring, banding per ring segment — `d9827ed`
 - `[x]` **A4** stable ids for contour segments — `ea3153a`
 - `[x]` **A2** contour as a ring of segments — `0833b4c`
 - `[x]` **A1** the contour segment type — `e7551ca`
