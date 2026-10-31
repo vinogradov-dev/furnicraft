@@ -32,12 +32,14 @@ use thiserror::Error;
 
 mod catalog;
 mod contour;
+mod contour_edit;
 mod panel_contour;
 mod panel_features;
 
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
 use contour::point_to_document;
 pub use contour::{ContourSegment, ContourSegmentEntry, ContourSegmentError};
+pub use contour_edit::ContourEditError;
 pub use panel_contour::{ContourPath, PanelContourError, SegmentSource};
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 

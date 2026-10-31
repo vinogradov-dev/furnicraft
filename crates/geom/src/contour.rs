@@ -25,8 +25,8 @@ pub const DEFAULT_TANGENT_TOLERANCE: f64 = 1.0e-6;
 /// The cap keeps an extension from wrapping around the supporting circle and finding a point on
 /// the opposite side.
 pub const MAX_ARC_EXTENSION: f64 = FRAC_PI_2;
-/// Tolerance for treating a point as lying on a supporting circle, in millimetres.
-const CIRCLE_TOLERANCE: f64 = 1.0e-6;
+/// Tolerance for treating a point as lying on a supporting line or circle, in millimetres.
+const SUPPORT_TOLERANCE: f64 = 1.0e-6;
 /// Upper bound on the number of segments in one contour.
 const MAX_SEGMENTS: usize = 4096;
 /// Upper bound on samples generated for one arc.
@@ -49,6 +49,8 @@ pub enum ContourError {
     InvalidRadius,
     /// An arc sweep is zero or larger than a full turn.
     InvalidSweep,
+    /// A split point does not lie strictly inside the segment it would split.
+    SplitOutside,
     /// A contour has no segments.
     Empty,
     /// A contour has more than [`MAX_SEGMENTS`] segments.
@@ -82,6 +84,7 @@ impl fmt::Display for ContourError {
             Self::SagittaTooDeep => formatter.write_str("a bow sagitta must not exceed half its chord"),
             Self::InvalidRadius => formatter.write_str("an arc radius must be positive and finite"),
             Self::InvalidSweep => formatter.write_str("an arc sweep must be non-zero and at most a full turn"),
+            Self::SplitOutside => formatter.write_str("a split point must lie strictly inside the segment"),
             Self::Empty => formatter.write_str("a contour needs at least one segment"),
             Self::TooManySegments => formatter.write_str("a contour has too many segments"),
             Self::Disconnected { index } => {
@@ -160,6 +163,62 @@ impl Line {
         Some(self.start + (self.end - self.start) * t)
     }
 
+    /// The parameter of the projection of `point` onto the supporting line.
+    ///
+    /// The result is not restricted to `0..=1`; a caller that means the segment checks the span.
+    fn parameter_of(self, point: DVec2) -> Option<f64> {
+        if !point.is_finite() {
+            return None;
+        }
+        let direction = self.end - self.start;
+        let length_squared = direction.length_squared();
+        if !length_squared.is_finite() || length_squared <= EPSILON * EPSILON {
+            return None;
+        }
+        let parameter = (point - self.start).dot(direction) / length_squared;
+        parameter.is_finite().then_some(parameter)
+    }
+
+    /// The point of the supporting line nearest to `point`.
+    pub fn nearest_on_support(self, point: DVec2) -> Option<DVec2> {
+        let parameter = self.parameter_of(point)?;
+        let nearest = self.start + (self.end - self.start) * parameter;
+        nearest.is_finite().then_some(nearest)
+    }
+
+    /// Whether `point` lies on the segment within `tolerance` millimetres.
+    pub fn contains_point(self, point: DVec2, tolerance: f64) -> bool {
+        if !point.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+            return false;
+        }
+        let Some(parameter) = self.parameter_of(point) else {
+            return false;
+        };
+        if !(0.0..=1.0).contains(&parameter) {
+            return false;
+        }
+        let foot = self.start + (self.end - self.start) * parameter;
+        (point - foot).length() <= tolerance
+    }
+
+    /// Splits the line at a point strictly inside it.
+    ///
+    /// The first part keeps the start and the second part keeps the end, so the two parts share
+    /// `point` exactly. A point on an endpoint or off the segment is rejected.
+    pub fn split_at(self, point: DVec2) -> Result<(Self, Self), ContourError> {
+        let Some(parameter) = self.parameter_of(point) else {
+            return Err(ContourError::InvalidInput("split point must be finite"));
+        };
+        if !self.contains_point(point, SUPPORT_TOLERANCE) {
+            return Err(ContourError::SplitOutside);
+        }
+        let length = self.length();
+        if parameter * length <= EPSILON || (1.0 - parameter) * length <= EPSILON {
+            return Err(ContourError::SplitOutside);
+        }
+        Ok((Self::new(self.start, point)?, Self::new(point, self.end)?))
+    }
+
     /// The unit tangent at the start.
     pub fn tangent_at_start(self) -> DVec2 {
         self.direction()
@@ -210,11 +269,11 @@ impl Line {
         let to_center = arc.center() - self.start;
         let foot = self.start + direction * (to_center.dot(direction) / length_squared);
         let distance = (arc.center() - foot).length();
-        if !distance.is_finite() || distance > arc.radius() + CIRCLE_TOLERANCE {
+        if !distance.is_finite() || distance > arc.radius() + SUPPORT_TOLERANCE {
             return [None, None];
         }
         let half = (arc.radius() * arc.radius() - distance * distance).max(0.0).sqrt();
-        if half <= CIRCLE_TOLERANCE {
+        if half <= SUPPORT_TOLERANCE {
             return [foot.is_finite().then_some(foot), None];
         }
         let unit = direction / length_squared.sqrt();
@@ -364,6 +423,22 @@ impl Arc {
         Some(self.point_at_angle(self.start_angle + self.sweep_angle * t))
     }
 
+    /// The point of the supporting circle nearest to `point`.
+    ///
+    /// Returns `None` for a non-finite point and for the centre, where every point of the circle is
+    /// equally distant.
+    pub fn nearest_on_support(self, point: DVec2) -> Option<DVec2> {
+        if !point.is_finite() {
+            return None;
+        }
+        let radial = point - self.center;
+        let length = radial.length();
+        if !length.is_finite() || length <= EPSILON {
+            return None;
+        }
+        Some(self.center + radial / length * self.radius)
+    }
+
     /// The unit tangent at the start.
     pub fn tangent_at_start(self) -> DVec2 {
         self.tangent_at_angle(self.start_angle)
@@ -401,11 +476,11 @@ impl Arc {
     pub fn intersections_with_arc(self, other: Self) -> [Option<DVec2>; 2] {
         let between = other.center - self.center;
         let distance = between.length();
-        if !distance.is_finite() || distance <= CIRCLE_TOLERANCE {
+        if !distance.is_finite() || distance <= SUPPORT_TOLERANCE {
             return [None, None];
         }
-        if distance > self.radius + other.radius + CIRCLE_TOLERANCE
-            || distance < (self.radius - other.radius).abs() - CIRCLE_TOLERANCE
+        if distance > self.radius + other.radius + SUPPORT_TOLERANCE
+            || distance < (self.radius - other.radius).abs() - SUPPORT_TOLERANCE
         {
             return [None, None];
         }
@@ -416,7 +491,7 @@ impl Arc {
             return [None, None];
         }
         let height = height_squared.max(0.0).sqrt();
-        if height <= CIRCLE_TOLERANCE {
+        if height <= SUPPORT_TOLERANCE {
             return [Some(base), None];
         }
         let normal = DVec2::new(-between.y, between.x) / distance;
@@ -453,7 +528,7 @@ impl Arc {
             return Err(ContourError::InvalidInput("arc point must be finite"));
         }
         let radial = point - self.center;
-        if (radial.length() - self.radius).abs() > CIRCLE_TOLERANCE {
+        if (radial.length() - self.radius).abs() > SUPPORT_TOLERANCE {
             return Err(ContourError::InvalidInput("point must lie on the arc's circle"));
         }
         let angle = radial.y.atan2(radial.x);
@@ -506,6 +581,26 @@ impl Arc {
             return Err(ContourError::InvalidSweep);
         }
         Self::new(self.center, self.radius, self.start_angle, self.sweep_angle.signum() * ahead)
+    }
+
+    /// Splits the arc at a point strictly inside its sweep.
+    ///
+    /// Both parts keep the centre, the radius and the direction of travel, so the joint they share
+    /// is exactly the split point. A point on an endpoint or off the circle is rejected.
+    pub fn split_at(self, point: DVec2) -> Result<(Self, Self), ContourError> {
+        let ahead = self.travel_delta(point)?;
+        if ahead <= EPSILON || ahead >= self.sweep_angle.abs() - EPSILON {
+            return Err(ContourError::SplitOutside);
+        }
+        let sign = self.sweep_angle.signum();
+        let first = Self::new(self.center, self.radius, self.start_angle, sign * ahead)?;
+        let second = Self::new(
+            self.center,
+            self.radius,
+            self.start_angle + sign * ahead,
+            sign * (self.sweep_angle.abs() - ahead),
+        )?;
+        Ok((first, second))
     }
 }
 
@@ -564,6 +659,39 @@ impl Segment {
         match self {
             Self::Line(line) => line.point_at(t),
             Self::Arc(arc) => arc.point_at(t),
+        }
+    }
+
+    /// Whether `point` lies on the segment within `tolerance` millimetres.
+    pub fn contains_point(self, point: DVec2, tolerance: f64) -> bool {
+        match self {
+            Self::Line(line) => line.contains_point(point, tolerance),
+            Self::Arc(arc) => arc.contains_point(point, tolerance),
+        }
+    }
+
+    /// The point of the segment's supporting line or circle nearest to `point`.
+    pub fn nearest_on_support(self, point: DVec2) -> Option<DVec2> {
+        match self {
+            Self::Line(line) => line.nearest_on_support(point),
+            Self::Arc(arc) => arc.nearest_on_support(point),
+        }
+    }
+
+    /// Splits the segment at a point strictly inside it.
+    ///
+    /// Both parts keep the segment's supporting curve and its direction of travel, so the joint
+    /// they share is exactly the split point.
+    pub fn split_at(self, point: DVec2) -> Result<(Self, Self), ContourError> {
+        match self {
+            Self::Line(line) => {
+                let (first, second) = line.split_at(point)?;
+                Ok((Self::Line(first), Self::Line(second)))
+            }
+            Self::Arc(arc) => {
+                let (first, second) = arc.split_at(point)?;
+                Ok((Self::Arc(first), Self::Arc(second)))
+            }
         }
     }
 
@@ -858,6 +986,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use std::f64::consts::FRAC_PI_4;
 
     fn point(x: f64, y: f64) -> DVec2 {
         DVec2::new(x, y)
@@ -1119,5 +1248,70 @@ mod tests {
         let trimmed = arc.trimmed(point(5.0, 0.0), point(0.0, 5.0)).expect("trim the circle");
         assert!((trimmed.length() - 5.0 * FRAC_PI_2).abs() < 1e-9);
         assert!(line.trimmed(point(0.0, -10.0), point(0.0, -10.0)).is_err());
+    }
+
+    #[test]
+    fn line_nearest_point_and_containment_follow_the_span() {
+        let line = Line::new(point(0.0, 0.0), point(10.0, 0.0)).expect("line");
+        let nearest = line.nearest_on_support(point(4.0, 3.0)).expect("a foot");
+        assert!((nearest - point(4.0, 0.0)).length() < 1e-12);
+        assert!(line.contains_point(point(4.0, 0.0), 1e-9));
+        assert!(line.contains_point(point(4.0, 0.5), 1.0));
+        assert!(!line.contains_point(point(4.0, 1.5), 1.0));
+        assert!(!line.contains_point(point(11.0, 0.0), 1e-9));
+        assert!(!line.contains_point(DVec2::new(f64::NAN, 0.0), 1e-9));
+        assert!(line.nearest_on_support(DVec2::new(f64::INFINITY, 0.0)).is_none());
+    }
+
+    #[test]
+    fn line_splits_only_inside_its_span() {
+        let line = Line::new(point(0.0, 0.0), point(10.0, 0.0)).expect("line");
+        let (first, second) = line.split_at(point(4.0, 0.0)).expect("split");
+        assert!((first.length() - 4.0).abs() < 1e-12);
+        assert!((second.length() - 6.0).abs() < 1e-12);
+        assert_eq!(first.end(), second.start());
+
+        assert!(matches!(line.split_at(point(0.0, 0.0)), Err(ContourError::SplitOutside)));
+        assert!(matches!(line.split_at(point(10.0, 0.0)), Err(ContourError::SplitOutside)));
+        assert!(matches!(line.split_at(point(4.0, 1.0)), Err(ContourError::SplitOutside)));
+    }
+
+    #[test]
+    fn arc_nearest_point_and_split_keep_the_circle() {
+        let quarter = Arc::new(DVec2::ZERO, 10.0, 0.0, FRAC_PI_2).expect("quarter");
+        let nearest = quarter.nearest_on_support(point(20.0, 0.0)).expect("a circle point");
+        assert!((nearest - point(10.0, 0.0)).length() < 1e-12);
+        assert!(quarter.nearest_on_support(DVec2::ZERO).is_none());
+
+        let middle = quarter.point_at(0.5).expect("midpoint");
+        let (first, second) = quarter.split_at(middle).expect("split");
+        assert!((first.sweep_angle() - FRAC_PI_4).abs() < 1e-12);
+        assert!((second.sweep_angle() - FRAC_PI_4).abs() < 1e-12);
+        assert!((first.end() - second.start()).length() < 1e-12);
+        assert!((first.radius() - 10.0).abs() < 1e-12);
+
+        let clockwise = Arc::new(DVec2::ZERO, 10.0, 0.0, -FRAC_PI_2).expect("clockwise quarter");
+        let middle = clockwise.point_at(0.5).expect("midpoint");
+        let (first, second) = clockwise.split_at(middle).expect("split a clockwise arc");
+        assert!((first.sweep_angle() + FRAC_PI_4).abs() < 1e-12);
+        assert!((second.sweep_angle() + FRAC_PI_4).abs() < 1e-12);
+        assert!((first.end() - second.start()).length() < 1e-12);
+
+        assert!(matches!(quarter.split_at(quarter.start()), Err(ContourError::SplitOutside)));
+        assert!(matches!(quarter.split_at(point(10.0, 1.0)), Err(ContourError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn segment_support_and_split_dispatch_by_kind() {
+        let line = Segment::Line(Line::new(point(0.0, 0.0), point(10.0, 0.0)).expect("line"));
+        let line_nearest = line.nearest_on_support(point(5.0, 2.0)).expect("a foot");
+        assert!((line_nearest - point(5.0, 0.0)).length() < 1e-12);
+        assert!(line.contains_point(point(5.0, 0.0), 1e-9));
+
+        let arc = Segment::Arc(Arc::new(point(0.0, 0.0), 5.0, 0.0, TAU).expect("circle"));
+        assert!(arc.contains_point(point(0.0, 5.0), 1e-9));
+        let (first, second) = arc.split_at(point(0.0, -5.0)).expect("split the circle");
+        assert!((first.length() - 1.5 * PI * 5.0).abs() < 1e-9);
+        assert!((second.length() - 0.5 * PI * 5.0).abs() < 1e-9);
     }
 }

@@ -264,7 +264,7 @@ fn check_point(point: [Length; 2]) -> Result<(), ContourSegmentError> {
 }
 
 /// Converts document micrometres to geometry millimetres.
-fn point_to_geometry(point: [Length; 2]) -> Result<DVec2, ContourSegmentError> {
+pub(crate) fn point_to_geometry(point: [Length; 2]) -> Result<DVec2, ContourSegmentError> {
     check_point(point)?;
     Ok(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()))
 }
