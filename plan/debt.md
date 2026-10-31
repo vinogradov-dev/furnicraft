@@ -27,6 +27,9 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[object]` A contour's self-intersection test samples each segment into chords; a crossing finer than
   0.1 mm inside an arc can slip through. An exact segment-pair test can replace it when the sketch
   editor needs the last tenth of a millimetre.
+- `[object]` A corner shared by two arcs moves only to a point both circles reach at millidegree
+  resolution; the ring stores whole endpoints, so `move_corner` rejects such a point with
+  `ArcJointMismatch` instead of bending either curve. The edit mode must place the handle accordingly.
 - `[mesh]` Vertex markers and face fills are painted over the viewport image without an occlusion test,
   so a vertex on the far side of the mesh is visible and selectable through it. A depth readback or a
   pick pass can hide the back vertices when the first large mesh makes it matter.

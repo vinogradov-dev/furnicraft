@@ -16,8 +16,6 @@ L is scene lighting.
 
 ## Now
 
-- `[ ]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring.
-  `files: crates/model/src/lib.rs, crates/geom/src/contour.rs`
 - `[ ]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
   in the viewport with handles and a preview, leave by applying one command or by cancelling.
   `files: crates/ui, apps/furnicraft`
@@ -49,6 +47,7 @@ L is scene lighting.
 
 ## Done
 
+- `[x]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring — `dda986c`
 - `[x]` **D1** a panel whose outline is a contour ring, banding per ring segment — `d9827ed`
 - `[x]` **A4** stable ids for contour segments — `ea3153a`
 - `[x]` **A2** contour as a ring of segments — `0833b4c`
