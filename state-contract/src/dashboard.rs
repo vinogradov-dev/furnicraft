@@ -116,7 +116,7 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     }
 
     if let Some(debt) = debt.as_deref() {
-        let counts = tag_counts(&debt);
+        let counts = tag_counts(debt);
         if !counts.is_empty() {
             out.section("DEBT", "plan/debt.md", None, |body| {
                 let _ = writeln!(body, "{}", counts.join(" · "));
@@ -136,7 +136,7 @@ fn is_interrupted(state: &crate::State, session: Option<&str>, head: Option<&str
     let Some(head) = head else {
         return false;
     };
-    if state.base == head || !git.is_ancestor(&state.base, &head) {
+    if state.base == head || !git.is_ancestor(&state.base, head) {
         return false;
     }
     has_open_steps(session.unwrap_or(""))

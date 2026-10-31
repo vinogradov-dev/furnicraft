@@ -86,6 +86,7 @@ impl CommandSpec {
 /// The commands compiled into this build.
 static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CREATE,
+    panel_cmds::CONTOUR_CREATE,
     node_cmds::ASSEMBLY_CREATE,
     panel_cmds::RENAME,
     node_cmds::NODE_RENAME,
@@ -284,6 +285,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 37);
+        assert_eq!(registry.specs().len(), 38);
     }
 }

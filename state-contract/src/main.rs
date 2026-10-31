@@ -105,9 +105,7 @@ impl Flags {
                 }
                 "--width" => {
                     let value = Self::value(args, &mut index, arg)?;
-                    width = value
-                        .parse::<usize>()
-                        .map_err(|_| format!("--width needs a number, got `{value}`"))?;
+                    width = value.parse::<usize>().map_err(|_| format!("--width needs a number, got `{value}`"))?;
                 }
                 "--no-color" => no_color = true,
                 other => return Err(format!("unknown option `{other}`")),

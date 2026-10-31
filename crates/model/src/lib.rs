@@ -1513,6 +1513,45 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether ring banding can be set without invalidating the panel.
+    pub fn validate_ring_banding(&self, id: Id, band: RingBanding) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let mut candidate = panel.clone();
+        candidate.apply_ring_banding(band)?;
+        candidate.geometry_with_fallbacks()?;
+        Ok(())
+    }
+
+    /// Adds or replaces banding on one ring segment and moves it to the end of the order.
+    pub fn set_ring_banding(&mut self, id: Id, band: RingBanding) -> Result<Revision, ProjectError> {
+        self.validate_ring_banding(id, band.clone())?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        let segment = band.segment();
+        panel.apply_ring_banding(band)?;
+        panel.add_band_source(SegmentSource::Ring(segment));
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes banding from one ring segment and bumps the revision once.
+    pub fn clear_ring_banding(&mut self, id: Id, segment: ContourSegmentId) -> Result<Revision, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if panel.ring_banding_at(segment).is_none() {
+            return Err(ProjectError::RingBandingNotFound { panel: id, segment });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.remove_ring_banding(segment);
+        panel.remove_band_source(SegmentSource::Ring(segment));
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Checks whether a cutout can be added to a panel without changing the document.
     pub fn validate_cutout(&self, panel: Id, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
         let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
@@ -1584,6 +1623,56 @@ impl Project {
         children.push(Node::Panel(panel));
         self.revision = next_revision;
         Ok(id)
+    }
+
+    /// Adds a panel whose outline is a contour ring selected in the scene.
+    ///
+    /// The ring is moved so its minimum corner is the panel-local zero, which is the panel frame
+    /// anchor (ADR 0009); a ring that is already anchored is unchanged apart from rounding. The
+    /// panel is created in one revision with the ring as its outline, so a rectangle panel never
+    /// converts into a contour panel and the reverse is impossible too.
+    pub fn add_panel_contour(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        contour: &Contour,
+        material: Option<MaterialId>,
+        last_known_thickness: Length,
+        placement: Placement,
+    ) -> Result<Id, ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let next_revision = self.next_revision()?;
+        let id = self.allocate_id()?;
+        let anchored = Panel::anchored_contour(contour)?;
+        let panel = Panel::new_contour(id, name, anchored, material, last_known_thickness, placement)?;
+        let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        };
+        children.push(Node::Panel(panel));
+        self.revision = next_revision;
+        Ok(id)
+    }
+
+    /// The contour of a constructive object that a new panel can inherit.
+    ///
+    /// A missing node, a mesh object or a node that is not a constructive object is an error the
+    /// user can read; nothing is derived when the payload has no extrusion.
+    pub fn object_contour(&self, id: Id) -> Result<&Contour, ProjectError> {
+        let object = self.object(id).ok_or(ProjectError::NodeNotFound { id })?;
+        let constructive = object.geometry().as_constructive().ok_or(ProjectError::NotConstructiveObject { id })?;
+        constructive.contour().ok_or(ProjectError::NotConstructiveObject { id })
+    }
+
+    /// Checks whether an object's contour can become a panel outline without changing the document.
+    pub fn validate_panel_contour(&self, parent: Id, source: Id) -> Result<(), ProjectError> {
+        if !self.is_container(parent) {
+            return Err(ProjectError::ContainerNotFound { id: parent });
+        }
+        let anchored = Panel::anchored_contour(self.object_contour(source)?)?;
+        Panel::contour_size(&anchored)?;
+        Ok(())
     }
 
     /// Adds a geometry object to an existing container and bumps the revision once.
@@ -2928,6 +3017,12 @@ pub enum ProjectError {
     /// The panel's nominal contour cannot be built or grouped.
     #[error(transparent)]
     PanelContour(#[from] PanelContourError),
+    /// A panel's stored fields or outline cannot be read as a panel.
+    #[error(transparent)]
+    Panel(#[from] PanelError),
+    /// A document contour is not valid.
+    #[error(transparent)]
+    Contour(#[from] ContourError),
     /// Edge banding refers to an edge outside the rectangular v1 outline.
     #[error("edge banding on panel {panel} uses unsupported edge {edge}")]
     UnsupportedEdgeBanding {
@@ -2957,6 +3052,14 @@ pub enum ProjectError {
         panel: Id,
         /// The edge that was requested.
         edge: EdgeId,
+    },
+    /// The requested ring segment has no banding to clear.
+    #[error("panel {panel} has no ring banding on segment {segment}")]
+    RingBandingNotFound {
+        /// The panel that owns the banding.
+        panel: Id,
+        /// The ring segment that was requested.
+        segment: ContourSegmentId,
     },
     /// The requested corner has no treatment to clear.
     #[error("panel {panel} has no corner feature on corner {corner}")]
@@ -3303,6 +3406,7 @@ pub struct Panel {
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
     corner_banding: Vec<CornerBanding>,
+    ring_banding: Vec<RingBanding>,
     /// Banded segments in application order; the last one is drawn on top.
     band_order: Vec<SegmentSource>,
     corner_features: Vec<CornerFeature>,
@@ -3343,6 +3447,7 @@ impl Panel {
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
+            ring_banding: Vec::new(),
             band_order: Vec::new(),
             corner_features: Vec::new(),
             edge_bows: Vec::new(),
@@ -3377,6 +3482,7 @@ impl Panel {
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
+            ring_banding: Vec::new(),
             band_order: Vec::new(),
             corner_features: Vec::new(),
             edge_bows: Vec::new(),
@@ -3400,6 +3506,30 @@ impl Panel {
             PanelOutline::Contour { contour } => Some(contour),
             PanelOutline::Rect => None,
         }
+    }
+
+    /// The same outline moved so its minimum corner is the panel-local zero.
+    ///
+    /// A contour selected in the scene sits somewhere in that object's frame; the panel frame is
+    /// anchored at the outline's minimum corner (ADR 0009), so the ring is translated there before
+    /// it becomes the outline. Segment ids travel with their curves, so a band named by a segment
+    /// keeps its meaning.
+    pub fn anchored_contour(contour: &Contour) -> Result<Contour, ContourError> {
+        let (min, _) = contour.bounds_micrometres();
+        let offset = [
+            Length::from_micrometres(min[0].checked_neg().ok_or(ContourSegmentError::NonFinite)?),
+            Length::from_micrometres(min[1].checked_neg().ok_or(ContourSegmentError::NonFinite)?),
+        ];
+        contour.translated(offset)
+    }
+
+    /// Checks that a ring can become a panel outline and returns the size it occupies.
+    ///
+    /// A ring must be anchored at the panel-local zero and span a usable panel size; this is the
+    /// same check [`Panel::new_contour`] applies, exposed so a command can validate before it
+    /// allocates an id.
+    pub fn contour_size(contour: &Contour) -> Result<PanelNominalSize, PanelError> {
+        contour_nominal_size(contour)
     }
 
     /// Banded segments in application order; the last one is drawn on top.
@@ -3502,9 +3632,19 @@ impl Panel {
         self.corner_banding.iter().find(|band| band.corner() == corner).cloned()
     }
 
-    /// Whether any edge or corner is banded.
+    /// Ring banding records in application order, one per banded ring segment.
+    pub fn ring_banding(&self) -> &[RingBanding] {
+        &self.ring_banding
+    }
+
+    /// The ring banding record on one ring segment, if present.
+    pub fn ring_banding_at(&self, segment: ContourSegmentId) -> Option<RingBanding> {
+        self.ring_banding.iter().find(|band| band.segment() == segment).cloned()
+    }
+
+    /// Whether any edge, corner or ring segment is banded.
     pub fn has_banding(&self) -> bool {
-        !self.edge_banding.is_empty() || !self.corner_banding.is_empty()
+        !self.edge_banding.is_empty() || !self.corner_banding.is_empty() || !self.ring_banding.is_empty()
     }
 
     /// Corner treatments in application order.
@@ -3581,18 +3721,7 @@ impl Panel {
     {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
 
-        if let Some(contour) = self.outline_contour() {
-            let (min, max) = contour.bounds_micrometres();
-            let length = max[0].checked_sub(min[0]).ok_or(PanelGeometryError::Contour)?;
-            let width = max[1].checked_sub(min[1]).ok_or(PanelGeometryError::Contour)?;
-            let origin = [Length::from_micrometres(min[0]), Length::from_micrometres(min[1])];
-            let size = [Length::from_micrometres(length), Length::from_micrometres(width)];
-            // Banding is not resolved for a contour ring yet, so the core and the finished outline
-            // share the ring's bounds and the core origin is the ring's minimum corner.
-            return PanelGeometry::new(origin[0], origin[1], size[0], size[1], thickness, size[0], size[1]);
-        }
-
-        if self.has_contour_features() {
+        if self.has_shaped_outline() {
             let core =
                 self.core_contour_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
             let (core_min, core_max) = core.bounds().ok_or(PanelGeometryError::Contour)?;
@@ -3754,6 +3883,12 @@ impl Panel {
         self.corner_banding.retain(|existing| existing.corner() != corner);
         self.corner_banding.len() != before
     }
+
+    fn remove_ring_banding(&mut self, segment: ContourSegmentId) -> bool {
+        let before = self.ring_banding.len();
+        self.ring_banding.retain(|existing| existing.segment() != segment);
+        self.ring_banding.len() != before
+    }
 }
 
 /// Why a serialized panel cannot be read as the current schema.
@@ -3835,6 +3970,21 @@ pub enum PanelError {
     /// A contour panel stored banding against rectangle edges.
     #[error("a contour panel cannot carry banding until banding follows the ring")]
     ContourWithBanding,
+    /// A rectangular panel stored banding against contour ring segments.
+    #[error("a rectangular panel cannot carry banding on a contour ring segment")]
+    RectWithRingBanding,
+    /// Two ring banding records name the same segment.
+    #[error("panel has duplicate ring banding on segment {segment}")]
+    DuplicateRingBanding {
+        /// The duplicated ring segment.
+        segment: ContourSegmentId,
+    },
+    /// A ring banding record names a segment the stored ring does not have.
+    #[error("panel ring banding uses unsupported segment {segment}")]
+    UnsupportedRingBanding {
+        /// The rejected ring segment.
+        segment: ContourSegmentId,
+    },
 }
 
 /// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
@@ -3860,6 +4010,8 @@ struct PanelWire {
     edge_banding: Vec<EdgeBanding>,
     #[serde(default)]
     corner_banding: Vec<CornerBanding>,
+    #[serde(default)]
+    ring_banding: Vec<RingBanding>,
     #[serde(default)]
     band_order: Vec<SegmentSource>,
     #[serde(default)]
@@ -3891,6 +4043,7 @@ impl TryFrom<PanelWire> for Panel {
                     || wire.last_known_thickness.is_some()
                     || !wire.edge_banding.is_empty()
                     || !wire.corner_banding.is_empty()
+                    || !wire.ring_banding.is_empty()
                     || !wire.band_order.is_empty()
                     || !wire.corner_features.is_empty()
                     || !wire.edge_bows.is_empty()
@@ -3910,16 +4063,24 @@ impl TryFrom<PanelWire> for Panel {
 
         validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
         validate_corner_banding(&wire.corner_banding)?;
-        if let PanelOutline::Contour { contour } = &wire.outline {
-            if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
-                return Err(PanelError::ContourWithFeatures);
+        match &wire.outline {
+            PanelOutline::Contour { contour } => {
+                if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
+                    return Err(PanelError::ContourWithFeatures);
+                }
+                if !edge_banding.is_empty() || !wire.corner_banding.is_empty() {
+                    return Err(PanelError::ContourWithBanding);
+                }
+                validate_ring_banding(contour, &wire.ring_banding)?;
+                let contour_size = contour_nominal_size(contour)?;
+                if contour_size != nominal_size {
+                    return Err(PanelError::ContourSizeMismatch { stored: nominal_size, contour: contour_size });
+                }
             }
-            if !edge_banding.is_empty() || !wire.corner_banding.is_empty() || !wire.band_order.is_empty() {
-                return Err(PanelError::ContourWithBanding);
-            }
-            let contour_size = contour_nominal_size(contour)?;
-            if contour_size != nominal_size {
-                return Err(PanelError::ContourSizeMismatch { stored: nominal_size, contour: contour_size });
+            PanelOutline::Rect => {
+                if !wire.ring_banding.is_empty() {
+                    return Err(PanelError::RectWithRingBanding);
+                }
             }
         }
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
@@ -3928,12 +4089,29 @@ impl TryFrom<PanelWire> for Panel {
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
         panel.corner_banding = wire.corner_banding;
-        panel.band_order = normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding);
+        panel.ring_banding = wire.ring_banding;
+        panel.band_order =
+            normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding, &panel.ring_banding);
         panel.corner_features = wire.corner_features;
         panel.edge_bows = wire.edge_bows;
         panel.properties = wire.properties;
         Ok(panel)
     }
+}
+
+/// Rejects ring banding that names two records for one segment or a segment the ring lacks.
+fn validate_ring_banding(contour: &Contour, bands: &[RingBanding]) -> Result<(), PanelError> {
+    let mut seen = HashSet::with_capacity(bands.len());
+    for band in bands {
+        let segment = band.segment();
+        if !seen.insert(segment) {
+            return Err(PanelError::DuplicateRingBanding { segment });
+        }
+        if contour.index_of(segment).is_none() {
+            return Err(PanelError::UnsupportedRingBanding { segment });
+        }
+    }
+    Ok(())
 }
 
 /// The nominal size a contour ring occupies, refusing a ring that is not anchored at zero.
@@ -3960,12 +4138,14 @@ fn normalize_band_order(
     order: Vec<SegmentSource>,
     edges: &[EdgeBanding],
     corners: &[CornerBanding],
+    ring: &[RingBanding],
 ) -> Vec<SegmentSource> {
     let mut normalized = Vec::new();
     for source in order {
         let present = match source {
             SegmentSource::Edge(edge) => edges.iter().any(|band| band.edge() == edge),
             SegmentSource::Corner(corner) => corners.iter().any(|band| band.corner() == corner),
+            SegmentSource::Ring(segment) => ring.iter().any(|band| band.segment() == segment),
         };
         if present && !normalized.contains(&source) {
             normalized.push(source);
@@ -3979,6 +4159,12 @@ fn normalize_band_order(
     }
     for band in corners {
         let source = SegmentSource::Corner(band.corner());
+        if !normalized.contains(&source) {
+            normalized.push(source);
+        }
+    }
+    for band in ring {
+        let source = SegmentSource::Ring(band.segment());
         if !normalized.contains(&source) {
             normalized.push(source);
         }
@@ -4634,6 +4820,27 @@ impl Contour {
         self.next_segment_id
     }
 
+    /// The same ring moved by a whole-micrometre offset in its own plane.
+    ///
+    /// Ids travel with their segments, so a panel ring anchored at a new zero corner keeps every
+    /// band record meaningful. The offset is applied with [`i64::checked_add`] so a hostile value
+    /// is an error rather than a wrapped coordinate.
+    pub fn translated(&self, offset: [Length; 2]) -> Result<Self, ContourError> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            let segment = match entry.segment() {
+                ContourSegment::Line { start, end } => {
+                    ContourSegment::line(translate_point(start, offset)?, translate_point(end, offset)?)?
+                }
+                ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                    ContourSegment::arc(translate_point(center, offset)?, radius, start_angle, sweep)?
+                }
+            };
+            entries.push(ContourSegmentEntry::new(entry.id(), segment));
+        }
+        Self::assemble(entries, self.next_segment_id)
+    }
+
     /// Whether every segment is a straight line, so the ring is a plain polygon.
     ///
     /// A line-only ring can be written back as corner points without losing anything; a ring with
@@ -4896,6 +5103,21 @@ fn next_id_after_entries(entries: &[ContourSegmentEntry]) -> Result<ContourSegme
     let max = entries.iter().map(|entry| entry.id().get()).max().unwrap_or(0);
     let next = max.checked_add(1).ok_or(ContourError::SegmentIdExhausted)?;
     ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)
+}
+
+/// Moves one contour point by a whole-micrometre offset.
+///
+/// Range checking is left to the segment constructor the moved point enters; this only refuses a
+/// sum that does not fit an `i64`.
+fn translate_point(point: [Length; 2], offset: [Length; 2]) -> Result<[Length; 2], ContourError> {
+    let move_axis = |value: Length, delta: Length| {
+        value
+            .micrometres()
+            .checked_add(delta.micrometres())
+            .map(Length::from_micrometres)
+            .ok_or(ContourSegmentError::NonFinite)
+    };
+    Ok([move_axis(point[0], offset[0])?, move_axis(point[1], offset[1])?])
 }
 
 /// Twice the signed area of one arc, in square millimetres; it follows from the sector integral.
@@ -6530,6 +6752,71 @@ impl CornerBanding {
     }
 }
 
+/// One banding strip on one segment of a contour ring.
+///
+/// A contour panel has no rectangle edges: every side is a ring segment with its own stable
+/// [`ContourSegmentId`], so banding is keyed by that id. The record is removed with its segment when
+/// the outline is edited (ADR 0041).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RingBandingWire")]
+pub struct RingBanding {
+    segment: ContourSegmentId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl RingBanding {
+    /// Creates a ring banding record with validated fallback dimensions.
+    pub fn new(
+        segment: ContourSegmentId,
+        material: MaterialId,
+        included_in_size: bool,
+        thickness: Length,
+        width: Length,
+    ) -> Result<Self, PanelDimensionError> {
+        validate_dimension("thickness", thickness, Panel::MAX_LENGTH)?;
+        validate_dimension("width", width, Panel::MAX_THICKNESS)?;
+        Ok(Self { segment, material, included_in_size, last_known_thickness: thickness, last_known_width: width })
+    }
+
+    /// The ring segment this strip covers.
+    pub const fn segment(&self) -> ContourSegmentId {
+        self.segment
+    }
+
+    /// The banding material id.
+    pub const fn material(&self) -> MaterialId {
+        self.material
+    }
+
+    /// Whether this strip is included in the panel's nominal size.
+    pub const fn included_in_size(&self) -> bool {
+        self.included_in_size
+    }
+
+    /// The fallback band thickness.
+    pub const fn last_known_thickness(&self) -> Length {
+        self.last_known_thickness
+    }
+
+    /// The fallback band width.
+    pub const fn last_known_width(&self) -> Length {
+        self.last_known_width
+    }
+
+    /// The shared banding values without the segment owner.
+    pub const fn spec(&self) -> BandingSpec {
+        BandingSpec {
+            material: self.material,
+            included_in_size: self.included_in_size,
+            last_known_thickness: self.last_known_thickness,
+            last_known_width: self.last_known_width,
+        }
+    }
+}
+
 fn length_from_millimetres(value: f64) -> Result<Length, PanelGeometryError> {
     let micrometres = (value * 1000.0).round();
     if !micrometres.is_finite() || micrometres < 0.0 || micrometres > i64::MAX as f64 {
@@ -6640,6 +6927,24 @@ impl TryFrom<CornerBandingWire> for CornerBanding {
 
     fn try_from(wire: CornerBandingWire) -> Result<Self, Self::Error> {
         Self::new(wire.corner, wire.material, wire.included_in_size, wire.last_known_thickness, wire.last_known_width)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RingBandingWire {
+    segment: ContourSegmentId,
+    material: MaterialId,
+    included_in_size: bool,
+    last_known_thickness: Length,
+    last_known_width: Length,
+}
+
+impl TryFrom<RingBandingWire> for RingBanding {
+    type Error = PanelDimensionError;
+
+    fn try_from(wire: RingBandingWire) -> Result<Self, Self::Error> {
+        Self::new(wire.segment, wire.material, wire.included_in_size, wire.last_known_thickness, wire.last_known_width)
     }
 }
 
@@ -7534,6 +7839,155 @@ mod tests {
         }]);
         let error = serde_json::from_value::<Panel>(banded).expect_err("rectangle banding is not a ring");
         assert!(error.to_string().contains("banding follows the ring"), "error was {error}");
+    }
+
+    #[test]
+    fn a_contour_panel_bands_one_ring_segment() {
+        let contour = rectangle_contour(700, 500);
+        let segment = contour.entries().first().expect("ring segment").id();
+        let panel_id = Id::new(2).expect("id");
+        let panel = Panel::new_contour(panel_id, "Shelf", contour, None, sample_thickness(), Placement::IDENTITY)
+            .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+
+        let band =
+            RingBanding::new(segment, sample_material(), true, millimetres(2), millimetres(20)).expect("ring band");
+        project.set_ring_banding(panel_id, band).expect("set ring banding");
+
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.ring_banding().len(), 1);
+        assert_eq!(panel.ring_banding_at(segment).map(|band| band.spec().last_known_thickness), Some(millimetres(2)));
+        assert_eq!(panel.band_order(), &[SegmentSource::Ring(segment)]);
+        assert_eq!(
+            panel.segment_banding(SegmentSource::Ring(segment)),
+            panel.ring_banding_at(segment).map(|band| band.spec())
+        );
+
+        let geometry = panel.geometry_with_fallbacks().expect("contour geometry");
+        assert_eq!(geometry.core_width(), millimetres(498), "the included band narrows the core");
+        assert_eq!(geometry.overall_width(), millimetres(500));
+
+        project.clear_ring_banding(panel_id, segment).expect("clear ring banding");
+        let panel = project.panel(panel_id).expect("panel");
+        assert!(!panel.has_banding());
+        assert!(panel.band_order().is_empty());
+    }
+
+    #[test]
+    fn a_rectangular_panel_refuses_ring_banding() {
+        let mut panel = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let segment = ContourSegmentId::new(1).expect("segment id");
+        let band =
+            RingBanding::new(segment, sample_material(), false, millimetres(2), millimetres(20)).expect("ring band");
+        assert_eq!(panel.apply_ring_banding(band), Err(PanelContourError::UnsupportedRingSegment { segment }));
+    }
+
+    #[test]
+    fn ring_banding_survives_a_round_trip_and_is_refused_on_a_rectangle() {
+        let contour = rectangle_contour(700, 500);
+        let segment = contour.entries().first().expect("ring segment").id();
+        let panel_id = Id::new(2).expect("id");
+        let panel = Panel::new_contour(panel_id, "Shelf", contour, None, sample_thickness(), Placement::IDENTITY)
+            .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        project
+            .set_ring_banding(
+                panel_id,
+                RingBanding::new(segment, sample_material(), true, millimetres(2), millimetres(20)).expect("band"),
+            )
+            .expect("set ring banding");
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+        let decoded_panel = decoded.panel(panel_id).expect("panel");
+        assert_eq!(decoded_panel.ring_banding_at(segment).map(|band| band.material()), Some(sample_material()));
+
+        let rect = serde_json::to_value(sample_panel(Id::new(2).expect("id"), "Shelf")).expect("serialize panel");
+        let mut ring_on_rect = rect.clone();
+        ring_on_rect["ring_banding"] = serde_json::json!([{
+            "segment": 1,
+            "material": 1,
+            "included_in_size": false,
+            "last_known_thickness": 2_000,
+            "last_known_width": 20_000,
+        }]);
+        let error = serde_json::from_value::<Panel>(ring_on_rect).expect_err("a rectangle has no ring segments");
+        assert!(error.to_string().contains("contour ring segment"), "error was {error}");
+
+        let mut duplicate = serde_json::to_value(decoded_panel).expect("serialize panel");
+        let one = serde_json::json!({
+            "segment": segment.get(),
+            "material": 1,
+            "included_in_size": false,
+            "last_known_thickness": 2_000,
+            "last_known_width": 20_000,
+        });
+        duplicate["ring_banding"] = serde_json::json!([one.clone(), one]);
+        let error = serde_json::from_value::<Panel>(duplicate).expect_err("one record per segment");
+        assert!(error.to_string().contains("duplicate ring banding"), "error was {error}");
+
+        let mut unknown = serde_json::to_value(decoded_panel).expect("serialize panel");
+        unknown["ring_banding"] = serde_json::json!([{
+            "segment": 99,
+            "material": 1,
+            "included_in_size": false,
+            "last_known_thickness": 2_000,
+            "last_known_width": 20_000,
+        }]);
+        let error = serde_json::from_value::<Panel>(unknown).expect_err("the segment must exist in the ring");
+        assert!(error.to_string().contains("unsupported segment"), "error was {error}");
+    }
+
+    #[test]
+    fn a_panel_created_from_a_moved_scene_contour_is_anchored() {
+        let moved = Contour::from_polygon(vec![
+            [millimetres(10), millimetres(10)],
+            [millimetres(110), millimetres(10)],
+            [millimetres(110), millimetres(60)],
+            [millimetres(10), millimetres(60)],
+        ])
+        .expect("ring");
+        let source_id = Id::new(5).expect("id");
+        let constructive = Constructive::extrude(moved.clone(), millimetres(18)).expect("constructive object");
+        let source = Object::new(source_id, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive));
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![source.into()]);
+        let mut project = Project::new(root).expect("valid project");
+
+        assert_eq!(project.object_contour(source_id).expect("source contour"), &moved);
+        project.validate_panel_contour(project.root().id(), source_id).expect("a valid ring");
+
+        let panel_id = project
+            .add_panel_contour(project.root().id(), "Top", &moved, None, sample_thickness(), Placement::IDENTITY)
+            .expect("contour panel");
+        let panel = project.panel(panel_id).expect("panel");
+        let ring = panel.outline_contour().expect("ring");
+        assert_eq!(ring.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+        assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size"));
+        assert_eq!(
+            ring.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            moved.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            "segment ids travel with their curves"
+        );
+
+        let mesh_id = project
+            .add_object(project.root().id(), "Mesh", Placement::IDENTITY, Geometry::Mesh(box_mesh()))
+            .expect("mesh object");
+        assert_eq!(
+            project.validate_panel_contour(project.root().id(), mesh_id),
+            Err(ProjectError::NotConstructiveObject { id: mesh_id })
+        );
+        let missing = Id::new(999).expect("id");
+        assert_eq!(
+            project.validate_panel_contour(project.root().id(), missing),
+            Err(ProjectError::NodeNotFound { id: missing })
+        );
+        assert_eq!(
+            project.validate_panel_contour(missing, source_id),
+            Err(ProjectError::ContainerNotFound { id: missing })
+        );
     }
 
     #[test]

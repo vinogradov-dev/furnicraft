@@ -138,9 +138,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Id,
-        Machining, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge, Revision,
-        SYSTEM_FURNTYPE, VertexId,
+        Catalog, Constructive, Contour, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId,
+        FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue,
+        RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -157,9 +157,9 @@ mod tests {
         NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
-        CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
-        PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename,
-        PanelResize,
+        CutoutCreate, PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
+        PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
+        PanelRename, PanelResize,
     };
 
     fn sample_session() -> Session {
@@ -178,6 +178,35 @@ mod tests {
 
     fn cutout_request(panel: Id, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> CutoutCreate {
         CutoutCreate { panel, shape, depth, entry }
+    }
+
+    /// A session whose root holds a constructive object with a 700 x 500 rectangular contour.
+    fn session_with_contour_source() -> (Session, Id) {
+        let mut project = sample_project();
+        let width = Length::from_millimetres(700).expect("width");
+        let height = Length::from_millimetres(500).expect("height");
+        let contour = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [width, Length::ZERO],
+            [width, height],
+            [Length::ZERO, height],
+        ])
+        .expect("ring");
+        let constructive = Constructive::extrude(contour, sample_panel_thickness()).expect("constructive object");
+        let source = project
+            .add_object(project.root().id(), "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
+            .expect("contour source");
+        (Session::with_catalog(project, sample_catalog()), source)
+    }
+
+    fn contour_panel_create(session: &Session, source: Id, name: &str) -> PanelContourCreate {
+        PanelContourCreate {
+            parent: session.project().root().id(),
+            name: name.to_owned(),
+            source,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY,
+        }
     }
 
     fn json_params<T: serde::Serialize>(value: &T) -> Value {
@@ -202,6 +231,56 @@ mod tests {
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn contour_panel_create_uses_a_scene_contour_and_leaves_rect_panels_alone() {
+        let (mut session, source) = session_with_contour_source();
+        let before = session.project().revision().get();
+        let request = contour_panel_create(&session, source, "Top");
+        let params = json_params(&request);
+        let registry = CommandRegistry::new();
+        assert!(registry.get("panel.contour.create").expect("registered").enabled(&session, &params));
+
+        let outcome = session.dispatch("panel.contour.create", &params).expect("create contour panel");
+        let created = outcome.created_id().expect("the command creates a panel");
+        let panel = session.project().panel(created).expect("created panel");
+        assert!(panel.is_contour());
+        assert_eq!(panel.nominal_size(), sample_panel_nominal_size());
+        assert!(!session.project().panel(Id::new(2).expect("id")).expect("shelf").is_contour());
+        assert_eq!(session.project().revision().get(), before + 1);
+
+        session.undo().expect("undo");
+        assert!(session.project().panel(created).is_none(), "one undo removes the contour panel");
+        assert_eq!(session.project().revision().get(), before + 2);
+    }
+
+    #[test]
+    fn contour_panel_create_rejects_a_source_that_is_not_a_contour() {
+        let (mut session, source) = session_with_contour_source();
+        let before = session.project().revision();
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.contour.create").expect("registered");
+
+        let panel_source = Id::new(2).expect("id");
+        let request = contour_panel_create(&session, panel_source, "Top");
+        assert!(!spec.enabled(&session, &json_params(&request)));
+        let error =
+            session.dispatch("panel.contour.create", &json_params(&request)).expect_err("a panel is not a contour");
+        assert!(matches!(error, CommandError::Model(ProjectError::NodeNotFound { id }) if id == panel_source));
+        assert_eq!(session.project().revision(), before);
+
+        let blank = contour_panel_create(&session, source, "   ");
+        assert!(!spec.enabled(&session, &json_params(&blank)));
+        assert!(matches!(
+            session.dispatch("panel.contour.create", &json_params(&blank)),
+            Err(CommandError::InvalidParams { command: "panel.contour.create", .. })
+        ));
+
+        let mut unknown_material = contour_panel_create(&session, source, "Top");
+        unknown_material.material = furnicraft_model::MaterialId::new(9_999).expect("id");
+        assert!(!spec.enabled(&session, &json_params(&unknown_material)));
+        assert_eq!(session.project().revision(), before);
     }
 
     #[test]
