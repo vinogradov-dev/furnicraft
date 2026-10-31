@@ -1,8 +1,8 @@
 //! Document commands for panels and their cutouts.
 
 use furnicraft_model::{
-    Catalog, CornerBanding, CornerFeature, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBanding, EdgeBow, EdgeId,
-    FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError, VertexId,
+    Catalog, Contour, CornerBanding, CornerFeature, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBanding, EdgeBow,
+    EdgeId, FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -127,6 +127,49 @@ fn contour_create_run(
         params.placement,
     )?;
     Ok(CommandOutcome::created(id))
+}
+
+/// Stable id of the contour-outline replacement command.
+pub const OUTLINE_SET_ID: &str = "panel.outline.set";
+
+/// User-facing label of the contour-outline replacement command.
+pub const OUTLINE_SET_LABEL: &str = "Set panel outline";
+
+/// Parameters for `panel.outline.set`.
+///
+/// The ring is in the panel-local plane and may sit anywhere; the command anchors it at the
+/// panel-local zero and moves the panel frame with it, so the world-space shape stays fixed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelOutlineSet {
+    /// Id of the contour panel whose outline changes.
+    pub panel: Id,
+    /// The new closed ring.
+    pub contour: Contour,
+}
+
+impl PanelOutlineSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: OUTLINE_SET_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.outline.set` command.
+pub(crate) const OUTLINE_SET: CommandSpec =
+    CommandSpec::new(OUTLINE_SET_ID, OUTLINE_SET_LABEL, outline_set_enabled, outline_set_run);
+
+fn outline_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelOutlineSet::parse(params) else {
+        return false;
+    };
+    session.project().validate_panel_outline(params.panel, &params.contour).is_ok()
+}
+
+fn outline_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
+    let params = PanelOutlineSet::parse(params)?;
+    project.set_panel_outline(params.panel, params.contour)?;
+    Ok(CommandOutcome::changed())
 }
 
 fn create_enabled(session: &Session, params: &Value) -> bool {

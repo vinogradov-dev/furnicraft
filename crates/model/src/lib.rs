@@ -1307,6 +1307,45 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether a ring can replace a contour panel's outline.
+    ///
+    /// The ring is first moved to the panel-local zero corner, exactly as
+    /// [`Panel::anchored_contour`] does for a new panel, and its bounds must form a usable panel
+    /// size. Every ring banding record must still name a segment the ring has: an edit that drops a
+    /// banded segment is refused instead of silently dropping the band.
+    pub fn validate_panel_outline(&self, id: Id, contour: &Contour) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if !panel.is_contour() {
+            return Err(ProjectError::PanelNotContour { id });
+        }
+        let anchored = Panel::anchored_contour(contour)?;
+        Panel::contour_size(&anchored)?;
+        validate_ring_banding(&anchored, panel.ring_banding())?;
+        Ok(())
+    }
+
+    /// Replaces a contour panel's outline and bumps the revision once.
+    ///
+    /// The new ring is anchored at the panel-local zero corner (ADR 0009). When the edit moves the
+    /// minimum corner, the panel placement, pivot and machining shift by the same offset so the
+    /// world-space shape and every feature stay where the user drew them. A rectangle panel never
+    /// converts; [`Project::validate_panel_outline`] rejects it before anything changes.
+    pub fn set_panel_outline(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
+        self.validate_panel_outline(id, &contour)?;
+        let (min, _) = contour.bounds_micrometres();
+        let anchored = Panel::anchored_contour(&contour)?;
+        let nominal_size = Panel::contour_size(&anchored)?;
+        let next_revision = self.next_revision()?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.move_frame_to(min)?;
+        panel.nominal_size = nominal_size;
+        panel.outline = PanelOutline::Contour { contour: anchored };
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Renames a panel and bumps the revision once.
     ///
     /// The name is user-visible text; callers validate that it is not blank before calling this
@@ -2996,6 +3035,18 @@ pub enum ProjectError {
         /// The node that was asked.
         id: Id,
     },
+    /// The node is not a contour panel, so it has no outline ring to replace.
+    #[error("panel {id} is not a contour panel")]
+    PanelNotContour {
+        /// The panel that was asked.
+        id: Id,
+    },
+    /// A contour edit moves the panel frame beyond what the placement or pivot can represent.
+    #[error("the frame of panel {panel} cannot follow its new outline")]
+    PanelOutlineFrame {
+        /// The panel whose frame could not move.
+        panel: Id,
+    },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {
@@ -3805,6 +3856,42 @@ impl Panel {
     /// Resolves geometry using the stored fallback thickness.
     pub fn geometry_with_fallbacks(&self) -> Result<PanelGeometry, PanelGeometryError> {
         self.geometry(self.last_known_thickness)
+    }
+
+    /// Moves the panel-local frame so its origin sits at `min`, keeping the world shape fixed.
+    ///
+    /// A contour edit can move the ring's minimum corner. The frame is anchored there (ADR 0009),
+    /// so the ring is translated to zero and the placement, pivot and machining move by the inverse
+    /// offset. The world-space geometry and the world-space pivot therefore do not move.
+    fn move_frame_to(&mut self, min: [i64; 2]) -> Result<(), ProjectError> {
+        if min == [0, 0] {
+            return Ok(());
+        }
+        let x = Length::from_micrometres(min[0]);
+        let y = Length::from_micrometres(min[1]);
+        let offset = DVec3::new(x.millimetres_f64(), y.millimetres_f64(), 0.0);
+        let translation = self.placement.translation() + self.placement.rotation() * offset;
+        let placement = Placement::new(translation, self.placement.rotation())
+            .map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot = self.pivot.components();
+        let pivot_x = pivot[0].checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot_y = pivot[1].checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot = Pivot::new(pivot_x, pivot_y, pivot[2]);
+        // Build the shifted machining beside the old one so a refusal leaves the panel untouched.
+        let mut machining = self.machining.clone();
+        for entry in &mut machining {
+            let Machining::Cutout(cutout) = entry;
+            let CutoutShape::Rectangle(rect) = cutout.shape;
+            let cut_x = rect.x().checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+            let cut_y = rect.y().checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+            let shape = PanelRect::new(cut_x, cut_y, rect.width(), rect.height())
+                .map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?;
+            cutout.shape = CutoutShape::Rectangle(shape);
+        }
+        self.placement = placement;
+        self.pivot = pivot;
+        self.machining = machining;
+        Ok(())
     }
 
     /// Translates version-2 core-local cutouts into the nominal panel frame.
@@ -7804,6 +7891,102 @@ mod tests {
             Panel::new_contour(Id::new(2).expect("id"), "Moved", moved, None, sample_thickness(), Placement::IDENTITY),
             Err(PanelError::ContourNotAnchored { start: [10_000, 10_000] })
         );
+    }
+
+    #[test]
+    fn replacing_a_contour_outline_reanchors_the_frame_and_keeps_the_world_shape() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let placement = Placement::new(DVec3::new(100.0, 20.0, 30.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour, None, sample_thickness(), placement).expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let pivot = Pivot::new(millimetres(350), millimetres(250), Length::ZERO);
+        project.set_node_pivot(panel_id, pivot).expect("pivot");
+        let before_world = project.world_placement(panel_id).expect("world placement");
+        let before_pivot = project.pivot_world(panel_id).expect("world pivot");
+
+        let moved = rectangle_contour(800, 600)
+            .translated([millimetres(-100), millimetres(-50)])
+            .expect("move the ring past the old zero");
+        project.set_panel_outline(panel_id, moved).expect("replace the outline");
+
+        let panel = project.panel(panel_id).expect("panel");
+        let ring = panel.outline_contour().expect("ring");
+        assert_eq!(ring.bounds_micrometres().0, [0, 0], "the ring is anchored at the panel zero");
+        assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(800), millimetres(600)).expect("new size"));
+        assert_eq!(
+            panel.pivot().components(),
+            [millimetres(450), millimetres(300), Length::ZERO],
+            "the pivot follows the frame so it stays in the same world place"
+        );
+        let after_world = project.world_placement(panel_id).expect("world placement");
+        let old_zero = before_world.transform_point(DVec3::ZERO);
+        let new_zero = after_world.transform_point(DVec3::new(100.0, 50.0, 0.0));
+        assert!((old_zero - new_zero).length() < 1.0e-9, "the old zero corner stays in place");
+        let after_pivot = project.pivot_world(panel_id).expect("world pivot");
+        assert!((before_pivot - after_pivot).length() < 1.0e-9, "the pivot stays in place");
+    }
+
+    #[test]
+    fn a_rectangle_panel_never_takes_a_contour_outline() {
+        let mut project = sample_project();
+        let id = Id::new(2).expect("id");
+        assert_eq!(
+            project.set_panel_outline(id, rectangle_contour(100, 100)),
+            Err(ProjectError::PanelNotContour { id })
+        );
+        assert_eq!(project.panel(id).expect("panel").outline(), &PanelOutline::Rect);
+    }
+
+    #[test]
+    fn a_bad_outline_edit_leaves_the_panel_and_revision_alone() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour.clone(), None, sample_thickness(), Placement::IDENTITY)
+                .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let revision = project.revision();
+        let too_long = Contour::from_polygon(vec![
+            [millimetres(-10_000), millimetres(0)],
+            [millimetres(10_000), millimetres(0)],
+            [millimetres(10_000), millimetres(500)],
+            [millimetres(-10_000), millimetres(500)],
+        ])
+        .expect("a ring inside the coordinate limit but wider than a panel");
+        assert!(project.set_panel_outline(panel_id, too_long).is_err(), "a ring wider than a panel is refused");
+        assert_eq!(project.revision(), revision);
+        assert_eq!(project.panel(panel_id).expect("panel").outline_contour(), Some(&contour));
+    }
+
+    #[test]
+    fn an_outline_edit_may_not_drop_a_banded_segment() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour.clone(), None, sample_thickness(), Placement::IDENTITY)
+                .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let segment = contour.id_at(0).expect("segment");
+        let band =
+            RingBanding::new(segment, sample_material(), false, millimetres(2), millimetres(20)).expect("ring band");
+        project.set_ring_banding(panel_id, band).expect("band the ring");
+        let (split, inserted) =
+            contour.split_segment(segment, [millimetres(350), millimetres(0)]).expect("split the bottom edge");
+        project.set_panel_outline(panel_id, split.clone()).expect("apply the split");
+        let band =
+            RingBanding::new(inserted, sample_material(), false, millimetres(2), millimetres(20)).expect("ring band");
+        project.set_ring_banding(panel_id, band).expect("band the new segment");
+        assert_eq!(
+            project.set_panel_outline(panel_id, contour),
+            Err(ProjectError::Panel(PanelError::UnsupportedRingBanding { segment: inserted }))
+        );
+        assert_eq!(project.panel(panel_id).expect("panel").outline_contour(), Some(&split));
+        assert!(project.panel(panel_id).expect("panel").ring_banding_at(inserted).is_some());
     }
 
     #[test]
