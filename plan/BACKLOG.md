@@ -16,14 +16,12 @@ L is scene lighting.
 
 ## Now
 
-- `[~]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
-  in the viewport with handles and a preview, leave by applying one command or by cancelling.
-  `files: crates/ui/src/panel_card.rs, crates/ui/src/object_card.rs, apps/furnicraft`
+- `[~]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
+  checks, validation before mutation and one undo entry per apply.
+  `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
 
 ## Next
 
-- `[ ]` **A6** contour edit commands: `panel.outline.set` and `object.contour.replace`, one undo entry
-  per apply. `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
 - `[ ]` **D2** the card of a contour panel: thickness, material and banding per ring segment; no bows,
   no corner features, no parametric cutouts; an `Edit contour` button.
   `files: crates/ui/src/panel_card.rs`
@@ -47,6 +45,8 @@ L is scene lighting.
 
 ## Done
 
+- `[x]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
+  in the viewport with handles and a preview, leave by applying one command or by cancelling — `1428441`
 - `[x]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring — `dda986c`
 - `[x]` **D1** a panel whose outline is a contour ring, banding per ring segment — `d9827ed`
 - `[x]` **A4** stable ids for contour segments — `ea3153a`

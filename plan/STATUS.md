@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A3 state=doing base=dda986c updated=2026-10-31
+STATE: milestone=M7 phase=A task=A6 state=idle base=1428441 updated=2026-10-31
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -36,12 +36,11 @@ plan is broken.
 
 ## Next
 
-A3 is the first open task: the contour edit mode over the edit math — enter on a panel outline or an
-object contour, edit a working copy in the viewport with handles and a preview, leave by applying one
-command or by cancelling. A6 then turns the apply into one command, D2 rebuilds the contour panel card
-around thickness, material and per-segment banding; D3 adds a cutout by an arbitrary contour. P1–P3 in
-`plan/BACKLOG.md` continue the gate itself, now inside `state-contract`, starting with `status`
-printing the resume block.
+A6 is the first open task: audit the `panel.outline.set` and `object.contour.replace` commands,
+validate before mutation and ensure one undo entry per apply. D2 then rebuilds the contour panel
+card around thickness, material and per-segment banding; D3 adds a cutout by an arbitrary contour.
+P1–P3 in `plan/BACKLOG.md` continue the gate itself, now inside `state-contract`, starting with
+`status` printing the resume block.
 
 ## Index
 
