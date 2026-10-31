@@ -16,7 +16,7 @@ L is scene lighting.
 
 ## Now
 
-- `[~]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
+- `[ ]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
   checks, validation before mutation and one undo entry per apply.
   `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
 
