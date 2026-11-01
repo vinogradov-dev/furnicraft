@@ -27,12 +27,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Bugs
 
-- `[ ]` **X1** an extruded object with a concave contour shows a flap triangle across the notch.
-  Observed: a point added to the ring and pulled inward produces a triangle joining vertices across
-  the material. Expected: the cap shows only triangles inside the contour. Cause: `object_mesh` fans
-  every face from its first vertex, which is only valid for convex faces; `build_constructive_mesh`
-  keeps the contour cap as one concave n-gon. Also bakes into `object.collapse`.
-  `files: crates/geom/src, crates/mesh/src/lib.rs`
+No open defect.
 
 ## Next
 
@@ -59,6 +54,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X1** a concave contour cap drew a flap triangle across the notch: `object_mesh` fanned
+  every face, so the cap of an extruded object left its own contour; faces are ear-clipped now —
+  `a2859fc`
 - `[x]` **A3** the contour edit mode: enter on a panel outline or an object contour, edit a working copy
   in the viewport with handles and a preview, leave by applying one command or by cancelling — `1428441`
 - `[x]` **A5** contour edit math: move a corner, trim, split, and rely on the segment ring — `dda986c`

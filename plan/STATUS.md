@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A6 state=idle base=a76af2a updated=2026-11-01
+STATE: milestone=M7 phase=A task=A6 state=idle base=a2859fc updated=2026-11-01
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -27,8 +27,9 @@ plan is broken.
   math is in (A5): `Contour::{move_corner, trim_segment, split_segment}` reshape a ring, keep every
   untouched segment id and mint a split part from the ring counter; an arc keeps its centre and
   radius. The card does not edit the outline yet: A3 is the mode, A6 the apply command, D2 the card.
-- Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id; `X1` is open and the dashboard prints
-  the section; taking a bug moves its line into `## Now` in work order.
+- Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
+  taking a bug moves its line into `## Now` in work order. X1 was the first: a concave contour cap
+  drew a flap across the notch because `object_mesh` fanned every face; faces are ear-clipped now.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
 - The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
   `STATUS`/`BACKLOG`/`SESSION`, ships templates, the agent section, the README and MIT/Apache-2.0
@@ -41,10 +42,8 @@ plan is broken.
 A6 is the first open task: audit the `panel.outline.set` and `object.contour.replace` commands,
 validate before mutation and ensure one undo entry per apply. D2 then rebuilds the contour panel
 card around thickness, material and per-segment banding; D3 adds a cutout by an arbitrary contour.
-`X1` in `## Bugs` is the concave-cap triangulation defect: `object_mesh` fans every face, so a
-concave contour cap draws a flap across the notch; it waits for the owner's order relative to A6.
-P1–P3 in `plan/BACKLOG.md` continue the gate itself, now inside `state-contract`, starting with
-`status` printing the resume block.
+`## Bugs` is empty; the next defect takes `X2`. P1–P3 in `plan/BACKLOG.md` continue the gate itself,
+now inside `state-contract`, starting with `status` printing the resume block.
 
 ## Index
 
