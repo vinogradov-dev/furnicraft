@@ -97,6 +97,8 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::EDGE_BANDING_CLEAR,
     panel_cmds::CORNER_BANDING_SET,
     panel_cmds::CORNER_BANDING_CLEAR,
+    panel_cmds::RING_BANDING_SET,
+    panel_cmds::RING_BANDING_CLEAR,
     panel_cmds::CORNER_SET,
     panel_cmds::CORNER_CLEAR,
     panel_cmds::BOW_SET,
@@ -289,6 +291,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 39);
+        assert_eq!(registry.specs().len(), 41);
     }
 }

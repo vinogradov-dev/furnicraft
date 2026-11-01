@@ -1,8 +1,9 @@
 //! Document commands for panels and their cutouts.
 
 use furnicraft_model::{
-    Catalog, Contour, CornerBanding, CornerFeature, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBanding, EdgeBow,
-    EdgeId, FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError, VertexId,
+    Catalog, Contour, ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, CutoutDepth, CutoutShape,
+    EdgeBanding, EdgeBow, EdgeId, FaceSide, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError,
+    RingBanding, VertexId,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -611,6 +612,122 @@ fn corner_banding_clear_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelCornerBandingClear::parse(params)?;
     project.clear_corner_banding(params.panel, params.corner)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the ring-banding command.
+pub const RING_BANDING_SET_ID: &str = "panel.ring_banding.set";
+
+/// User-facing label of the ring-banding command.
+pub const RING_BANDING_SET_LABEL: &str = "Set contour banding";
+
+/// Parameters for `panel.ring_banding.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelRingBandingSet {
+    /// Id of the contour panel whose ring segment is banded.
+    pub panel: Id,
+    /// Stable id of the ring segment to cover.
+    pub segment: ContourSegmentId,
+    /// Edge-banding material from the session catalogue.
+    pub material: MaterialId,
+    /// Whether the banding thickness is taken out of the nominal size.
+    pub included_in_size: bool,
+}
+
+impl PanelRingBandingSet {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: RING_BANDING_SET_ID, message: error.to_string() })
+    }
+
+    fn band(&self, catalog: &Catalog) -> Option<RingBanding> {
+        let material = catalog.edge_material(self.material)?;
+        RingBanding::new(self.segment, self.material, self.included_in_size, material.thickness(), material.width())
+            .ok()
+    }
+}
+
+/// The `panel.ring_banding.set` command.
+pub(crate) const RING_BANDING_SET: CommandSpec =
+    CommandSpec::new(RING_BANDING_SET_ID, RING_BANDING_SET_LABEL, ring_banding_set_enabled, ring_banding_set_run);
+
+fn ring_banding_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelRingBandingSet::parse(params) else {
+        return false;
+    };
+    let Some(band) = params.band(session.catalog()) else {
+        return false;
+    };
+    session.project().validate_ring_banding(params.panel, band).is_ok()
+}
+
+fn ring_banding_set_run(
+    project: &mut Project,
+    catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelRingBandingSet::parse(params)?;
+    let Some(material) = catalog.edge_material(params.material) else {
+        return Err(CommandError::UnknownMaterial { material: params.material });
+    };
+    let band = RingBanding::new(
+        params.segment,
+        params.material,
+        params.included_in_size,
+        material.thickness(),
+        material.width(),
+    )
+    .map_err(|error| CommandError::Model(ProjectError::PanelDimension(error)))?;
+    project.set_ring_banding(params.panel, band)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the ring-banding clear command.
+pub const RING_BANDING_CLEAR_ID: &str = "panel.ring_banding.clear";
+
+/// User-facing label of the ring-banding clear command.
+pub const RING_BANDING_CLEAR_LABEL: &str = "Clear contour banding";
+
+/// Parameters for `panel.ring_banding.clear`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelRingBandingClear {
+    /// Id of the contour panel whose ring segment is cleared.
+    pub panel: Id,
+    /// Stable id of the ring segment to clear.
+    pub segment: ContourSegmentId,
+}
+
+impl PanelRingBandingClear {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: RING_BANDING_CLEAR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.ring_banding.clear` command.
+pub(crate) const RING_BANDING_CLEAR: CommandSpec = CommandSpec::new(
+    RING_BANDING_CLEAR_ID,
+    RING_BANDING_CLEAR_LABEL,
+    ring_banding_clear_enabled,
+    ring_banding_clear_run,
+);
+
+fn ring_banding_clear_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelRingBandingClear::parse(params) else {
+        return false;
+    };
+    session.project().panel(params.panel).is_some_and(|panel| panel.ring_banding_at(params.segment).is_some())
+}
+
+fn ring_banding_clear_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelRingBandingClear::parse(params)?;
+    project.clear_ring_banding(params.panel, params.segment)?;
     Ok(CommandOutcome::changed())
 }
 

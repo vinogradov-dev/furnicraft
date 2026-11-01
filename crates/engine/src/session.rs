@@ -138,9 +138,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, Constructive, Contour, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId,
-        FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue,
-        RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, VertexId,
+        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, CutoutDepth, CutoutShape,
+        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement,
+        ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -159,7 +159,7 @@ mod tests {
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
         PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
-        PanelOutlineSet, PanelRename, PanelResize,
+        PanelOutlineSet, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
     };
 
     fn sample_session() -> Session {
@@ -207,6 +207,18 @@ mod tests {
             material: sample_material_id(),
             placement: Placement::IDENTITY,
         }
+    }
+
+    /// A session whose root holds a 700 x 500 contour panel built from a constructive contour.
+    fn session_with_contour_panel() -> (Session, Id) {
+        let (mut session, source) = session_with_contour_source();
+        let create = json_params(&contour_panel_create(&session, source, "Top"));
+        let panel = session
+            .dispatch("panel.contour.create", &create)
+            .expect("create contour panel")
+            .created_id()
+            .expect("the command creates a panel");
+        (session, panel)
     }
 
     fn json_params<T: serde::Serialize>(value: &T) -> Value {
@@ -963,6 +975,99 @@ mod tests {
         let panel = session.project().panel(panel_id).expect("panel");
         assert!(panel.corner_feature(corner).is_none());
         assert!(panel.corner_banding_at(corner).is_none(), "the banding is removed with its segment");
+    }
+
+    #[test]
+    fn ring_banding_set_and_clear_change_history() {
+        let (mut session, panel_id) = session_with_contour_panel();
+        let segment = session
+            .project()
+            .panel(panel_id)
+            .expect("panel")
+            .outline_contour()
+            .expect("ring")
+            .entries()
+            .first()
+            .expect("segment")
+            .id();
+        let set = PanelRingBandingSet {
+            panel: panel_id,
+            segment,
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.ring_banding.set").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&set)));
+        let before = session.project().revision();
+
+        session.dispatch("panel.ring_banding.set", &json_params(&set)).expect("band the ring segment");
+        let panel = session.project().panel(panel_id).expect("panel");
+        let band = panel.ring_banding_at(segment).expect("ring band");
+        assert_eq!(band.material(), sample_edge_material_id());
+        assert!(band.included_in_size());
+        assert_eq!(panel.band_order(), &[SegmentSource::Ring(segment)]);
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        session.undo().expect("one undo removes the band");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+        session.redo().expect("redo");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_some());
+
+        let clear = PanelRingBandingClear { panel: panel_id, segment };
+        let clear_spec = registry.get("panel.ring_banding.clear").expect("registered");
+        assert!(clear_spec.enabled(&session, &json_params(&clear)));
+        session.dispatch("panel.ring_banding.clear", &json_params(&clear)).expect("clear the ring band");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+    }
+
+    #[test]
+    fn ring_banding_refuses_a_rectangle_and_an_unknown_segment() {
+        let registry = CommandRegistry::new();
+        let set_spec = registry.get("panel.ring_banding.set").expect("registered");
+        let clear_spec = registry.get("panel.ring_banding.clear").expect("registered");
+
+        let mut session = sample_session();
+        let rectangle = Id::new(2).expect("id");
+        let segment = ContourSegmentId::new(1).expect("segment");
+        let set = PanelRingBandingSet {
+            panel: rectangle,
+            segment,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        let before = session.project().revision();
+        assert!(!set_spec.enabled(&session, &json_params(&set)));
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.set", &json_params(&set)),
+            Err(CommandError::Model(ProjectError::PanelContour(_)))
+        ));
+        assert_eq!(session.project().revision(), before, "a refused command changes nothing");
+
+        let (mut session, panel_id) = session_with_contour_panel();
+        let missing = ContourSegmentId::new(99).expect("segment");
+        let set = PanelRingBandingSet {
+            panel: panel_id,
+            segment: missing,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        assert!(!set_spec.enabled(&session, &json_params(&set)));
+        let before = session.project().revision();
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.set", &json_params(&set)),
+            Err(CommandError::Model(ProjectError::PanelContour(_)))
+        ));
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding().is_empty());
+        assert_eq!(session.project().revision(), before);
+
+        let clear = PanelRingBandingClear { panel: panel_id, segment: missing };
+        assert!(!clear_spec.enabled(&session, &json_params(&clear)));
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.clear", &json_params(&clear)),
+            Err(CommandError::Model(ProjectError::RingBandingNotFound { panel, segment }))
+                if panel == panel_id && segment == missing
+        ));
     }
 
     #[test]

@@ -5,8 +5,8 @@
 //! the document and never make a scene unreadable.
 
 use furnicraft_model::{
-    Catalog, CoreViolation, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId, PanelGeometryError, PanelRect,
-    Project, ProjectError, VertexId,
+    Catalog, ContourSegmentId, CoreViolation, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId,
+    PanelGeometryError, PanelRect, Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
 
@@ -31,6 +31,13 @@ pub enum PanelDiagnostic {
     MissingCornerBandingMaterial {
         /// The corner whose banding is unresolved.
         corner: VertexId,
+        /// The missing material id.
+        material: MaterialId,
+    },
+    /// Ring banding refers to a material that is absent from the catalogue.
+    MissingRingBandingMaterial {
+        /// The ring segment whose banding is unresolved.
+        segment: ContourSegmentId,
         /// The missing material id.
         material: MaterialId,
     },
@@ -84,6 +91,14 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
         if catalog.edge_material(band.material()).is_none() {
             diagnostics.push(PanelDiagnostic::MissingCornerBandingMaterial {
                 corner: band.corner(),
+                material: band.material(),
+            });
+        }
+    }
+    for band in panel.ring_banding() {
+        if catalog.edge_material(band.material()).is_none() {
+            diagnostics.push(PanelDiagnostic::MissingRingBandingMaterial {
+                segment: band.segment(),
                 material: band.material(),
             });
         }
@@ -143,8 +158,8 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, FaceSide, MaterialId,
-        PanelMaterial, RectCorner,
+        Catalog, Contour, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, FaceSide, MaterialId,
+        PanelMaterial, Placement, RectCorner, RingBanding,
     };
     use furnicraft_testkit::{
         sample_blind_depth, sample_catalog, sample_material_id, sample_panel_thickness, sample_project,
@@ -210,6 +225,52 @@ mod tests {
             .expect("set corner banding");
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
         assert!(diagnostics.contains(&PanelDiagnostic::MissingCornerBandingMaterial { corner, material: missing }));
+    }
+
+    #[test]
+    fn missing_ring_banding_material_is_a_diagnostic() {
+        let mut project = sample_project();
+        let length = Length::from_millimetres(700).expect("length");
+        let width = Length::from_millimetres(500).expect("width");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [length, Length::ZERO],
+            [length, width],
+            [Length::ZERO, width],
+        ])
+        .expect("ring");
+        let panel = project
+            .add_panel_contour(
+                project.root().id(),
+                "Contour",
+                &ring,
+                None,
+                Length::from_millimetres(18).expect("thickness"),
+                Placement::IDENTITY,
+            )
+            .expect("contour panel");
+        let segment = project
+            .panel(panel)
+            .expect("panel")
+            .outline_contour()
+            .expect("ring")
+            .entries()
+            .first()
+            .expect("segment")
+            .id();
+        let missing = MaterialId::new(999).expect("material id");
+        let band = RingBanding::new(
+            segment,
+            missing,
+            false,
+            Length::from_micrometres(2_000),
+            Length::from_micrometres(22_000),
+        )
+        .expect("band");
+        project.set_ring_banding(panel, band).expect("ring banding");
+
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel);
+        assert!(diagnostics.contains(&PanelDiagnostic::MissingRingBandingMaterial { segment, material: missing }));
     }
 
     #[test]
