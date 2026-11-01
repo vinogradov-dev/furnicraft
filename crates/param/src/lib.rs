@@ -63,9 +63,38 @@ pub enum ParamError {
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
+    /// The contour samples to more points than one extrusion cap can hold.
+    #[error(
+        "the contour samples to {points} points but one extrusion cap holds at most {max}; use fewer or wider arcs"
+    )]
+    ContourTooDetailed {
+        /// The number of points the contour sampled to.
+        points: usize,
+        /// The largest cap the document mesh can store.
+        max: usize,
+    },
     /// An extruded contour produced an invalid document mesh.
     #[error("the constructed mesh is invalid: {0}")]
     Mesh(#[from] MeshError),
+}
+
+/// Checks that a contour can become a renderable extrusion, without building the mesh.
+///
+/// The cap of a single extrusion is one document face and its vertices are the sampled ring, so a
+/// contour that samples to more points than [`furnicraft_model::MAX_FACE_VERTICES`] can never be
+/// drawn. A command that stores a ring calls this before it mutates the document, so an object
+/// never ends up with a contour that evaluates to nothing.
+pub fn validate_extrusion_contour(contour: &furnicraft_model::Contour) -> Result<(), ParamError> {
+    sampled_cap(contour).map(|_| ())
+}
+
+/// The sampled ring, refused when it cannot be stored as one cap face.
+fn sampled_cap(contour: &furnicraft_model::Contour) -> Result<Vec<[Length; 2]>, ParamError> {
+    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
+    if points.len() > furnicraft_model::MAX_FACE_VERTICES {
+        return Err(ParamError::ContourTooDetailed { points: points.len(), max: furnicraft_model::MAX_FACE_VERTICES });
+    }
+    Ok(points)
 }
 
 /// Builds the polygon mesh of a constructive object with one extrusion.
@@ -84,7 +113,7 @@ pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, Para
         return Err(ParamError::UnsupportedConstructive);
     };
     let contour = extrude.contour();
-    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).map_err(ParamError::from)?;
+    let points = sampled_cap(contour)?;
     let count = u32::try_from(points.len()).map_err(|_| ParamError::UnsupportedConstructive)?;
     let height = extrude.height();
     let mut positions = Vec::with_capacity(points.len().saturating_mul(2));
@@ -1940,5 +1969,41 @@ mod tests {
             "volume was {}, expected about {expected}",
             signed_volume(&mesh)
         );
+    }
+
+    #[test]
+    fn a_contour_the_cap_cannot_hold_is_refused_before_the_mesh_is_built() {
+        // An outer and an inner arc joined by two radial lines: a simple "C" band whose sampled
+        // ring holds more points than one document face can store.
+        use furnicraft_model::ContourSegment;
+        use furnicraft_units::Degrees;
+
+        let start = Degrees::from_millidegrees(0);
+        let sweep = Degrees::from_millidegrees(350_000);
+        let outer =
+            ContourSegment::arc([Length::ZERO, Length::ZERO], millimetres(5_000), start, sweep).expect("outer arc");
+        let inner = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(4_000),
+            sweep,
+            Degrees::from_millidegrees(-350_000),
+        )
+        .expect("inner arc");
+        let contour = Contour::new(vec![
+            outer,
+            ContourSegment::line(outer.end().expect("outer end"), inner.start().expect("inner start"))
+                .expect("inward line"),
+            inner,
+            ContourSegment::line(inner.end().expect("inner end"), outer.start().expect("outer start"))
+                .expect("outward line"),
+        ])
+        .expect("a simple band");
+        assert!(
+            contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).expect("sampled").len()
+                > furnicraft_model::MAX_FACE_VERTICES,
+            "the fixture must exceed the cap limit"
+        );
+        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::ContourTooDetailed { .. })));
     }
 }

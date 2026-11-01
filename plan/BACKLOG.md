@@ -21,13 +21,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
+- `[~]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
   checks, validation before mutation and one undo entry per apply.
   `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
 
 ## Bugs
 
-No open defect.
+- `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
+  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
+  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
+  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
+  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
+  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
+  `files: crates/param/src/lib.rs, crates/model/src/lib.rs`
 
 ## Next
 

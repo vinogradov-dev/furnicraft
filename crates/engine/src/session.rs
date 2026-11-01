@@ -314,11 +314,16 @@ mod tests {
 
         let rectangle = Id::new(2).expect("id");
         let refused = PanelOutlineSet { panel: rectangle, contour: moved };
+        let stored = session.project().revision();
         assert!(!spec.enabled(&session, &json_params(&refused)));
         assert!(matches!(
             session.dispatch("panel.outline.set", &json_params(&refused)),
             Err(CommandError::Model(ProjectError::PanelNotContour { id })) if id == rectangle
         ));
+        assert_eq!(session.project().revision(), stored, "a refused outline changes nothing");
+        session.undo().expect("the refused command left no undo entry");
+        assert!(session.project().panel(created).is_none(), "undo removes the creation, nothing was recorded between");
+        assert!(!session.can_undo());
     }
 
     #[test]
