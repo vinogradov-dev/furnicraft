@@ -21,9 +21,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D2** the card of a contour panel: thickness, material and banding per ring segment; no bows,
-  no corner features, no parametric cutouts; an `Edit contour` button.
-  `files: crates/ui/src/panel_card.rs`
+- `[ ]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the outline,
+  through and blind, tool built by extrusion. `files: crates/model, crates/param`
 
 ## Bugs
 
@@ -37,8 +36,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the outline,
-  through and blind, tool built by extrusion. `files: crates/model, crates/param`
 - `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
   `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 - `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
@@ -57,6 +54,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **D2** the contour panel card: the ring summary, the material-driven thickness, the material
+  and one banding row per ring segment through `panel.ring_banding.set`/`clear`, no corners, bows or
+  cutouts, an `Edit contour` entry; a missing ring-band material is a diagnostic — `f88a995`
 - `[x]` **A6** contour edit commands: `panel.outline.set` and `object.contour.replace` share their
   `enabled` check with `run`, validate the ring before the document changes, and record one undo
   entry per apply; a contour too detailed for one extrusion cap is refused instead of stored — `6f3e82b`
