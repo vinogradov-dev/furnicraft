@@ -924,7 +924,7 @@ impl Project {
     /// a version 10 point list loads as a ring of lines, so the shape is unchanged. Version 12 gives
     /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
     /// with ids `1..n`.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 13;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 14;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -1307,6 +1307,45 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether a ring can replace a contour panel's outline.
+    ///
+    /// The ring is first moved to the panel-local zero corner, exactly as
+    /// [`Panel::anchored_contour`] does for a new panel, and its bounds must form a usable panel
+    /// size. Every ring banding record must still name a segment the ring has: an edit that drops a
+    /// banded segment is refused instead of silently dropping the band.
+    pub fn validate_panel_outline(&self, id: Id, contour: &Contour) -> Result<(), ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        if !panel.is_contour() {
+            return Err(ProjectError::PanelNotContour { id });
+        }
+        let anchored = Panel::anchored_contour(contour)?;
+        Panel::contour_size(&anchored)?;
+        validate_ring_banding(&anchored, panel.ring_banding())?;
+        Ok(())
+    }
+
+    /// Replaces a contour panel's outline and bumps the revision once.
+    ///
+    /// The new ring is anchored at the panel-local zero corner (ADR 0009). When the edit moves the
+    /// minimum corner, the panel placement, pivot and machining shift by the same offset so the
+    /// world-space shape and every feature stay where the user drew them. A rectangle panel never
+    /// converts; [`Project::validate_panel_outline`] rejects it before anything changes.
+    pub fn set_panel_outline(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
+        self.validate_panel_outline(id, &contour)?;
+        let (min, _) = contour.bounds_micrometres();
+        let anchored = Panel::anchored_contour(&contour)?;
+        let nominal_size = Panel::contour_size(&anchored)?;
+        let next_revision = self.next_revision()?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        panel.move_frame_to(min)?;
+        panel.nominal_size = nominal_size;
+        panel.outline = PanelOutline::Contour { contour: anchored };
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Renames a panel and bumps the revision once.
     ///
     /// The name is user-visible text; callers validate that it is not blank before calling this
@@ -1555,7 +1594,7 @@ impl Project {
     }
 
     /// Checks whether a cutout can be added to a panel without changing the document.
-    pub fn validate_cutout(&self, panel: Id, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+    pub fn validate_cutout(&self, panel: Id, shape: &CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
         let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
         validate_new_cutout(panel, shape, depth)
     }
@@ -1572,7 +1611,7 @@ impl Project {
         depth: CutoutDepth,
         entry: FaceSide,
     ) -> Result<Id, ProjectError> {
-        self.validate_cutout(panel, shape, depth)?;
+        self.validate_cutout(panel, &shape, depth)?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let id = self.allocate_id()?;
         let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
@@ -2707,7 +2746,7 @@ fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<()
     validate_core(panel, geometry, None)
 }
 
-fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+fn validate_new_cutout(panel: &Panel, shape: &CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
     if panel.has_contour_features() {
         return Err(ProjectError::ContourMachiningUnsupported { panel: panel.id() });
     }
@@ -2716,29 +2755,39 @@ fn validate_new_cutout(panel: &Panel, shape: CutoutShape, depth: CutoutDepth) ->
     for machining in panel.machining() {
         let Machining::Cutout(existing) = machining;
         let both_through = matches!(depth, CutoutDepth::Through) && matches!(existing.depth(), CutoutDepth::Through);
-        if !both_through && rects_overlap(cutout_rect(shape), cutout_rect(existing.shape())) {
+        if !both_through && cutout_shapes_overlap(shape, existing.shape())? {
             return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
         }
     }
-    let candidate = matches!(depth, CutoutDepth::Through).then(|| cutout_rect(shape));
+    let candidate = match (depth, shape) {
+        (CutoutDepth::Through, CutoutShape::Rectangle(rect)) => Some(*rect),
+        _ => None,
+    };
     validate_core(panel, geometry, candidate)
 }
 
 fn validate_cutout_geometry(
     panel: Id,
     geometry: PanelGeometry,
-    shape: CutoutShape,
+    shape: &CutoutShape,
     depth: CutoutDepth,
 ) -> Result<(), ProjectError> {
-    let rect = cutout_rect(shape);
     match depth {
         CutoutDepth::Through => {
-            if !geometry.cutout_reaches_core(rect) {
+            let reaches = match shape {
+                CutoutShape::Rectangle(rect) => geometry.cutout_reaches_core(*rect),
+                CutoutShape::Contour(contour) => geometry.contour_inside_core(contour),
+            };
+            if !reaches {
                 return Err(ProjectError::CutoutOutsidePanel { panel });
             }
         }
         CutoutDepth::Blind { depth } => {
-            if !geometry.cutout_fits_core(rect) {
+            let fits = match shape {
+                CutoutShape::Rectangle(rect) => geometry.cutout_fits_core(*rect),
+                CutoutShape::Contour(contour) => geometry.contour_fits_core(contour),
+            };
+            if !fits {
                 return Err(ProjectError::CutoutOutsidePanel { panel });
             }
             let thickness = geometry.thickness();
@@ -2762,7 +2811,7 @@ fn validate_cutout_overlaps(panel: Id, machining: &[Machining]) -> Result<(), Pr
         for other in &cutouts[..index] {
             let both_through =
                 matches!(cutout.depth(), CutoutDepth::Through) && matches!(other.depth(), CutoutDepth::Through);
-            if !both_through && rects_overlap(cutout_rect(cutout.shape()), cutout_rect(other.shape())) {
+            if !both_through && cutout_shapes_overlap(cutout.shape(), other.shape())? {
                 return Err(ProjectError::CutoutOverlap { panel, other: other.id() });
             }
         }
@@ -2785,7 +2834,7 @@ fn core_violation_of(panel: &Panel, geometry: PanelGeometry, extra: Option<Panel
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
         if matches!(cutout.depth(), CutoutDepth::Through)
-            && let Some(rect) = geom_rect(cutout_rect(cutout.shape()))
+            && let Some(rect) = cutout_rect(cutout.shape()).and_then(geom_rect)
         {
             cuts.push(rect);
         }
@@ -2808,10 +2857,106 @@ fn core_violation_of(panel: &Panel, geometry: PanelGeometry, extra: Option<Panel
     }
 }
 
-fn cutout_rect(shape: CutoutShape) -> PanelRect {
+/// The rectangle a cutout contributes to the rectangle-only core tracer.
+///
+/// A contour cutout is a hole strictly inside the core, so it can neither remove nor split it and
+/// takes no part in the trace.
+fn cutout_rect(shape: &CutoutShape) -> Option<PanelRect> {
     match shape {
-        CutoutShape::Rectangle(rect) => rect,
+        CutoutShape::Rectangle(rect) => Some(*rect),
+        CutoutShape::Contour(_) => None,
     }
+}
+
+/// Whether two cutout outlines share area.
+///
+/// A rectangle pair uses the exact rectangle test. A contour takes part as a chord polygon sampled
+/// at the self-intersection resolution, so a contour against a rectangle or another contour is
+/// decided by edge contact and vertex containment. The chord-pair budget keeps a hostile pair from
+/// buying unbounded work.
+fn cutout_shapes_overlap(first: &CutoutShape, second: &CutoutShape) -> Result<bool, ProjectError> {
+    if let (CutoutShape::Rectangle(a), CutoutShape::Rectangle(b)) = (first, second) {
+        return Ok(rects_overlap(*a, *b));
+    }
+    let first = cutout_polygon(first)?;
+    let second = cutout_polygon(second)?;
+    polygons_overlap(&first, &second)
+}
+
+/// The outline as a closed chord polygon in whole micrometres.
+fn cutout_polygon(shape: &CutoutShape) -> Result<Vec<[i64; 2]>, ProjectError> {
+    match shape {
+        CutoutShape::Rectangle(rect) => Ok(rect_polygon(*rect)),
+        CutoutShape::Contour(contour) => {
+            let points = contour.sampled_points(SELF_INTERSECTION_TOLERANCE_MICROMETRES)?;
+            Ok(points.into_iter().map(|point| [point[0].micrometres(), point[1].micrometres()]).collect())
+        }
+    }
+}
+
+fn rect_polygon(rect: PanelRect) -> Vec<[i64; 2]> {
+    let x0 = rect.x().micrometres();
+    let y0 = rect.y().micrometres();
+    let x1 = x0.saturating_add(rect.width().micrometres());
+    let y1 = y0.saturating_add(rect.height().micrometres());
+    vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+}
+
+fn polygons_overlap(first: &[[i64; 2]], second: &[[i64; 2]]) -> Result<bool, ProjectError> {
+    let first_count = first.len();
+    let second_count = second.len();
+    if first_count < 3 || second_count < 3 {
+        return Ok(false);
+    }
+    if !SegBounds::of(first).overlaps(SegBounds::of(second)) {
+        return Ok(false);
+    }
+    if first_count.saturating_mul(second_count) > MAX_SELF_INTERSECTION_PAIRS {
+        return Err(ContourError::SamplingTooDetailed { max: MAX_SELF_INTERSECTION_PAIRS }.into());
+    }
+    for index in 0..first_count {
+        let (Some(a), Some(b)) = (first.get(index), first.get((index + 1) % first_count)) else {
+            continue;
+        };
+        for other in 0..second_count {
+            let (Some(c), Some(d)) = (second.get(other), second.get((other + 1) % second_count)) else {
+                continue;
+            };
+            if segments_touch(*a, *b, *c, *d) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(first.iter().any(|point| point_in_polygon(*point, second))
+        || second.iter().any(|point| point_in_polygon(*point, first)))
+}
+
+/// Whether a point lies inside a chord polygon, by the even-odd rule.
+///
+/// A point on the boundary is decided by the edge test the caller runs first; here only a point
+/// strictly inside toggles the parity.
+fn point_in_polygon(point: [i64; 2], polygon: &[[i64; 2]]) -> bool {
+    let count = polygon.len();
+    if count < 3 {
+        return false;
+    }
+    let mut inside = false;
+    for index in 0..count {
+        let (Some(current), Some(previous)) = (polygon.get(index), polygon.get((index + count - 1) % count)) else {
+            continue;
+        };
+        let (a, b) = (*previous, *current);
+        if (a[1] > point[1]) == (b[1] > point[1]) {
+            continue;
+        }
+        let dx = i128::from(b[0]) - i128::from(a[0]);
+        let dy = i128::from(b[1]) - i128::from(a[1]);
+        let cross = dx * (i128::from(point[1]) - i128::from(a[1])) - (i128::from(point[0]) - i128::from(a[0])) * dy;
+        if (cross > 0) == (dy > 0) {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// The rectangle in millimetres, or `None` for a degenerate rectangle, which validated input rules out.
@@ -2833,6 +2978,23 @@ fn rect_inside(rect: PanelRect, core: PanelRect) -> bool {
     let core_x1 = core_x0 + core.width().micrometres() as i128;
     let core_y1 = core_y0 + core.height().micrometres() as i128;
     x0 >= core_x0 && y0 >= core_y0 && x1 <= core_x1 && y1 <= core_y1
+}
+
+fn contour_within(contour: &Contour, core: PanelRect, strict: bool) -> bool {
+    let ([min_x, min_y], [max_x, max_y]) = contour.bounds_micrometres();
+    let core_x0 = core.x().micrometres() as i128;
+    let core_y0 = core.y().micrometres() as i128;
+    let core_x1 = core_x0 + core.width().micrometres() as i128;
+    let core_y1 = core_y0 + core.height().micrometres() as i128;
+    let min_x = i128::from(min_x);
+    let min_y = i128::from(min_y);
+    let max_x = i128::from(max_x);
+    let max_y = i128::from(max_y);
+    if strict {
+        min_x > core_x0 && min_y > core_y0 && max_x < core_x1 && max_y < core_y1
+    } else {
+        min_x >= core_x0 && min_y >= core_y0 && max_x <= core_x1 && max_y <= core_y1
+    }
 }
 
 fn rects_overlap(a: PanelRect, b: PanelRect) -> bool {
@@ -2995,6 +3157,18 @@ pub enum ProjectError {
     NotConstructiveObject {
         /// The node that was asked.
         id: Id,
+    },
+    /// The node is not a contour panel, so it has no outline ring to replace.
+    #[error("panel {id} is not a contour panel")]
+    PanelNotContour {
+        /// The panel that was asked.
+        id: Id,
+    },
+    /// A contour edit moves the panel frame beyond what the placement or pivot can represent.
+    #[error("the frame of panel {panel} cannot follow its new outline")]
+    PanelOutlineFrame {
+        /// The panel whose frame could not move.
+        panel: Id,
     },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
@@ -3807,6 +3981,54 @@ impl Panel {
         self.geometry(self.last_known_thickness)
     }
 
+    /// Moves the panel-local frame so its origin sits at `min`, keeping the world shape fixed.
+    ///
+    /// A contour edit can move the ring's minimum corner. The frame is anchored there (ADR 0009),
+    /// so the ring is translated to zero and the placement, pivot and machining move by the inverse
+    /// offset. The world-space geometry and the world-space pivot therefore do not move.
+    fn move_frame_to(&mut self, min: [i64; 2]) -> Result<(), ProjectError> {
+        if min == [0, 0] {
+            return Ok(());
+        }
+        let x = Length::from_micrometres(min[0]);
+        let y = Length::from_micrometres(min[1]);
+        let offset = DVec3::new(x.millimetres_f64(), y.millimetres_f64(), 0.0);
+        let translation = self.placement.translation() + self.placement.rotation() * offset;
+        let placement = Placement::new(translation, self.placement.rotation())
+            .map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot = self.pivot.components();
+        let pivot_x = pivot[0].checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot_y = pivot[1].checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+        let pivot = Pivot::new(pivot_x, pivot_y, pivot[2]);
+        // Build the shifted machining beside the old one so a refusal leaves the panel untouched.
+        let mut machining = self.machining.clone();
+        let shift = [
+            Length::ZERO.checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?,
+            Length::ZERO.checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?,
+        ];
+        for entry in &mut machining {
+            let Machining::Cutout(cutout) = entry;
+            let shape = match &cutout.shape {
+                CutoutShape::Rectangle(rect) => {
+                    let cut_x = rect.x().checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+                    let cut_y = rect.y().checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
+                    CutoutShape::Rectangle(
+                        PanelRect::new(cut_x, cut_y, rect.width(), rect.height())
+                            .map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?,
+                    )
+                }
+                CutoutShape::Contour(contour) => CutoutShape::Contour(
+                    contour.translated(shift).map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?,
+                ),
+            };
+            cutout.shape = shape;
+        }
+        self.placement = placement;
+        self.pivot = pivot;
+        self.machining = machining;
+        Ok(())
+    }
+
     /// Translates version-2 core-local cutouts into the nominal panel frame.
     ///
     /// The legacy core origin is derived from the included bottom and left banding fallbacks. A
@@ -3840,12 +4062,30 @@ impl Panel {
         }
         for machining in &mut self.machining {
             let Machining::Cutout(cutout) = machining;
-            let CutoutShape::Rectangle(rect) = cutout.shape;
-            let x = rect.x().checked_add(core_x).ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-            let y = rect.y().checked_add(core_y).ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-            let shape = PanelRect::new(x, y, rect.width(), rect.height())
-                .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-            cutout.shape = CutoutShape::Rectangle(shape);
+            let shape = match &cutout.shape {
+                CutoutShape::Rectangle(rect) => {
+                    let x = rect
+                        .x()
+                        .checked_add(core_x)
+                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+                    let y = rect
+                        .y()
+                        .checked_add(core_y)
+                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
+                    CutoutShape::Rectangle(
+                        PanelRect::new(x, y, rect.width(), rect.height())
+                            .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?,
+                    )
+                }
+                // A version-2 file predates contour cutouts; a ring that somehow carries one keeps
+                // its place in the nominal frame.
+                CutoutShape::Contour(contour) => CutoutShape::Contour(
+                    contour
+                        .translated([core_x, core_y])
+                        .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?,
+                ),
+            };
+            cutout.shape = shape;
         }
         Ok(())
     }
@@ -3969,8 +4209,8 @@ pub enum PanelError {
     /// A contour panel stored corner features or bows, which describe a rectangle.
     #[error("a contour panel cannot carry corner features or bows")]
     ContourWithFeatures,
-    /// A contour panel stored banding against rectangle edges.
-    #[error("a contour panel cannot carry banding until banding follows the ring")]
+    /// A contour panel stored edge or corner banding, which belongs to a rectangle.
+    #[error("a contour panel cannot carry edge or corner banding, only ring banding")]
     ContourWithBanding,
     /// A rectangular panel stored banding against contour ring segments.
     #[error("a rectangular panel cannot carry banding on a contour ring segment")]
@@ -4249,8 +4489,8 @@ impl Cutout {
     }
 
     /// The cutout outline in nominal panel-local coordinates.
-    pub const fn shape(&self) -> CutoutShape {
-        self.shape
+    pub const fn shape(&self) -> &CutoutShape {
+        &self.shape
     }
 
     /// How deep the cutout goes.
@@ -4265,11 +4505,17 @@ impl Cutout {
 }
 
 /// The outline of a cutout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CutoutShape {
     /// A rectangle whose minimum corner is at `rect.x`, `rect.y` from the nominal panel zero.
     Rectangle(PanelRect),
+    /// A closed ring of directed lines and arcs in nominal panel-local coordinates.
+    ///
+    /// A contour cutout is a hole: it must stay inside the core instead of crossing its edge,
+    /// because the core tracer is rectangle-only and a ring that touched or crossed the boundary
+    /// would change the material outline it cannot describe.
+    Contour(Contour),
 }
 
 /// How much material a cutout removes.
@@ -4660,7 +4906,7 @@ impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
 /// Each segment is converted to the geometry layer, where a line or arc is validated once, and the
 /// joints, the signed area and the self-intersection test then run on that exact curve. Document
 /// units stay integer: every point that leaves the module is rounded to a whole micrometre.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ContourWire", into = "ContourWire")]
 pub struct Contour {
     entries: Vec<ContourSegmentEntry>,
@@ -6466,6 +6712,23 @@ impl PanelGeometry {
         self.core_panel_rect().is_some_and(|core| rect_inside(rect, core))
     }
 
+    /// Whether a contour cutout lies inside the core, touching its edge allowed.
+    ///
+    /// This is the rule for a blind contour cutout: it may open at the edge like a blind rectangle,
+    /// because it removes no through material and the core trace is unaffected.
+    pub fn contour_fits_core(self, contour: &Contour) -> bool {
+        self.core_panel_rect().is_some_and(|core| contour_within(contour, core, false))
+    }
+
+    /// Whether a contour cutout lies strictly inside the core.
+    ///
+    /// This is the rule for a through contour cutout: the core tracer works on rectangles, so a ring
+    /// that touched the boundary could open a notch or split the core without being traced. A ring
+    /// strictly inside is a hole and cannot change the core outline.
+    pub fn contour_inside_core(self, contour: &Contour) -> bool {
+        self.core_panel_rect().is_some_and(|core| contour_within(contour, core, true))
+    }
+
     fn core_panel_rect(self) -> Option<PanelRect> {
         PanelRect::new(self.core_x, self.core_y, self.core_length, self.core_width).ok()
     }
@@ -7807,6 +8070,102 @@ mod tests {
     }
 
     #[test]
+    fn replacing_a_contour_outline_reanchors_the_frame_and_keeps_the_world_shape() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let placement = Placement::new(DVec3::new(100.0, 20.0, 30.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour, None, sample_thickness(), placement).expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let pivot = Pivot::new(millimetres(350), millimetres(250), Length::ZERO);
+        project.set_node_pivot(panel_id, pivot).expect("pivot");
+        let before_world = project.world_placement(panel_id).expect("world placement");
+        let before_pivot = project.pivot_world(panel_id).expect("world pivot");
+
+        let moved = rectangle_contour(800, 600)
+            .translated([millimetres(-100), millimetres(-50)])
+            .expect("move the ring past the old zero");
+        project.set_panel_outline(panel_id, moved).expect("replace the outline");
+
+        let panel = project.panel(panel_id).expect("panel");
+        let ring = panel.outline_contour().expect("ring");
+        assert_eq!(ring.bounds_micrometres().0, [0, 0], "the ring is anchored at the panel zero");
+        assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(800), millimetres(600)).expect("new size"));
+        assert_eq!(
+            panel.pivot().components(),
+            [millimetres(450), millimetres(300), Length::ZERO],
+            "the pivot follows the frame so it stays in the same world place"
+        );
+        let after_world = project.world_placement(panel_id).expect("world placement");
+        let old_zero = before_world.transform_point(DVec3::ZERO);
+        let new_zero = after_world.transform_point(DVec3::new(100.0, 50.0, 0.0));
+        assert!((old_zero - new_zero).length() < 1.0e-9, "the old zero corner stays in place");
+        let after_pivot = project.pivot_world(panel_id).expect("world pivot");
+        assert!((before_pivot - after_pivot).length() < 1.0e-9, "the pivot stays in place");
+    }
+
+    #[test]
+    fn a_rectangle_panel_never_takes_a_contour_outline() {
+        let mut project = sample_project();
+        let id = Id::new(2).expect("id");
+        assert_eq!(
+            project.set_panel_outline(id, rectangle_contour(100, 100)),
+            Err(ProjectError::PanelNotContour { id })
+        );
+        assert_eq!(project.panel(id).expect("panel").outline(), &PanelOutline::Rect);
+    }
+
+    #[test]
+    fn a_bad_outline_edit_leaves_the_panel_and_revision_alone() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour.clone(), None, sample_thickness(), Placement::IDENTITY)
+                .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let revision = project.revision();
+        let too_long = Contour::from_polygon(vec![
+            [millimetres(-10_000), millimetres(0)],
+            [millimetres(10_000), millimetres(0)],
+            [millimetres(10_000), millimetres(500)],
+            [millimetres(-10_000), millimetres(500)],
+        ])
+        .expect("a ring inside the coordinate limit but wider than a panel");
+        assert!(project.set_panel_outline(panel_id, too_long).is_err(), "a ring wider than a panel is refused");
+        assert_eq!(project.revision(), revision);
+        assert_eq!(project.panel(panel_id).expect("panel").outline_contour(), Some(&contour));
+    }
+
+    #[test]
+    fn an_outline_edit_may_not_drop_a_banded_segment() {
+        let contour = rectangle_contour(700, 500);
+        let panel_id = Id::new(2).expect("id");
+        let panel =
+            Panel::new_contour(panel_id, "Shelf", contour.clone(), None, sample_thickness(), Placement::IDENTITY)
+                .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let segment = contour.id_at(0).expect("segment");
+        let band =
+            RingBanding::new(segment, sample_material(), false, millimetres(2), millimetres(20)).expect("ring band");
+        project.set_ring_banding(panel_id, band).expect("band the ring");
+        let (split, inserted) =
+            contour.split_segment(segment, [millimetres(350), millimetres(0)]).expect("split the bottom edge");
+        project.set_panel_outline(panel_id, split.clone()).expect("apply the split");
+        let band =
+            RingBanding::new(inserted, sample_material(), false, millimetres(2), millimetres(20)).expect("ring band");
+        project.set_ring_banding(panel_id, band).expect("band the new segment");
+        assert_eq!(
+            project.set_panel_outline(panel_id, contour),
+            Err(ProjectError::Panel(PanelError::UnsupportedRingBanding { segment: inserted }))
+        );
+        assert_eq!(project.panel(panel_id).expect("panel").outline_contour(), Some(&split));
+        assert!(project.panel(panel_id).expect("panel").ring_banding_at(inserted).is_some());
+    }
+
+    #[test]
     fn a_contour_panel_refuses_the_rectangle_controls_on_load() {
         let panel = Panel::new_contour(
             Id::new(2).expect("id"),
@@ -7840,7 +8199,7 @@ mod tests {
             "last_known_width": 20_000,
         }]);
         let error = serde_json::from_value::<Panel>(banded).expect_err("rectangle banding is not a ring");
-        assert!(error.to_string().contains("banding follows the ring"), "error was {error}");
+        assert!(error.to_string().contains("contour panel cannot carry edge or corner banding"), "error was {error}");
     }
 
     #[test]
@@ -8522,7 +8881,8 @@ mod tests {
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
 
-        let cutout_id = project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        let cutout_id =
+            project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add cutout");
         assert_eq!(cutout_id.get(), 5);
         assert_eq!(project.next_id().get(), 6);
         assert_eq!(project.revision().get(), 1);
@@ -8530,7 +8890,7 @@ mod tests {
         assert_eq!(panel.machining().len(), 1);
         let Machining::Cutout(cutout) = &panel.machining()[0];
         assert_eq!(cutout.id(), cutout_id);
-        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
         assert_eq!(cutout.entry(), FaceSide::A);
         assert!(project.validate().is_ok());
@@ -8549,11 +8909,11 @@ mod tests {
         let revision = project.revision();
 
         assert_eq!(
-            project.add_cutout(panel_id, shape, CutoutDepth::Blind { depth: Length::ZERO }, FaceSide::A),
+            project.add_cutout(panel_id, shape.clone(), CutoutDepth::Blind { depth: Length::ZERO }, FaceSide::A),
             Err(ProjectError::CutoutDepthInvalid { panel: panel_id, depth: Length::ZERO, thickness: millimetres(18) })
         );
         assert_eq!(
-            project.add_cutout(panel_id, shape, CutoutDepth::Blind { depth: millimetres(18) }, FaceSide::A),
+            project.add_cutout(panel_id, shape.clone(), CutoutDepth::Blind { depth: millimetres(18) }, FaceSide::A),
             Err(ProjectError::CutoutDepthInvalid {
                 panel: panel_id,
                 depth: millimetres(18),
@@ -8683,7 +9043,8 @@ mod tests {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
-        let cutout_id = project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        let cutout_id =
+            project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add cutout");
         let text = serde_json::to_string(&project).expect("serialize project");
         let invalid = text.replacen("\"next_id\":6", &format!("\"next_id\":{}", cutout_id.get()), 1);
         let error = serde_json::from_str::<Project>(&invalid).expect_err("next id must exceed cutout id");
@@ -8961,13 +9322,13 @@ mod tests {
         assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
         let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
         let Machining::Cutout(cutout) = &panel.machining()[0];
-        assert_eq!(cutout.shape(), CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
 
         let text = serde_json::to_string(&project).expect("serialize migrated project");
         let decoded: Project = serde_json::from_str(&text).expect("reload migrated project");
         let panel = decoded.panel(Id::new(2).expect("id")).expect("reloaded panel");
         let Machining::Cutout(cutout) = &panel.machining()[0];
-        assert_eq!(cutout.shape(), CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
     }
 
     #[test]
@@ -8986,10 +9347,10 @@ mod tests {
         assert_eq!(geometry.core_y(), millimetres(2));
 
         let shape = CutoutShape::Rectangle(sample_rect(10, 10, 20, 20));
-        project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
+        project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add cutout");
         let panel = project.panel(panel_id).expect("panel");
         let Machining::Cutout(cutout) = &panel.machining()[0];
-        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.shape(), &shape);
 
         // Nominal coordinates: the 2 mm included bands put the core origin at (2, 2), so this
         // cutout lies entirely in the band and would remove no core material.
@@ -8998,6 +9359,147 @@ mod tests {
             project.add_cutout(panel_id, under_the_band, CutoutDepth::Through, FaceSide::A),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
         );
+    }
+
+    /// A rectangular ring around `(x, y)` of `width` x `height` millimetres.
+    fn ring(x: i64, y: i64, width: i64, height: i64) -> Contour {
+        Contour::from_polygon(vec![
+            [millimetres(x), millimetres(y)],
+            [millimetres(x + width), millimetres(y)],
+            [millimetres(x + width), millimetres(y + height)],
+            [millimetres(x), millimetres(y + height)],
+        ])
+        .expect("ring")
+    }
+
+    #[test]
+    fn contour_cutout_is_stored_and_round_trips() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Contour(ring(100, 100, 100, 60));
+        let cutout_id =
+            project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add contour cutout");
+        let panel = project.panel(panel_id).expect("panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.id(), cutout_id);
+        assert_eq!(cutout.shape(), &shape);
+        assert_eq!(cutout.depth(), CutoutDepth::Through);
+
+        let text = serde_json::to_string(&project).expect("serialize project");
+        let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
+        assert_eq!(decoded, project);
+        let panel = decoded.panel(panel_id).expect("reloaded panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), &shape);
+    }
+
+    #[test]
+    fn contour_cutout_must_stay_inside_the_core() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let next_id = project.next_id();
+        let revision = project.revision();
+
+        // A through ring must be strictly inside: touching the edge could open a notch the
+        // rectangle-only core trace cannot see.
+        for shape in [ring(-10, 100, 120, 60), ring(0, 100, 100, 60), ring(690, 100, 20, 60)] {
+            assert_eq!(
+                project.add_cutout(panel_id, CutoutShape::Contour(shape), CutoutDepth::Through, FaceSide::A),
+                Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+            );
+        }
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+
+        // A blind ring may open at the edge like a blind rectangle, but it may not cross it.
+        project
+            .add_cutout(
+                panel_id,
+                CutoutShape::Contour(ring(0, 100, 100, 60)),
+                CutoutDepth::Blind { depth: millimetres(8) },
+                FaceSide::A,
+            )
+            .expect("blind contour cutout at the edge");
+        assert_eq!(
+            project.add_cutout(
+                panel_id,
+                CutoutShape::Contour(ring(-10, 300, 100, 60)),
+                CutoutDepth::Blind { depth: millimetres(8) },
+                FaceSide::B,
+            ),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
+    }
+
+    #[test]
+    fn contour_cutout_overlap_follows_the_ring_not_its_bounds() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let blind = CutoutDepth::Blind { depth: millimetres(8) };
+        project
+            .add_cutout(panel_id, CutoutShape::Rectangle(sample_rect(100, 100, 50, 50)), blind, FaceSide::A)
+            .expect("rect cutout");
+
+        let overlapping = CutoutShape::Contour(ring(120, 120, 100, 60));
+        assert_eq!(
+            project.add_cutout(panel_id, overlapping, blind, FaceSide::A),
+            Err(ProjectError::CutoutOverlap { panel: panel_id, other: Id::new(5).expect("id") })
+        );
+
+        // A C-shaped ring around the rectangle's bounding box leaves the notch free.
+        let c_shape = Contour::from_polygon(vec![
+            [millimetres(50), millimetres(50)],
+            [millimetres(250), millimetres(50)],
+            [millimetres(250), millimetres(90)],
+            [millimetres(90), millimetres(90)],
+            [millimetres(90), millimetres(210)],
+            [millimetres(250), millimetres(210)],
+            [millimetres(250), millimetres(250)],
+            [millimetres(50), millimetres(250)],
+        ])
+        .expect("C-shaped ring");
+        project
+            .add_cutout(panel_id, CutoutShape::Contour(c_shape), blind, FaceSide::A)
+            .expect("a ring that surrounds the bounds but not the rectangle");
+
+        // Two contours are compared the same way: a crossing ring is an overlap, a nested one is
+        // not (a through pair may overlap, so use blind here).
+        let crossing = CutoutShape::Contour(ring(200, 220, 100, 60));
+        assert!(matches!(
+            project.add_cutout(panel_id, crossing, blind, FaceSide::A),
+            Err(ProjectError::CutoutOverlap { panel, .. }) if panel == panel_id
+        ));
+        let nested = CutoutShape::Contour(ring(160, 120, 20, 20));
+        project.add_cutout(panel_id, nested, blind, FaceSide::A).expect("a ring inside the C notch");
+    }
+
+    #[test]
+    fn contour_cutout_is_refused_when_a_resize_moves_the_core() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        project
+            .add_cutout(
+                panel_id,
+                CutoutShape::Contour(ring(100, 100, 100, 60)),
+                CutoutDepth::Blind { depth: millimetres(8) },
+                FaceSide::A,
+            )
+            .expect("contour cutout");
+        let small = PanelNominalSize::new(millimetres(150), millimetres(500)).expect("small size");
+        assert_eq!(
+            project.validate_panel_resize(panel_id, small),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
+    }
+
+    #[test]
+    fn an_older_schema_without_a_contour_cutout_still_loads() {
+        let project = sample_project();
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        wire["schema_version"] = serde_json::json!(13);
+        let decoded: Project = serde_json::from_value(wire).expect("load a schema 13 file");
+        assert_eq!(decoded.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        assert_eq!(decoded, project);
     }
 
     #[test]

@@ -15,7 +15,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::MeshData;
+use furnicraft_geom::{DVec3, MeshData, triangulate_face};
 use furnicraft_kernel::{BodyId, KernelError, SolidKernel, TessOptions};
 use furnicraft_model::Mesh;
 use thiserror::Error;
@@ -44,47 +44,40 @@ pub fn tessellate_panel(kernel: &dyn SolidKernel, body: BodyId, options: &TessOp
 
 /// Triangulates a document mesh into flat-shaded renderable triangles.
 ///
-/// Polygons are fan-triangulated and each face gets one normal, so the object renders faceted
-/// without smoothing. Positions are converted from micrometres to local millimetres here, at the
-/// render boundary, and a degenerate face is skipped rather than producing a NaN normal.
+/// Every face is ear-clipped in its own plane, so a concave cap keeps its triangles inside the
+/// contour; a face that ear clipping rejects — a self-crossing one, which dragging a vertex can
+/// make — falls back to a fan so the edited mesh still draws. Each face gets one normal, so the
+/// object renders faceted without smoothing. Positions are converted from micrometres to local
+/// millimetres here, at the render boundary, and a degenerate face is skipped rather than producing
+/// a NaN normal.
 pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
     for face in mesh.faces() {
-        let mut points = Vec::with_capacity(face.len());
-        for index in face {
-            let Some(position) = mesh.positions().get(*index as usize) else {
-                return Err(MeshError::Invalid(format!("face refers to missing vertex {index}")));
-            };
-            let point = [
-                position[0].micrometres() as f64 / 1000.0,
-                position[1].micrometres() as f64 / 1000.0,
-                position[2].micrometres() as f64 / 1000.0,
-            ];
-            if point.iter().any(|value| !value.is_finite()) {
-                return Err(MeshError::Invalid("a vertex is not finite".into()));
-            }
-            points.push(point);
-        }
+        let points = face_points(mesh, face)?;
         let Some(normal) = face_normal(&points) else {
             continue;
         };
-        let normal = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
-        let base = u32::try_from(positions.len())
-            .map_err(|_| MeshError::Invalid("the object has too many vertices to index".into()))?;
-        for index in 1..points.len().saturating_sub(1) {
-            for corner in [0, index, index + 1] {
-                let Some(point) = points.get(corner) else {
-                    continue;
-                };
-                positions.push([point[0] as f32, point[1] as f32, point[2] as f32]);
+        let normal = [normal.x as f32, normal.y as f32, normal.z as f32];
+        let triangles = triangulate_face(&points).unwrap_or_else(|_| fan_triangles(points.len()));
+        for triangle in triangles {
+            let [Some(first), Some(second), Some(third)] = triangle.map(|index| points.get(index as usize).copied())
+            else {
+                return Err(MeshError::Invalid("a triangle refers to a missing vertex".into()));
+            };
+            if positions.len() > (u32::MAX as usize).saturating_sub(3) {
+                return Err(MeshError::Invalid("the object has too many vertices to index".into()));
+            }
+            let Ok(base) = u32::try_from(positions.len()) else {
+                return Err(MeshError::Invalid("the object has too many vertices to index".into()));
+            };
+            for point in [first, second, third] {
+                positions.push([point.x as f32, point.y as f32, point.z as f32]);
                 normals.push(normal);
             }
+            indices.extend([base, base + 1, base + 2]);
         }
-        let added = u32::try_from(points.len().saturating_sub(2).saturating_mul(3))
-            .map_err(|_| MeshError::Invalid("the face has too many vertices".into()))?;
-        indices.extend(base..base.saturating_add(added));
     }
     let data = MeshData { positions, normals, indices };
     if data.is_empty() {
@@ -96,20 +89,49 @@ pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
     Ok(data)
 }
 
+/// The face's vertices in local millimetres, in face order.
+fn face_points(mesh: &Mesh, face: &[u32]) -> Result<Vec<DVec3>, MeshError> {
+    let mut points = Vec::with_capacity(face.len());
+    for index in face {
+        let Some(position) = mesh.positions().get(*index as usize) else {
+            return Err(MeshError::Invalid(format!("face refers to missing vertex {index}")));
+        };
+        let point = DVec3::new(
+            position[0].micrometres() as f64 / 1000.0,
+            position[1].micrometres() as f64 / 1000.0,
+            position[2].micrometres() as f64 / 1000.0,
+        );
+        if !point.is_finite() {
+            return Err(MeshError::Invalid("a vertex is not finite".into()));
+        }
+        points.push(point);
+    }
+    Ok(points)
+}
+
+/// The fan fallback: triangles from the first vertex, valid only while the face is convex.
+fn fan_triangles(len: usize) -> Vec<[u32; 3]> {
+    let mut triangles = Vec::with_capacity(len.saturating_sub(2));
+    for index in 1..len.saturating_sub(1) {
+        let (Ok(current), Ok(next)) = (u32::try_from(index), u32::try_from(index + 1)) else {
+            break;
+        };
+        triangles.push([0, current, next]);
+    }
+    triangles
+}
+
 /// Newell's normal of a polygon, or `None` when it is degenerate.
-fn face_normal(points: &[[f64; 3]]) -> Option<[f64; 3]> {
-    let mut normal = [0.0f64; 3];
+fn face_normal(points: &[DVec3]) -> Option<DVec3> {
+    let mut normal = DVec3::ZERO;
     for (index, current) in points.iter().enumerate() {
         let next = points.get((index + 1) % points.len())?;
-        normal[0] += (current[1] - next[1]) * (current[2] + next[2]);
-        normal[1] += (current[2] - next[2]) * (current[0] + next[0]);
-        normal[2] += (current[0] - next[0]) * (current[1] + next[1]);
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
     }
-    let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-    if !length.is_finite() || length <= f64::EPSILON {
-        return None;
-    }
-    Some([normal[0] / length, normal[1] / length, normal[2] / length])
+    let length = normal.length();
+    (length.is_finite() && length > f64::EPSILON).then(|| normal / length)
 }
 
 fn validate_mesh(mesh: &MeshData) -> Result<(), MeshError> {
@@ -291,6 +313,59 @@ mod tests {
         .expect("valid mesh");
         let mesh = object_mesh(&collinear).expect("render mesh");
         assert!(mesh.is_empty());
+    }
+
+    /// A 100 x 100 contour with a 20 x 60 notch cut into its top edge, in millimetres.
+    fn notched_contour() -> furnicraft_model::Contour {
+        let points = [[0, 0], [100, 0], [100, 100], [60, 100], [60, 40], [40, 40], [40, 100], [0, 100]]
+            .map(|[x, y]| [millimetres(x), millimetres(y)]);
+        furnicraft_model::Contour::from_polygon(points.to_vec()).expect("a simple contour")
+    }
+
+    fn inside_notched_contour(point: [f32; 2]) -> bool {
+        let ring = notched_contour();
+        let points = ring.sampled_points(1.0).expect("sampled contour");
+        let mut inside = false;
+        for (index, current) in points.iter().enumerate() {
+            let Some(next) = points.get((index + 1) % points.len()) else {
+                continue;
+            };
+            let (ax, ay) = (current[0].millimetres_f64() as f32, current[1].millimetres_f64() as f32);
+            let (bx, by) = (next[0].millimetres_f64() as f32, next[1].millimetres_f64() as f32);
+            if (ay > point[1]) != (by > point[1]) {
+                let at = (bx - ax) * (point[1] - ay) / (by - ay) + ax;
+                if point[0] < at {
+                    inside = !inside;
+                }
+            }
+        }
+        inside
+    }
+
+    #[test]
+    fn a_concave_extrusion_cap_keeps_its_triangles_inside_the_contour() {
+        let constructive =
+            furnicraft_model::Constructive::extrude(notched_contour(), millimetres(18)).expect("a constructive object");
+        let mesh = furnicraft_param::build_constructive_mesh(&constructive).expect("document mesh");
+        let data = object_mesh(&mesh).expect("render mesh");
+        let mut caps = 0;
+        for triangle in data.indices.as_chunks::<3>().0 {
+            let corners: Vec<[f32; 3]> =
+                triangle.iter().filter_map(|index| data.positions.get(*index as usize).copied()).collect();
+            let [Some(a), Some(b), Some(c)] = [corners.first(), corners.get(1), corners.get(2)] else {
+                continue;
+            };
+            if a[2] != b[2] || b[2] != c[2] {
+                continue;
+            }
+            caps += 1;
+            let centroid = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
+            assert!(
+                inside_notched_contour(centroid),
+                "a cap triangle at {centroid:?} left the contour: {triangle:?} of {corners:?}"
+            );
+        }
+        assert_eq!(caps, 12, "each cap of an eight-point ring has six triangles");
     }
 
     #[test]

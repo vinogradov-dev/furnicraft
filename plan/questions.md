@@ -28,5 +28,7 @@ this file only when a task touches the question.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
   connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
 - Whether visibility and lock are document data or session state.
+- A legal contour can sample to more points than one extrusion cap stores (X2). Choose how to lift
+  the limit: raise `MAX_FACE_VERTICES`, split a cap into several faces, or sample large rings coarser.
 - Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.

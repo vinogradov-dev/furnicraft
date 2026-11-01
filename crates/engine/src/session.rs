@@ -138,9 +138,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, Constructive, Contour, CornerFeatureKind, CutoutDepth, CutoutShape, EdgeBandingMaterial, EdgeId,
-        FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue,
-        RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, VertexId,
+        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, CutoutDepth, CutoutShape,
+        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement,
+        ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -159,7 +159,7 @@ mod tests {
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
         PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
-        PanelRename, PanelResize,
+        PanelOutlineSet, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
     };
 
     fn sample_session() -> Session {
@@ -207,6 +207,18 @@ mod tests {
             material: sample_material_id(),
             placement: Placement::IDENTITY,
         }
+    }
+
+    /// A session whose root holds a 700 x 500 contour panel built from a constructive contour.
+    fn session_with_contour_panel() -> (Session, Id) {
+        let (mut session, source) = session_with_contour_source();
+        let create = json_params(&contour_panel_create(&session, source, "Top"));
+        let panel = session
+            .dispatch("panel.contour.create", &create)
+            .expect("create contour panel")
+            .created_id()
+            .expect("the command creates a panel");
+        (session, panel)
     }
 
     fn json_params<T: serde::Serialize>(value: &T) -> Value {
@@ -281,6 +293,49 @@ mod tests {
         unknown_material.material = furnicraft_model::MaterialId::new(9_999).expect("id");
         assert!(!spec.enabled(&session, &json_params(&unknown_material)));
         assert_eq!(session.project().revision(), before);
+    }
+
+    #[test]
+    fn panel_outline_set_edits_a_contour_panel_in_one_undo_step() {
+        let (mut session, source) = session_with_contour_source();
+        let create = json_params(&contour_panel_create(&session, source, "Top"));
+        let created = session
+            .dispatch("panel.contour.create", &create)
+            .expect("create contour panel")
+            .created_id()
+            .expect("the command creates a panel");
+        let original = session.project().panel(created).expect("panel").outline_contour().expect("ring").clone();
+        let segment = original.id_at(1).expect("the right edge");
+        let moved = original
+            .move_corner(segment, [Length::from_millimetres(800).expect("x"), Length::ZERO])
+            .expect("move the top of the right edge");
+        let request = PanelOutlineSet { panel: created, contour: moved.clone() };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.outline.set").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&request)));
+
+        let before = session.project().revision();
+        session.dispatch("panel.outline.set", &json_params(&request)).expect("set the outline");
+        let panel = session.project().panel(created).expect("panel");
+        assert_eq!(panel.outline_contour(), Some(&moved));
+        assert_eq!(panel.nominal_size().length(), Length::from_millimetres(800).expect("length"));
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        session.undo().expect("one undo restores the whole edit");
+        assert_eq!(session.project().panel(created).expect("panel").outline_contour(), Some(&original));
+
+        let rectangle = Id::new(2).expect("id");
+        let refused = PanelOutlineSet { panel: rectangle, contour: moved };
+        let stored = session.project().revision();
+        assert!(!spec.enabled(&session, &json_params(&refused)));
+        assert!(matches!(
+            session.dispatch("panel.outline.set", &json_params(&refused)),
+            Err(CommandError::Model(ProjectError::PanelNotContour { id })) if id == rectangle
+        ));
+        assert_eq!(session.project().revision(), stored, "a refused outline changes nothing");
+        session.undo().expect("the refused command left no undo entry");
+        assert!(session.project().panel(created).is_none(), "undo removes the creation, nothing was recorded between");
+        assert!(!session.can_undo());
     }
 
     #[test]
@@ -422,7 +477,7 @@ mod tests {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_cutout_rect());
-        let params = json_params(&cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A));
+        let params = json_params(&cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A));
 
         let outcome = session.dispatch("cutout.create", &params).expect("create cutout");
         let cutout_id = outcome.created_id().expect("cutout id");
@@ -433,7 +488,7 @@ mod tests {
         assert_eq!(machining.len(), 1);
         let Machining::Cutout(cutout) = &machining[0];
         assert_eq!(cutout.id(), cutout_id);
-        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
         assert_eq!(cutout.entry(), FaceSide::A);
         assert!(session.is_dirty());
@@ -448,6 +503,49 @@ mod tests {
         assert_eq!(session.project().revision().get(), 3);
         assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
         assert!(session.is_dirty());
+    }
+
+    fn cutout_ring(x: i64, y: i64, width: i64, height: i64) -> Contour {
+        let point =
+            |x: i64, y: i64| [Length::from_millimetres(x).expect("mm"), Length::from_millimetres(y).expect("mm")];
+        Contour::from_polygon(vec![
+            point(x, y),
+            point(x + width, y),
+            point(x + width, y + height),
+            point(x, y + height),
+        ])
+        .expect("cutout ring")
+    }
+
+    #[test]
+    fn dispatch_cutout_create_accepts_a_contour_ring() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Contour(cutout_ring(100, 100, 100, 50));
+        let request = cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A);
+
+        let outcome = session.dispatch("cutout.create", &json_params(&request)).expect("create contour cutout");
+        let cutout_id = outcome.created_id().expect("cutout id");
+        let machining = session.project().panel(panel_id).expect("panel").machining();
+        let Machining::Cutout(cutout) = &machining[0];
+        assert_eq!(cutout.id(), cutout_id);
+        assert_eq!(cutout.shape(), &shape);
+
+        // A through ring that crosses the core edge is refused before any id is consumed.
+        let next_id = session.project().next_id();
+        let crossing = cutout_request(
+            panel_id,
+            CutoutShape::Contour(cutout_ring(-10, 200, 100, 50)),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&crossing)).expect_err("ring outside the core");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
+        ));
+        assert_eq!(session.project().next_id(), next_id);
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
     }
 
     #[test]
@@ -920,6 +1018,99 @@ mod tests {
         let panel = session.project().panel(panel_id).expect("panel");
         assert!(panel.corner_feature(corner).is_none());
         assert!(panel.corner_banding_at(corner).is_none(), "the banding is removed with its segment");
+    }
+
+    #[test]
+    fn ring_banding_set_and_clear_change_history() {
+        let (mut session, panel_id) = session_with_contour_panel();
+        let segment = session
+            .project()
+            .panel(panel_id)
+            .expect("panel")
+            .outline_contour()
+            .expect("ring")
+            .entries()
+            .first()
+            .expect("segment")
+            .id();
+        let set = PanelRingBandingSet {
+            panel: panel_id,
+            segment,
+            material: sample_edge_material_id(),
+            included_in_size: true,
+        };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.ring_banding.set").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&set)));
+        let before = session.project().revision();
+
+        session.dispatch("panel.ring_banding.set", &json_params(&set)).expect("band the ring segment");
+        let panel = session.project().panel(panel_id).expect("panel");
+        let band = panel.ring_banding_at(segment).expect("ring band");
+        assert_eq!(band.material(), sample_edge_material_id());
+        assert!(band.included_in_size());
+        assert_eq!(panel.band_order(), &[SegmentSource::Ring(segment)]);
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        session.undo().expect("one undo removes the band");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+        session.redo().expect("redo");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_some());
+
+        let clear = PanelRingBandingClear { panel: panel_id, segment };
+        let clear_spec = registry.get("panel.ring_banding.clear").expect("registered");
+        assert!(clear_spec.enabled(&session, &json_params(&clear)));
+        session.dispatch("panel.ring_banding.clear", &json_params(&clear)).expect("clear the ring band");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+    }
+
+    #[test]
+    fn ring_banding_refuses_a_rectangle_and_an_unknown_segment() {
+        let registry = CommandRegistry::new();
+        let set_spec = registry.get("panel.ring_banding.set").expect("registered");
+        let clear_spec = registry.get("panel.ring_banding.clear").expect("registered");
+
+        let mut session = sample_session();
+        let rectangle = Id::new(2).expect("id");
+        let segment = ContourSegmentId::new(1).expect("segment");
+        let set = PanelRingBandingSet {
+            panel: rectangle,
+            segment,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        let before = session.project().revision();
+        assert!(!set_spec.enabled(&session, &json_params(&set)));
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.set", &json_params(&set)),
+            Err(CommandError::Model(ProjectError::PanelContour(_)))
+        ));
+        assert_eq!(session.project().revision(), before, "a refused command changes nothing");
+
+        let (mut session, panel_id) = session_with_contour_panel();
+        let missing = ContourSegmentId::new(99).expect("segment");
+        let set = PanelRingBandingSet {
+            panel: panel_id,
+            segment: missing,
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        };
+        assert!(!set_spec.enabled(&session, &json_params(&set)));
+        let before = session.project().revision();
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.set", &json_params(&set)),
+            Err(CommandError::Model(ProjectError::PanelContour(_)))
+        ));
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding().is_empty());
+        assert_eq!(session.project().revision(), before);
+
+        let clear = PanelRingBandingClear { panel: panel_id, segment: missing };
+        assert!(!clear_spec.enabled(&session, &json_params(&clear)));
+        assert!(matches!(
+            session.dispatch("panel.ring_banding.clear", &json_params(&clear)),
+            Err(CommandError::Model(ProjectError::RingBandingNotFound { panel, segment }))
+                if panel == panel_id && segment == missing
+        ));
     }
 
     #[test]

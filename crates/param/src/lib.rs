@@ -5,8 +5,9 @@
 //! is anchored at the nominal minimum corner. The core and bands are placed relative to the
 //! resolved core origin so included banding fills the nominal edge; cutouts stay in the nominal
 //! panel frame and do not move with the core.
-//! Panel-owned cutouts are subtracted as rectangular tool bodies, with blind cuts starting at the
-//! named entry face. Placement into an assembly is a later concern and never happens here.
+//! Panel-owned cutouts are subtracted as extruded tool bodies — a rectangle or a sampled contour
+//! ring — with blind cuts starting at the named entry face. Placement into an assembly is a later
+//! concern and never happens here.
 //!
 //! Reports validation errors as typed results; never panics on a broken parametric graph.
 #![forbid(unsafe_code)]
@@ -63,9 +64,38 @@ pub enum ParamError {
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
+    /// The contour samples to more points than one extrusion cap can hold.
+    #[error(
+        "the contour samples to {points} points but one extrusion cap holds at most {max}; use fewer or wider arcs"
+    )]
+    ContourTooDetailed {
+        /// The number of points the contour sampled to.
+        points: usize,
+        /// The largest cap the document mesh can store.
+        max: usize,
+    },
     /// An extruded contour produced an invalid document mesh.
     #[error("the constructed mesh is invalid: {0}")]
     Mesh(#[from] MeshError),
+}
+
+/// Checks that a contour can become a renderable extrusion, without building the mesh.
+///
+/// The cap of a single extrusion is one document face and its vertices are the sampled ring, so a
+/// contour that samples to more points than [`furnicraft_model::MAX_FACE_VERTICES`] can never be
+/// drawn. A command that stores a ring calls this before it mutates the document, so an object
+/// never ends up with a contour that evaluates to nothing.
+pub fn validate_extrusion_contour(contour: &furnicraft_model::Contour) -> Result<(), ParamError> {
+    sampled_cap(contour).map(|_| ())
+}
+
+/// The sampled ring, refused when it cannot be stored as one cap face.
+fn sampled_cap(contour: &furnicraft_model::Contour) -> Result<Vec<[Length; 2]>, ParamError> {
+    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
+    if points.len() > furnicraft_model::MAX_FACE_VERTICES {
+        return Err(ParamError::ContourTooDetailed { points: points.len(), max: furnicraft_model::MAX_FACE_VERTICES });
+    }
+    Ok(points)
 }
 
 /// Builds the polygon mesh of a constructive object with one extrusion.
@@ -84,7 +114,7 @@ pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, Para
         return Err(ParamError::UnsupportedConstructive);
     };
     let contour = extrude.contour();
-    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).map_err(ParamError::from)?;
+    let points = sampled_cap(contour)?;
     let count = u32::try_from(points.len()).map_err(|_| ParamError::UnsupportedConstructive)?;
     let height = extrude.height();
     let mut positions = Vec::with_capacity(points.len().saturating_mul(2));
@@ -691,7 +721,6 @@ fn build_cutout_tool(
     geometry: PanelGeometry,
     cutout: &Cutout,
 ) -> Result<BodyId, ParamError> {
-    let CutoutShape::Rectangle(rect) = cutout.shape();
     let thickness = geometry.thickness().millimetres_f64();
     let (z, height) = match cutout.depth() {
         CutoutDepth::Through => (-TOOL_OVERSHOOT_MM, thickness + 2.0 * TOOL_OVERSHOOT_MM),
@@ -703,8 +732,22 @@ fn build_cutout_tool(
             }
         }
     };
-    let profile = Profile::rectangle(rect.width().millimetres_f64(), rect.height().millimetres_f64())?;
-    let origin = DVec3::new(rect.x().millimetres_f64(), rect.y().millimetres_f64(), z);
+    // A rectangle tool is placed at its own minimum corner; a contour ring is already in the
+    // nominal panel frame, so it extrudes from the frame origin.
+    let (profile, origin) = match cutout.shape() {
+        CutoutShape::Rectangle(rect) => (
+            Profile::rectangle(rect.width().millimetres_f64(), rect.height().millimetres_f64())?,
+            DVec3::new(rect.x().millimetres_f64(), rect.y().millimetres_f64(), z),
+        ),
+        CutoutShape::Contour(contour) => {
+            let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
+            let mut outer = Vec::with_capacity(points.len());
+            for point in points {
+                outer.push(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()));
+            }
+            (Profile::new(outer, Vec::new())?, DVec3::new(0.0, 0.0, z))
+        }
+    };
     let frame = Frame { origin, ..Frame::WORLD };
     Ok(kernel.extrude(&profile, &frame, height)?)
 }
@@ -1164,7 +1207,7 @@ mod tests {
             .add_panel(project.root().id(), "Panel", panel_size(), None, millimetres(18), Placement::IDENTITY)
             .expect("add panel");
         for (shape, depth) in cutouts {
-            project.add_cutout(panel_id, *shape, *depth, FaceSide::A).expect("add cutout");
+            project.add_cutout(panel_id, shape.clone(), *depth, FaceSide::A).expect("add cutout");
         }
         project.panel(panel_id).expect("panel exists").clone()
     }
@@ -1705,6 +1748,51 @@ mod tests {
         assert_eq!(frame.origin.y, 20.0);
     }
 
+    /// A 100 x 50 ring at `(100, 100)` in nominal panel-local millimetres.
+    fn cutout_ring() -> Contour {
+        Contour::from_polygon(vec![
+            [millimetres(100), millimetres(100)],
+            [millimetres(200), millimetres(100)],
+            [millimetres(200), millimetres(150)],
+            [millimetres(100), millimetres(150)],
+        ])
+        .expect("cutout ring")
+    }
+
+    #[test]
+    fn contour_cutout_tool_extrudes_the_sampled_ring_from_the_nominal_origin() {
+        let mut kernel = RecordingKernel::default();
+        let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
+        let geometry = geometry(&panel);
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+
+        build_cutout_tool(&mut kernel, geometry, cutout).expect("contour cutout tool");
+        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 0.0, -TOOL_OVERSHOOT_MM), ..Frame::WORLD }));
+        assert_eq!(kernel.height, Some(18.0 + 2.0 * TOOL_OVERSHOOT_MM));
+        let profile = kernel.profile.as_ref().expect("recorded contour profile");
+        assert!(profile.holes.is_empty());
+        assert_eq!(
+            profile.outer,
+            vec![
+                DVec2::new(100.0, 100.0),
+                DVec2::new(200.0, 100.0),
+                DVec2::new(200.0, 150.0),
+                DVec2::new(100.0, 150.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn through_contour_cutout_removes_its_volume() {
+        let mut kernel = TruckKernel::new();
+        let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
+        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+
+        let measure = kernel.measure(body).expect("panel measure");
+        let expected = 6_300_000.0 - 100.0 * 50.0 * 18.0;
+        assert!((measure.volume - expected).abs() < 1.0, "volume was {}, expected {expected}", measure.volume);
+    }
+
     #[test]
     fn build_panel_propagates_kernel_errors() {
         let mut kernel = RecordingKernel { fail: true, ..RecordingKernel::default() };
@@ -1940,5 +2028,41 @@ mod tests {
             "volume was {}, expected about {expected}",
             signed_volume(&mesh)
         );
+    }
+
+    #[test]
+    fn a_contour_the_cap_cannot_hold_is_refused_before_the_mesh_is_built() {
+        // An outer and an inner arc joined by two radial lines: a simple "C" band whose sampled
+        // ring holds more points than one document face can store.
+        use furnicraft_model::ContourSegment;
+        use furnicraft_units::Degrees;
+
+        let start = Degrees::from_millidegrees(0);
+        let sweep = Degrees::from_millidegrees(350_000);
+        let outer =
+            ContourSegment::arc([Length::ZERO, Length::ZERO], millimetres(5_000), start, sweep).expect("outer arc");
+        let inner = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(4_000),
+            sweep,
+            Degrees::from_millidegrees(-350_000),
+        )
+        .expect("inner arc");
+        let contour = Contour::new(vec![
+            outer,
+            ContourSegment::line(outer.end().expect("outer end"), inner.start().expect("inner start"))
+                .expect("inward line"),
+            inner,
+            ContourSegment::line(inner.end().expect("inner end"), outer.start().expect("outer start"))
+                .expect("outward line"),
+        ])
+        .expect("a simple band");
+        assert!(
+            contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).expect("sampled").len()
+                > furnicraft_model::MAX_FACE_VERTICES,
+            "the fixture must exceed the cap limit"
+        );
+        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::ContourTooDetailed { .. })));
     }
 }
