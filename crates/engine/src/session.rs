@@ -477,7 +477,7 @@ mod tests {
         let mut session = sample_session();
         let panel_id = Id::new(2).expect("id");
         let shape = CutoutShape::Rectangle(sample_cutout_rect());
-        let params = json_params(&cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A));
+        let params = json_params(&cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A));
 
         let outcome = session.dispatch("cutout.create", &params).expect("create cutout");
         let cutout_id = outcome.created_id().expect("cutout id");
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(machining.len(), 1);
         let Machining::Cutout(cutout) = &machining[0];
         assert_eq!(cutout.id(), cutout_id);
-        assert_eq!(cutout.shape(), shape);
+        assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
         assert_eq!(cutout.entry(), FaceSide::A);
         assert!(session.is_dirty());
@@ -503,6 +503,49 @@ mod tests {
         assert_eq!(session.project().revision().get(), 3);
         assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
         assert!(session.is_dirty());
+    }
+
+    fn cutout_ring(x: i64, y: i64, width: i64, height: i64) -> Contour {
+        let point =
+            |x: i64, y: i64| [Length::from_millimetres(x).expect("mm"), Length::from_millimetres(y).expect("mm")];
+        Contour::from_polygon(vec![
+            point(x, y),
+            point(x + width, y),
+            point(x + width, y + height),
+            point(x, y + height),
+        ])
+        .expect("cutout ring")
+    }
+
+    #[test]
+    fn dispatch_cutout_create_accepts_a_contour_ring() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let shape = CutoutShape::Contour(cutout_ring(100, 100, 100, 50));
+        let request = cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A);
+
+        let outcome = session.dispatch("cutout.create", &json_params(&request)).expect("create contour cutout");
+        let cutout_id = outcome.created_id().expect("cutout id");
+        let machining = session.project().panel(panel_id).expect("panel").machining();
+        let Machining::Cutout(cutout) = &machining[0];
+        assert_eq!(cutout.id(), cutout_id);
+        assert_eq!(cutout.shape(), &shape);
+
+        // A through ring that crosses the core edge is refused before any id is consumed.
+        let next_id = session.project().next_id();
+        let crossing = cutout_request(
+            panel_id,
+            CutoutShape::Contour(cutout_ring(-10, 200, 100, 50)),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&crossing)).expect_err("ring outside the core");
+        assert!(matches!(
+            error,
+            CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
+        ));
+        assert_eq!(session.project().next_id(), next_id);
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
     }
 
     #[test]

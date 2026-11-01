@@ -6,7 +6,7 @@
 
 use furnicraft_model::{
     Catalog, ContourSegmentId, CoreViolation, CutoutDepth, CutoutShape, EdgeId, Id, Machining, MaterialId,
-    PanelGeometryError, PanelRect, Project, ProjectError, VertexId,
+    PanelGeometryError, Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
 
@@ -115,25 +115,25 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
 
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
-        let rect = cutout_rect(cutout.shape());
-        match cutout.depth() {
-            CutoutDepth::Through => {
-                if !geometry.cutout_reaches_core(rect) {
-                    diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
-                }
-            }
-            CutoutDepth::Blind { depth } => {
-                if !geometry.cutout_fits_core(rect) {
-                    diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
-                }
-                if depth >= geometry.thickness() {
-                    diagnostics.push(PanelDiagnostic::BlindDepthNotLessThanThickness {
-                        cutout: cutout.id(),
-                        depth,
-                        thickness: geometry.thickness(),
-                    });
-                }
-            }
+        // A rectangle through cut may open a notch at the core edge; a through ring must stay
+        // strictly inside it, because the rectangle-only core trace cannot describe a curved notch.
+        let outside = match (cutout.depth(), cutout.shape()) {
+            (CutoutDepth::Through, CutoutShape::Rectangle(rect)) => !geometry.cutout_reaches_core(*rect),
+            (CutoutDepth::Through, CutoutShape::Contour(contour)) => !geometry.contour_inside_core(contour),
+            (CutoutDepth::Blind { .. }, CutoutShape::Rectangle(rect)) => !geometry.cutout_fits_core(*rect),
+            (CutoutDepth::Blind { .. }, CutoutShape::Contour(contour)) => !geometry.contour_fits_core(contour),
+        };
+        if outside {
+            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+        }
+        if let CutoutDepth::Blind { depth } = cutout.depth()
+            && depth >= geometry.thickness()
+        {
+            diagnostics.push(PanelDiagnostic::BlindDepthNotLessThanThickness {
+                cutout: cutout.id(),
+                depth,
+                thickness: geometry.thickness(),
+            });
         }
     }
     match panel.core_violation(geometry) {
@@ -143,12 +143,6 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
     }
 
     diagnostics
-}
-
-fn cutout_rect(shape: CutoutShape) -> PanelRect {
-    match shape {
-        CutoutShape::Rectangle(rect) => rect,
-    }
 }
 
 #[cfg(test)]
@@ -398,6 +392,54 @@ mod tests {
             }
         });
         serde_json::from_value(value).expect("project loads")
+    }
+
+    fn project_with_contour_cutout(points: &[[i64; 2]], depth: serde_json::Value) -> Project {
+        let value = serde_json::json!({
+            "schema_version": 14,
+            "revision": 0,
+            "next_id": 20,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Panel",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "last_known_thickness": 18000,
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "machining": [{"cutout": {
+                        "id": 3,
+                        "shape": {"contour": {"points": points}},
+                        "depth": depth,
+                        "entry": "A"
+                    }}],
+                    "edge_banding": []
+                }}]
+            }
+        });
+        serde_json::from_value(value).expect("project loads")
+    }
+
+    #[test]
+    fn a_through_contour_cutout_must_stay_strictly_inside_the_core() {
+        let cutout = Id::new(3).expect("id");
+        let at_the_edge = [[0, 100_000], [100_000, 100_000], [100_000, 200_000], [0, 200_000]];
+
+        let project = project_with_contour_cutout(&at_the_edge, serde_json::json!("through"));
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
+        assert!(diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+
+        // A blind ring may open at the edge, because it removes no through material.
+        let project = project_with_contour_cutout(&at_the_edge, serde_json::json!({"blind": {"depth": 8_000}}));
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+
+        let inside = [[100_000, 100_000], [200_000, 100_000], [200_000, 150_000], [100_000, 150_000]];
+        let project = project_with_contour_cutout(&inside, serde_json::json!("through"));
+        let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
     }
 
     #[test]

@@ -21,8 +21,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the outline,
-  through and blind, tool built by extrusion. `files: crates/model, crates/param`
+- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
+  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 
 ## Bugs
 
@@ -36,8 +36,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
-  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 - `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
 - `[ ]` **B2** offset a contour inward and outward as a new ring. `files: crates/geom/src/contour.rs`
 - `[ ]` **C1** a sketch on a chosen plane: grid, vertex snapping, translation and rotation steps.
@@ -54,6 +52,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the core, through
+  and blind, the tool built by extruding the sampled ring; the schema moves to 14 — `2167e2b`
 - `[x]` **D2** the contour panel card: the ring summary, the material-driven thickness, the material
   and one banding row per ring segment through `panel.ring_banding.set`/`clear`, no corners, bows or
   cutouts, an `Edit contour` entry; a missing ring-band material is a diagnostic — `f88a995`

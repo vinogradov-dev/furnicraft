@@ -81,7 +81,10 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[gizmo]` The orientation widget is hidden in a viewport smaller than its own size plus margins;
   there is no menu fallback for the six views yet.
 - `[panel]` Region rings are traced for rectangles only; a shaped core has no contour-aware cutout
-  union, so adding machining to a shaped panel is still rejected.
+  union, so adding machining to a shaped panel is still rejected. For the same reason a through
+  contour cutout must stay strictly inside the core: a ring touching the edge could open a notch the
+  rectangle tracer cannot describe, while a blind ring may touch it. A contour-aware core ring would
+  let a through ring cut the edge too.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a
   straight connector; only the band strips are intersected analytically.
 - `[panel]` Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt

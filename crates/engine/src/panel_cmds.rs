@@ -322,7 +322,7 @@ fn cutout_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = CutoutCreate::parse(params) else {
         return false;
     };
-    session.project().validate_cutout(params.panel, params.shape, params.depth).is_ok()
+    session.project().validate_cutout(params.panel, &params.shape, params.depth).is_ok()
 }
 
 fn cutout_create_run(
