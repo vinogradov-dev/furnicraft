@@ -20,5 +20,6 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Contour panel outline | `crates/model/src/panel_contour.rs` (`nominal_contour`, `contour_paths`) | whole file |
 | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |
 | Object commands | `crates/engine/src/object_cmds.rs` (`object.*`) | small |
+| Constructive evaluation | `crates/param/src/lib.rs` (`build_constructive_mesh`, `validate_extrusion_contour`) | small |
 | Scene file envelope | `crates/project/src/lib.rs` (`SceneFile`, `read`, `write`) | — |
 | Panel card UI | `crates/ui/src/panel_card.rs` (`PanelCard`) | — |

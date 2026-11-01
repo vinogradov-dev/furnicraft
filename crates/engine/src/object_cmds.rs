@@ -9,7 +9,7 @@
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 
 use furnicraft_model::{Constructive, Contour, Geometry, Id, Mesh, Placement, Project, ProjectError};
-use furnicraft_param::build_constructive_mesh;
+use furnicraft_param::{build_constructive_mesh, validate_extrusion_contour};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -131,6 +131,7 @@ fn object_extrude_create_enabled(session: &Session, params: &Value) -> bool {
     !params.name.trim().is_empty()
         && valid_extrusion_height(params.height)
         && session.project().is_container(params.parent)
+        && validate_extrusion_contour(&params.contour).is_ok()
 }
 
 fn object_extrude_create_run(
@@ -149,9 +150,19 @@ fn object_extrude_create_run(
             ),
         });
     }
+    evaluate_contour(OBJECT_EXTRUDE_CREATE_ID, &params.contour)?;
     let constructive = Constructive::extrude(params.contour, params.height).map_err(ProjectError::from)?;
     let id = project.add_object(params.parent, params.name, params.placement, Geometry::Constructive(constructive))?;
     Ok(CommandOutcome::created(id))
+}
+
+/// Refuses a contour the render mesh cannot hold, before anything is stored.
+///
+/// A contour is valid as a ring but still too detailed for the one face its extrusion cap becomes;
+/// storing it would leave an object that evaluates to an error and draws nothing.
+fn evaluate_contour(command: &'static str, contour: &Contour) -> Result<(), CommandError> {
+    validate_extrusion_contour(contour)
+        .map_err(|error| CommandError::Evaluation { command, message: error.to_string() })
 }
 
 /// Stable id of the contour replacement command.
@@ -183,6 +194,7 @@ fn object_contour_replace_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     session.project().object(params.object).is_some_and(|object| object.geometry().as_constructive().is_some())
+        && validate_extrusion_contour(&params.contour).is_ok()
 }
 
 fn object_contour_replace_run(
@@ -191,6 +203,9 @@ fn object_contour_replace_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectContourReplace>(params, OBJECT_CONTOUR_REPLACE_ID)?;
+    // Validate the new ring before the document changes: a contour the cap cannot hold would
+    // leave a constructive object that evaluates to an error and renders nothing.
+    evaluate_contour(OBJECT_CONTOUR_REPLACE_ID, &params.contour)?;
     project.set_object_contour(params.object, params.contour)?;
     Ok(CommandOutcome::changed())
 }
@@ -240,8 +255,11 @@ fn object_collapse_run(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::Revision;
+    use furnicraft_model::{ContourSegment, Revision};
     use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_units::Degrees;
+
+    use crate::CommandRegistry;
 
     use super::*;
 
@@ -339,6 +357,119 @@ mod tests {
             placement: Placement::IDENTITY,
         })
         .expect("params serialize")
+    }
+
+    /// A "C" band: an outer and an inner arc joined by two radial lines.
+    ///
+    /// The ring is valid and simple, but at the mesh sampling tolerance it holds more than
+    /// [`furnicraft_model::MAX_FACE_VERTICES`] points, so one extrusion cap cannot store it.
+    fn band_contour() -> Contour {
+        let centre = [Length::ZERO, Length::ZERO];
+        let start = Degrees::from_millidegrees(0);
+        let sweep = Degrees::from_millidegrees(350_000);
+        let outer = ContourSegment::arc(centre, Length::from_millimetres(5_000).expect("radius"), start, sweep)
+            .expect("outer arc");
+        let inner = ContourSegment::arc(
+            centre,
+            Length::from_millimetres(4_000).expect("radius"),
+            sweep,
+            Degrees::from_millidegrees(-350_000),
+        )
+        .expect("inner arc");
+        let inward = ContourSegment::line(outer.end().expect("outer end"), inner.start().expect("inner start"))
+            .expect("inward line");
+        let outward = ContourSegment::line(inner.end().expect("inner end"), outer.start().expect("outer start"))
+            .expect("outward line");
+        Contour::new(vec![outer, inward, inner, outward]).expect("a simple band")
+    }
+
+    #[test]
+    fn a_contour_the_cap_cannot_hold_is_refused_without_mutating() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let registry = CommandRegistry::new();
+        let height = Length::from_millimetres(18).expect("height");
+        let value = serde_json::to_value(ObjectExtrudeCreate {
+            parent: session.project().root().id(),
+            name: "Band".to_owned(),
+            contour: band_contour(),
+            height,
+            placement: Placement::IDENTITY,
+        })
+        .expect("params serialize");
+        let create = registry.get(OBJECT_EXTRUDE_CREATE_ID).expect("registered");
+        assert!(!create.enabled(&session, &value), "a ring the cap cannot hold is not creatable");
+        let error = session.dispatch(OBJECT_EXTRUDE_CREATE_ID, &value).expect_err("the cap cannot hold it");
+        assert!(error.to_string().contains("extrusion cap"), "the error names the limit: {error}");
+        assert_eq!(session.project().revision(), Revision::ZERO);
+        assert!(!session.can_undo(), "a refused create leaves no undo entry");
+
+        let id = session
+            .dispatch(OBJECT_EXTRUDE_CREATE_ID, &extrude_params(&session, "Top", height))
+            .expect("create extrusion")
+            .created_id()
+            .expect("a new object id");
+        let original = session
+            .project()
+            .object(id)
+            .and_then(|object| object.geometry().as_constructive())
+            .and_then(Constructive::contour)
+            .cloned()
+            .expect("the stored ring");
+        let before = session.project().revision();
+        let replace = serde_json::to_value(ObjectContourReplace { object: id, contour: band_contour() })
+            .expect("params serialize");
+        let spec = registry.get(OBJECT_CONTOUR_REPLACE_ID).expect("registered");
+        assert!(!spec.enabled(&session, &replace), "the replacement ring is not buildable either");
+        assert!(session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &replace).is_err());
+        assert_eq!(session.project().revision(), before);
+        assert_eq!(
+            session
+                .project()
+                .object(id)
+                .and_then(|object| object.geometry().as_constructive())
+                .and_then(Constructive::contour),
+            Some(&original),
+            "the stored ring is untouched"
+        );
+        session.undo().expect("the refused command left no entry");
+        assert!(session.project().object(id).is_none(), "undo removes the creation, nothing was recorded between");
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn a_contour_replacement_is_one_revision_and_one_undo() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("a new object id");
+        let contour = |session: &Session| {
+            session
+                .project()
+                .object(id)
+                .and_then(|object| object.geometry().as_constructive())
+                .and_then(Constructive::contour)
+                .cloned()
+        };
+        let original = contour(&session).expect("the stored ring");
+        let wider = rectangle(120, 50);
+        let value = serde_json::to_value(ObjectContourReplace { object: id, contour: wider.clone() })
+            .expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_CONTOUR_REPLACE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+        let before = session.project().revision();
+        session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the contour");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(contour(&session), Some(wider), "the new ring is stored");
+        session.undo().expect("one undo restores the old ring");
+        assert_eq!(contour(&session), Some(original));
+        session.undo().expect("the replacement was one entry");
+        assert!(session.project().object(id).is_none());
+        assert!(!session.can_undo());
     }
 
     #[test]

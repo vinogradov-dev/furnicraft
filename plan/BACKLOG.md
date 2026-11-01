@@ -21,19 +21,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
-  checks, validation before mutation and one undo entry per apply.
-  `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
-
-## Bugs
-
-No open defect.
-
-## Next
-
 - `[ ]` **D2** the card of a contour panel: thickness, material and banding per ring segment; no bows,
   no corner features, no parametric cutouts; an `Edit contour` button.
   `files: crates/ui/src/panel_card.rs`
+
+## Bugs
+
+- `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
+  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
+  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
+  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
+  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
+  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
+  `files: crates/param/src/lib.rs, crates/model/src/lib.rs`
+
+## Next
+
 - `[ ]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the outline,
   through and blind, tool built by extrusion. `files: crates/model, crates/param`
 - `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
@@ -54,6 +57,9 @@ No open defect.
 
 ## Done
 
+- `[x]` **A6** contour edit commands: `panel.outline.set` and `object.contour.replace` share their
+  `enabled` check with `run`, validate the ring before the document changes, and record one undo
+  entry per apply; a contour too detailed for one extrusion cap is refused instead of stored — `6f3e82b`
 - `[x]` **X1** a concave contour cap drew a flap triangle across the notch: `object_mesh` fanned
   every face, so the cap of an extruded object left its own contour; faces are ear-clipped now —
   `a2859fc`
