@@ -4056,8 +4056,8 @@ pub enum PanelError {
     /// A contour panel stored corner features or bows, which describe a rectangle.
     #[error("a contour panel cannot carry corner features or bows")]
     ContourWithFeatures,
-    /// A contour panel stored banding against rectangle edges.
-    #[error("a contour panel cannot carry banding until banding follows the ring")]
+    /// A contour panel stored edge or corner banding, which belongs to a rectangle.
+    #[error("a contour panel cannot carry edge or corner banding, only ring banding")]
     ContourWithBanding,
     /// A rectangular panel stored banding against contour ring segments.
     #[error("a rectangular panel cannot carry banding on a contour ring segment")]
@@ -8023,7 +8023,7 @@ mod tests {
             "last_known_width": 20_000,
         }]);
         let error = serde_json::from_value::<Panel>(banded).expect_err("rectangle banding is not a ring");
-        assert!(error.to_string().contains("banding follows the ring"), "error was {error}");
+        assert!(error.to_string().contains("contour panel cannot carry edge or corner banding"), "error was {error}");
     }
 
     #[test]

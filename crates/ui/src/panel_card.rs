@@ -6,15 +6,17 @@
 use egui::{Color32, ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
     BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
-    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID,
+    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID, RING_BANDING_CLEAR_ID,
+    RING_BANDING_SET_ID,
 };
 use furnicraft_engine::{
     PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
-    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize, Session,
+    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize,
+    PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
-    CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel, PanelNominalSize,
-    RectCorner, RectEdge, SegmentSource, VertexId,
+    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel,
+    PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use serde_json::Value;
@@ -60,6 +62,8 @@ enum Action {
     ClearBand { panel: Id, edge: EdgeId },
     SetCornerBand { panel: Id, corner: VertexId, material: MaterialId, included_in_size: bool },
     ClearCornerBand { panel: Id, corner: VertexId },
+    SetRingBand { panel: Id, segment: ContourSegmentId, material: MaterialId, included_in_size: bool },
+    ClearRingBand { panel: Id, segment: ContourSegmentId },
     SetCorner { panel: Id, corner: VertexId, feature: CornerFeatureKind },
     ClearCorner { panel: Id, corner: VertexId },
     SetBow { panel: Id, edge: EdgeId, sagitta: Length },
@@ -411,8 +415,11 @@ impl PanelCard {
                         show_corner_band_row(ui, session, panel, panel_id, corner, &band, actions);
                     }
                 }
-                // The contour panel card is task D2; until then a ring band is not offered here.
-                SegmentSource::Ring(_) => {}
+                SegmentSource::Ring(segment) => {
+                    if let Some(band) = panel.ring_banding_at(segment) {
+                        show_ring_band_row(ui, session, panel, panel_id, segment, &band, actions);
+                    }
+                }
             }
         }
 
@@ -450,7 +457,12 @@ impl PanelCard {
                                     material: material.id(),
                                     included_in_size: false,
                                 }),
-                                SegmentSource::Ring(_) => {}
+                                SegmentSource::Ring(segment) => actions.push(Action::SetRingBand {
+                                    panel: panel_id,
+                                    segment: *segment,
+                                    material: material.id(),
+                                    included_in_size: false,
+                                }),
                             }
                         }
                     }
@@ -523,6 +535,19 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
         Action::ClearCornerBand { panel, corner } => {
             let params = json(&PanelCornerBandingClear { panel: *panel, corner: *corner })?;
             dispatch(session, CORNER_BANDING_CLEAR_ID, &params)
+        }
+        Action::SetRingBand { panel, segment, material, included_in_size } => {
+            let params = json(&PanelRingBandingSet {
+                panel: *panel,
+                segment: *segment,
+                material: *material,
+                included_in_size: *included_in_size,
+            })?;
+            dispatch(session, RING_BANDING_SET_ID, &params)
+        }
+        Action::ClearRingBand { panel, segment } => {
+            let params = json(&PanelRingBandingClear { panel: *panel, segment: *segment })?;
+            dispatch(session, RING_BANDING_CLEAR_ID, &params)
         }
         Action::SetCorner { panel, corner, feature } => {
             let params = json(&PanelCornerSet { panel: *panel, corner: *corner, feature: *feature })?;
@@ -627,6 +652,9 @@ pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
         PanelDiagnostic::MissingCornerBandingMaterial { corner, material } => {
             format!("Corner {corner} uses missing edge material {material}.")
         }
+        PanelDiagnostic::MissingRingBandingMaterial { segment, material } => {
+            format!("Segment {segment} uses missing edge material {material}.")
+        }
         PanelDiagnostic::NonPositiveCore => "The panel core is not positive.".to_owned(),
         PanelDiagnostic::MachiningOutsideCore { cutout } => {
             format!("Cutout {cutout} lies outside the core.")
@@ -654,6 +682,12 @@ fn listed_band_sources(panel: &Panel) -> Vec<SegmentSource> {
             sources.push(source);
         }
     }
+    for band in panel.ring_banding() {
+        let source = SegmentSource::Ring(band.segment());
+        if segment_exists(panel, source) && !sources.contains(&source) {
+            sources.push(source);
+        }
+    }
     sources
 }
 
@@ -668,9 +702,16 @@ fn segment_exists(panel: &Panel, source: SegmentSource) -> bool {
 }
 
 fn available_band_segments(panel: &Panel) -> Vec<SegmentSource> {
-    // A contour panel's banding is per ring segment and belongs to its own card (task D2).
     if panel.is_contour() {
-        return Vec::new();
+        let Some(contour) = panel.outline_contour() else {
+            return Vec::new();
+        };
+        return contour
+            .entries()
+            .iter()
+            .filter(|entry| panel.ring_banding_at(entry.id()).is_none())
+            .map(|entry| SegmentSource::Ring(entry.id()))
+            .collect();
     }
     let mut available = Vec::new();
     for edge in RectEdge::ALL {
@@ -692,7 +733,13 @@ fn segment_label(panel: &Panel, source: SegmentSource) -> String {
     match source {
         SegmentSource::Edge(edge) => edge_label(edge.get()).to_owned(),
         SegmentSource::Corner(corner) => corner_segment_label(panel, corner),
-        SegmentSource::Ring(segment) => format!("Segment {}", segment.get()),
+        SegmentSource::Ring(segment) => {
+            let arc = panel
+                .outline_contour()
+                .and_then(|contour| contour.segment(segment))
+                .is_some_and(|segment| segment.is_arc());
+            if arc { format!("Segment {} (arc)", segment.get()) } else { format!("Segment {}", segment.get()) }
+        }
     }
 }
 
@@ -806,14 +853,77 @@ fn show_corner_band_row(
     });
 }
 
+fn show_ring_band_row(
+    ui: &mut Ui,
+    session: &Session,
+    panel: &Panel,
+    panel_id: Id,
+    segment: ContourSegmentId,
+    band: &RingBanding,
+    actions: &mut Vec<Action>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(segment_label(panel, SegmentSource::Ring(segment)));
+        ComboBox::from_id_salt(("band_material", panel_id.get(), band_key(SegmentSource::Ring(segment))))
+            .selected_text(material_name(session, band.material()))
+            .show_ui(ui, |ui| {
+                for material in session.catalog().edge_materials() {
+                    let chosen = band.material() == material.id();
+                    if ui.selectable_label(chosen, material.name()).clicked() && !chosen {
+                        actions.push(Action::SetRingBand {
+                            panel: panel_id,
+                            segment,
+                            material: material.id(),
+                            included_in_size: band.included_in_size(),
+                        });
+                    }
+                }
+            });
+        let mut included = band.included_in_size();
+        let material_known = session.catalog().edge_material(band.material()).is_some();
+        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+            actions.push(Action::SetRingBand {
+                panel: panel_id,
+                segment,
+                material: band.material(),
+                included_in_size: included,
+            });
+        }
+        if ui.small_button("−").on_hover_text("Remove banding").clicked() {
+            actions.push(Action::ClearRingBand { panel: panel_id, segment });
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use furnicraft_model::{Contour, Placement};
 
     fn material(value: u64) -> MaterialId {
         MaterialId::new(value).expect("material id")
+    }
+
+    /// A session whose root holds a 700 x 500 contour panel.
+    fn contour_session() -> (Session, Id) {
+        let mut project = furnicraft_testkit::sample_project();
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [mm(700), Length::ZERO],
+            [mm(700), mm(500)],
+            [Length::ZERO, mm(500)],
+        ])
+        .expect("ring");
+        let panel = project
+            .add_panel_contour(project.root().id(), "Contour", &ring, None, mm(18), Placement::IDENTITY)
+            .expect("contour panel");
+        (Session::with_catalog(project, furnicraft_testkit::sample_catalog()), panel)
+    }
+
+    fn ring_segments(panel: &Panel) -> Vec<SegmentSource> {
+        panel.outline_contour().expect("ring").entries().iter().map(|entry| SegmentSource::Ring(entry.id())).collect()
     }
 
     #[test]
@@ -836,6 +946,13 @@ mod tests {
                 material: material(101),
             }),
             "Corner 2 uses missing edge material 101."
+        );
+        assert_eq!(
+            diagnostic_message(&PanelDiagnostic::MissingRingBandingMaterial {
+                segment: ContourSegmentId::new(3).expect("segment"),
+                material: material(101),
+            }),
+            "Segment 3 uses missing edge material 101."
         );
         assert_eq!(diagnostic_message(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
         assert_eq!(
@@ -956,6 +1073,88 @@ mod tests {
 
         session.undo().expect("undo");
         assert!(session.project().panel(panel_id).expect("panel").edge_banding().is_empty());
+    }
+
+    #[test]
+    fn contour_card_offers_banding_per_ring_segment() {
+        let (mut session, panel_id) = contour_session();
+        let panel = session.project().panel(panel_id).expect("panel");
+        let segments = ring_segments(panel);
+        assert_eq!(segments.len(), 4);
+        assert_eq!(available_band_segments(panel), segments);
+        assert!(listed_band_sources(panel).is_empty());
+
+        let segment = panel.outline_contour().expect("ring").entries().first().expect("segment").id();
+        run_action(
+            &mut session,
+            &Action::SetRingBand {
+                panel: panel_id,
+                segment,
+                material: furnicraft_testkit::sample_edge_material_id(),
+                included_in_size: true,
+            },
+        )
+        .expect("band the ring segment");
+
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert_eq!(listed_band_sources(panel), vec![SegmentSource::Ring(segment)]);
+        assert_eq!(available_band_segments(panel).len(), 3);
+        assert!(!available_band_segments(panel).contains(&SegmentSource::Ring(segment)));
+        assert_eq!(panel.ring_banding_at(segment).map(|band| band.included_in_size()), Some(true));
+
+        session.undo().expect("undo");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+    }
+
+    #[test]
+    fn ring_band_clear_dispatches_through_the_engine() {
+        let (mut session, panel_id) = contour_session();
+        let segment = session
+            .project()
+            .panel(panel_id)
+            .expect("panel")
+            .outline_contour()
+            .expect("ring")
+            .entries()
+            .first()
+            .expect("segment")
+            .id();
+        run_action(
+            &mut session,
+            &Action::SetRingBand {
+                panel: panel_id,
+                segment,
+                material: furnicraft_testkit::sample_edge_material_id(),
+                included_in_size: false,
+            },
+        )
+        .expect("band the ring segment");
+        run_action(&mut session, &Action::ClearRingBand { panel: panel_id, segment }).expect("clear the ring band");
+        assert!(session.project().panel(panel_id).expect("panel").ring_banding_at(segment).is_none());
+        assert!(
+            available_band_segments(session.project().panel(panel_id).expect("panel"))
+                .contains(&SegmentSource::Ring(segment))
+        );
+    }
+
+    #[test]
+    fn contour_shape_section_offers_no_corners_or_bows() {
+        let (session, panel_id) = contour_session();
+        let mut actions = Vec::new();
+        let context = egui::Context::default();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let panel = session.project().panel(panel_id).expect("panel");
+                let card = PanelCard::default();
+                let _ = card.show_shape(ui, panel_id, panel, false, true, &mut actions);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(actions.is_empty(), "a contour panel must not offer corner or bow edits: {actions:?}");
     }
 
     #[test]

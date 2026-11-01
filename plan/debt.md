@@ -96,6 +96,8 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   tools use nominal coordinates, but cutout validation on a shaped panel only sees the core bounding
   box.
 - `[panel]` The panel card does not edit cutouts yet.
+- `[panel]` A contour banding row names its ring segment by number only; the card cannot highlight the
+  segment in the viewport, so the user has to count segments to band the one they mean.
 - `[panel]` Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks
   for some checks; rendering and diagnostics use the catalogue.
 - `[vendor]` `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.
