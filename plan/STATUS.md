@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=D task=D3 state=idle base=f88a995 updated=2026-11-01
+STATE: milestone=M7 phase=D task=A7 state=idle base=2167e2b updated=2026-11-01
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -31,7 +31,10 @@ plan is broken.
   extrusion is refused instead of stored. D2 is the card: a contour panel shows its ring summary,
   the material-driven thickness, the material and one banding row per ring segment through
   `panel.ring_banding.set`/`clear`, keeps the `Edit contour` entry and offers no corners, bows or
-  cutouts; a ring band with a missing material is a diagnostic like an edge or corner band.
+  cutouts; a ring band with a missing material is a diagnostic like an edge or corner band. D3 lets a
+  cutout outline be a contour ring: `CutoutShape::Contour` must stay strictly inside the core for a
+  through cut and may touch its edge for a blind one, overlap is decided on the sampled ring rather
+  than its bounds, `param` extrudes the ring as the tool, and the schema moves to 14.
 - Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
   taking a bug moves its line into `## Now` in work order. X1 (the concave cap flap) is fixed; X2
   records that a legal ring over 1024 sampled points cannot be extruded, and waits for the owner's
@@ -45,9 +48,9 @@ plan is broken.
 
 ## Next
 
-D3 is the next task: a cutout by an arbitrary contour, kept inside the outline, through and blind,
-with the tool built by extrusion. A7 then writes the contour panel and the edit mode down in
-`docs/domain/` and an ADR. X2 waits for a decision on the cap limit (`plan/questions.md`). P1–P3 in
+A7 is the next task: write the contour panel and the contour edit mode down in `docs/domain/` and an
+ADR, and fold the D1–D3 cutout rules into `docs/domain/panels.md`. B1 (fillet and chamfer on a
+contour corner) follows. X2 waits for a decision on the cap limit (`plan/questions.md`). P1–P3 in
 `plan/BACKLOG.md` continue the gate itself, now inside `state-contract`, starting with `status`
 printing the resume block.
 
