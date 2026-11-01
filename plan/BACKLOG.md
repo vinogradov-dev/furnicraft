@@ -12,13 +12,27 @@ those files and their callers, not the workspace.
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans; P is the plan and `xtask` itself,
-L is scene lighting.
+L is scene lighting, X is a defect in behaviour that already shipped.
+
+A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
+the observation, the expectation and the suspected cause, and never a guess at a fix that has not
+been reproduced. Taking it moves the line into `## Now` at its place in the work order, so `STATE` can
+name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
 - `[ ]` **A6** contour edit commands: audit `panel.outline.set` and `object.contour.replace` — enabled
   checks, validation before mutation and one undo entry per apply.
   `files: crates/engine/src/panel_cmds.rs, crates/engine/src/object_cmds.rs`
+
+## Bugs
+
+- `[ ]` **X1** an extruded object with a concave contour shows a flap triangle across the notch.
+  Observed: a point added to the ring and pulled inward produces a triangle joining vertices across
+  the material. Expected: the cap shows only triangles inside the contour. Cause: `object_mesh` fans
+  every face from its first vertex, which is only valid for convex faces; `build_constructive_mesh`
+  keeps the contour cap as one concave n-gon. Also bakes into `object.collapse`.
+  `files: crates/geom/src, crates/mesh/src/lib.rs`
 
 ## Next
 
