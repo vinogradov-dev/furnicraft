@@ -16,6 +16,7 @@
 mod camera_card;
 mod command;
 mod container_card;
+mod contour_edit;
 mod light_card;
 mod mesh_edit;
 mod object_card;
@@ -40,7 +41,10 @@ use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{CameraProjection, Contour, Id, LightKind, NodeQuery, PanelNominalSize, Placement, Project};
+use furnicraft_model::{
+    CameraProjection, Contour, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize,
+    Placement, Project,
+};
 use furnicraft_units::Length;
 
 use crate::camera_card::CameraCard;
@@ -48,13 +52,14 @@ use crate::command::{dispatch, json};
 use crate::container_card::ContainerCard;
 use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
-use crate::object_card::{MeshEditAction, ObjectCard};
-use crate::panel_card::PanelCard;
+use crate::object_card::{ObjectAction, ObjectCard};
+use crate::panel_card::{PanelAction, PanelCard};
 use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
+pub use contour_edit::{ContourEdit, ContourTarget};
 pub use mesh_edit::{MeshEdit, MeshElement};
 
 /// Default length of a newly created panel, in millimetres.
@@ -77,6 +82,7 @@ pub struct Editor {
     selection: Selection,
     open: HashSet<Id>,
     mesh_edit: Option<MeshEdit>,
+    contour_edit: Option<ContourEdit>,
     card: PanelCard,
     container_card: ContainerCard,
     object_card: ObjectCard,
@@ -128,6 +134,7 @@ impl Editor {
         if !is_editable_mesh(project, object) {
             return false;
         }
+        self.contour_edit = None;
         self.mesh_edit = Some(MeshEdit::new(object));
         true
     }
@@ -208,6 +215,93 @@ impl Editor {
             edit.retain_vertices(vertices);
             edit.retain_faces(faces);
         }
+    }
+
+    /// The live contour edit, when the editor is reshaping a panel outline or an object contour.
+    pub fn contour_edit(&self) -> Option<&ContourEdit> {
+        self.contour_edit.as_ref()
+    }
+
+    /// Starts a contour edit on the selected panel or object.
+    ///
+    /// The mode needs exactly one selected node that stores a contour, and it owns the pointer while
+    /// it is live: starting it leaves mesh mode, and an already running edit is never replaced
+    /// silently. Returns whether the mode started.
+    pub fn start_contour_edit(&mut self, project: &Project, target: ContourTarget) -> bool {
+        if self.contour_edit.is_some() || self.selection.ids() != [target.id()] {
+            return false;
+        }
+        let Some(edit) = ContourEdit::start(project, target) else {
+            return false;
+        };
+        self.mesh_edit = None;
+        self.contour_edit = Some(edit);
+        true
+    }
+
+    /// Leaves the contour edit and drops the working copy; the document never changed.
+    pub fn end_contour_edit(&mut self) {
+        self.contour_edit = None;
+    }
+
+    /// Leaves the contour edit when its target vanished or the selection moved elsewhere.
+    ///
+    /// A live edit is never allowed to outlive the node it reshapes: applying it later would fail
+    /// and the toolbar would describe a node the inspector no longer shows.
+    pub fn retain_contour_edit(&mut self, project: &Project) {
+        let Some(target) = self.contour_edit.as_ref().map(ContourEdit::target) else {
+            return;
+        };
+        if self.selection.ids() != [target.id()] || !ContourEdit::is_editable(project, target) {
+            self.contour_edit = None;
+        }
+    }
+
+    /// Moves one corner of the working copy, or reports why the draft refused the point.
+    pub fn contour_edit_move_corner(
+        &mut self,
+        segment: ContourSegmentId,
+        point: [Length; 2],
+    ) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::UnknownSegment { segment });
+        };
+        edit.move_corner(segment, point)
+    }
+
+    /// Splits one side of the working copy and returns the new segment id.
+    pub fn contour_edit_split(
+        &mut self,
+        segment: ContourSegmentId,
+        point: [Length; 2],
+    ) -> Result<ContourSegmentId, ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::UnknownSegment { segment });
+        };
+        edit.split_segment(segment, point)
+    }
+
+    /// Throws the working copy away without leaving the mode.
+    pub fn reset_contour_edit(&mut self) {
+        if let Some(edit) = self.contour_edit.as_mut() {
+            edit.reset();
+        }
+    }
+
+    /// Applies the working copy as one command and leaves the mode on success.
+    ///
+    /// A rejected edit keeps the draft alive so the user can fix it or cancel; the document and the
+    /// undo history are untouched because the command validates before it mutates.
+    pub fn apply_contour_edit(&mut self, session: &mut Session) -> Result<(), String> {
+        let Some(edit) = self.contour_edit.as_ref() else {
+            return Ok(());
+        };
+        // An untouched draft would dispatch the same ring and leave an empty undo entry behind.
+        if edit.is_dirty() {
+            edit.apply(session)?;
+        }
+        self.contour_edit = None;
+        Ok(())
     }
 
     /// Replaces the selection with one node, or clears it for `None`.
@@ -320,6 +414,7 @@ impl Editor {
     /// Draws the inspector card for the primary selection.
     pub fn show_card(&mut self, ui: &mut Ui, session: &mut Session) {
         self.retain_mesh_edit(session.project());
+        self.retain_contour_edit(session.project());
         let Some(primary) = self.selection.primary() else {
             ui.label("Select a node in the scene tree.");
             return;
@@ -329,20 +424,30 @@ impl Editor {
             self.pivot_card.show(ui, session, primary);
         }
         if session.project().panel(primary).is_some() {
-            self.card.show(ui, session, Some(primary));
+            let contour_editing = self.contour_edit.as_ref().is_some_and(|edit| edit.target().id() == primary);
+            let single_selection = self.selection.ids().len() == 1;
+            let action = self.card.show(ui, session, Some(primary), contour_editing, single_selection);
+            if action == PanelAction::StartContour {
+                self.start_contour_edit(session.project(), ContourTarget::Panel(primary));
+            }
         } else if session.project().object(primary).is_some() {
             let single_selection = self.selection.ids().len() == 1;
-            let action = self.object_card.show(ui, session, primary, self.mesh_edit.as_ref(), single_selection);
+            let contour_editing = self.contour_edit.as_ref().is_some_and(|edit| edit.target().id() == primary);
+            let action =
+                self.object_card.show(ui, session, primary, self.mesh_edit.as_ref(), contour_editing, single_selection);
             match action {
-                MeshEditAction::None => {}
-                MeshEditAction::Toggle => {
+                ObjectAction::None => {}
+                ObjectAction::Toggle => {
                     if self.mesh_edit.is_some() {
                         self.end_mesh_edit();
                     } else {
                         self.start_mesh_edit(session.project());
                     }
                 }
-                MeshEditAction::Element(element) => self.set_mesh_element(element),
+                ObjectAction::Element(element) => self.set_mesh_element(element),
+                ObjectAction::StartContour => {
+                    self.start_contour_edit(session.project(), ContourTarget::Object(primary));
+                }
             }
         } else if session.project().camera(primary).is_some() {
             self.camera_card.show(ui, session, primary);
@@ -572,8 +677,8 @@ mod tests {
 
     use furnicraft_engine::NodePropertySet;
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
-    use furnicraft_model::{FurnType, Geometry, Mesh, Placement, PropertyValue, SYSTEM_FURNTYPE};
-    use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_model::{Container, FurnType, Geometry, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE};
+    use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
     fn cube_project() -> (Project, Id) {
         let mut project = sample_project();
@@ -581,6 +686,30 @@ mod tests {
         let mesh = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
         let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("add object");
         (project, id)
+    }
+
+    /// A project whose root holds one contour panel with a 700 x 500 ring.
+    fn contour_panel_project() -> (Project, Id) {
+        let width = Length::from_millimetres(700).expect("width");
+        let height = Length::from_millimetres(500).expect("height");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [width, Length::ZERO],
+            [width, height],
+            [Length::ZERO, height],
+        ])
+        .expect("ring");
+        let panel = Panel::new_contour(
+            Id::new(2).expect("id"),
+            "Shelf",
+            ring,
+            None,
+            sample_panel_thickness(),
+            Placement::IDENTITY,
+        )
+        .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        (Project::new(root).expect("project"), Id::new(2).expect("id"))
     }
 
     #[test]
@@ -634,6 +763,115 @@ mod tests {
         editor.selection.clear();
         editor.retain_mesh_edit(&project);
         assert!(editor.mesh_edit().is_none());
+    }
+
+    #[test]
+    fn contour_edit_starts_only_on_a_single_contour_node() {
+        let (project, panel) = contour_panel_project();
+        let mut editor = Editor::new();
+        assert!(!editor.start_contour_edit(&project, ContourTarget::Panel(panel)), "nothing is selected");
+
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        assert_eq!(editor.contour_edit().map(ContourEdit::target), Some(ContourTarget::Panel(panel)));
+        assert!(!editor.start_contour_edit(&project, ContourTarget::Panel(panel)), "one edit at a time");
+
+        editor.end_contour_edit();
+        assert!(editor.contour_edit().is_none());
+
+        let sample = sample_project();
+        let rectangle = Id::new(2).expect("id");
+        editor.select_node(Some(rectangle));
+        assert!(!editor.start_contour_edit(&sample, ContourTarget::Panel(rectangle)), "a rectangle panel has no ring");
+
+        editor.selection.replace_all(vec![panel, project.root().id()]);
+        assert!(
+            !editor.start_contour_edit(&project, ContourTarget::Panel(panel)),
+            "a multi-selection cannot enter contour editing"
+        );
+    }
+
+    #[test]
+    fn contour_edit_ends_on_a_selection_change_or_a_removed_target() {
+        let (mut project, panel) = contour_panel_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+
+        editor.select_node(Some(project.root().id()));
+        editor.retain_contour_edit(&project);
+        assert!(editor.contour_edit().is_none(), "a selection change leaves the mode");
+
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        project.remove_node(panel).expect("remove the panel");
+        editor.retain_contour_edit(&project);
+        assert!(editor.contour_edit().is_none(), "a removed target leaves the mode");
+    }
+
+    #[test]
+    fn applying_a_contour_edit_is_one_undoable_command() {
+        let (project, panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(session.project(), ContourTarget::Panel(panel)));
+        let segment = editor.contour_edit().and_then(|edit| edit.draft().id_at(1)).expect("right edge");
+        editor
+            .contour_edit_move_corner(segment, [Length::from_millimetres(800).expect("x"), Length::ZERO])
+            .expect("move the corner");
+        let revision = session.project().revision();
+        editor.apply_contour_edit(&mut session).expect("apply the outline");
+        assert!(editor.contour_edit().is_none(), "a successful apply leaves the mode");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        session.undo().expect("one undo restores the ring");
+        assert_eq!(
+            session.project().panel(panel).expect("panel").nominal_size().length(),
+            Length::from_millimetres(700).expect("length")
+        );
+    }
+
+    #[test]
+    fn applying_an_untouched_contour_edit_changes_nothing() {
+        let (project, panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(session.project(), ContourTarget::Panel(panel)));
+        let revision = session.project().revision();
+        editor.apply_contour_edit(&mut session).expect("leave the mode");
+        assert!(editor.contour_edit().is_none());
+        assert_eq!(session.project().revision(), revision, "an untouched draft dispatches nothing");
+        assert!(!session.can_undo(), "no empty undo entry is left behind");
+    }
+
+    #[test]
+    fn entering_one_edit_mode_leaves_the_other() {
+        let (mut project, cube) = cube_project();
+        let width = Length::from_millimetres(700).expect("width");
+        let height = Length::from_millimetres(500).expect("height");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [width, Length::ZERO],
+            [width, height],
+            [Length::ZERO, height],
+        ])
+        .expect("ring");
+        let root = project.root().id();
+        let panel = project
+            .add_panel_contour(root, "Top", &ring, None, sample_panel_thickness(), Placement::IDENTITY)
+            .expect("contour panel");
+
+        let mut editor = Editor::new();
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        assert!(editor.mesh_edit().is_none(), "contour editing replaces mesh editing");
+
+        editor.select_node(Some(cube));
+        assert!(editor.start_mesh_edit(&project));
+        assert!(editor.contour_edit().is_none(), "mesh editing replaces contour editing");
     }
 
     #[test]

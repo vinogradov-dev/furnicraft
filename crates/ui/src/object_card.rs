@@ -18,15 +18,17 @@ use crate::command::{dispatch, json};
 use crate::mesh_edit::{MeshEdit, MeshElement};
 use crate::section::section;
 
-/// What the object card asks the editor to do with the mesh-edit session.
+/// What the object card asks the editor to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MeshEditAction {
+pub(crate) enum ObjectAction {
     /// Nothing was pressed.
     None,
     /// Enter or leave sub-object editing.
     Toggle,
     /// Switch between vertex and face selection.
     Element(MeshElement),
+    /// Enter contour editing on this constructive object.
+    StartContour,
 }
 
 /// Most selected vertices the card lists with their positions; the count covers the rest.
@@ -100,23 +102,25 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
 impl ObjectCard {
     /// Draws the card for the selected object and dispatches accepted edits.
     ///
-    /// Returns what the user asked to do with sub-object editing; the editor owns the mode and
-    /// validates that the object is a mesh before it starts.
+    /// Returns what the user asked to do with sub-object or contour editing; the editor owns both
+    /// modes. `contour_editing` tells the card that this object is already being reshaped in the
+    /// viewport, so it shows the state instead of the entry button.
     pub(crate) fn show(
         &mut self,
         ui: &mut Ui,
         session: &mut Session,
         object_id: Id,
         mesh_edit: Option<&MeshEdit>,
+        contour_editing: bool,
         single_selection: bool,
-    ) -> MeshEditAction {
+    ) -> ObjectAction {
         let Some(summary) = object_summary(session.project(), object_id) else {
             self.draft = None;
             self.contour_draft = None;
             self.confirm_collapse = false;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return MeshEditAction::None;
+            return ObjectAction::None;
         };
         if self.draft.as_ref().is_none_or(|draft| draft.object != object_id) {
             self.error = None;
@@ -137,9 +141,15 @@ impl ObjectCard {
 
         let (rename, name_error) = self.name_section(ui, &summary);
         self.geometry_section(ui, &summary);
-        let action = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
-        let contour_result = self.contour_section(ui, &summary);
-        let (collapse, cancel) = if is_mesh { (false, false) } else { self.collapse_section(ui, single_selection) };
+        let mut action = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
+        if self.contour_edit_section(ui, &summary, contour_editing, single_selection) {
+            action = ObjectAction::StartContour;
+        }
+        // The viewport owns the working copy while the mode is live; a text replacement or a
+        // collapse would silently make that copy stale.
+        let contour_result = if contour_editing { None } else { self.contour_section(ui, &summary) };
+        let (collapse, cancel) =
+            if is_mesh || contour_editing { (false, false) } else { self.collapse_section(ui, single_selection) };
 
         if let Some(error) = name_error {
             self.error = Some(error);
@@ -242,9 +252,9 @@ impl ObjectCard {
         summary: &ObjectSummary,
         mesh_edit: Option<&MeshEdit>,
         single_selection: bool,
-    ) -> MeshEditAction {
+    ) -> ObjectAction {
         ui.separator();
-        let mut action = MeshEditAction::None;
+        let mut action = ObjectAction::None;
         section(ui, "object.mesh_edit", "Mesh editing", true, |ui| {
             if summary.contour.is_some() {
                 ui.label("Collapse the object to a mesh before editing its elements.");
@@ -252,7 +262,7 @@ impl ObjectCard {
                 let editing = mesh_edit.is_some_and(|edit| edit.object() == object_id);
                 let label = if editing { "Done" } else { "Edit mesh" };
                 if ui.button(label).clicked() {
-                    action = MeshEditAction::Toggle;
+                    action = ObjectAction::Toggle;
                 }
                 if let Some(edit) = mesh_edit.filter(|edit| edit.object() == object_id) {
                     let current = edit.element();
@@ -262,7 +272,7 @@ impl ObjectCard {
                         ui.selectable_value(&mut choice, MeshElement::Face, "Faces");
                     });
                     if choice != current {
-                        action = MeshEditAction::Element(choice);
+                        action = ObjectAction::Element(choice);
                     }
                 }
             } else {
@@ -297,6 +307,35 @@ impl ObjectCard {
             }
         });
         action
+    }
+
+    /// Draws the entry point into the viewport contour edit mode.
+    ///
+    /// Only a constructive object has a contour to reshape; a mesh object returns `false` and shows
+    /// nothing. The editor owns the working copy and validates the object again before it starts.
+    fn contour_edit_section(
+        &self,
+        ui: &mut Ui,
+        summary: &ObjectSummary,
+        contour_editing: bool,
+        single_selection: bool,
+    ) -> bool {
+        if summary.contour.is_none() {
+            return false;
+        }
+        let mut requested = false;
+        ui.separator();
+        section(ui, "object.contour_edit", "Contour editing", true, |ui| {
+            if contour_editing {
+                ui.label("Editing the contour in the viewport. Apply or cancel in the viewport toolbar.");
+            } else if !single_selection {
+                ui.label("Select only this object to edit its contour.");
+            } else {
+                ui.label("Drag corners in the viewport; double-click a side to split it.");
+                requested = ui.button("Edit contour").clicked();
+            }
+        });
+        requested
     }
 
     /// Draws the contour editor; returns the parsed replacement when Apply was pressed.

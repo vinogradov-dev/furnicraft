@@ -14,6 +14,7 @@
     clippy::unreachable
 )]
 
+mod contour_gizmo;
 mod file_menu;
 mod gizmo;
 mod gizmo_math;
@@ -42,6 +43,7 @@ use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
 use furnicraft_ui::{Editor, MeshElement};
 
+use crate::contour_gizmo::ContourGizmo;
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
 use crate::rotate_gizmo::RotateGizmo;
@@ -87,6 +89,7 @@ struct FurniCraftApp {
     translate_gizmo: TranslateGizmo,
     rotate_gizmo: RotateGizmo,
     vertex_gizmo: VertexGizmo,
+    contour_gizmo: ContourGizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
     uploaded_preview: Option<PreviewKey>,
@@ -130,6 +133,7 @@ impl FurniCraftApp {
             translate_gizmo: TranslateGizmo::default(),
             rotate_gizmo: RotateGizmo::default(),
             vertex_gizmo: VertexGizmo::default(),
+            contour_gizmo: ContourGizmo::default(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             uploaded_preview: None,
@@ -162,6 +166,7 @@ impl FurniCraftApp {
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
+        self.contour_gizmo = ContourGizmo::default();
         self.highlighted.clear();
         self.uploaded_preview = None;
         self.extra = extra;
@@ -252,7 +257,7 @@ impl FurniCraftApp {
 
     /// The scene change the active gizmo is previewing.
     fn preview(&self) -> Option<Preview<'_>> {
-        if self.editor.mesh_edit().is_some() {
+        if self.editor.contour_edit().is_some() || self.editor.mesh_edit().is_some() {
             return None;
         }
         match self.mode {
@@ -262,7 +267,13 @@ impl FurniCraftApp {
     }
 
     /// The preview currently shown by the renderer.
+    ///
+    /// A contour edit paints its working copy as an overlay; the document solid is not rebuilt until
+    /// the single command that applies the draft.
     fn preview_key(&self) -> Option<PreviewKey> {
+        if self.editor.contour_edit().is_some() {
+            return None;
+        }
         if self.editor.mesh_edit().is_some() {
             return self.vertex_gizmo.preview_key();
         }
@@ -270,6 +281,19 @@ impl FurniCraftApp {
             TransformMode::Move => self.translate_gizmo.preview_key(),
             TransformMode::Rotate => self.rotate_gizmo.preview_key(),
         }
+    }
+
+    /// Applies the live contour draft as one command and rebuilds the scene.
+    fn apply_contour_edit(&mut self) -> Result<(), String> {
+        self.editor.apply_contour_edit(&mut self.session)?;
+        self.contour_gizmo.reset();
+        self.sync_scene()
+    }
+
+    /// Leaves contour editing and throws the working copy away.
+    fn cancel_contour_edit(&mut self) {
+        self.editor.end_contour_edit();
+        self.contour_gizmo.reset();
     }
 
     /// Re-uploads the scene when the drag preview moved to a new position.
@@ -381,7 +405,9 @@ impl FurniCraftApp {
 
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
-        let mesh_object = self.editor.mesh_edit().map(|edit| edit.object());
+        // A contour edit owns the pointer: the object gizmo and picking would fight the corner drag.
+        let contour_editing = self.editor.contour_edit().is_some();
+        let mesh_object = if contour_editing { None } else { self.editor.mesh_edit().map(|edit| edit.object()) };
         // Face mode moves the union of the selected faces, so both sub-object modes feed the same
         // vertex gizmo and dispatch the same vertex command.
         let mesh_vertices = mesh_object.map(|object| self.mesh_selection_vertices(object)).unwrap_or_default();
@@ -409,12 +435,28 @@ impl FurniCraftApp {
             Err(error) => self.last_error = Some(error),
         }
 
+        if contour_editing {
+            match self.contour_gizmo.update(
+                &response,
+                rect,
+                self.scene.camera,
+                self.session.project(),
+                &mut self.editor,
+            ) {
+                Ok(true) => ui.ctx().request_repaint(),
+                Ok(false) => {}
+                Err(error) => self.last_error = Some(error),
+            }
+        } else {
+            self.contour_gizmo.reset();
+        }
+
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        let update: Result<Option<PlacementCommit>, String> = if mesh_object.is_some() {
+        let update: Result<Option<PlacementCommit>, String> = if contour_editing || mesh_object.is_some() {
             Ok(None)
         } else {
             match self.mode {
@@ -437,12 +479,16 @@ impl FurniCraftApp {
         // A camera or a light has no drawable, so its glyph and its contribution to the frame are
         // driven by this list rather than by the uploaded geometry.
         let previewed = self.previewed_scene_placements();
-        let dragging = if mesh_object.is_some() {
+        let dragging = if contour_editing {
+            self.contour_gizmo.is_dragging()
+        } else if mesh_object.is_some() {
             self.vertex_gizmo.is_dragging()
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if mesh_object.is_some() {
+        let consumed_click = if contour_editing {
+            true
+        } else if mesh_object.is_some() {
             self.vertex_gizmo.consumed_click()
         } else {
             match self.mode {
@@ -481,7 +527,9 @@ impl FurniCraftApp {
         // The composite camera follows the navigable view unless an authored camera wins.
         self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
 
-        if dragging || response.dragged() {
+        if contour_editing {
+            ui.ctx().set_cursor_icon(self.contour_gizmo.cursor());
+        } else if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
@@ -497,7 +545,8 @@ impl FurniCraftApp {
         } else {
             response.clicked() || response.double_clicked()
         };
-        if clicked
+        if !contour_editing
+            && clicked
             && !pointer_over_gizmo
             && !consumed_click
             && let Some(pointer) = response.interact_pointer_pos()
@@ -588,7 +637,9 @@ impl FurniCraftApp {
             selection: self.editor.selected_nodes(),
         };
         // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
-        if let Some(object) = mesh_object {
+        if let Some(edit) = self.editor.contour_edit() {
+            self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+        } else if let Some(object) = mesh_object {
             let target = vertex_gizmo::MeshTarget {
                 camera: self.scene.camera,
                 project: self.session.project(),
@@ -713,6 +764,8 @@ impl FurniCraftApp {
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut reset = false;
+            let mut apply_contour = false;
+            let mut cancel_contour = false;
             let mesh_selection = self.editor.mesh_edit().map(|edit| {
                 let count = match edit.element() {
                     MeshElement::Vertex => edit.vertices().len(),
@@ -720,24 +773,39 @@ impl FurniCraftApp {
                 };
                 (edit.element(), count)
             });
+            let contour_edit = self
+                .editor
+                .contour_edit()
+                .map(|edit| (edit.draft().segments().len(), edit.is_dirty()));
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                ui.label("Gizmo");
-                ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
-                ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
-                ui.separator();
-                if let Some((element, count)) = mesh_selection {
-                    ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
+                if let Some((segments, dirty)) = contour_edit {
+                    ui.label(format!(
+                        "Contour edit · {segments} segments{}",
+                        if dirty { " · modified" } else { "" }
+                    ));
+                    apply_contour = ui.button("Apply").clicked();
+                    cancel_contour = ui.button("Cancel").clicked();
                     ui.separator();
-                    ui.label("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
+                    ui.label("Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
                 } else {
-                    ui.label(
-                        "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
-                    );
+                    ui.label("Gizmo");
+                    ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
+                    ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
+                    ui.separator();
+                    if let Some((element, count)) = mesh_selection {
+                        ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
+                        ui.separator();
+                        ui.label("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
+                    } else {
+                        ui.label(
+                            "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
+                        );
+                    }
                 }
                 if let Some(camera) = self
                     .session
@@ -753,6 +821,14 @@ impl FurniCraftApp {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
             });
+            if apply_contour
+                && let Err(error) = self.apply_contour_edit()
+            {
+                self.last_error = Some(error);
+            }
+            if cancel_contour {
+                self.cancel_contour_edit();
+            }
             if reset {
                 self.reset_view();
             }
@@ -840,7 +916,18 @@ impl eframe::App for FurniCraftApp {
             self.last_error = Some(error);
         }
         let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        if escape
+        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if self.editor.contour_edit().is_some() {
+            // The working copy is dropped by Escape and applied by Enter; typing in a field keeps
+            // both keys for the field, and a corner drag keeps them for the drag.
+            if !ui.ctx().text_edit_focused() && !self.contour_gizmo.is_dragging() {
+                if escape {
+                    self.cancel_contour_edit();
+                } else if enter && let Err(error) = self.apply_contour_edit() {
+                    self.last_error = Some(error);
+                }
+            }
+        } else if escape
             && !self.translate_gizmo.is_dragging()
             && !self.rotate_gizmo.is_dragging()
             && !self.vertex_gizmo.is_dragging()

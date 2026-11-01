@@ -66,6 +66,16 @@ enum Action {
     ClearBow { panel: Id, edge: EdgeId },
 }
 
+/// What the panel card asks the editor to do with the contour edit mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PanelAction {
+    /// Nothing was pressed.
+    #[default]
+    None,
+    /// Enter contour editing on this panel.
+    StartContour,
+}
+
 /// The three states of a corner in the outline editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CornerMode {
@@ -88,12 +98,23 @@ impl CornerMode {
 
 impl PanelCard {
     /// Draws the card for the current panel and dispatches any accepted edits.
-    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, selected: Option<Id>) {
+    ///
+    /// Returns what the user asked to do with contour editing; the editor owns the mode and the
+    /// working copy. `contour_editing` tells the card that this panel is already being reshaped in
+    /// the viewport, so it shows the state instead of the entry button.
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        selected: Option<Id>,
+        contour_editing: bool,
+        single_selection: bool,
+    ) -> PanelAction {
         let Some(panel_id) = selected else {
             self.draft = None;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return;
+            return PanelAction::None;
         };
 
         if self.draft.as_ref().is_none_or(|draft| draft.panel != panel_id) {
@@ -104,15 +125,16 @@ impl PanelCard {
             self.draft = None;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return;
+            return PanelAction::None;
         };
         let Some(draft) = self.draft.as_mut() else {
             ui.label("Select a node in the scene tree.");
-            return;
+            return PanelAction::None;
         };
 
         let mut actions = Vec::new();
         let mut errors = Vec::new();
+        let mut contour_request = PanelAction::None;
         ui.separator();
 
         section(ui, "panel.name", "Name", true, |ui| {
@@ -132,28 +154,32 @@ impl PanelCard {
 
         section(ui, "panel.dimensions", "Dimensions", true, |ui| {
             section(ui, "panel.dimensions.nominal_size", "Nominal size", true, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Length");
-                    let length_response =
-                        ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
-                    ui.label("Width");
-                    let width_response =
-                        ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
-                    let clicked = ui.button("Apply size").clicked();
-                    if length_response.lost_focus() || width_response.lost_focus() || clicked {
-                        match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
-                            (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
-                                Ok(nominal_size) if nominal_size != panel.nominal_size() => {
-                                    actions.push(Action::Resize { panel: panel_id, nominal_size });
-                                }
-                                Ok(_) => {}
-                                Err(error) => errors.push(error.to_string()),
-                            },
-                            (Err(error), _) => errors.push(format!("Length: {error}")),
-                            (_, Err(error)) => errors.push(format!("Width: {error}")),
+                if panel.is_contour() {
+                    ui.label("The contour ring sets the length and width.");
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Length");
+                        let length_response =
+                            ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
+                        ui.label("Width");
+                        let width_response =
+                            ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
+                        let clicked = ui.button("Apply size").clicked();
+                        if length_response.lost_focus() || width_response.lost_focus() || clicked {
+                            match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
+                                (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
+                                    Ok(nominal_size) if nominal_size != panel.nominal_size() => {
+                                        actions.push(Action::Resize { panel: panel_id, nominal_size });
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => errors.push(error.to_string()),
+                                },
+                                (Err(error), _) => errors.push(format!("Length: {error}")),
+                                (_, Err(error)) => errors.push(format!("Width: {error}")),
+                            }
                         }
-                    }
-                });
+                    });
+                }
             });
 
             section(ui, "panel.dimensions.resolved", "Resolved", true, |ui| {
@@ -167,7 +193,7 @@ impl PanelCard {
         });
         ui.separator();
         section(ui, "panel.shape", "Shape", true, |ui| {
-            self.show_shape(ui, panel_id, panel, &mut actions);
+            contour_request = self.show_shape(ui, panel_id, panel, contour_editing, single_selection, &mut actions);
         });
         ui.separator();
         section(ui, "panel.banding", "Banding", true, |ui| {
@@ -185,7 +211,7 @@ impl PanelCard {
         if !errors.is_empty() {
             self.error = Some(errors.join("\n"));
             ui.ctx().request_repaint();
-            return;
+            return contour_request;
         }
         if !actions.is_empty() {
             self.error = None;
@@ -200,6 +226,7 @@ impl PanelCard {
             }
             ui.ctx().request_repaint();
         }
+        contour_request
     }
 
     fn show_material(
@@ -232,13 +259,47 @@ impl PanelCard {
         });
     }
 
-    fn show_shape(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+    /// Draws the outline section and reports a contour-edit request.
+    ///
+    /// A contour panel has no rectangle corners or bows: its ring is the outline, so the card shows
+    /// the ring summary and the entry point into the viewport edit mode instead.
+    fn show_shape(
+        &self,
+        ui: &mut Ui,
+        panel_id: Id,
+        panel: &Panel,
+        contour_editing: bool,
+        single_selection: bool,
+        actions: &mut Vec<Action>,
+    ) -> PanelAction {
+        let mut request = PanelAction::None;
         section(ui, "panel.shape.outline", "Outline", true, |ui| {
-            self.show_outline(ui, panel_id, panel, actions);
+            if panel.is_contour() {
+                if let Some(contour) = panel.outline_contour() {
+                    let segments = contour.segments().len();
+                    let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
+                    ui.label(format!("Contour ring · {segments} segments"));
+                    if arcs > 0 {
+                        ui.label(format!("Arcs  {arcs}"));
+                    }
+                }
+                if contour_editing {
+                    ui.label("Editing the outline in the viewport. Apply or cancel in the viewport toolbar.");
+                } else if !single_selection {
+                    ui.label("Select only this panel to edit its contour.");
+                } else if ui.button("Edit contour").clicked() {
+                    request = PanelAction::StartContour;
+                }
+            } else {
+                self.show_outline(ui, panel_id, panel, actions);
+            }
         });
-        section(ui, "panel.shape.bowed_edges", "Bowed edges", true, |ui| {
-            self.show_bowed_edges(ui, panel_id, panel, actions);
-        });
+        if !panel.is_contour() {
+            section(ui, "panel.shape.bowed_edges", "Bowed edges", true, |ui| {
+                self.show_bowed_edges(ui, panel_id, panel, actions);
+            });
+        }
+        request
     }
 
     fn show_outline(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {

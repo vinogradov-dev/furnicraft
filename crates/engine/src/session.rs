@@ -159,7 +159,7 @@ mod tests {
     use crate::panel_cmds::{
         CutoutCreate, PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
         PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
-        PanelRename, PanelResize,
+        PanelOutlineSet, PanelRename, PanelResize,
     };
 
     fn sample_session() -> Session {
@@ -281,6 +281,44 @@ mod tests {
         unknown_material.material = furnicraft_model::MaterialId::new(9_999).expect("id");
         assert!(!spec.enabled(&session, &json_params(&unknown_material)));
         assert_eq!(session.project().revision(), before);
+    }
+
+    #[test]
+    fn panel_outline_set_edits_a_contour_panel_in_one_undo_step() {
+        let (mut session, source) = session_with_contour_source();
+        let create = json_params(&contour_panel_create(&session, source, "Top"));
+        let created = session
+            .dispatch("panel.contour.create", &create)
+            .expect("create contour panel")
+            .created_id()
+            .expect("the command creates a panel");
+        let original = session.project().panel(created).expect("panel").outline_contour().expect("ring").clone();
+        let segment = original.id_at(1).expect("the right edge");
+        let moved = original
+            .move_corner(segment, [Length::from_millimetres(800).expect("x"), Length::ZERO])
+            .expect("move the top of the right edge");
+        let request = PanelOutlineSet { panel: created, contour: moved.clone() };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.outline.set").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&request)));
+
+        let before = session.project().revision();
+        session.dispatch("panel.outline.set", &json_params(&request)).expect("set the outline");
+        let panel = session.project().panel(created).expect("panel");
+        assert_eq!(panel.outline_contour(), Some(&moved));
+        assert_eq!(panel.nominal_size().length(), Length::from_millimetres(800).expect("length"));
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        session.undo().expect("one undo restores the whole edit");
+        assert_eq!(session.project().panel(created).expect("panel").outline_contour(), Some(&original));
+
+        let rectangle = Id::new(2).expect("id");
+        let refused = PanelOutlineSet { panel: rectangle, contour: moved };
+        assert!(!spec.enabled(&session, &json_params(&refused)));
+        assert!(matches!(
+            session.dispatch("panel.outline.set", &json_params(&refused)),
+            Err(CommandError::Model(ProjectError::PanelNotContour { id })) if id == rectangle
+        ));
     }
 
     #[test]

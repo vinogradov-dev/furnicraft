@@ -68,7 +68,7 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     });
 
     let entries = backlog_entries(&backlog);
-    for section in ["Now", "Next"] {
+    for section in ["Now", "Bugs", "Next"] {
         let tasks: Vec<(TaskStatus, String, String, Option<String>)> = entries
             .iter()
             .filter(|entry| entry.section == section)
@@ -491,6 +491,24 @@ mod tests {
         assert!(!text.contains("SESSION"), "an idle plan must not show a session block: {text}");
         assert!(!text.contains("QUESTIONS"), "a missing questions.md omits the section: {text}");
         assert!(!text.contains("DEBT"), "a missing debt.md omits the section: {text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_bug_section_is_its_own_block() {
+        let backlog = "## Now\n\n\
+                       - `[ ]` **A6** contour edit commands `files: crates/engine/src`\n\n\
+                       ## Bugs\n\n\
+                       - `[ ]` **X1** a flap triangle across a concave cap `files: crates/mesh/src/lib.rs`\n\n\
+                       ## Next\n\n\
+                       - `[ ]` **D2** the contour panel card `files: crates/ui/src/panel_card.rs`\n\n\
+                       ## Done\n\n\
+                       - `[x]` **A2** ring of segments — `0833b4c`\n";
+        let status = "STATE: milestone=M7 phase=A task=A6 state=idle base=abc1234 updated=2026-10-30\n";
+        let root = project("bugs", &[("plan/STATUS.md", status), ("plan/BACKLOG.md", backlog)]);
+        let text = dashboard_with(&root, &opts(80, false), &head_same()).expect("the plan parses");
+        assert!(text.contains("┌ BUGS ─ plan/BACKLOG.md"), "a defect needs its own block: {text}");
+        assert!(text.contains("X1"), "the defect is listed with its id: {text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
