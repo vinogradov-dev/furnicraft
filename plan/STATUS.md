@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A7 state=idle base=5663bd7 updated=2026-11-02
+STATE: milestone=M7 phase=S task=S2 state=doing base=ebee0a9 updated=2026-11-02
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -18,6 +18,8 @@ plan is broken.
   `Contour` = closed ring of directed line and arc `ContourSegment`s, each with a stable
   `ContourSegmentId` and a per-ring counter (ADR 0040, schema 13), and the object card, the extrusion
   and the file all read that one representation.
+- S2 is live: the domain-free `SolidPlan` in `param` becomes the one place that turns a feature list
+  into a kernel body. The SESSION note holds the steps; the first is `crates/param/src/solid.rs`.
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is either the nominal rectangle or a contour ring (D1). A contour panel keeps the
@@ -48,12 +50,12 @@ plan is broken.
 
 ## Next
 
-A7 is next: write the contour panel and the contour edit mode down in `docs/domain/` and an ADR, and
-fold the D1–D3 cutout rules into `docs/domain/panels.md`. Then S2 starts the shared shape layer: one
-`SolidPlan` and evaluator, S3 one contour conversion, G1–G2 exact region rings and booleans, and
-D4–D11 the panel outline, typed operation list, registry, card sections, groove/milling and banding
-operations. S4 adds the revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and
-P1–P3 follow. X2 waits for a decision on the cap limit (`plan/questions.md`).
+S2 is live: the domain-free `SolidPlan` in `param` becomes the one place that turns a feature list
+into a kernel body; the SESSION note holds the steps. After S2, A7 writes the contour panel docs, then
+S3 one contour conversion, G1–G2 exact region rings and booleans, and D4–D11 the panel outline, typed
+operation list, registry, card sections, groove/milling and banding operations. S4 adds the
+revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for
+a decision on the cap limit (`plan/questions.md`).
 
 ## Index
 
