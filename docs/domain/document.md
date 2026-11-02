@@ -228,6 +228,8 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 10 adds the constructive geometry payload: a closed contour and an ordered feature history whose mesh is derived. A version 9 object still loads as a baked mesh, and a constructive object is not editable as a mesh until it is collapsed.
 - Version 11 stores a constructive contour as directed line and arc segments instead of a point list, so an object can carry a round corner. A version 10 point list loads as a ring of lines, which is the same shape it described, and is saved back as segments.
 - Version 12 gives every contour segment a stable id and the ring a counter for the next one. A version 11 ring loads with ids `1..n`, so a later edit can name a segment instead of an index without renumbering the ring.
+- Version 13 adds the contour panel: a panel outline may be a stored ring, and ring banding is one record per segment. A version 12 panel loads with the rectangle outline and its edge and corner banding unchanged.
+- Version 14 lets a cutout outline be a contour ring. A version 13 cutout loads as a rectangle, and every value it stored keeps its place.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 

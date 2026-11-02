@@ -9,8 +9,10 @@ Related documents:
 
 Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.md),
 [0007](../decisions/0007-edge-banding-v1.md),
-[0008](../decisions/0008-panel-diagnostics.md) and
-[0009](../decisions/0009-contour-first-panel-model.md).
+[0008](../decisions/0008-panel-diagnostics.md),
+[0009](../decisions/0009-contour-first-panel-model.md),
+[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md) and
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md).
 
 ## 1. Terms
 
@@ -21,6 +23,8 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 - **Contour feature** — a corner radius or chamfer stored against a stable `VertexId`, or a signed bow stored against a stable `EdgeId`.
 - **Bow** — a circular arc replacing a straight edge. A positive sagitta bows outward from the nominal rectangle; a negative sagitta bows inward.
 - **Shaped panel** — a panel with at least one contour feature. Its nominal outline is the rectangle with those features applied.
+- **Contour panel** — a panel whose outline is a stored contour ring instead of the rectangle. Its ring is the finished outline; it has no corner features and no bows, and it is never resized to a rectangle.
+- **Ring segment** — one directed line or arc of a contour panel's ring, named by its stable `ContourSegmentId`. It is the banding unit of a contour panel, where an edge or a corner segment is the unit on a rectangle.
 - **Banding path** — a maximal tangent-continuous chain of nominal contour segments between sharp joints. One path is one banding unit.
 - **Nominal size** — the length and width entered in the panel card. It is not always the finished overall size.
 - **Core** — the actual length and width of the board after trimming for included edge banding.
@@ -41,7 +45,12 @@ Panel material and edge-banding material are described in [Materials and catalog
 ## 3. Local coordinate system
 
 - The world is Z-up. A panel has a local frame rigidly attached to its nominal outline.
-- The origin is the minimum corner of the **nominal** rectangle.
+- The origin is the minimum corner of the **nominal** outline. For a rectangle panel that is the
+  nominal rectangle; for a contour panel it is the minimum corner of the stored ring, and the ring's
+  bounds are the nominal size.
+- An outline edit may move a contour ring's minimum corner. The command then re-anchors the ring at
+  the panel zero and moves the placement, pivot and machining by the inverse offset, so the
+  world-space shape and every feature stay where the user drew them.
 - `Placement` anchors this nominal zero. Included bottom and left banding move the core inward, not
   the whole panel outward; non-included banding may extend outside the nominal rectangle, and bounds
   are computed from every part of the group.
@@ -74,6 +83,9 @@ When creating or editing a panel, the user sets:
 - length (nominal);
 - width (nominal);
 - panel material.
+
+A contour panel is the exception: its nominal size comes from the ring, so creation chooses the
+source ring and the material, and the card shows no length or width fields.
 
 Thickness is not editable: it comes from the panel material (see [Materials and catalogue](materials.md)). The card shows it as a read-only property. If the material is not found, the card shows `<no material id %d>` (or a similar marker) and the last known thickness with a warning; the loading behaviour is described in [Scene document](document.md).
 
@@ -149,6 +161,31 @@ still waits for the contour-aware cutout union. Outline controls are never locke
 machining: a shape change keeps every edge banding record, and a corner banding belongs to its corner
 segment, so changing a chamfer to a radius keeps it while removing the treatment deletes it.
 
+### 4.6. Contour panels
+
+A contour panel is the second outline source. `panel.contour.create` copies the ring of a
+constructive object into a new panel:
+
+- the ring is translated so its minimum corner is the panel-local zero, and its bounds become the
+  nominal size; segment ids travel with their curves;
+- the outline variant is fixed at creation. A rectangle panel never converts, and a contour panel is
+  not reshaped by corner features or bows; the file reader rejects both on a ring;
+- `panel.resize` is refused, because the ring is the size. A different size is another outline edit
+  or another panel;
+- the body is the ring extruded from `z = 0` to the material thickness, and a band strip follows each
+  banded ring segment;
+- thickness and the missing-material rules are the same as for a rectangle panel. The thickness stays
+  read-only and comes from the material.
+
+The card shows the ring summary — the number of segments and, when there are any, the number of arcs
+— instead of length and width fields, and offers one `Edit contour` entry. It shows no corner, bow or
+cutout controls, because those describe a rectangle or wait for their own section. The viewport edit
+mode is described in [Geometry objects](geometry.md).
+
+Machining is still stored in nominal panel-local coordinates, and a cutout tool is subtracted from
+the contour body in 3D. The core trace and the cutout fit still work on the bounds rectangle of the
+ring; a ring whose material does not fill those bounds is not yet traced as a region.
+
 ## 5. Edge banding
 
 ### 5.1. Profile
@@ -167,14 +204,20 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 ### 5.3. Segments and application order
 
-- A banding belongs to one contour segment: an edge (ids 1..4) or a corner segment created by a
-  chamfer or a radius. A segment carries at most one banding.
+- A banding belongs to one contour segment: an edge (ids 1..4), a corner segment created by a
+  chamfer or a radius, or a ring segment of a contour panel. A segment carries at most one banding.
+- On a contour panel the segment is the `ContourSegmentId` itself. A ring segment is its own banding
+  unit: it is not grouped into a tangent path and no band is copied to a neighbour. One record belongs
+  to one segment, travels with its id and disappears with the segment. An outline edit that would drop
+  a segment carrying banding is refused instead of dropping the record silently.
 - Corner segments exist only while the corner has a treatment. Removing the treatment deletes the
   banding with the segment.
-- Edge and corner bandings share one ordered list. Adding a banding appends its segment; editing the
-  material, width or inclusion keeps its position; removing it preserves the order of the others.
+- Edge, corner and ring bandings share one ordered list of segment sources (`band_order`). Adding a
+  banding appends its segment; editing the material, width or inclusion keeps its position; removing
+  it preserves the order of the others.
 - The card lists the banded segments and offers only existing unbanded segments in the add control.
-  The order will later be reorderable; the last banding is drawn on top.
+  The order will later be reorderable; the last banding is drawn on top. On a contour panel the add
+  control offers the ring segments that carry no banding yet, and a label marks an arc segment.
 - A tangent path is contour grouping only. It no longer copies a banding to adjacent edges and a
   partially banded path is not an invalid state.
 - Order matters at joints: the later band covers the earlier one and is cut at its outer face.
@@ -188,6 +231,10 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
   non-included segment extends the outer envelope. Machining on a shaped panel is subtracted from the
   shaped body in 3D; adding new machining still waits for the contour-aware cutout union.
 - **Single banded edge at a corner.** With no earlier adjacent band the strip ends flush with the core side face. With an earlier adjacent band it is extended to that band's outer face along its own supporting curve — line or arc — and trimmed there.
+- **Contour panel joints.** Two ring segments meet at a sharp or a smooth joint like any other
+  segments, and each carries its own record. The later band still reaches an earlier neighbour's
+  outer face when that face is further out and is cut there; an included band keeps its radial butt
+  joint.
 - **Edge banding milling.** Rounding the banding faces and corner is a later operation and is outside the current scope.
 
 ### 5.5. Inclusion in size
@@ -195,12 +242,41 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 - `included_in_size = true`: the core is reduced by `thickness` on that segment; a bottom or left straight band on a rectangular panel also moves the core origin inward; the banding fills the freed space; the overall size does not grow.
 - `included_in_size = false`: the core is unchanged on that segment; the banding is added outside; the overall size grows by `thickness`.
 - On a shaped panel the rule applies to the segment itself: an included segment is offset inward and its tangent neighbours are not moved. A straight connector joins the step in the core outline.
+- On a contour panel the flag belongs to the ring segment's record and offsets that segment alone:
+  an included segment trims the core inward, a non-included one extends the outer envelope, and a
+  straight connector joins the step to its neighbours.
 - The flag belongs to the segment's banding record, not to the banding material.
 - Machining coordinates do not change when the flag changes: the machine works on the core, and the parametric layer applies the core origin when building the body and tools.
 
-## 6. Display and diagnostics
+## 6. Machining and cutouts
 
-### 6.1. Colours
+Machining is stored in nominal panel-local coordinates; the document stores the feature, never the
+removed solid. A cutout removes a volume from the panel body:
+
+- `CutoutShape::Rectangle` is a rectangle in the panel plane.
+- `CutoutShape::Contour` is a closed ring of directed lines and arcs, with the same ring rules as any
+  contour: at least three segments, closed, non-zero area and not self-intersecting. The schema moves
+  to 14; an older file without the variant loads unchanged.
+- The ring becomes a solid by sampling it into the kernel profile at the shared contour tolerance; the
+  document keeps the arcs. A through cutout removes the full thickness, a blind one removes material
+  from its entry face by its depth.
+- A **through** contour cutout must lie strictly inside the core: the core tracer works on rectangles,
+  so a ring that touched or crossed the boundary could open a notch or split the core without being
+  traced. A **blind** contour cutout may touch the core edge, because it removes no through material.
+- Whether two cutouts overlap is decided on the shape itself: a rectangle uses the exact rectangle
+  test, a ring takes part as its sampled chord polygon. Bounds alone are not enough. Two through
+  cutouts may overlap and merge; any other pair may not share area.
+- A contour cutout is a hole and takes no part in the rectangle-only core trace. The core must still
+  have positive area and remain one connected component after the through rectangle cutouts.
+- A panel shaped by corner features or bows still rejects a new cutout until the shaped-core union
+  lands. A contour panel accepts machining through the commands and subtracts the tool from its
+  ring body; the fit is checked against the bounds of the core ring, not its exact material region.
+- Machining coordinates never change when an included band moves the core origin; the body is built
+  in the nominal frame and the tool is placed there too.
+
+## 7. Display and diagnostics
+
+### 7.1. Colours
 
 - Colours are not stored in the scene document.
 - The base colour of a panel comes from the panel material. To distinguish panels that use the same material, a deterministic tint is applied from `panel.id()`, so the colour does not change when the scene is rebuilt.
@@ -208,7 +284,7 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 - If the panel material is missing, the panel is drawn in a neutral colour.
 - Later, colour and texture will come from the material; textures are a separate rendering task.
 
-### 6.2. Panel diagnostics
+### 7.2. Panel diagnostics
 
 Panel issues are computed during loading/rebuild and are not stored as data:
 
@@ -216,24 +292,36 @@ Panel issues are computed during loading/rebuild and are not stored as data:
 - a material id is absent from the catalogue;
 - an edge-banding material is missing;
 - a corner-banding material is missing;
+- a ring-banding material is missing;
 - the core is not positive;
 - machining no longer fits the new core;
 - the banding profile is unavailable and there is no fallback.
 
 A panel with an issue stays in the document, is drawn where possible and shows a warning in the card. A whole-file load error is reserved for scenes that cannot be read or recovered; see [Scene document](document.md).
 
-## 7. Panel commands
+## 8. Panel commands
 
 All changes are `engine` commands with stable ids and typed parameters. The UI never writes to the document directly.
 
 - `panel.create` — parent, name, nominal length, nominal width, material, placement. Thickness is not passed.
+- `panel.contour.create` — parent, name, a constructive object as the source ring, material,
+  placement. The ring is copied, anchored at the panel zero and becomes the outline; the panel is a
+  contour panel from then on.
 - `panel.rename` — panel, a non-blank name.
-- `panel.resize` — panel, nominal length, nominal width.
+- `panel.resize` — panel, nominal length, nominal width. A contour panel is refused: its ring sets the
+  size.
+- `panel.outline.set` — a contour panel and a new ring. The ring is anchored at the panel zero and its
+  bounds become the nominal size; the placement, pivot and machining move with the frame so the world
+  shape stays fixed, and an edit that drops a banded segment is refused.
 - `panel.material.set` — panel, material.
 - `panel.edge_banding.set` — panel, edge, material, included_in_size. The command applies to that edge segment only. A new banding is appended to the order; editing an existing one keeps its position.
 - `panel.edge_banding.clear` — panel, edge. Removes that edge's banding.
 - `panel.corner_banding.set` — panel, corner `VertexId`, material, included_in_size. The corner must currently have a chamfer or radius segment. A new banding is appended; editing keeps its position.
 - `panel.corner_banding.clear` — panel, corner `VertexId`. Removes the corner segment's banding.
+- `panel.ring_banding.set` — contour panel, ring segment `ContourSegmentId`, material and
+  included_in_size. The segment must belong to the stored ring. A new banding is appended; editing
+  keeps its position.
+- `panel.ring_banding.clear` — contour panel, ring segment. Removes that segment's banding.
 - `panel.corner.set` — panel, corner `VertexId`, and a feature: `Radius { radius }` or `Chamfer { incoming, outgoing }`. The two chamfer setbacks are measured along the incoming and outgoing edges and may differ.
 - `panel.corner.clear` — panel, corner `VertexId`. The corner becomes a point; its corner banding is removed with the segment.
 - `panel.bow.set` — panel, edge `EdgeId`, signed sagitta. Positive bows outward; negative inward. Zero is rejected; use `panel.bow.clear`.
@@ -248,10 +336,18 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 
 A panel owns its cutouts, banding and machining; the scene tree never splits it into child nodes. Panels and assemblies can be grouped, but only groups can be ungrouped: an assembly is a furniture component with its own identity, and dismantling it is a separate operation. Grouping is sibling-only: nodes under different parents need an explicit reparent operation, which is not part of this stage.
 
+An outline command is closed over its variant. A contour panel rejects `panel.resize`, `panel.corner.*`,
+`panel.bow.*`, `panel.edge_banding.*` and `panel.corner_banding.*`; a rectangle panel rejects
+`panel.outline.set` and `panel.ring_banding.*`. `panel.contour.create` validates the source object and
+the ring before it allocates an id. `panel.outline.set` runs the full ring validation — closed, at
+least three segments, non-zero area, no self-intersection, a usable panel size — and refuses an edit
+that would drop a ring segment carrying banding, so no band is lost silently. A failed outline command
+leaves the document, its revision and the id counter unchanged.
+
 Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
 commands keep the root immutable and preserve world transforms when a group is created or flattened.
 
-## 8. Panel tests
+## 9. Panel tests
 
 At minimum:
 
@@ -275,22 +371,37 @@ At minimum:
 - machining that no longer fits the core marks the panel as a problem panel without losing data;
 - overlapping through cutouts merge and a cutout crossing the boundary opens a notch;
 - a cutout that would split the core into disconnected pieces or remove it is rejected, and a loaded file with such a core is diagnosed;
-- machining keeps its core-local position when an included band moves the core origin.
+- machining keeps its core-local position when an included band moves the core origin;
+- a contour panel keeps the source ring, anchors its minimum corner at the panel zero, derives the
+  nominal size from the bounds and keeps every segment id;
+- a ring that does not start at zero is refused as a panel outline;
+- a rectangle panel never takes a contour outline, and a contour panel refuses a resize, a corner
+  feature, a bow and edge or corner banding;
+- a contour panel file that stores corner features, bows or rectangle banding is a readable error;
+- ring banding has one record per segment, editing it keeps its place, and clearing it returns the
+  segment to the add picker;
+- an outline edit that drops a banded segment is refused and leaves the panel unchanged;
+- an outline edit that moves the minimum corner keeps the world shape, the pivot and the machining in
+  place;
+- a ring-banding material missing from the catalogue is a diagnostic, not a load error;
+- a through contour cutout is refused when it touches or crosses the core edge, while a blind contour
+  cutout may touch it; overlap is decided on the sampled ring.
 
 Catalogue and scene-loading tests live in [Materials and catalogue](materials.md) and [Scene document](document.md).
 
-## 9. Open questions
+## 10. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes for rectangular panels (ADR 0012). Shaped cores are next.
+2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes for rectangular panels (ADR 0012). Shaped cores are next. A contour panel's core trace and cutout fit still use the bounds rectangle of its ring, so a ring that does not fill those bounds is traced as if it did.
 3. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
 4. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
 5. Edge banding milling: rounding the faces and corner.
 6. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
-no-division invariant — are recorded in ADR 0009; segment banding in ADR 0014, and band joints on
-straight and arc segments in ADRs 0015 and 0016. Corner features, bows, tangent paths, chamfer corner
-banding, shaped-panel band strips and analytic arc band joints are implemented; the rectangular cutout
-union and its `Region` ring tracing are implemented, and shaped-core rings plus cutout banding are
-staged next.
+no-division invariant — are recorded in ADR 0009; segment banding in ADR 0014, band joints on straight
+and arc segments in ADRs 0015 and 0016, and contour panels with their edit mode in ADR 0042. Corner
+features, bows, tangent paths, chamfer corner banding, shaped-panel band strips and analytic arc band
+joints are implemented; the rectangular cutout union and its `Region` ring tracing are implemented,
+and contour panels, ring banding and the viewport edit mode are implemented on top of the ring from
+ADR 0040. Shaped-core rings plus cutout banding are staged next.
