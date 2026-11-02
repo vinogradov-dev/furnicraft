@@ -22,10 +22,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S1** decompose `crates/model/src/lib.rs` by responsibility: one module per value family,
-  panel rules split into geometry, banding and machining, `Project` split into wire, error, derived
-  queries and command families, tree traversal in one place; public API, serde and behaviour
-  unchanged. `files: crates/model/src, plan/map.md`
 - `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
   `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 
@@ -37,7 +33,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
   50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
   segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
-  `files: crates/param/src/lib.rs, crates/model/src/lib.rs`
+  `files: crates/param/src/lib.rs, crates/model/src/object.rs`
 
 ## Next
 
@@ -57,6 +53,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **S1** decompose `crates/model/src/lib.rs` by responsibility: one module per value family,
+  panel rules split into geometry, banding and machining, `Project` split into wire, error, derived
+  queries and command families, tree traversal in one place; public API, serde and behaviour
+  unchanged — `43583b4`
 - `[x]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the core, through
   and blind, the tool built by extruding the sampled ring; the schema moves to 14 — `2167e2b`
 - `[x]` **D2** the contour panel card: the ring summary, the material-driven thickness, the material

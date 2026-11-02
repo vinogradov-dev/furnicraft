@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=S task=S1 state=doing base=90ef57c updated=2026-11-02
+STATE: milestone=M7 phase=A task=A7 state=idle base=43583b4 updated=2026-11-02
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
@@ -48,11 +48,11 @@ plan is broken.
 
 ## Next
 
-S1 is the live task: split `crates/model/src/lib.rs` by responsibility without changing behaviour,
-the public API or the serialized schema. A7 follows it: write the contour panel and the contour edit
-mode down in `docs/domain/` and an ADR, and fold the D1–D3 cutout rules into
-`docs/domain/panels.md`. B1 (fillet and chamfer on a contour corner) follows. X2 waits for a decision
-on the cap limit (`plan/questions.md`). P1–P3 in `plan/BACKLOG.md` continue the gate itself, now
+S1 is complete: `crates/model/src/lib.rs` is only the facade, panel rules live in `panel/`, and the
+document lives in `project/` with wire, error, queries and one module per command family. A7 is next:
+write the contour panel and the contour edit mode down in `docs/domain/` and an ADR, and fold the
+D1–D3 cutout rules into `docs/domain/panels.md`. B1 (fillet and chamfer on a contour corner) follows.
+X2 waits for a decision on the cap limit (`plan/questions.md`). P1–P3 continue the gate itself,
 inside `state-contract`, starting with `status` printing the resume block.
 
 ## Index
