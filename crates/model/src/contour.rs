@@ -10,12 +10,14 @@
 //! turn. Values that arrive from a file go through the same constructors, so a hostile scene is an
 //! error the user can read rather than a broken ring.
 
+use std::collections::HashSet;
+
 use furnicraft_geom::{Arc, DVec2, Line, Segment};
 use furnicraft_units::{Degrees, Length};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ContourSegmentId, MAX_CONTOUR_COORDINATE};
+use crate::ContourSegmentId;
 
 /// One directed segment of a planar contour.
 ///
@@ -395,4 +397,1114 @@ mod tests {
         .expect("arc");
         assert_eq!(ContourSegment::from_geom(arc.to_geom().expect("to geometry")).expect("back"), arc);
     }
+
+    use crate::fixtures::*;
+
+    #[test]
+    fn a_contour_rejects_every_shape_error_at_construction_and_load() {
+        assert_eq!(
+            Contour::from_polygon(vec![[millimetres(0), millimetres(0)], [millimetres(1), millimetres(0)]]),
+            Err(ContourError::TooFewSegments { count: 2 })
+        );
+        assert_eq!(
+            Contour::from_polygon(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(0), millimetres(10)]
+            ]),
+            Err(ContourError::Segment(ContourSegmentError::ZeroLength))
+        );
+        assert_eq!(
+            Contour::from_polygon(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(20), millimetres(0)]
+            ]),
+            Err(ContourError::ZeroArea)
+        );
+        assert!(matches!(
+            Contour::from_polygon(vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(30), millimetres(0)],
+                [millimetres(20), millimetres(20)],
+                [millimetres(10), millimetres(-10)]
+            ]),
+            Err(ContourError::SelfIntersecting { .. })
+        ));
+        let far = Length::from_micrometres(MAX_CONTOUR_COORDINATE.micrometres() + 1);
+        assert_eq!(
+            Contour::from_polygon(vec![
+                [far, millimetres(0)],
+                [millimetres(10), millimetres(0)],
+                [millimetres(10), millimetres(10)]
+            ]),
+            Err(ContourError::Segment(ContourSegmentError::CoordinateOutOfRange {
+                point: far,
+                max: MAX_CONTOUR_COORDINATE
+            }))
+        );
+        let too_many = (0..=MAX_CONTOUR_SEGMENTS)
+            .map(|index| [millimetres(index as i64), millimetres((index % 2) as i64)])
+            .collect::<Vec<_>>();
+        assert!(matches!(Contour::from_polygon(too_many), Err(ContourError::TooManySegments { .. })));
+
+        let too_short = r#"{"segments":[{"kind":"line","start":[0,0],"end":[10000,0]},{"kind":"line","start":[10000,0],"end":[0,0]}]}"#;
+        assert!(serde_json::from_str::<Contour>(too_short).is_err(), "load runs the same validation");
+        let open = r#"{"segments":[
+            {"kind":"line","start":[0,0],"end":[10000,0]},
+            {"kind":"line","start":[10000,0],"end":[10000,10000]},
+            {"kind":"line","start":[10000,10000],"end":[0,10000]}
+        ]}"#;
+        assert!(serde_json::from_str::<Contour>(open).is_err(), "an open ring cannot load");
+        let old_points = r#"{"points":[[0,0],[10000,0],[10000,10000]]}"#;
+        let legacy = serde_json::from_str::<Contour>(old_points).expect("a version 10 point list still loads");
+        assert_eq!(legacy.segments().len(), 3, "the point list becomes a ring of lines");
+        assert!(
+            !serde_json::to_string(&legacy).expect("serialize").contains("\"points\""),
+            "a loaded point list is saved as segments"
+        );
+    }
+
+    #[test]
+    fn a_contour_segment_must_meet_the_next_one() {
+        let segments = vec![
+            ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)]).expect("line"),
+            ContourSegment::line([millimetres(100), millimetres(1)], [millimetres(100), millimetres(50)])
+                .expect("line"),
+            ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)]).expect("line"),
+            ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(0), millimetres(0)]).expect("line"),
+        ];
+        assert_eq!(Contour::new(segments), Err(ContourError::NotClosed { index: 0 }));
+    }
+
+    #[test]
+    fn a_clockwise_ring_is_stored_counter_clockwise_exactly() {
+        let clockwise = Contour::from_polygon(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(0), millimetres(50)],
+            [millimetres(100), millimetres(50)],
+            [millimetres(100), millimetres(0)],
+        ])
+        .expect("a clockwise rectangle is accepted");
+        assert_eq!(
+            clockwise.segments().next(),
+            Some(ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"))
+        );
+        assert_eq!(clockwise.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+    }
+
+    #[test]
+    fn a_fresh_ring_numbers_its_segments_from_one() {
+        let contour = plate_contour();
+        let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2, 3, 4]);
+        assert_eq!(contour.next_segment_id().get(), 5, "the counter follows the last id");
+
+        assert_eq!(contour.index_of(segment_id(2)), Some(1));
+        assert_eq!(contour.id_at(1), Some(segment_id(2)));
+        assert_eq!(contour.segment(segment_id(2)), contour.entries().get(1).map(|entry| entry.segment()));
+        assert_eq!(contour.segment(segment_id(9)), None, "an id outside the ring has no segment");
+        assert_eq!(contour.id_at(9), None, "a position outside the ring has no id");
+    }
+
+    #[test]
+    fn segment_ids_survive_a_serde_round_trip() {
+        let contour = plate_contour();
+        let json = serde_json::to_string(&contour).expect("serialize");
+        assert!(json.contains("\"next_segment_id\":5"), "the counter is written: {json}");
+        assert!(json.contains("\"id\":1"), "every segment carries its id: {json}");
+        let back: Contour = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, contour);
+    }
+
+    #[test]
+    fn a_version_eleven_ring_loads_with_fresh_ids() {
+        let json = r#"{"segments":[
+            {"kind":"line","start":[0,0],"end":[100000,0]},
+            {"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let contour: Contour = serde_json::from_str(json).expect("a version 11 ring loads");
+        let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2, 3, 4], "a ring without ids gets them in travel order");
+        assert_eq!(contour.next_segment_id().get(), 5);
+        assert!(
+            serde_json::to_string(&contour).expect("serialize").contains("\"next_segment_id\":5"),
+            "a migrated ring is saved with its ids"
+        );
+    }
+
+    #[test]
+    fn a_ring_with_broken_ids_is_a_readable_error() {
+        let no_counter = r#"{"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let error = serde_json::from_str::<Contour>(no_counter).expect_err("ids without a counter are rejected");
+        assert!(error.to_string().contains("next segment id"), "error was {error}");
+
+        let repeated = r#"{"next_segment_id":5,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":1,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":2,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":3,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let error = serde_json::from_str::<Contour>(repeated).expect_err("a repeated id is rejected");
+        assert!(error.to_string().contains("appears twice"), "error was {error}");
+
+        let stale_counter = r#"{"next_segment_id":4,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let error =
+            serde_json::from_str::<Contour>(stale_counter).expect_err("a counter that repeats an id is rejected");
+        assert!(error.to_string().contains("greater than the largest stored id"), "error was {error}");
+
+        let zero = r#"{"next_segment_id":5,"segments":[
+            {"id":0,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let error = serde_json::from_str::<Contour>(zero).expect_err("id zero is rejected");
+        assert!(error.to_string().contains("must be non-zero"), "error was {error}");
+    }
+
+    #[test]
+    fn a_rebuilt_ring_keeps_the_ids_it_was_given_and_raises_the_counter() {
+        let contour = plate_contour();
+        let bottom = ContourSegmentId::new(1).expect("id 1");
+        let left_half =
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(50), Length::ZERO]).expect("line");
+        let right_half =
+            ContourSegment::line([millimetres(50), Length::ZERO], [millimetres(100), Length::ZERO]).expect("line");
+
+        // Split the bottom segment in two: the first half keeps id 1, the second takes the next id.
+        let mut entries = Vec::with_capacity(contour.entries().len() + 1);
+        entries.push(ContourSegmentEntry::new(bottom, left_half));
+        entries.push(ContourSegmentEntry::new(contour.next_segment_id(), right_half));
+        entries.extend(contour.entries().iter().skip(1).copied());
+
+        let edited = contour.rebuild(entries).expect("the split ring is valid");
+        assert_eq!(edited.entries().len(), 5);
+        assert_eq!(edited.next_segment_id().get(), 6, "the minted id is spent");
+        assert_eq!(edited.segment(bottom), Some(left_half), "the split segment keeps its id");
+        assert_eq!(edited.segment(segment_id(5)), Some(right_half), "the new half carries the minted id");
+        for id in 2..=4 {
+            assert_eq!(
+                edited.segment(segment_id(id)),
+                contour.segment(segment_id(id)),
+                "an untouched segment keeps its curve"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ring_rejects_a_repeated_id_at_construction() {
+        let contour = plate_contour();
+        let mut entries = contour.entries().to_vec();
+        if let Some(entry) = entries.get_mut(2) {
+            *entry = ContourSegmentEntry::new(segment_id(1), entry.segment());
+        }
+        assert_eq!(Contour::from_entries(entries), Err(ContourError::DuplicateSegmentId { id: segment_id(1) }));
+    }
+
+    #[test]
+    fn reversing_a_ring_keeps_each_id_with_its_segment() {
+        let clockwise = Contour::from_polygon(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(0), millimetres(50)],
+            [millimetres(100), millimetres(50)],
+            [millimetres(100), millimetres(0)],
+        ])
+        .expect("a clockwise rectangle");
+        // Id 1 was the left edge going up. The constructor turns the ring around, so the same id now
+        // names that edge going down, at the end of the stored travel order.
+        assert_eq!(
+            clockwise.segment(segment_id(1)),
+            Some(ContourSegment::line([Length::ZERO, millimetres(50)], [Length::ZERO, Length::ZERO]).expect("line"))
+        );
+        assert_eq!(clockwise.index_of(segment_id(1)), Some(3));
+        assert_eq!(clockwise.next_segment_id().get(), 5, "reversing does not change the counter");
+    }
+
+    #[test]
+    fn a_contour_with_one_corner_arc_round_trips_and_bounds_the_arc() {
+        // A 100 x 50 plate whose top-right corner is a 20 mm quarter round.
+        let arc = ContourSegment::arc(
+            [millimetres(80), millimetres(30)],
+            millimetres(20),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let contour = Contour::new(vec![
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
+            ContourSegment::line([millimetres(100), Length::ZERO], arc.start().expect("start")).expect("line"),
+            arc,
+            ContourSegment::line(arc.end().expect("end"), [Length::ZERO, millimetres(50)]).expect("line"),
+            ContourSegment::line([Length::ZERO, millimetres(50)], [Length::ZERO, Length::ZERO]).expect("line"),
+        ])
+        .expect("a rounded plate");
+        assert_eq!(contour.segments().len(), 5);
+        assert_eq!(contour.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+        // The corner itself is gone: the round cuts it, so the area is the plate minus the corner.
+        let sampled = contour.sampled_points(50.0).expect("sampled");
+        assert!(sampled.len() > 5, "the arc is sampled into the polyline");
+
+        let text = serde_json::to_string(&contour).expect("serialize");
+        assert!(text.contains("\"kind\":\"arc\""), "the arc is saved as a segment");
+        assert_eq!(serde_json::from_str::<Contour>(&text).expect("load"), contour);
+    }
+
+    #[test]
+    fn a_rounded_plate_encloses_the_plate_area_minus_its_corner() {
+        // Unit square 100 x 100 with a quarter circle of radius 100 at the origin corner is a disc
+        // quarter, so its area is pi r^2 / 4. The sagging arc is direct: start at (100, 0), sweep
+        // 90 degrees counter-clockwise to (0, 100), then two lines back along the axes.
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let contour = Contour::new(vec![
+            arc,
+            ContourSegment::line([Length::ZERO, millimetres(100)], [Length::ZERO, Length::ZERO]).expect("line"),
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
+        ])
+        .expect("a quarter disc");
+        let area = std::f64::consts::PI * 100.0 * 100.0 / 4.0;
+        let sampled = contour.sampled_points(1.0).expect("sampled");
+        // Shoelace on the sampled polygon stays within the chord error of the exact area.
+        let mut twice = 0.0;
+        for index in 0..sampled.len() {
+            let current = sampled.get(index).expect("point");
+            let next = sampled.get((index + 1) % sampled.len()).expect("point");
+            twice += current[0].millimetres_f64() * next[1].millimetres_f64()
+                - next[0].millimetres_f64() * current[1].millimetres_f64();
+        }
+        assert!((twice.abs() / 2.0 - area).abs() < 1.0, "got {} for {area}", twice.abs() / 2.0);
+    }
+
+    #[test]
+    fn an_arc_that_crosses_a_line_is_rejected() {
+        // A three-quarter arc from (100, 0) through (0, 100) and (-100, 0) to (0, -100), then a
+        // vertical line back up past the arc and a line to the arc's start. Both lines cut the arc,
+        // so the ring is not simple even though every joint meets.
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(270_000),
+        )
+        .expect("arc");
+        let contour = Contour::new(vec![
+            arc,
+            ContourSegment::line([Length::ZERO, millimetres(-100)], [Length::ZERO, millimetres(200)]).expect("line"),
+            ContourSegment::line([Length::ZERO, millimetres(200)], [millimetres(100), Length::ZERO]).expect("line"),
+        ]);
+        assert_eq!(contour, Err(ContourError::SelfIntersecting { first: 0, second: 1 }));
+    }
+
+    #[test]
+    fn a_line_ring_that_crosses_itself_is_still_rejected() {
+        // A pentagon with a spike: the two edges of the spike cross the far edge, so the ring is not
+        // simple even though every joint meets.
+        let contour = Contour::from_polygon(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(100), millimetres(0)],
+            [millimetres(100), millimetres(100)],
+            [millimetres(50), millimetres(-50)],
+            [millimetres(0), millimetres(100)],
+        ]);
+        assert!(matches!(contour, Err(ContourError::SelfIntersecting { .. })), "got {contour:?}");
+    }
+}
+
+/// Largest number of segments in a constructive contour.
+pub const MAX_CONTOUR_SEGMENTS: usize = 256;
+
+/// Largest accepted contour coordinate and extrusion height: ten metres.
+pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
+
+/// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
+///
+/// A version 10 file stored the ring as a point list and a version 11 file stored segments without
+/// ids. Both still load: the point list as a ring of lines, the id-less ring with ids `1..n`.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContourWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    segments: Option<Vec<ContourSegmentEntryWire>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_segment_id: Option<ContourSegmentId>,
+    #[serde(default, skip_serializing)]
+    points: Option<Vec<[Length; 2]>>,
+}
+
+/// Serialized form of one ring element; the id is optional so a version 11 ring still loads.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ContourSegmentEntryWire {
+    Line {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ContourSegmentId>,
+        start: [Length; 2],
+        end: [Length; 2],
+    },
+    Arc {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<ContourSegmentId>,
+        center: [Length; 2],
+        radius: Length,
+        start_angle: Degrees,
+        sweep: Degrees,
+    },
+}
+
+impl ContourSegmentEntryWire {
+    /// The id the file carried, if it carried one.
+    const fn id(self) -> Option<ContourSegmentId> {
+        match self {
+            Self::Line { id, .. } | Self::Arc { id, .. } => id,
+        }
+    }
+
+    /// The curve, validated by the segment constructor.
+    fn segment(self) -> Result<ContourSegment, ContourSegmentError> {
+        match self {
+            Self::Line { start, end, .. } => ContourSegment::line(start, end),
+            Self::Arc { center, radius, start_angle, sweep, .. } => {
+                ContourSegment::arc(center, radius, start_angle, sweep)
+            }
+        }
+    }
+}
+
+impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
+    fn from(entry: ContourSegmentEntry) -> Self {
+        let id = Some(entry.id());
+        match entry.segment() {
+            ContourSegment::Line { start, end } => Self::Line { id, start, end },
+            ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                Self::Arc { id, center, radius, start_angle, sweep }
+            }
+        }
+    }
+}
+
+/// A closed flat contour in the object's local XY plane.
+///
+/// The ring is a list of directed lines and arcs, each carrying a stable [`ContourSegmentId`]. A
+/// valid contour has at least three segments, is closed, every segment lies inside
+/// [`MAX_CONTOUR_COORDINATE`], it encloses a non-zero area and it does not cross itself. The
+/// constructor stores it counter-clockwise, so face winding does not depend on how the user drew it.
+///
+/// Each segment is converted to the geometry layer, where a line or arc is validated once, and the
+/// joints, the signed area and the self-intersection test then run on that exact curve. Document
+/// units stay integer: every point that leaves the module is rounded to a whole micrometre.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ContourWire", into = "ContourWire")]
+pub struct Contour {
+    entries: Vec<ContourSegmentEntry>,
+    next_segment_id: ContourSegmentId,
+}
+
+/// Largest magnitude of the signed area sum, in square micrometres, before it is rejected.
+///
+/// Ten metres square is `2 * 10^14`; the bound only has to catch a non-finite or absurd sum.
+const MAX_CONTOUR_AREA2: f64 = 1.0e18;
+/// Chord tolerance of the polyline used by the self-intersection test, in micrometres.
+///
+/// The samples lie on the curve itself, so the tolerance only decides how finely an arc is cut; a
+/// tenth of a millimetre finds a crossing far finer than any furniture part cares about.
+pub(crate) const SELF_INTERSECTION_TOLERANCE_MICROMETRES: f64 = 100.0;
+
+impl Contour {
+    /// Validates a ring of segments, gives every segment a fresh id and stores it counter-clockwise.
+    ///
+    /// Fresh ids run `1..=n` in the order the caller supplied the segments, and the next id is
+    /// `n + 1`. A clockwise ring is turned around after numbering, so its ids are not in stored
+    /// travel order; they are labels, and [`Contour::index_of`] is what maps one to a position. A
+    /// ring rebuilt from existing entries keeps its ids through [`Contour::rebuild`] instead.
+    pub fn new(segments: Vec<ContourSegment>) -> Result<Self, ContourError> {
+        let count = segments.len();
+        if count < 3 {
+            return Err(ContourError::TooFewSegments { count });
+        }
+        if count > MAX_CONTOUR_SEGMENTS {
+            return Err(ContourError::TooManySegments { count, max: MAX_CONTOUR_SEGMENTS });
+        }
+        let mut entries = Vec::with_capacity(count);
+        let mut next = 1_u32;
+        for segment in segments {
+            let id = ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)?;
+            next = next.checked_add(1).ok_or(ContourError::SegmentIdExhausted)?;
+            entries.push(ContourSegmentEntry::new(id, segment));
+        }
+        let next_segment_id = ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)?;
+        Self::assemble(entries, next_segment_id)
+    }
+
+    /// Validates a ring of entries and stores it counter-clockwise.
+    ///
+    /// The ids must be unique. The counter is derived as one above the largest id, so a ring built
+    /// from scratch never hands out an id twice; [`Contour::rebuild`] is the variant that keeps a
+    /// counter across an edit.
+    pub fn from_entries(entries: Vec<ContourSegmentEntry>) -> Result<Self, ContourError> {
+        let next_segment_id = next_id_after_entries(&entries)?;
+        Self::assemble(entries, next_segment_id)
+    }
+
+    /// The same ring rebuilt from new entries, keeping this contour's id counter.
+    ///
+    /// This is the edit path: a caller changes one segment, keeps the id of every segment it did not
+    /// touch, mints a new id from [`Contour::next_segment_id`] for every segment it adds, and the
+    /// returned contour hands out ids above both the old counter and the largest stored id.
+    pub fn rebuild(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, ContourError> {
+        let after_entries = next_id_after_entries(&entries)?;
+        let next = self.next_segment_id.get().max(after_entries.get());
+        let next_segment_id = ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)?;
+        Self::assemble(entries, next_segment_id)
+    }
+
+    /// Builds a line-only ring from polygon corner points, in travel order.
+    pub fn from_polygon(points: Vec<[Length; 2]>) -> Result<Self, ContourError> {
+        if points.len() < 3 {
+            return Err(ContourError::TooFewSegments { count: points.len() });
+        }
+        if points.len() > MAX_CONTOUR_SEGMENTS {
+            return Err(ContourError::TooManySegments { count: points.len(), max: MAX_CONTOUR_SEGMENTS });
+        }
+        let mut segments = Vec::with_capacity(points.len());
+        for index in 0..points.len() {
+            let (Some(start), Some(end)) = (points.get(index), points.get((index + 1) % points.len())) else {
+                continue;
+            };
+            segments.push(ContourSegment::line(*start, *end)?);
+        }
+        Self::new(segments)
+    }
+
+    /// Validates a ring of entries and stores it with the given next id.
+    ///
+    /// The counter must be larger than every stored id. Validation order matters: the count, the ids
+    /// and the counter are checked before the ring is sampled or its area is summed.
+    fn assemble(entries: Vec<ContourSegmentEntry>, next_segment_id: ContourSegmentId) -> Result<Self, ContourError> {
+        let count = entries.len();
+        if count < 3 {
+            return Err(ContourError::TooFewSegments { count });
+        }
+        if count > MAX_CONTOUR_SEGMENTS {
+            return Err(ContourError::TooManySegments { count, max: MAX_CONTOUR_SEGMENTS });
+        }
+        let mut seen = HashSet::with_capacity(count);
+        let mut max_id = 0_u32;
+        for entry in &entries {
+            if !seen.insert(entry.id()) {
+                return Err(ContourError::DuplicateSegmentId { id: entry.id() });
+            }
+            max_id = max_id.max(entry.id().get());
+        }
+        if next_segment_id.get() <= max_id {
+            return Err(ContourError::NextSegmentIdNotAfterMax { next: next_segment_id, max: max_id });
+        }
+        for index in 0..count {
+            let (Some(entry), Some(next)) = (entries.get(index), entries.get((index + 1) % count)) else {
+                continue;
+            };
+            if entry.segment().end()? != next.segment().start()? {
+                return Err(ContourError::NotClosed { index });
+            }
+        }
+        let mut contour = Self { entries, next_segment_id };
+        let area2 = contour.signed_area2()?;
+        if area2 == 0.0 {
+            return Err(ContourError::ZeroArea);
+        }
+        // The crossing test runs before the ring is turned counter-clockwise, so the reported
+        // indices name the segments the caller supplied.
+        if let Some((first, second)) = contour.first_self_intersection()? {
+            return Err(ContourError::SelfIntersecting { first, second });
+        }
+        if area2 < 0.0 {
+            contour = contour.reversed()?;
+        }
+        Ok(contour)
+    }
+
+    /// The ring elements with their ids, in travel order.
+    pub fn entries(&self) -> &[ContourSegmentEntry] {
+        &self.entries
+    }
+
+    /// The segments in travel order.
+    ///
+    /// A segment is a copy of the stored curve; ask [`Contour::entries`] when the id matters.
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = ContourSegment> + '_ {
+        self.entries.iter().map(|entry| entry.segment())
+    }
+
+    /// The segment with this id.
+    pub fn segment(&self, id: ContourSegmentId) -> Option<ContourSegment> {
+        self.entries.iter().find(|entry| entry.id() == id).map(|entry| entry.segment())
+    }
+
+    /// The position of a segment id in travel order.
+    pub fn index_of(&self, id: ContourSegmentId) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.id() == id)
+    }
+
+    /// The id of the segment at this position in travel order.
+    pub fn id_at(&self, index: usize) -> Option<ContourSegmentId> {
+        self.entries.get(index).map(|entry| entry.id())
+    }
+
+    /// The next id an edit may hand out; ids are never reused.
+    pub const fn next_segment_id(&self) -> ContourSegmentId {
+        self.next_segment_id
+    }
+
+    /// The same ring moved by a whole-micrometre offset in its own plane.
+    ///
+    /// Ids travel with their segments, so a panel ring anchored at a new zero corner keeps every
+    /// band record meaningful. The offset is applied with [`i64::checked_add`] so a hostile value
+    /// is an error rather than a wrapped coordinate.
+    pub fn translated(&self, offset: [Length; 2]) -> Result<Self, ContourError> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            let segment = match entry.segment() {
+                ContourSegment::Line { start, end } => {
+                    ContourSegment::line(translate_point(start, offset)?, translate_point(end, offset)?)?
+                }
+                ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                    ContourSegment::arc(translate_point(center, offset)?, radius, start_angle, sweep)?
+                }
+            };
+            entries.push(ContourSegmentEntry::new(entry.id(), segment));
+        }
+        Self::assemble(entries, self.next_segment_id)
+    }
+
+    /// Whether every segment is a straight line, so the ring is a plain polygon.
+    ///
+    /// A line-only ring can be written back as corner points without losing anything; a ring with
+    /// an arc cannot, because its corners do not describe the curve.
+    pub fn is_line_only(&self) -> bool {
+        self.entries.iter().all(|entry| !entry.segment().is_arc())
+    }
+
+    /// Samples the contour into a closed polyline for a polygon-only kernel profile.
+    ///
+    /// The points are rounded to whole micrometres, so the polyline stays in document units. An arc
+    /// contributes as many interior points as `tolerance_micrometres` needs: a chord deviates from
+    /// its arc by less than the tolerance. The first point is not repeated at the end.
+    pub fn sampled_points(&self, tolerance_micrometres: f64) -> Result<Vec<[Length; 2]>, ContourError> {
+        if !tolerance_micrometres.is_finite() || tolerance_micrometres <= 0.0 {
+            return Err(ContourError::InvalidTolerance);
+        }
+        let mut points: Vec<[Length; 2]> = Vec::with_capacity(self.entries.len().saturating_mul(2));
+        for entry in &self.entries {
+            let segment = entry.segment();
+            points.push(segment.start()?);
+            let geometry = segment.to_geom()?;
+            let mut steps = 1_usize;
+            if let ContourSegment::Arc { radius, sweep, .. } = segment {
+                steps = arc_steps(radius, sweep, tolerance_micrometres)?;
+            }
+            for step in 1..steps {
+                let fraction = step as f64 / steps as f64;
+                let point = geometry.point_at(fraction).ok_or(ContourError::InvalidTolerance)?;
+                let document = point_to_document(point)?;
+                if points.last() != Some(&document) {
+                    points.push(document);
+                }
+            }
+            if points.len() > MAX_SAMPLED_CONTOUR_POINTS {
+                return Err(ContourError::SamplingTooDetailed { max: MAX_SAMPLED_CONTOUR_POINTS });
+            }
+        }
+        if points.len() < 3 {
+            return Err(ContourError::TooFewSegments { count: points.len() });
+        }
+        Ok(points)
+    }
+
+    /// The two axis-aligned extents of the contour, in micrometres.
+    ///
+    /// An arc contributes the axis extremes it crosses, not only its endpoints.
+    pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
+        let mut min = [i64::MAX; 2];
+        let mut max = [i64::MIN; 2];
+        let mut include = |point: [Length; 2]| {
+            for (axis, value) in point.iter().enumerate() {
+                let value = value.micrometres();
+                min[axis] = min[axis].min(value);
+                max[axis] = max[axis].max(value);
+            }
+        };
+        for entry in &self.entries {
+            let segment = entry.segment();
+            if let (Ok(start), Ok(end)) = (segment.start(), segment.end()) {
+                include(start);
+                include(end);
+            }
+            if let ContourSegment::Arc { start_angle, sweep, .. } = segment
+                && let Ok(geometry) = segment.to_geom()
+            {
+                for turn in 0..4_i64 {
+                    let quarter = Degrees::from_millidegrees(turn.saturating_mul(90_000));
+                    if !arc_reaches(start_angle, sweep, quarter) {
+                        continue;
+                    }
+                    if let Some(point) = geometry.point_at(arc_fraction(start_angle, sweep, quarter))
+                        && let Ok(point) = point_to_document(point)
+                    {
+                        include(point);
+                    }
+                }
+            }
+        }
+        if min[0] > max[0] {
+            return ([0; 2], [0; 2]);
+        }
+        (min, max)
+    }
+
+    /// Twice the signed area of the ring, in square micrometres; positive for counter-clockwise.
+    ///
+    /// A line-only ring is summed exactly in integers, so a sliver far from the origin neither
+    /// loses its sign to rounding nor reads as zero. A ring with an arc sums its exact arc
+    /// integrals in floating point, which is where the geometry boundary already is.
+    pub(crate) fn signed_area2(&self) -> Result<f64, ContourError> {
+        if self.is_line_only() {
+            let mut total = 0_i128;
+            for entry in &self.entries {
+                let ContourSegment::Line { start, end } = entry.segment() else {
+                    continue;
+                };
+                let start = [i128::from(start[0].micrometres()), i128::from(start[1].micrometres())];
+                let end = [i128::from(end[0].micrometres()), i128::from(end[1].micrometres())];
+                total += start[0] * end[1] - end[0] * start[1];
+            }
+            let area2 = total as f64;
+            if !area2.is_finite() {
+                return Err(ContourError::AreaOutOfRange);
+            }
+            return Ok(area2);
+        }
+        let mut total = 0.0;
+        for entry in &self.entries {
+            total += match entry.segment().to_geom()? {
+                furnicraft_geom::Segment::Line(line) => line.start().perp_dot(line.end()),
+                furnicraft_geom::Segment::Arc(arc) => arc_area2(arc),
+            };
+        }
+        let area2 = total * 1_000_000.0;
+        if !area2.is_finite() || area2.abs() > MAX_CONTOUR_AREA2 {
+            return Err(ContourError::AreaOutOfRange);
+        }
+        Ok(area2)
+    }
+
+    /// The ring with the opposite direction of travel.
+    ///
+    /// Every id travels with its segment, so a ring turned counter-clockwise by the constructor
+    /// keeps the ids the caller supplied.
+    fn reversed(self) -> Result<Self, ContourError> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries.into_iter().rev() {
+            entries.push(ContourSegmentEntry::new(entry.id(), entry.segment().reversed()?));
+        }
+        Ok(Self { entries, next_segment_id: self.next_segment_id })
+    }
+
+    /// The first pair of non-adjacent segments that touch, as segment indices.
+    ///
+    /// Every segment is sampled into chords on the curve itself, so a crossing inside two arcs, or
+    /// between an arc and a line, is found as soon as the samples are close enough. Two adjacent
+    /// segments share their joint by construction; that one chord pair is skipped, while any other
+    /// touch between two neighbours still counts. Segment bounds skip pairs that cannot meet, and a
+    /// chord-pair budget bounds the work a hostile ring can ask for.
+    fn first_self_intersection(&self) -> Result<Option<(usize, usize)>, ContourError> {
+        let mut polylines: Vec<(SegBounds, Vec<[i64; 2]>)> = Vec::with_capacity(self.entries.len());
+        let mut total = 0_usize;
+        for entry in &self.entries {
+            let points = sampled_segment(entry.segment(), SELF_INTERSECTION_TOLERANCE_MICROMETRES)?;
+            total = total.saturating_add(points.len());
+            if total > MAX_SELF_INTERSECTION_CHORDS {
+                return Err(ContourError::SamplingTooDetailed { max: MAX_SELF_INTERSECTION_CHORDS });
+            }
+            polylines.push((SegBounds::of(&points), points));
+        }
+        let count = polylines.len();
+        let mut budget = MAX_SELF_INTERSECTION_PAIRS;
+        for first in 0..count {
+            let Some((first_bounds, first_points)) = polylines.get(first) else {
+                continue;
+            };
+            for second in (first + 1)..count {
+                let Some((second_bounds, second_points)) = polylines.get(second) else {
+                    continue;
+                };
+                if !first_bounds.overlaps(*second_bounds) {
+                    continue;
+                }
+                let first_chords = first_points.len().saturating_sub(1);
+                let second_chords = second_points.len().saturating_sub(1);
+                let needed = first_chords.saturating_mul(second_chords);
+                if needed > budget {
+                    return Err(ContourError::SamplingTooDetailed { max: MAX_SELF_INTERSECTION_PAIRS });
+                }
+                budget -= needed;
+                let shared = shared_joint(count, first, second, first_chords, second_chords);
+                for first_chord in 0..first_chords {
+                    for second_chord in 0..second_chords {
+                        if shared == Some((first_chord, second_chord)) {
+                            continue;
+                        }
+                        let (Some(a), Some(b)) = (first_points.get(first_chord), first_points.get(first_chord + 1))
+                        else {
+                            continue;
+                        };
+                        let (Some(c), Some(d)) = (second_points.get(second_chord), second_points.get(second_chord + 1))
+                        else {
+                            continue;
+                        };
+                        if segments_touch(*a, *b, *c, *d) {
+                            return Ok(Some((first, second)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl TryFrom<ContourWire> for Contour {
+    type Error = ContourError;
+
+    fn try_from(wire: ContourWire) -> Result<Self, Self::Error> {
+        let ContourWire { segments, next_segment_id, points } = wire;
+        match (segments, points) {
+            (Some(segments), None) => from_wire_segments(segments, next_segment_id),
+            (None, Some(points)) => {
+                if next_segment_id.is_some() {
+                    return Err(ContourError::AmbiguousSegmentIds);
+                }
+                Self::from_polygon(points)
+            }
+            (Some(_), Some(_)) => Err(ContourError::AmbiguousWire),
+            (None, None) => Err(ContourError::MissingRing),
+        }
+    }
+}
+
+impl From<Contour> for ContourWire {
+    fn from(contour: Contour) -> Self {
+        Self {
+            segments: Some(contour.entries.iter().map(|entry| ContourSegmentEntryWire::from(*entry)).collect()),
+            next_segment_id: Some(contour.next_segment_id),
+            points: None,
+        }
+    }
+}
+
+/// Reads a stored segment ring, with ids when the file has them and `1..n` when it is a version 11
+/// ring, which carried none.
+fn from_wire_segments(
+    segments: Vec<ContourSegmentEntryWire>,
+    next_segment_id: Option<ContourSegmentId>,
+) -> Result<Contour, ContourError> {
+    let mut curves = Vec::with_capacity(segments.len());
+    let mut ids = Vec::with_capacity(segments.len());
+    for wire in segments {
+        ids.push(wire.id());
+        curves.push(wire.segment()?);
+    }
+    match next_segment_id {
+        Some(next_segment_id) => {
+            let mut entries = Vec::with_capacity(curves.len());
+            for (id, segment) in ids.into_iter().zip(curves) {
+                let Some(id) = id else {
+                    return Err(ContourError::AmbiguousSegmentIds);
+                };
+                entries.push(ContourSegmentEntry::new(id, segment));
+            }
+            Contour::assemble(entries, next_segment_id)
+        }
+        None => {
+            if ids.iter().any(Option::is_some) {
+                return Err(ContourError::AmbiguousSegmentIds);
+            }
+            Contour::new(curves)
+        }
+    }
+}
+
+/// The id just above the largest stored id, so a fresh ring never reuses one.
+fn next_id_after_entries(entries: &[ContourSegmentEntry]) -> Result<ContourSegmentId, ContourError> {
+    let max = entries.iter().map(|entry| entry.id().get()).max().unwrap_or(0);
+    let next = max.checked_add(1).ok_or(ContourError::SegmentIdExhausted)?;
+    ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)
+}
+
+/// Moves one contour point by a whole-micrometre offset.
+///
+/// Range checking is left to the segment constructor the moved point enters; this only refuses a
+/// sum that does not fit an `i64`.
+fn translate_point(point: [Length; 2], offset: [Length; 2]) -> Result<[Length; 2], ContourError> {
+    let move_axis = |value: Length, delta: Length| {
+        value
+            .micrometres()
+            .checked_add(delta.micrometres())
+            .map(Length::from_micrometres)
+            .ok_or(ContourSegmentError::NonFinite)
+    };
+    Ok([move_axis(point[0], offset[0])?, move_axis(point[1], offset[1])?])
+}
+
+/// Twice the signed area of one arc, in square millimetres; it follows from the sector integral.
+fn arc_area2(arc: furnicraft_geom::Arc) -> f64 {
+    let start = arc.start_angle();
+    let end = start + arc.sweep_angle();
+    let center = arc.center();
+    let radius = arc.radius();
+    radius * (center.x * (end.sin() - start.sin()) - center.y * (end.cos() - start.cos()))
+        + radius * radius * arc.sweep_angle()
+}
+
+/// One segment as chords on its curve, both endpoints included.
+///
+/// The interior samples are rounded together with the endpoints, so every chord pair still shares
+/// the exact joint of two adjacent segments.
+fn sampled_segment(segment: ContourSegment, tolerance_micrometres: f64) -> Result<Vec<[i64; 2]>, ContourError> {
+    let geometry = segment.to_geom()?;
+    let steps = match segment {
+        ContourSegment::Arc { radius, sweep, .. } => arc_steps(radius, sweep, tolerance_micrometres)?,
+        ContourSegment::Line { .. } => 1,
+    };
+    let mut points = Vec::with_capacity(steps.saturating_add(1));
+    for step in 0..=steps {
+        let fraction = step as f64 / steps as f64;
+        let point = geometry.point_at(fraction).ok_or(ContourError::InvalidTolerance)?;
+        let document = point_to_document(point)?;
+        let micrometres = [document[0].micrometres(), document[1].micrometres()];
+        if points.last() != Some(&micrometres) {
+            points.push(micrometres);
+        }
+    }
+    Ok(points)
+}
+
+/// The chord pair that is the shared joint of two adjacent segments, if they are adjacent.
+///
+/// The pair is `(last chord of the first segment, first chord of the second)`; for the closing
+/// joint it is `(first chord of segment 0, last chord of the last segment)`.
+fn shared_joint(
+    count: usize,
+    first: usize,
+    second: usize,
+    first_chords: usize,
+    second_chords: usize,
+) -> Option<(usize, usize)> {
+    if second == first.saturating_add(1) {
+        Some((first_chords.checked_sub(1)?, 0))
+    } else if first == 0 && second.saturating_add(1) == count {
+        Some((0, second_chords.checked_sub(1)?))
+    } else {
+        None
+    }
+}
+
+/// The micrometre bounds of one sampled segment, used to skip pairs that cannot meet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SegBounds {
+    min: [i64; 2],
+    max: [i64; 2],
+}
+
+impl SegBounds {
+    /// The bounds around a non-empty sample list.
+    pub(crate) fn of(points: &[[i64; 2]]) -> Self {
+        let mut bounds = Self { min: [i64::MAX; 2], max: [i64::MIN; 2] };
+        for point in points {
+            for (axis, value) in point.iter().enumerate() {
+                bounds.min[axis] = bounds.min[axis].min(*value);
+                bounds.max[axis] = bounds.max[axis].max(*value);
+            }
+        }
+        bounds
+    }
+
+    /// Whether two closed bounds share at least one point.
+    pub(crate) fn overlaps(self, other: Self) -> bool {
+        self.min[0] <= other.max[0]
+            && other.min[0] <= self.max[0]
+            && self.min[1] <= other.max[1]
+            && other.min[1] <= self.max[1]
+    }
+}
+
+/// Whether a sweep from `start` reaches `angle` in its direction of travel.
+fn arc_reaches(start: Degrees, sweep: Degrees, angle: Degrees) -> bool {
+    let full = 360_000_i64;
+    let magnitude = i64::try_from(sweep.millidegrees().unsigned_abs()).unwrap_or(full).min(full);
+    if magnitude >= full {
+        return true;
+    }
+    let mut delta = (angle.millidegrees().wrapping_sub(start.millidegrees()) % full + full) % full;
+    if sweep.millidegrees() < 0 {
+        delta = full - delta;
+    }
+    delta <= magnitude
+}
+
+/// The parameter of `angle` along an arc from `start` with `sweep`, clamped into `0..=1`.
+fn arc_fraction(start: Degrees, sweep: Degrees, angle: Degrees) -> f64 {
+    let full = 360_000_f64;
+    let mut delta = (angle.millidegrees() as f64 - start.millidegrees() as f64).rem_euclid(full);
+    if sweep.millidegrees() < 0 {
+        delta = full - delta;
+    }
+    let magnitude = sweep.millidegrees().unsigned_abs() as f64;
+    if magnitude <= 0.0 {
+        return 0.0;
+    }
+    (delta / magnitude).clamp(0.0, 1.0)
+}
+
+/// Interior chord count of one arc so that every chord stays within `tolerance` of the curve.
+fn arc_steps(radius: Length, sweep: Degrees, tolerance_micrometres: f64) -> Result<usize, ContourError> {
+    let arc_radius = radius.micrometres() as f64;
+    if arc_radius <= 0.0 {
+        return Err(ContourError::InvalidTolerance);
+    }
+    let tolerance = tolerance_micrometres.clamp(1.0, arc_radius);
+    let step = (2.0 * (1.0 - tolerance / arc_radius).acos()).clamp(1.0e-6, std::f64::consts::FRAC_PI_2);
+    let sweep = (sweep.millidegrees().unsigned_abs() as f64 / 1_000.0).to_radians();
+    let count = (sweep / step).ceil();
+    if !count.is_finite() || count > MAX_CONTOUR_SAMPLES_PER_ARC as f64 {
+        return Err(ContourError::SamplingTooDetailed { max: MAX_CONTOUR_SAMPLES_PER_ARC });
+    }
+    Ok((count as usize).max(1))
+}
+
+/// Upper bound on the interior points sampled from one arc.
+const MAX_CONTOUR_SAMPLES_PER_ARC: usize = 4_096;
+/// Upper bound on the points sampled from one contour.
+const MAX_SAMPLED_CONTOUR_POINTS: usize = 65_536;
+/// Upper bound on the chords the self-intersection test may build for one contour.
+const MAX_SELF_INTERSECTION_CHORDS: usize = 65_536;
+/// Upper bound on the chord pairs the self-intersection test may compare for one contour.
+pub(crate) const MAX_SELF_INTERSECTION_PAIRS: usize = 16_000_000;
+
+fn orientation(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
+    (i128::from(b[0]) - i128::from(a[0])) * (i128::from(c[1]) - i128::from(a[1]))
+        - (i128::from(b[1]) - i128::from(a[1])) * (i128::from(c[0]) - i128::from(a[0]))
+}
+
+fn on_segment(a: [i64; 2], b: [i64; 2], point: [i64; 2]) -> bool {
+    point[0] >= a[0].min(b[0]) && point[0] <= a[0].max(b[0]) && point[1] >= a[1].min(b[1]) && point[1] <= a[1].max(b[1])
+}
+
+/// Whether two closed chords share any point, including a collinear overlap.
+pub(crate) fn segments_touch(a: [i64; 2], b: [i64; 2], c: [i64; 2], d: [i64; 2]) -> bool {
+    let abc = orientation(a, b, c);
+    let abd = orientation(a, b, d);
+    let cda = orientation(c, d, a);
+    let cdb = orientation(c, d, b);
+    if ((abc > 0 && abd < 0) || (abc < 0 && abd > 0)) && ((cda > 0 && cdb < 0) || (cda < 0 && cdb > 0)) {
+        return true;
+    }
+    (abc == 0 && on_segment(a, b, c))
+        || (abd == 0 && on_segment(a, b, d))
+        || (cda == 0 && on_segment(c, d, a))
+        || (cdb == 0 && on_segment(c, d, b))
+}
+
+/// A validation failure of a constructive contour.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ContourError {
+    /// A segment is not a valid line or arc.
+    #[error(transparent)]
+    Segment(#[from] ContourSegmentError),
+    /// The contour has fewer than three segments.
+    #[error("a contour needs at least three segments, got {count}")]
+    TooFewSegments {
+        /// The supplied segment count.
+        count: usize,
+    },
+    /// The contour has more segments than the limit allows.
+    #[error("a contour has {count} segments, the limit is {max}")]
+    TooManySegments {
+        /// The supplied segment count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The end of a segment does not meet the start of the next one.
+    #[error("contour segment {index} does not meet the next segment")]
+    NotClosed {
+        /// Index of the segment whose end is checked.
+        index: usize,
+    },
+    /// The contour encloses no area.
+    #[error("the contour has zero area")]
+    ZeroArea,
+    /// The signed area of the contour is too large to represent.
+    #[error("the contour encloses too much area")]
+    AreaOutOfRange,
+    /// Sampling the contour would need more points than the limit allows.
+    #[error("sampling the contour would need more than {max} points")]
+    SamplingTooDetailed {
+        /// The supported maximum.
+        max: usize,
+    },
+    /// Two non-adjacent edges touch.
+    #[error("contour edges {first} and {second} cross")]
+    SelfIntersecting {
+        /// The first edge index.
+        first: usize,
+        /// The second edge index.
+        second: usize,
+    },
+    /// The sampling tolerance is not positive and finite.
+    #[error("a sampling tolerance must be positive and finite")]
+    InvalidTolerance,
+    /// Two ring elements carry the same id.
+    #[error("contour segment id {id} appears twice in one ring")]
+    DuplicateSegmentId {
+        /// The repeated id.
+        id: ContourSegmentId,
+    },
+    /// The next-segment counter would hand out an id that the ring already holds.
+    #[error("the next contour segment id {next} must be greater than the largest stored id {max}")]
+    NextSegmentIdNotAfterMax {
+        /// The stored counter.
+        next: ContourSegmentId,
+        /// The largest id in the ring.
+        max: u32,
+    },
+    /// The id space of one contour is used up.
+    #[error("the contour segment id space is exhausted")]
+    SegmentIdExhausted,
+    /// A stored ring mixes ids and segments without them, or carries ids without their counter.
+    #[error("a contour ring must carry an id for every segment and a next segment id, or neither")]
+    AmbiguousSegmentIds,
+    /// A stored contour names both a segment ring and a legacy point list.
+    #[error("a contour cannot carry both a segment ring and a point list")]
+    AmbiguousWire,
+    /// A stored contour names neither a segment ring nor a legacy point list.
+    #[error("a contour needs a segment ring")]
+    MissingRing,
 }
