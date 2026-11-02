@@ -12,7 +12,8 @@ those files and their callers, not the workspace.
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans; P is the plan and `xtask` itself,
-L is scene lighting, X is a defect in behaviour that already shipped.
+L is scene lighting, S is a structural refactor that changes module boundaries only, X is a defect in
+behaviour that already shipped.
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -32,7 +33,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
   50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
   segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
-  `files: crates/param/src/lib.rs, crates/model/src/lib.rs`
+  `files: crates/param/src/lib.rs, crates/model/src/object.rs`
 
 ## Next
 
@@ -52,6 +53,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **S1** decompose `crates/model/src/lib.rs` by responsibility: one module per value family,
+  panel rules split into geometry, banding and machining, `Project` split into wire, error, derived
+  queries and command families, tree traversal in one place; public API, serde and behaviour
+  unchanged — `43583b4`
 - `[x]` **D3** a cutout by an arbitrary contour: `CutoutShape::Contour`, kept inside the core, through
   and blind, the tool built by extruding the sampled ring; the schema moves to 14 — `2167e2b`
 - `[x]` **D2** the contour panel card: the ring summary, the material-driven thickness, the material

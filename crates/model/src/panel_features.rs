@@ -4,10 +4,12 @@
 //! banding solid. Coordinates and distances are in panel-local millimetres once the geometry layer
 //! converts them; this module stores validated integer lengths.
 
+use std::collections::HashSet;
+
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 
-use crate::{EdgeId, Panel, PanelDimensionError, VertexId};
+use crate::{EdgeId, Panel, PanelDimensionError, PanelError, VertexId};
 
 /// A corner treatment applied to a nominal rectangle corner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,11 +154,36 @@ fn validate_feature_dimension(field: &'static str, value: Length) -> Result<(), 
     Ok(())
 }
 
+pub(crate) fn validate_contour_features(features: &[CornerFeature], bows: &[EdgeBow]) -> Result<(), PanelError> {
+    let mut corners = HashSet::new();
+    for feature in features {
+        let corner = feature.corner();
+        if !(1..=4).contains(&corner.get()) {
+            return Err(PanelError::UnsupportedCornerFeature { corner });
+        }
+        if !corners.insert(corner.get()) {
+            return Err(PanelError::DuplicateCornerFeature { corner });
+        }
+    }
+    let mut edges = HashSet::new();
+    for bow in bows {
+        let edge = bow.edge();
+        if !(1..=4).contains(&edge.get()) {
+            return Err(PanelError::UnsupportedEdgeBow { edge });
+        }
+        if !edges.insert(edge.get()) {
+            return Err(PanelError::DuplicateEdgeBow { edge });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use crate::panel::PanelWire;
     use crate::{RectCorner, RectEdge};
     use serde_json::json;
 
@@ -228,5 +255,50 @@ mod tests {
         ));
         assert!(serde_json::from_value::<EdgeBow>(json!({"edge": 1, "sagitta": 0})).is_err());
         assert!(serde_json::from_value::<EdgeBow>(json!({"edge": 1, "sagitta": 10, "extra": 1})).is_err());
+    }
+
+    #[test]
+    fn panel_load_rejects_duplicate_and_out_of_range_contour_features() {
+        let base = |corner_features: serde_json::Value, edge_bows: serde_json::Value| {
+            serde_json::json!({
+                "id": 2,
+                "name": "Panel",
+                "nominal_size": {"length": 700000, "width": 500000},
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "last_known_thickness": 18000,
+                "corner_features": corner_features,
+                "edge_bows": edge_bows,
+            })
+        };
+
+        let duplicate = base(
+            serde_json::json!([
+                {"corner": 1, "feature": {"kind": "radius", "radius": 10000}},
+                {"corner": 1, "feature": {"kind": "chamfer", "incoming": 10000, "outgoing": 20000}}
+            ]),
+            serde_json::json!([]),
+        );
+        let duplicate: PanelWire = serde_json::from_value(duplicate).expect("panel wire");
+        assert_eq!(
+            Panel::try_from(duplicate),
+            Err(PanelError::DuplicateCornerFeature { corner: RectCorner::BottomLeft.id() })
+        );
+
+        let unsupported = base(
+            serde_json::json!([{"corner": 5, "feature": {"kind": "radius", "radius": 10000}}]),
+            serde_json::json!([]),
+        );
+        let unsupported: PanelWire = serde_json::from_value(unsupported).expect("panel wire");
+        assert_eq!(
+            Panel::try_from(unsupported),
+            Err(PanelError::UnsupportedCornerFeature { corner: VertexId::new(5).expect("corner") })
+        );
+
+        let bad_bow = base(
+            serde_json::json!([]),
+            serde_json::json!([{"edge": 1, "sagitta": 1000}, {"edge": 1, "sagitta": 2000}]),
+        );
+        let bad_bow: PanelWire = serde_json::from_value(bad_bow).expect("panel wire");
+        assert_eq!(Panel::try_from(bad_bow), Err(PanelError::DuplicateEdgeBow { edge: RectEdge::Bottom.id() }));
     }
 }
