@@ -1,12 +1,9 @@
-//! The FurniCraft document: assemblies, panels, machining, hardware, materials and dimensions.
+//! The FurniCraft document: the container tree, panels, machining, banding, materials and the scene
+//! objects the user authors.
 //!
-//! Pure serializable data plus its invariants. No geometry, no GPU, no UI, no file I/O. The exact
-//! document schema is designed in M1; see `PROJECT.md`, "Open model questions".
-//!
-//! This module currently defines the document skeleton: ids and revisions, the container tree,
-//! minimal panel records, validated rectangular dimensions, rigid placements and the external
-//! material catalogue. The two large faces, stable edge and vertex ids, and the local numbering of
-//! a rectangular outline are here as well; geometry, edge banding and machining arrive later.
+//! Pure serializable data plus its invariants. No geometry kernel, no GPU, no UI, no file I/O. The
+//! crate root is a facade: each module owns one family of values or rules and its public items are
+//! re-exported here, so callers keep writing `furnicraft_model::Type`.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -20,466 +17,34 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
-use std::num::NonZeroU64;
-use std::str::FromStr;
 
-use furnicraft_geom::{DQuat, DVec2, DVec3, EulerRot, Rect, regions_from_rects, subtract_rects};
+use furnicraft_geom::{DVec2, DVec3, Rect, regions_from_rects, subtract_rects};
 use furnicraft_units::{Degrees, Length};
 use serde::de::{self, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
 mod catalog;
 mod contour;
 mod contour_edit;
+#[cfg(test)]
+mod fixtures;
+mod furntype;
+mod ids;
 mod panel_contour;
 mod panel_features;
+mod placement;
 
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
 use contour::point_to_document;
 pub use contour::{ContourSegment, ContourSegmentEntry, ContourSegmentError};
 pub use contour_edit::ContourEditError;
+pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
+pub use ids::{ContourSegmentId, EdgeId, Id, Revision, VertexId};
 pub use panel_contour::{ContourPath, PanelContourError, SegmentSource};
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
-
-/// A stable document identifier.
-///
-/// Identifiers are never reused while a document is edited, so commands, hardware references and
-/// the undo stack can refer to a container, panel or catalogue entry without holding a pointer.
-/// Zero is reserved for "no entity" and is rejected on construction and deserialization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Id(NonZeroU64);
-
-impl Id {
-    /// Creates an id from a non-zero raw value.
-    pub const fn new(value: u64) -> Option<Self> {
-        match NonZeroU64::new(value) {
-            Some(value) => Some(Self(value)),
-            None => None,
-        }
-    }
-
-    /// The raw numeric value.
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-impl fmt::Display for Id {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.0)
-    }
-}
-
-/// A monotonically increasing document revision.
-///
-/// The revision changes after every document mutation and keys every derived cache. It starts at
-/// zero and never wraps: [`Revision::checked_next`] returns `None` at the end of the range.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Revision(u64);
-
-impl Revision {
-    /// The initial revision of an unmodified document.
-    pub const ZERO: Self = Self(0);
-
-    /// The raw numeric value.
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-
-    /// The next revision, or `None` if the counter would overflow.
-    pub fn checked_next(self) -> Option<Self> {
-        self.0.checked_add(1).map(Self)
-    }
-}
-
-/// Intrinsic XYZ Euler angles in degrees, the inspector's view of a placement rotation.
-///
-/// The document stores a unit quaternion; Euler angles are derived on read and never serialized.
-/// Each angle is in millidegrees, so text entered in the inspector round-trips exactly.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct EulerAngles {
-    /// Rotation about the local X axis, in degrees.
-    pub x: Degrees,
-    /// Rotation about the local Y axis, in degrees.
-    pub y: Degrees,
-    /// Rotation about the local Z axis, in degrees.
-    pub z: Degrees,
-}
-
-impl EulerAngles {
-    /// The axis order used by [`Placement::rotation_euler`] and [`Placement::with_rotation_euler`].
-    pub const ORDER_LABEL: &'static str = "XYZ";
-
-    /// Wraps each angle into `(-180°, 180°]`, the principal range the inspector displays.
-    ///
-    /// A full turn about one axis is the identity, so wrapping each angle does not change the
-    /// rotation the triple describes.
-    pub fn wrapped(self) -> Self {
-        Self { x: wrap_degrees(self.x), y: wrap_degrees(self.y), z: wrap_degrees(self.z) }
-    }
-}
-
-fn wrap_degrees(degrees: Degrees) -> Degrees {
-    let wrapped = degrees.millidegrees().rem_euclid(360_000);
-    Degrees::from_millidegrees(if wrapped > 180_000 { wrapped - 360_000 } else { wrapped })
-}
-
-/// A rigid placement relative to a parent frame.
-///
-/// Placement is translation plus rotation, never scale or shear. Rotations are stored as a unit
-/// quaternion; construction and deserialization reject a zero or non-unit quaternion instead of
-/// silently normalising it. The serialized rotation is `[x, y, z, w]`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "PlacementWire", into = "PlacementWire")]
-pub struct Placement {
-    translation: DVec3,
-    rotation: DQuat,
-}
-
-impl Placement {
-    /// The identity placement: no translation and no rotation.
-    pub const IDENTITY: Self = Self { translation: DVec3::ZERO, rotation: DQuat::IDENTITY };
-
-    /// Creates a placement after checking that every component is finite and the rotation is unit.
-    pub fn new(translation: DVec3, rotation: DQuat) -> Result<Self, PlacementError> {
-        if !translation.is_finite() {
-            return Err(PlacementError::NonFiniteTranslation);
-        }
-        if !rotation.is_finite() {
-            return Err(PlacementError::NonFiniteRotation);
-        }
-        let length = rotation.length();
-        if !length.is_finite() || (length - 1.0).abs() > ROTATION_TOLERANCE {
-            return Err(PlacementError::NonUnitRotation { length });
-        }
-        Ok(Self { translation, rotation })
-    }
-
-    /// The translation part, in the parent frame.
-    pub const fn translation(self) -> DVec3 {
-        self.translation
-    }
-
-    /// The unit rotation part, in the parent frame.
-    pub const fn rotation(self) -> DQuat {
-        self.rotation
-    }
-
-    /// Composes a child placement into its parent's frame: `parent ∘ child`.
-    ///
-    /// A point expressed in the child frame is first transformed by `child`, then by `parent`.
-    pub fn compose(parent: Self, child: Self) -> Result<Self, PlacementError> {
-        let rotation = (parent.rotation * child.rotation).normalize();
-        let translation = parent.rotation * child.translation + parent.translation;
-        Self::new(translation, rotation)
-    }
-
-    /// Applies the placement to a point.
-    pub fn transform_point(self, point: DVec3) -> DVec3 {
-        self.rotation * point + self.translation
-    }
-
-    /// Applies only the rotation to a direction vector.
-    pub fn transform_vector(self, vector: DVec3) -> DVec3 {
-        self.rotation * vector
-    }
-
-    /// The translation as exact micrometre lengths, rounded to the nearest micrometre.
-    ///
-    /// This is the boundary conversion for editing a placement as integer lengths. It returns
-    /// `None` when a component is NaN, infinite or outside the range of [`Length`].
-    pub fn translation_lengths(self) -> Option<[Length; 3]> {
-        lengths_from_millimetres(self.translation)
-    }
-
-    /// Replaces the translation from exact lengths, keeping the rotation.
-    ///
-    /// This converts to millimetres at the geometry boundary; callers keep placement coordinates
-    /// as [`Length`] until this point.
-    pub fn with_translation(self, x: Length, y: Length, z: Length) -> Result<Self, PlacementError> {
-        Self::new(DVec3::new(x.millimetres_f64(), y.millimetres_f64(), z.millimetres_f64()), self.rotation)
-    }
-
-    /// The rotation as intrinsic XYZ Euler angles, rounded to the nearest millidegree.
-    ///
-    /// Euler angles are a presentation of the stored unit quaternion; the quaternion remains the
-    /// source of truth. At Y = ±90° the X and Z angles are not unique.
-    pub fn rotation_euler(self) -> EulerAngles {
-        let (x, y, z) = self.rotation.to_euler(EulerRot::XYZ);
-        EulerAngles {
-            x: Degrees::from_radians(x).unwrap_or_default(),
-            y: Degrees::from_radians(y).unwrap_or_default(),
-            z: Degrees::from_radians(z).unwrap_or_default(),
-        }
-        .wrapped()
-    }
-
-    /// Replaces the rotation from intrinsic XYZ Euler angles, keeping the translation.
-    ///
-    /// The quaternion is re-derived from the angles, so values finer than a millidegree are lost;
-    /// this is the write side of the inspector. The angles are wrapped to `(-180°, 180°]` first.
-    pub fn with_rotation_euler(self, angles: EulerAngles) -> Result<Self, PlacementError> {
-        let angles = angles.wrapped();
-        let rotation =
-            DQuat::from_euler(EulerRot::XYZ, angles.x.radians_f64(), angles.y.radians_f64(), angles.z.radians_f64())
-                .normalize();
-        Self::new(self.translation, rotation)
-    }
-
-    /// Whether two placements describe the same rigid transform.
-    ///
-    /// Quaternions `q` and `-q` are the same rotation, so a sign-only difference is not a change.
-    /// The translation must match exactly; the rotation tolerance is well below the inspector's
-    /// millidegree display precision.
-    pub fn same_transform(self, other: Self) -> bool {
-        self.translation == other.translation && self.rotation.dot(other.rotation).abs() >= 1.0 - 1.0e-12
-    }
-}
-
-/// Rounds a millimetre point to exact micrometre lengths.
-///
-/// Returns `None` when a component is NaN, infinite or outside the range of [`Length`]. This is the
-/// geometry-boundary conversion used by placement and pivot editing.
-fn lengths_from_millimetres(point: DVec3) -> Option<[Length; 3]> {
-    fn to_length(value: f64) -> Option<Length> {
-        if !value.is_finite() {
-            return None;
-        }
-        let micrometres = (value * 1_000.0).round();
-        if !(micrometres >= i64::MIN as f64 && micrometres < i64::MAX as f64) {
-            return None;
-        }
-        Some(Length::from_micrometres(micrometres as i64))
-    }
-    Some([to_length(point.x)?, to_length(point.y)?, to_length(point.z)?])
-}
-
-/// The manipulation pivot of a node, in that node's local frame.
-///
-/// The pivot is stored document data rather than a value derived from the current geometry: it is
-/// created once with a sensible default, then moves and turns with the node and survives resizing,
-/// adding or removing children, and save/load. Coordinates are integer micrometres like every other
-/// persisted length; [`Pivot::to_local`] is the geometry-boundary view.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Pivot([Length; 3]);
-
-impl Pivot {
-    /// The local origin.
-    pub const ZERO: Self = Self([Length::ZERO; 3]);
-
-    /// Builds a pivot from exact micrometre lengths.
-    pub const fn new(x: Length, y: Length, z: Length) -> Self {
-        Self([x, y, z])
-    }
-
-    /// Rounds a millimetre point into a pivot, or `None` when it is not representable.
-    pub fn from_local(point: DVec3) -> Option<Self> {
-        Some(Self(lengths_from_millimetres(point)?))
-    }
-
-    /// The three components in micrometres.
-    pub const fn components(self) -> [Length; 3] {
-        self.0
-    }
-
-    /// The pivot in millimetres for geometry and rendering.
-    pub fn to_local(self) -> DVec3 {
-        DVec3::new(self.0[0].millimetres_f64(), self.0[1].millimetres_f64(), self.0[2].millimetres_f64())
-    }
-
-    /// Whether the pivot is the node's local origin.
-    pub const fn is_zero(self) -> bool {
-        self.0[0].is_zero() && self.0[1].is_zero() && self.0[2].is_zero()
-    }
-}
-
-/// The largest furniture type code: two digits for group, type and variant.
-pub const FURNTYPE_MAX_CODE: u32 = 999_999;
-
-/// Why a furniture type code or its text form is not usable.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum FurnTypeError {
-    /// The numeric code is outside the supported range.
-    #[error("furniture type {value} is outside the supported range 0 to {max}")]
-    OutOfRange {
-        /// The rejected code.
-        value: u32,
-        /// The largest supported code.
-        max: u32,
-    },
-    /// The text form is not a valid code.
-    #[error("furniture type `{text}` is not a valid code")]
-    Invalid {
-        /// The rejected text.
-        text: String,
-    },
-}
-
-/// A numeric furniture type in the strict `GG.TT.VV` tree.
-///
-/// The value is the stored integer code, from `0` (unclassified) to [`FurnType::MAX`]. The dotted
-/// form is a presentation only: it is produced by [`fmt::Display`] and accepted by `FromStr`, never
-/// stored. A zero suffix means "the type itself, without a variant".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct FurnType(u32);
-
-impl FurnType {
-    /// The unclassified type, `000000`.
-    pub const UNCLASSIFIED: Self = Self(0);
-
-    /// The largest assignable furniture type.
-    pub const MAX: Self = Self(999_999);
-
-    /// Builds a type from its numeric code, or `None` when the code is not a valid tree position.
-    ///
-    /// A valid code has a non-zero group; a variant requires a type. Zero is
-    /// [`FurnType::UNCLASSIFIED`].
-    pub const fn from_code(code: u32) -> Option<Self> {
-        if code == 0 {
-            return Some(Self(0));
-        }
-        let group = code / 10_000;
-        let type_ = (code / 100) % 100;
-        let variant = code % 100;
-        if code <= 999_999 && group != 0 && (variant == 0 || type_ != 0) { Some(Self(code)) } else { None }
-    }
-
-    /// The numeric code without separators, the only stored form.
-    pub const fn value(self) -> u32 {
-        self.0
-    }
-
-    /// Whether the type is unclassified.
-    pub const fn is_unclassified(self) -> bool {
-        self.0 == 0
-    }
-
-    /// The parent type: the current type without its variant, or the group without its type.
-    pub const fn parent(self) -> Self {
-        let variant = self.0 % 100;
-        let type_ = (self.0 / 100) % 100;
-        if variant != 0 {
-            Self(self.0 - variant)
-        } else if type_ != 0 {
-            Self(self.0 - type_ * 100)
-        } else {
-            Self(0)
-        }
-    }
-
-    /// Whether `ancestor` is the type itself or one of its ancestors.
-    ///
-    /// `000000` is a sentinel, not a group: it matches only unclassified types, so a report can ask
-    /// for "everything without a type" instead of matching the whole tree.
-    pub fn is_ancestor_or_self(self, ancestor: Self) -> bool {
-        if ancestor.is_unclassified() {
-            return self.is_unclassified();
-        }
-        let mut current = self;
-        loop {
-            if current == ancestor {
-                return true;
-            }
-            if current.is_unclassified() {
-                return false;
-            }
-            current = current.parent();
-        }
-    }
-}
-
-impl fmt::Display for FurnType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let group = self.0 / 10_000;
-        let type_ = (self.0 / 100) % 100;
-        let variant = self.0 % 100;
-        if variant != 0 {
-            write!(formatter, "{group}.{:02}.{:02}", type_, variant)
-        } else if type_ != 0 {
-            write!(formatter, "{group}.{:02}", type_)
-        } else {
-            write!(formatter, "{group}")
-        }
-    }
-}
-
-impl FromStr for FurnType {
-    type Err = FurnTypeError;
-
-    fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let text = text.trim();
-        let invalid = || FurnTypeError::Invalid { text: text.to_owned() };
-        if text.is_empty() {
-            return Err(invalid());
-        }
-        if !text.contains('.') {
-            let raw = text.parse::<u32>().map_err(|_| invalid())?;
-            // One or two digits name a group, the display form of a group code; a longer run is a
-            // raw integer code. Both round-trip through [`fmt::Display`].
-            let code = if text.len() <= 2 { raw * 10_000 } else { raw };
-            return FurnType::from_code(code).ok_or(FurnTypeError::OutOfRange { value: code, max: FURNTYPE_MAX_CODE });
-        }
-        let mut parts = text.split('.');
-        let group_text = parts.next().ok_or_else(invalid)?;
-        let type_text = parts.next();
-        let variant_text = parts.next();
-        if parts.next().is_some() {
-            return Err(invalid());
-        }
-        let parse_part = |part: &str, digits: usize| -> Result<u32, FurnTypeError> {
-            if part.is_empty() || part.len() > digits || !part.chars().all(|c| c.is_ascii_digit()) {
-                return Err(invalid());
-            }
-            let mut value = 0u32;
-            for c in part.chars() {
-                value = value * 10 + u32::from(c as u8 - b'0');
-            }
-            Ok(value)
-        };
-        let group = parse_part(group_text, 2)?;
-        if group == 0 {
-            return Err(invalid());
-        }
-        let type_ = match type_text {
-            Some(part) => parse_part(part, 2)?,
-            None => 0,
-        };
-        let variant = match variant_text {
-            Some(part) => parse_part(part, 2)?,
-            None => 0,
-        };
-        let code = group * 10_000 + type_ * 100 + variant;
-        FurnType::from_code(code).ok_or(FurnTypeError::OutOfRange { value: code, max: FURNTYPE_MAX_CODE })
-    }
-}
-
-impl Serialize for FurnType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_u32(self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for FurnType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let code = u32::deserialize(deserializer)?;
-        FurnType::from_code(code).ok_or_else(|| {
-            de::Error::custom(format_args!(
-                "furniture type {code} is outside the supported range 0 to {FURNTYPE_MAX_CODE}"
-            ))
-        })
-    }
-}
+pub use placement::{EulerAngles, Pivot, Placement, PlacementError};
 
 /// The reserved system property keys of a node (ADR 0034).
 pub const SYSTEM_COMPONENT: &str = "component";
@@ -843,53 +408,6 @@ impl NodeQuery {
     /// The property predicate, if any.
     pub const fn property(&self) -> Option<&PropertyPredicate> {
         self.property.as_ref()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Error, PartialEq)]
-pub enum PlacementError {
-    /// The translation contains a NaN or an infinity.
-    #[error("placement translation must be finite")]
-    NonFiniteTranslation,
-    /// The rotation contains a NaN or an infinity.
-    #[error("placement rotation must be finite")]
-    NonFiniteRotation,
-    /// The rotation quaternion is not unit length.
-    #[error("placement rotation must be a unit quaternion, got length {length}")]
-    NonUnitRotation {
-        /// The length of the rejected quaternion.
-        length: f64,
-    },
-}
-
-/// Accepted deviation from unit length for a rotation quaternion.
-const ROTATION_TOLERANCE: f64 = 1e-9;
-
-/// Serialized form of [`Placement`]; validation happens in its `TryFrom` implementation.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PlacementWire {
-    translation: [f64; 3],
-    rotation: [f64; 4],
-}
-
-impl From<Placement> for PlacementWire {
-    fn from(placement: Placement) -> Self {
-        let rotation = placement.rotation;
-        Self {
-            translation: placement.translation.to_array(),
-            rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
-        }
-    }
-}
-
-impl TryFrom<PlacementWire> for Placement {
-    type Error = PlacementError;
-
-    fn try_from(wire: PlacementWire) -> Result<Self, Self::Error> {
-        let translation = DVec3::from_array(wire.translation);
-        let rotation = DQuat::from_xyzw(wire.rotation[0], wire.rotation[1], wire.rotation[2], wire.rotation[3]);
-        Self::new(translation, rotation)
     }
 }
 
@@ -7213,72 +6731,6 @@ impl TryFrom<RingBandingWire> for RingBanding {
     }
 }
 
-macro_rules! stable_id {
-    ($(#[$meta:meta])* $name:ident, $description:literal) => {
-        $(#[$meta])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-        #[serde(transparent)]
-        pub struct $name(u32);
-
-        impl $name {
-            /// Creates an id from a non-zero value.
-            pub const fn new(value: u32) -> Option<Self> {
-                if value == 0 { None } else { Some(Self(value)) }
-            }
-
-            /// The numeric value.
-            pub const fn get(self) -> u32 {
-                self.0
-            }
-
-            /// Builds an id from a value that is known to be non-zero inside this crate.
-            ///
-            /// Only the id types with const constructors call this; the others reach it never, which
-            /// is why the allow is part of the generated item rather than of one invocation.
-            #[allow(dead_code)]
-            pub(crate) const fn from_known(value: u32) -> Self {
-                Self(value)
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let value = u32::deserialize(deserializer)?;
-                Self::new(value)
-                    .ok_or_else(|| <D::Error as serde::de::Error>::custom(concat!($description, " must be non-zero")))
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "{}", self.0)
-            }
-        }
-    };
-}
-
-stable_id!(
-    /// A corner id of a rectangular panel outline.
-    VertexId,
-    "vertex id"
-);
-stable_id!(
-    /// An edge id of a rectangular panel outline.
-    EdgeId,
-    "edge id"
-);
-stable_id!(
-    /// A stable id of one segment of a constructive contour.
-    ///
-    /// Ids are unique inside their ring and never reused, so a command can name a segment while the
-    /// ring is edited. They are labels, not keys: their numbers carry no order.
-    ContourSegmentId,
-    "contour segment id"
-);
-
 /// A corner of a rectangular panel, numbered counter-clockwise when viewed from face `A`.
 ///
 /// Corner 1 is the nominal minimum corner at `(0, 0)`. The core may start at a positive
@@ -7411,6 +6863,10 @@ pub enum EntryFace {
 mod tests {
     use super::*;
 
+    use furnicraft_geom::DQuat;
+
+    use crate::fixtures::{furntype, millimetres};
+
     #[test]
     fn face_sides_are_opposites() {
         assert_eq!(FaceSide::A.opposite(), FaceSide::B);
@@ -7437,63 +6893,6 @@ mod tests {
             assert_eq!(RectEdge::between(edge.start(), edge.end()), Some(edge));
         }
         assert_eq!(RectEdge::between(RectCorner::BottomLeft, RectCorner::TopLeft), None);
-    }
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
-
-    #[test]
-    fn ids_are_non_zero_and_serialize_as_numbers() {
-        assert!(Id::new(0).is_none());
-        let id = Id::new(42).expect("non-zero id");
-        assert_eq!(id.get(), 42);
-        assert_eq!(serde_json::to_string(&id).expect("serialize id"), "42");
-        assert_eq!(serde_json::from_str::<Id>("42").expect("deserialize id"), id);
-        assert!(serde_json::from_str::<Id>("0").is_err());
-        assert_eq!(std::mem::size_of::<Option<Id>>(), std::mem::size_of::<u64>());
-    }
-
-    #[test]
-    fn revisions_are_monotonic_and_do_not_wrap() {
-        assert_eq!(Revision::ZERO.get(), 0);
-        let one = Revision::ZERO.checked_next().expect("first revision");
-        assert_eq!(one.get(), 1);
-        assert_eq!(one.checked_next().expect("second revision").get(), 2);
-
-        assert_eq!(Revision(u64::MAX).checked_next(), None);
-        assert_eq!(serde_json::from_str::<Revision>("7").expect("deserialize revision").get(), 7);
-    }
-
-    #[test]
-    fn identity_placement_preserves_points_and_vectors() {
-        let point = DVec3::new(1.0, 2.0, 3.0);
-        assert_eq!(Placement::IDENTITY.transform_point(point), point);
-        assert_eq!(Placement::IDENTITY.transform_vector(DVec3::X), DVec3::X);
-    }
-
-    #[test]
-    fn placements_compose_translation_and_rotation() {
-        let parent = Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("parent placement");
-        let child = Placement::new(DVec3::new(0.0, 5.0, 0.0), DQuat::IDENTITY).expect("child placement");
-        let world = Placement::compose(parent, child).expect("world placement");
-        let point = world.transform_point(DVec3::ZERO);
-        assert!((point - DVec3::new(10.0, 5.0, 0.0)).length() < 1e-12, "point was {point:?}");
-
-        let parent =
-            Placement::new(DVec3::ZERO, DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)).expect("rotated parent");
-        let child = Placement::new(DVec3::new(1.0, 0.0, 0.0), DQuat::IDENTITY).expect("translated child");
-        let world = Placement::compose(parent, child).expect("world placement");
-        let point = world.transform_point(DVec3::ZERO);
-        assert!((point - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-12, "point was {point:?}");
-
-        let parent =
-            Placement::new(DVec3::ZERO, DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2)).expect("rotated parent");
-        let child =
-            Placement::new(DVec3::ZERO, DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)).expect("rotated child");
-        let world = Placement::compose(parent, child).expect("world placement");
-        let point = world.transform_point(DVec3::Y);
-        assert!((point - DVec3::Z).length() < 1e-12, "point was {point:?}");
     }
 
     #[test]
@@ -7659,152 +7058,6 @@ mod tests {
         assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
         assert!(matches!(project.set_node_pivot(root, Pivot::ZERO), Err(ProjectError::RootImmutable { .. })));
         assert!(matches!(project.center_node_pivot(root), Err(ProjectError::RootImmutable { .. })));
-    }
-
-    #[test]
-    fn placements_reject_non_finite_and_non_unit_input() {
-        assert_eq!(
-            Placement::new(DVec3::new(f64::NAN, 0.0, 0.0), DQuat::IDENTITY),
-            Err(PlacementError::NonFiniteTranslation)
-        );
-        assert_eq!(
-            Placement::new(DVec3::ZERO, DQuat::from_xyzw(f64::NAN, 0.0, 0.0, 1.0)),
-            Err(PlacementError::NonFiniteRotation)
-        );
-        assert!(matches!(
-            Placement::new(DVec3::ZERO, DQuat::from_xyzw(0.0, 0.0, 0.0, 2.0)),
-            Err(PlacementError::NonUnitRotation { length }) if (length - 2.0).abs() < 1e-12
-        ));
-    }
-
-    #[test]
-    fn placements_round_trip_and_validate_on_load() {
-        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.25)).expect("placement");
-        let text = serde_json::to_string(&placement).expect("serialize placement");
-        assert!(text.contains(r#""translation":[1.0,2.0,3.0]"#), "json was {text}");
-        assert_eq!(serde_json::from_str::<Placement>(&text).expect("deserialize placement"), placement);
-        assert!(
-            serde_json::from_str::<Placement>(r#"{"translation":[0.0,0.0,0.0],"rotation":[0.0,0.0,0.0,2.0]}"#).is_err()
-        );
-        assert!(
-            serde_json::from_str::<Placement>(
-                r#"{"translation":[0.0,0.0,0.0],"rotation":[0.0,0.0,0.0,1.0],"extra":1}"#
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn placements_round_trip_through_exact_translation_lengths() {
-        let placement =
-            Placement::new(DVec3::new(-2.5, 0.001, 1200.0), DQuat::from_rotation_y(0.5)).expect("placement");
-        let [x, y, z] = placement.translation_lengths().expect("representable translation");
-        assert_eq!(x, Length::from_micrometres(-2_500));
-        assert_eq!(y, Length::from_micrometres(1));
-        assert_eq!(z, Length::from_micrometres(1_200_000));
-
-        let edited = placement.with_translation(x, y, z).expect("rebuild placement");
-        assert_eq!(edited, placement);
-        assert_eq!(edited.rotation(), placement.rotation());
-
-        let moved = placement
-            .with_translation(Length::from_millimetres(10).expect("length"), Length::ZERO, Length::ZERO)
-            .expect("move placement");
-        assert_eq!(moved.translation(), DVec3::new(10.0, 0.0, 0.0));
-        assert_eq!(moved.rotation(), placement.rotation());
-    }
-
-    #[test]
-    fn translation_lengths_reject_values_outside_the_editable_range() {
-        let huge = Placement::new(DVec3::new(1e300, 0.0, 0.0), DQuat::IDENTITY).expect("finite placement");
-        assert!(huge.translation_lengths().is_none());
-        assert!(Placement::IDENTITY.translation_lengths().is_some());
-    }
-
-    #[test]
-    fn identity_rotation_has_zero_euler_angles() {
-        let angles = Placement::IDENTITY.rotation_euler();
-        assert_eq!(angles, EulerAngles::default());
-        assert_eq!(angles.x, Degrees::ZERO);
-        assert_eq!(angles.y, Degrees::ZERO);
-        assert_eq!(angles.z, Degrees::ZERO);
-    }
-
-    #[test]
-    fn euler_angles_use_intrinsic_xyz_order() {
-        let rotation = DQuat::from_rotation_x(std::f64::consts::FRAC_PI_2)
-            * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_4)
-            * DQuat::from_rotation_z(std::f64::consts::FRAC_PI_8);
-        let placement = Placement::new(DVec3::ZERO, rotation).expect("placement");
-        let angles = placement.rotation_euler();
-        assert_eq!(angles.x, Degrees::from_millidegrees(90_000));
-        assert_eq!(angles.y, Degrees::from_millidegrees(45_000));
-        assert_eq!(angles.z, Degrees::from_millidegrees(22_500));
-    }
-
-    #[test]
-    fn euler_angles_round_trip_and_preserve_translation() {
-        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.25)).expect("placement");
-        let angles = placement.rotation_euler();
-        let rebuilt = placement.with_rotation_euler(angles).expect("rebuild rotation");
-        assert_eq!(rebuilt.translation(), placement.translation());
-        assert!(rebuilt.rotation().dot(placement.rotation()).abs() > 1.0 - 1.0e-9);
-
-        let turned = placement
-            .with_rotation_euler(EulerAngles {
-                x: Degrees::from_millidegrees(30_000),
-                y: Degrees::from_millidegrees(-15_500),
-                z: Degrees::from_millidegrees(90_000),
-            })
-            .expect("turn placement");
-        assert_eq!(turned.translation(), placement.translation());
-        assert!((turned.rotation().length() - 1.0).abs() < 1.0e-12);
-    }
-
-    #[test]
-    fn euler_angles_at_gimbal_lock_recompose_the_same_rotation() {
-        let rotation = DQuat::from_rotation_x(0.4)
-            * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2)
-            * DQuat::from_rotation_z(0.7);
-        let placement = Placement::new(DVec3::ZERO, rotation).expect("placement");
-        let angles = placement.rotation_euler();
-        let rebuilt = placement.with_rotation_euler(angles).expect("rebuild rotation");
-        assert!(rebuilt.rotation().dot(placement.rotation()).abs() > 1.0 - 1.0e-9);
-    }
-
-    #[test]
-    fn euler_angles_wrap_full_turns_into_the_principal_range() {
-        let full_turn = EulerAngles {
-            x: Degrees::from_millidegrees(360_000),
-            y: Degrees::from_millidegrees(-360_000),
-            z: Degrees::from_millidegrees(720_000),
-        };
-        assert_eq!(full_turn.wrapped(), EulerAngles::default());
-        let placement = Placement::IDENTITY.with_rotation_euler(full_turn).expect("wrap placement");
-        assert!(placement.same_transform(Placement::IDENTITY));
-
-        let wrapped = EulerAngles {
-            x: Degrees::from_millidegrees(540_000),
-            y: Degrees::from_millidegrees(-181_000),
-            z: Degrees::from_millidegrees(180_000),
-        }
-        .wrapped();
-        assert_eq!(wrapped.x, Degrees::from_millidegrees(180_000));
-        assert_eq!(wrapped.y, Degrees::from_millidegrees(179_000));
-        assert_eq!(wrapped.z, Degrees::from_millidegrees(180_000));
-    }
-
-    #[test]
-    fn same_transform_ignores_the_quaternion_sign_and_rejects_real_changes() {
-        let rotation = DQuat::from_rotation_z(0.3);
-        let placement = Placement::new(DVec3::new(1.0, 2.0, 3.0), rotation).expect("placement");
-        let flipped = Placement::new(DVec3::new(1.0, 2.0, 3.0), -rotation).expect("flipped placement");
-        assert!(placement.same_transform(flipped));
-
-        let moved = Placement::new(DVec3::new(1.0, 2.0, 4.0), rotation).expect("moved placement");
-        assert!(!placement.same_transform(moved));
-        let turned = Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::from_rotation_z(0.31)).expect("turned placement");
-        assert!(!placement.same_transform(turned));
     }
 
     fn sample_nominal() -> PanelNominalSize {
@@ -9698,19 +8951,6 @@ mod tests {
     }
 
     #[test]
-    fn ids_reject_zero_and_serialize_as_numbers() {
-        assert!(VertexId::new(0).is_none());
-        assert!(EdgeId::new(0).is_none());
-        assert!(serde_json::from_str::<VertexId>("0").is_err());
-        assert!(serde_json::from_str::<EdgeId>("0").is_err());
-
-        let id = EdgeId::new(3).expect("non-zero edge id");
-        assert_eq!(serde_json::to_string(&id).expect("serialize id"), "3");
-        let decoded: EdgeId = serde_json::from_str("3").expect("deserialize id");
-        assert_eq!(decoded, id);
-    }
-
-    #[test]
     fn nodes_can_be_renamed_and_placed() {
         let mut project = sample_project();
         let root = project.root().id();
@@ -9942,50 +9182,6 @@ mod tests {
         assert_eq!(project.ungroup_group(drawer), Err(ProjectError::NotAComponent { id: drawer }));
         assert_eq!(project.ungroup_group(panel), Err(ProjectError::NotAnOrdinaryContainer { id: panel }));
         assert_eq!(project.ungroup_group(root), Err(ProjectError::RootImmutable { id: root }));
-    }
-
-    fn furntype(text: &str) -> FurnType {
-        text.parse().expect("valid furniture type")
-    }
-
-    #[test]
-    fn furniture_types_encode_three_levels_and_parents() {
-        let cabinet = furntype("12.03.02");
-        assert_eq!(cabinet.value(), 120_302);
-        assert_eq!(cabinet.to_string(), "12.03.02");
-        assert_eq!(cabinet.parent(), furntype("12.03"));
-        assert_eq!(cabinet.parent().parent(), furntype("12"));
-        assert_eq!(cabinet.parent().parent().parent(), FurnType::UNCLASSIFIED);
-        assert!(cabinet.is_ancestor_or_self(cabinet));
-        assert!(cabinet.is_ancestor_or_self(furntype("12")));
-        assert!(!furntype("12").is_ancestor_or_self(cabinet));
-        assert!(!cabinet.is_ancestor_or_self(FurnType::UNCLASSIFIED));
-        assert!(FurnType::UNCLASSIFIED.is_ancestor_or_self(FurnType::UNCLASSIFIED));
-        assert_eq!(furntype("12").value(), 120_000);
-        assert_eq!(format!("{}", furntype("12")), "12");
-        assert_eq!(format!("{}", FurnType::UNCLASSIFIED), "0");
-    }
-
-    #[test]
-    fn furniture_types_reject_bad_text_and_out_of_range_codes() {
-        assert_eq!(FurnType::from_code(1_000_000), None);
-        assert_eq!(FurnType::from_code(FURNTYPE_MAX_CODE), Some(FurnType::MAX));
-        assert!("".parse::<FurnType>().is_err());
-        assert!("0.0.0".parse::<FurnType>().is_err());
-        assert!("12.3.4.5".parse::<FurnType>().is_err());
-        assert!("12.123".parse::<FurnType>().is_err());
-        assert!("twelve".parse::<FurnType>().is_err());
-        assert_eq!("120302".parse::<FurnType>().expect("bare code"), furntype("12.03.02"));
-        assert_eq!("12.03".parse::<FurnType>().expect("type form"), furntype("12.03"));
-    }
-
-    #[test]
-    fn furniture_types_serialize_as_integers() {
-        let value = serde_json::to_value(furntype("12.03.02")).expect("serialize type");
-        assert_eq!(value, serde_json::json!(120_302));
-        let decoded: FurnType = serde_json::from_value(value).expect("deserialize type");
-        assert_eq!(decoded, furntype("12.03.02"));
-        assert!(serde_json::from_value::<FurnType>(serde_json::json!(1_000_000)).is_err());
     }
 
     #[test]
