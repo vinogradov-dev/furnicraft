@@ -22,10 +22,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S2** extract the domain-free solid plan: `SolidPlan`/`SolidOp` with extrude and boolean, an
-  internal builder, one evaluator with an analytic single-extrusion backend and a kernel backend;
-  move `build_constructive_mesh` and the cutout tool onto it without changing the scene, and write
-  the shape-layer ADR. `files: crates/param/src, crates/mesh/src/lib.rs, docs/decisions/`
+- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
+  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 
 ## Bugs
 
@@ -39,8 +37,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
-  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 - `[ ]` **S3** one contour conversion: `model::Contour` to `geom::Region` to `kernel::Profile` with one
   sampling tolerance and one place where arcs become a polyline; route the rectangular core, shaped
   core, cutout tool and constructive extrusion through it.
@@ -107,6 +103,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **S2** one domain-free solid plan: `SolidPlan` is a base extrusion plus boolean steps, a
+  `PlanBuilder` assembles it, and one evaluator drives both the kernel and the analytic
+  single-extrusion backend; panels, bands, cutout tools and constructive objects compile to it,
+  `object.collapse` keeps the exact mesh, and ADR 0041 records the boundary — `bd33056`
 - `[x]` **S1** decompose `crates/model/src/lib.rs` by responsibility: one module per value family,
   panel rules split into geometry, banding and machining, `Project` split into wire, error, derived
   queries and command families, tree traversal in one place; public API, serde and behaviour
