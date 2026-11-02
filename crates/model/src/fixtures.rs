@@ -94,6 +94,17 @@ pub(crate) fn rectangle_contour(width: i64, height: i64) -> Contour {
     .expect("rectangle")
 }
 
+/// A rectangular ring with its minimum corner at `(x, y)`.
+pub(crate) fn ring(x: i64, y: i64, width: i64, height: i64) -> Contour {
+    Contour::from_polygon(vec![
+        [millimetres(x), millimetres(y)],
+        [millimetres(x + width), millimetres(y)],
+        [millimetres(x + width), millimetres(y + height)],
+        [millimetres(x), millimetres(y + height)],
+    ])
+    .expect("rectangle ring")
+}
+
 pub(crate) fn plate_contour() -> Contour {
     rectangle_contour(100, 50)
 }

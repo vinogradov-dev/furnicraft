@@ -1215,4 +1215,14 @@ mod tests {
             Err(ProjectError::ContourMachiningUnsupported { panel }) if panel == panel_id
         ));
     }
+
+    #[test]
+    fn panels_load_without_machining() {
+        let panel = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let mut value = serde_json::to_value(&panel).expect("serialize panel");
+        value.as_object_mut().expect("panel is an object").remove("machining");
+        let decoded: Panel = serde_json::from_value(value).expect("older panel without machining");
+        assert_eq!(decoded, panel);
+        assert!(decoded.machining().is_empty());
+    }
 }

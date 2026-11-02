@@ -809,4 +809,17 @@ mod tests {
         }
         assert_eq!(RectEdge::between(RectCorner::BottomLeft, RectCorner::TopLeft), None);
     }
+
+    #[test]
+    fn panel_rects_reject_non_positive_dimensions() {
+        assert_eq!(
+            PanelRect::new(Length::ZERO, Length::ZERO, Length::ZERO, millimetres(10)),
+            Err(PanelRectError::NonPositive { field: "width", value: Length::ZERO })
+        );
+        assert_eq!(
+            PanelRect::new(Length::ZERO, Length::ZERO, millimetres(10), Length::ZERO),
+            Err(PanelRectError::NonPositive { field: "height", value: Length::ZERO })
+        );
+        assert!(serde_json::from_str::<PanelRect>(r#"{"x":0,"y":0,"width":0,"height":10000}"#).is_err());
+    }
 }

@@ -12,13 +12,13 @@ steps:
   [x] container, node enum and tree traversal moved into modules
   [x] duplicated tree walkers collapsed into one
   [x] project wire, errors and derived queries moved into modules
-  [ ] project commands split by family
+  [x] project commands split by family
   [ ] gate green, plan closed, `dev` merged into `main`
 
-now: step 7 committed; step 8 splits the remaining commands in `project/mod.rs` by family
+now: step 8 committed; step 9 closes the task: gate, map, status and merge into `main`
 blocked: nothing
 run: cargo test -p furnicraft-model
-resume: move the panel, object, node, camera/light and property commands with their validators into `project/{panel_cmds,object_cmds,node_cmds,camera_light_cmds,property_cmds}.rs`
+resume: run `cargo xtask ci`, refresh `plan/status` and `plan/map.md`, delete this note and merge `dev` into `main`
 map: `plan/map.md` row "Contour ring, segment ids"
 decisions: fields stay private; `Project` commands get `pub(crate)` mutators on value types; tests
   move into the module that owns the behaviour; serde attributes are copied verbatim

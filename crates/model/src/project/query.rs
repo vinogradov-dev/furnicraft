@@ -308,3 +308,67 @@ impl Project {
         ids
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::fixtures::*;
+    use crate::*;
+
+    #[test]
+    fn a_furniture_type_marks_a_container_as_a_component() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let group = project.group_nodes(&[Id::new(2).expect("id"), Id::new(3).expect("id")], "G").expect("group");
+        assert!(!project.is_component(group));
+
+        project.set_property(group, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        assert!(project.is_component(group));
+        project.set_property(group, SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("false marker");
+        assert!(project.is_component(group), "an explicit false does not erase the furniture type");
+        assert_eq!(project.furntype(group), Some(furntype("12.03.02")));
+        assert_eq!(project.furntype(root), Some(FurnType::UNCLASSIFIED));
+
+        assert_eq!(project.ungroup_group(group), Err(ProjectError::NotAComponent { id: group }));
+
+        project.convert_to_group(group).expect("convert to group");
+        assert!(project.container(group).is_none());
+        assert!(project.properties(Id::new(2).expect("id")).is_some());
+    }
+
+    #[test]
+    fn queries_select_by_kind_furniture_type_and_property() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel");
+        let front = Id::new(4).expect("front");
+        let drawer = Id::new(3).expect("drawer");
+        project.set_property(drawer, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(panel, "role", PropertyValue::text("shelf")).expect("role");
+
+        assert_eq!(project.query(&NodeQuery::any()), vec![panel, drawer, front]);
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Container)), vec![drawer]);
+        assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Panel)), vec![panel, front]);
+        assert_eq!(
+            project.query(&NodeQuery::any().with_furntype_under(furntype("12"))),
+            vec![drawer],
+            "a query on a group matches every type below it"
+        );
+        assert_eq!(project.query(&NodeQuery::any().with_furntype_under(furntype("12.03.02"))), vec![drawer]);
+        assert!(project.query(&NodeQuery::any().with_furntype_under(furntype("13"))).is_empty());
+        assert_eq!(
+            project.query(&NodeQuery::any().with_furntype_under(FurnType::UNCLASSIFIED)),
+            vec![panel, front],
+            "unclassified is a sentinel, not the root of the type tree"
+        );
+        assert_eq!(project.query(&NodeQuery::any().with_property("role", PropertyValue::text("shelf"))), vec![panel]);
+        assert!(
+            project
+                .query(
+                    &NodeQuery::any()
+                        .with_kind(StructuralKind::Panel)
+                        .with_property("role", PropertyValue::text("shelf"))
+                )
+                .len()
+                == 1
+        );
+    }
+}

@@ -122,3 +122,226 @@ fn migrate_container_pivots(root: &mut Container, depth: u32) -> Result<(), Proj
     }
     walk(root.children_mut(), depth.saturating_add(1))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::fixtures::*;
+    use crate::*;
+
+    #[test]
+    fn reserved_property_keys_are_validated_on_load() {
+        let invalid = r#"{
+            "schema_version": 7,
+            "revision": 0,
+            "next_id": 2,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [],
+                "properties": {"component": {"kind": "text", "value": "yes"}}
+            }
+        }"#;
+        let error = serde_json::from_str::<Project>(invalid).expect_err("invalid reserved property");
+        assert!(error.to_string().contains("must be a boolean"), "error was {error}");
+    }
+
+    #[test]
+    fn projects_reject_unsupported_schema_and_unknown_fields() {
+        let project = sample_project();
+        let text = serde_json::to_string(&project).expect("serialize project");
+
+        let newer = text.replacen(
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION),
+            &format!("\"schema_version\":{}", Project::CURRENT_SCHEMA_VERSION + 1),
+            1,
+        );
+        let error = serde_json::from_str::<Project>(&newer).expect_err("unsupported schema");
+        assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
+
+        let prefix = text.strip_suffix('}').expect("project JSON is an object");
+        let extra = format!("{prefix},\"extra\":1}}");
+        assert!(serde_json::from_str::<Project>(&extra).is_err());
+    }
+
+    #[test]
+    fn version_one_panels_migrate_to_nominal_geometry() {
+        let legacy = r#"{
+            "schema_version": 1,
+            "revision": 0,
+            "next_id": 3,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Shelf",
+                    "size": {"length": 700000, "width": 500000, "thickness": 18000},
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]}
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version one");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
+        assert_eq!(panel.nominal_size(), sample_nominal());
+        assert_eq!(panel.material(), None);
+        assert_eq!(panel.last_known_thickness(), millimetres(18));
+        assert!(panel.edge_banding().is_empty());
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn version_four_root_assembly_loads_as_a_group() {
+        let legacy = r#"{
+            "schema_version": 4,
+            "revision": 2,
+            "next_id": 4,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"assembly": {
+                    "id": 2,
+                    "name": "Drawer",
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "children": [{"panel": {
+                        "id": 3,
+                        "name": "Front",
+                        "nominal_size": {"length": 500000, "width": 200000},
+                        "last_known_thickness": 18000,
+                        "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]}
+                    }}]
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version four");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let root = Id::new(1).expect("root id");
+        let drawer = Id::new(2).expect("drawer id");
+        assert!(project.container(root).is_some());
+        assert!(!project.is_component(root));
+        assert!(project.is_component(drawer));
+        assert_eq!(project.parent_of(drawer), Some(root));
+        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
+        assert_eq!(
+            project.pivot(drawer),
+            Some(Pivot::new(
+                Length::from_micrometres(250_000),
+                Length::from_micrometres(100_000),
+                Length::from_micrometres(9_000),
+            )),
+            "an older file materializes the centred container default"
+        );
+        assert_eq!(project.pivot(Id::new(3).expect("panel id")), Some(Pivot::ZERO));
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn version_two_machining_migrates_from_core_to_nominal_coordinates() {
+        let legacy = r#"{
+            "schema_version": 2,
+            "revision": 4,
+            "next_id": 6,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Panel",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "last_known_thickness": 18000,
+                    "machining": [{"cutout": {
+                        "id": 5,
+                        "shape": {"rectangle": {"x": 1000, "y": 1000, "width": 10000, "height": 10000}},
+                        "depth": "through",
+                        "entry": "A"
+                    }}],
+                    "edge_banding": [
+                        {
+                            "edge": 1,
+                            "material": 1,
+                            "included_in_size": true,
+                            "last_known_thickness": 2000,
+                            "last_known_width": 22000
+                        },
+                        {
+                            "edge": 4,
+                            "material": 1,
+                            "included_in_size": true,
+                            "last_known_thickness": 2000,
+                            "last_known_width": 22000
+                        }
+                    ]
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version two");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+
+        let text = serde_json::to_string(&project).expect("serialize migrated project");
+        let decoded: Project = serde_json::from_str(&text).expect("reload migrated project");
+        let panel = decoded.panel(Id::new(2).expect("id")).expect("reloaded panel");
+        let Machining::Cutout(cutout) = &panel.machining()[0];
+        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+    }
+
+    #[test]
+    fn an_older_schema_without_a_contour_cutout_still_loads() {
+        let project = sample_project();
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        wire["schema_version"] = serde_json::json!(13);
+        let decoded: Project = serde_json::from_value(wire).expect("load a schema 13 file");
+        assert_eq!(decoded.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        assert_eq!(decoded, project);
+    }
+
+    #[test]
+    fn version_six_containers_migrate_to_one_container_kind() {
+        let legacy = r#"{
+            "schema_version": 6,
+            "revision": 3,
+            "next_id": 4,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [
+                    {"assembly": {
+                        "id": 2,
+                        "name": "Drawer",
+                        "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        "children": []
+                    }},
+                    {"group": {
+                        "id": 3,
+                        "name": "Parts",
+                        "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                        "children": []
+                    }}
+                ]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("migrate version six");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let drawer = Id::new(2).expect("id");
+        let parts = Id::new(3).expect("id");
+        assert!(project.is_component(drawer));
+        assert!(!project.is_component(parts));
+        assert_eq!(project.container(drawer).expect("drawer").name(), "Drawer");
+        assert_eq!(project.container(parts).expect("parts").name(), "Parts");
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"container\""));
+        assert!(!text.contains("\"assembly\""));
+        assert!(!text.contains("\"group\":"));
+        let decoded: Project = serde_json::from_str(&text).expect("round trip");
+        assert_eq!(decoded, project);
+    }
+}
