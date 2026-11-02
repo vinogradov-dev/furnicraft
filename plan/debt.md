@@ -103,4 +103,7 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   segment in the viewport, so the user has to count segments to band the one they mean.
 - `[panel]` Command validation (`panel.resize`, `panel.edge_banding.set`) still uses stored fallbacks
   for some checks; rendering and diagnostics use the catalogue.
+- `[panel]` A bent panel is not implemented. The agreed construction is a flat panel with all its
+  machining, then a bend applied to the finished body; the operation pipeline needs a post/deform
+  stage and the panel card a bend section. No geometry is stored until that stage exists.
 - `[vendor]` `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.

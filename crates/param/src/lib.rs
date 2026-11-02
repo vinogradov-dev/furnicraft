@@ -1,5 +1,11 @@
 //! Parametric evaluation: document features become concrete kernel operations.
 //!
+//! Every body is described by a domain-free [`solid::SolidPlan`] first: a base extrusion followed
+//! by boolean steps, each owning a tool plan. The plan is derived and never serialized; the
+//! document keeps the feature parameters and rebuilds it. [`solid::evaluate`] drives the geometry
+//! kernel, while a plan with one extrusion can also be answered analytically, which is how
+//! `object.collapse` produces the same mesh the viewport shows.
+//!
 //! Panels are built in their local frame: the profile lies in the XY plane and the extrusion runs
 //! along `+Z`, so the panel occupies `z` from `0` (face `B`) to its thickness (face `A`). The frame
 //! is anchored at the nominal minimum corner. The core and bands are placed relative to the
@@ -23,11 +29,18 @@
 use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, Constructive, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide,
-    Machining, Mesh, MeshError, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
+    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel,
+    PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
+
+mod constructive;
+mod solid;
+
+pub use constructive::build_constructive_mesh;
+
+use solid::{PlanBuilder, SolidPlan};
 
 /// Extra millimetres added to a cutting tool so booleans do not depend on coincident faces.
 const TOOL_OVERSHOOT_MM: f64 = 0.001;
@@ -74,9 +87,6 @@ pub enum ParamError {
         /// The largest cap the document mesh can store.
         max: usize,
     },
-    /// An extruded contour produced an invalid document mesh.
-    #[error("the constructed mesh is invalid: {0}")]
-    Mesh(#[from] MeshError),
 }
 
 /// Checks that a contour can become a renderable extrusion, without building the mesh.
@@ -90,50 +100,12 @@ pub fn validate_extrusion_contour(contour: &furnicraft_model::Contour) -> Result
 }
 
 /// The sampled ring, refused when it cannot be stored as one cap face.
-fn sampled_cap(contour: &furnicraft_model::Contour) -> Result<Vec<[Length; 2]>, ParamError> {
+pub(crate) fn sampled_cap(contour: &furnicraft_model::Contour) -> Result<Vec<[Length; 2]>, ParamError> {
     let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
     if points.len() > furnicraft_model::MAX_FACE_VERTICES {
         return Err(ParamError::ContourTooDetailed { points: points.len(), max: furnicraft_model::MAX_FACE_VERTICES });
     }
     Ok(points)
-}
-
-/// Builds the polygon mesh of a constructive object with one extrusion.
-///
-/// A single linear extrusion is exact as polygons, so it needs no kernel: the result is two cap
-/// faces and one quad per contour edge, with the contour stored counter-clockwise. This is also
-/// the mesh `object.collapse` bakes, so the collapsed object matches what the viewport showed.
-/// Once a feature needs a boolean or a fillet the evaluation goes through the kernel port instead.
-///
-/// Coordinates stay in micrometres in the object's local frame, from `z = 0` to the feature height.
-pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, ParamError> {
-    if constructive.features().len() != 1 {
-        return Err(ParamError::UnsupportedConstructive);
-    }
-    let Some(extrude) = constructive.extrude_feature() else {
-        return Err(ParamError::UnsupportedConstructive);
-    };
-    let contour = extrude.contour();
-    let points = sampled_cap(contour)?;
-    let count = u32::try_from(points.len()).map_err(|_| ParamError::UnsupportedConstructive)?;
-    let height = extrude.height();
-    let mut positions = Vec::with_capacity(points.len().saturating_mul(2));
-    for point in &points {
-        positions.push([point[0], point[1], Length::ZERO]);
-    }
-    for point in &points {
-        positions.push([point[0], point[1], height]);
-    }
-    let mut faces = Vec::with_capacity(points.len().saturating_add(2));
-    // The bottom cap is the contour reversed so its normal points down; the top keeps the
-    // counter-clockwise order. Each side quad is counter-clockwise seen from outside.
-    faces.push((0..count).rev().collect());
-    faces.push((count..count.saturating_mul(2)).collect());
-    for index in 0..count {
-        let next = (index + 1) % count;
-        faces.push(vec![index, next, next.saturating_add(count), index.saturating_add(count)]);
-    }
-    Ok(Mesh::new(positions, faces)?)
 }
 
 /// Builds the solid body of a panel in its local frame.
@@ -146,38 +118,35 @@ pub fn build_constructive_mesh(constructive: &Constructive) -> Result<Mesh, Para
 /// thickness, while a blind cutout removes material from its entry face. The caller owns the
 /// returned handle and must eventually release it through [`SolidKernel::clear`].
 pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
-    if panel.has_shaped_outline() {
-        let body = build_shaped_body_with(kernel, panel, geometry, &EdgeBandProfile::from_spec)?;
-        return subtract_machining(kernel, panel, geometry, body);
-    }
-
-    let core_x = geometry.core_x().millimetres_f64();
-    let core_y = geometry.core_y().millimetres_f64();
-    let length = geometry.core_length().millimetres_f64();
-    let width = geometry.core_width().millimetres_f64();
-    let thickness = geometry.thickness().millimetres_f64();
-    let profile = Profile::rectangle(length, width)?;
-    let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
-    let body = kernel.extrude(&profile, &frame, thickness)?;
-    subtract_machining(kernel, panel, geometry, body)
+    let plan = panel_plan(panel, geometry, &EdgeBandProfile::from_spec)?;
+    Ok(solid::evaluate(&plan, kernel)?)
 }
 
-/// Removes every cutout tool from a panel body.
-///
-/// The same 3D subtraction serves rectangular and shaped cores: tools are nominal panel-local, so
-/// they line up with either body without a core-origin translation.
-fn subtract_machining(
-    kernel: &mut dyn SolidKernel,
-    panel: &Panel,
-    geometry: PanelGeometry,
-    mut body: BodyId,
-) -> Result<BodyId, ParamError> {
+/// Compiles the base body and the cutout steps of a panel into one solid plan.
+fn panel_plan<F>(panel: &Panel, geometry: PanelGeometry, band_profile: &F) -> Result<SolidPlan, ParamError>
+where
+    F: Fn(&BandingSpec) -> EdgeBandProfile,
+{
+    let mut builder = if panel.has_shaped_outline() {
+        shaped_body_plan(panel, geometry, band_profile)?
+    } else {
+        let core_x = geometry.core_x().millimetres_f64();
+        let core_y = geometry.core_y().millimetres_f64();
+        let length = geometry.core_length().millimetres_f64();
+        let width = geometry.core_width().millimetres_f64();
+        let thickness = geometry.thickness().millimetres_f64();
+        let profile = Profile::rectangle(length, width)?;
+        let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
+        PlanBuilder::new().extrude(profile, frame, thickness)?
+    };
+    // The same 3D subtraction serves rectangular and shaped cores: tools are nominal
+    // panel-local, so they line up with either body without a core-origin translation.
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
-        let tool = build_cutout_tool(kernel, geometry, cutout)?;
-        body = kernel.boolean(BooleanOp::Difference, body, tool)?;
+        let tool = build_cutout_tool(geometry, cutout)?;
+        builder = builder.boolean(BooleanOp::Difference, tool);
     }
-    Ok(body)
+    Ok(builder.build()?)
 }
 
 /// What a band body covers.
@@ -296,7 +265,8 @@ where
         let core_y = geometry.core_y().millimetres_f64();
         let frame =
             Frame { origin: DVec3::new(core_x, core_y, (panel_thickness - visible_width) * 0.5), ..Frame::WORLD };
-        let body = kernel.extrude(&profile, &frame, visible_width)?;
+        let plan = extrusion_plan(profile, frame, visible_width)?;
+        let body = solid::evaluate(&plan, kernel)?;
         parts.push(BandPart { source: BandSource::Edge(band.edge()), body });
     }
     Ok(parts)
@@ -318,8 +288,8 @@ where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
     if panel.has_shaped_outline() {
-        let body = build_shaped_body_with(kernel, panel, geometry, &band_profile)?;
-        let body = subtract_machining(kernel, panel, geometry, body)?;
+        let plan = panel_plan(panel, geometry, &band_profile)?;
+        let body = solid::evaluate(&plan, kernel)?;
         let bands = build_shaped_bands(kernel, panel, geometry, &band_profile)?;
         return Ok(PanelParts { body, bands });
     }
@@ -329,12 +299,7 @@ where
     Ok(PanelParts { body, bands })
 }
 
-fn build_shaped_body_with<F>(
-    kernel: &mut dyn SolidKernel,
-    panel: &Panel,
-    geometry: PanelGeometry,
-    band_profile: &F,
-) -> Result<BodyId, ParamError>
+fn shaped_body_plan<F>(panel: &Panel, geometry: PanelGeometry, band_profile: &F) -> Result<PlanBuilder, ParamError>
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
@@ -342,7 +307,12 @@ where
     let points = core.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
     let profile = Profile::new(points, Vec::new())?;
     let thickness = geometry.thickness().millimetres_f64();
-    Ok(kernel.extrude(&profile, &Frame::WORLD, thickness)?)
+    Ok(PlanBuilder::new().extrude(profile, Frame::WORLD, thickness)?)
+}
+
+/// Wraps one extrusion into a plan.
+fn extrusion_plan(profile: Profile, frame: Frame, height: f64) -> Result<SolidPlan, ParamError> {
+    Ok(PlanBuilder::new().extrude(profile, frame, height)?.build()?)
 }
 
 /// Builds the core outline of a shaped panel.
@@ -396,7 +366,8 @@ where
         let panel_thickness_mm = panel_thickness.millimetres_f64();
         let z = (panel_thickness_mm - visible_width) * 0.5;
         let frame = Frame { origin: DVec3::new(0.0, 0.0, z), ..Frame::WORLD };
-        let body = kernel.extrude(&strip, &frame, visible_width)?;
+        let plan = extrusion_plan(strip.clone(), frame, visible_width)?;
+        let body = solid::evaluate(&plan, kernel)?;
         solids.push(BandSolid { profile: strip, z, height: visible_width });
         parts.push(BandPart { source: band_source(*source), body });
     }
@@ -628,14 +599,17 @@ fn trim_overlaps(kernel: &mut dyn SolidKernel, parts: &mut [BandPart], solids: &
                 continue;
             }
             let frame = Frame { origin: DVec3::new(0.0, 0.0, later_solid.z - TOOL_OVERSHOOT_MM), ..Frame::WORLD };
-            let tool = kernel.extrude(&later_solid.profile, &frame, later_solid.height + 2.0 * TOOL_OVERSHOOT_MM)?;
+            let plan =
+                extrusion_plan(later_solid.profile.clone(), frame, later_solid.height + 2.0 * TOOL_OVERSHOOT_MM)?;
+            let tool = solid::evaluate(&plan, kernel)?;
             match kernel.boolean(BooleanOp::Difference, target, tool) {
                 Ok(body) => parts[earlier].body = body,
                 Err(_) => {
                     // The boolean may consume the target even when it finds no solid to keep.
                     // Rebuild the band so the caller still gets a valid body.
                     let frame = Frame { origin: DVec3::new(0.0, 0.0, earlier_solid.z), ..Frame::WORLD };
-                    parts[earlier].body = kernel.extrude(&earlier_solid.profile, &frame, earlier_solid.height)?;
+                    let plan = extrusion_plan(earlier_solid.profile.clone(), frame, earlier_solid.height)?;
+                    parts[earlier].body = solid::evaluate(&plan, kernel)?;
                 }
             }
         }
@@ -716,11 +690,8 @@ where
         .map_or(Length::ZERO, |band| band_profile(band).thickness())
 }
 
-fn build_cutout_tool(
-    kernel: &mut dyn SolidKernel,
-    geometry: PanelGeometry,
-    cutout: &Cutout,
-) -> Result<BodyId, ParamError> {
+/// The plan of one cutout tool, in nominal panel-local coordinates.
+fn build_cutout_tool(geometry: PanelGeometry, cutout: &Cutout) -> Result<SolidPlan, ParamError> {
     let thickness = geometry.thickness().millimetres_f64();
     let (z, height) = match cutout.depth() {
         CutoutDepth::Through => (-TOOL_OVERSHOOT_MM, thickness + 2.0 * TOOL_OVERSHOOT_MM),
@@ -748,8 +719,7 @@ fn build_cutout_tool(
             (Profile::new(outer, Vec::new())?, DVec3::new(0.0, 0.0, z))
         }
     };
-    let frame = Frame { origin, ..Frame::WORLD };
-    Ok(kernel.extrude(&profile, &frame, height)?)
+    extrusion_plan(profile, Frame { origin, ..Frame::WORLD }, height)
 }
 
 #[cfg(test)]
@@ -760,8 +730,9 @@ mod tests {
     use furnicraft_kernel::{BooleanOp, Measure, TessOptions};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{
-        Container, Contour, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Extrude,
-        Feature, Id, MaterialId, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge, RingBanding,
+        Constructive, Container, Contour, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow,
+        EdgeId, Id, MaterialId, Mesh, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
+        RingBanding,
     };
     use furnicraft_units::Length;
 
@@ -1734,7 +1705,6 @@ mod tests {
 
     #[test]
     fn cutout_tool_stays_at_the_nominal_panel_origin_when_the_core_moves() {
-        let mut kernel = RecordingKernel::default();
         let panel =
             panel_with_bands_and_cutout(&[(1, true), (4, true)], CutoutShape::Rectangle(cutout_rect(10, 20, 30, 40)));
         let geometry = geometry(&panel);
@@ -1742,8 +1712,9 @@ mod tests {
         assert_eq!(geometry.core_y(), millimetres(2));
         let Machining::Cutout(cutout) = &panel.machining()[0];
 
-        build_cutout_tool(&mut kernel, geometry, cutout).expect("cutout tool");
-        let frame = kernel.frame.expect("recorded tool frame");
+        let plan = build_cutout_tool(geometry, cutout).expect("cutout tool");
+        assert!(plan.steps().is_empty(), "a cutout tool is one extrusion");
+        let frame = plan.base().frame();
         assert_eq!(frame.origin.x, 10.0);
         assert_eq!(frame.origin.y, 20.0);
     }
@@ -1761,15 +1732,16 @@ mod tests {
 
     #[test]
     fn contour_cutout_tool_extrudes_the_sampled_ring_from_the_nominal_origin() {
-        let mut kernel = RecordingKernel::default();
         let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
         let geometry = geometry(&panel);
         let Machining::Cutout(cutout) = &panel.machining()[0];
 
-        build_cutout_tool(&mut kernel, geometry, cutout).expect("contour cutout tool");
-        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 0.0, -TOOL_OVERSHOOT_MM), ..Frame::WORLD }));
-        assert_eq!(kernel.height, Some(18.0 + 2.0 * TOOL_OVERSHOOT_MM));
-        let profile = kernel.profile.as_ref().expect("recorded contour profile");
+        let plan = build_cutout_tool(geometry, cutout).expect("contour cutout tool");
+        assert!(plan.steps().is_empty(), "a cutout tool is one extrusion");
+        let extrude = plan.base();
+        assert_eq!(extrude.frame(), Frame { origin: DVec3::new(0.0, 0.0, -TOOL_OVERSHOOT_MM), ..Frame::WORLD });
+        assert_eq!(extrude.height(), 18.0 + 2.0 * TOOL_OVERSHOOT_MM);
+        let profile = extrude.profile();
         assert!(profile.holes.is_empty());
         assert_eq!(
             profile.outer,
@@ -1991,15 +1963,6 @@ mod tests {
     }
 
     #[test]
-    fn a_history_with_more_than_one_feature_is_not_evaluated_silently() {
-        let extrude =
-            Extrude::new(rectangle_contour(millimetres(10), millimetres(10), false), millimetres(5)).expect("extrude");
-        let constructive = Constructive::new(vec![Feature::Extrude(extrude.clone()), Feature::Extrude(extrude)])
-            .expect("two features are valid data");
-        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::UnsupportedConstructive)));
-    }
-
-    #[test]
     fn a_contour_with_a_round_corner_extrudes_with_the_disc_area() {
         // A quarter disc of radius 100 mm: the arc sweeps 90 degrees about the origin and two lines
         // close the ring along the axes, so the area is pi r^2 / 4.
@@ -2028,41 +1991,5 @@ mod tests {
             "volume was {}, expected about {expected}",
             signed_volume(&mesh)
         );
-    }
-
-    #[test]
-    fn a_contour_the_cap_cannot_hold_is_refused_before_the_mesh_is_built() {
-        // An outer and an inner arc joined by two radial lines: a simple "C" band whose sampled
-        // ring holds more points than one document face can store.
-        use furnicraft_model::ContourSegment;
-        use furnicraft_units::Degrees;
-
-        let start = Degrees::from_millidegrees(0);
-        let sweep = Degrees::from_millidegrees(350_000);
-        let outer =
-            ContourSegment::arc([Length::ZERO, Length::ZERO], millimetres(5_000), start, sweep).expect("outer arc");
-        let inner = ContourSegment::arc(
-            [Length::ZERO, Length::ZERO],
-            millimetres(4_000),
-            sweep,
-            Degrees::from_millidegrees(-350_000),
-        )
-        .expect("inner arc");
-        let contour = Contour::new(vec![
-            outer,
-            ContourSegment::line(outer.end().expect("outer end"), inner.start().expect("inner start"))
-                .expect("inward line"),
-            inner,
-            ContourSegment::line(inner.end().expect("inner end"), outer.start().expect("outer start"))
-                .expect("outward line"),
-        ])
-        .expect("a simple band");
-        assert!(
-            contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES).expect("sampled").len()
-                > furnicraft_model::MAX_FACE_VERTICES,
-            "the fixture must exceed the cap limit"
-        );
-        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
-        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::ContourTooDetailed { .. })));
     }
 }

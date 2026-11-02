@@ -25,6 +25,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Project commands | `crates/model/src/project/{panel,object,node,camera_light,property}_cmds.rs` | whole files |
 | Project queries and errors | `crates/model/src/project/query.rs`, `crates/model/src/project/error.rs` | whole files |
 | Object commands | `crates/engine/src/object_cmds.rs` (`object.*`) | small |
-| Constructive evaluation | `crates/param/src/lib.rs` (`build_constructive_mesh`, `validate_extrusion_contour`) | small |
+| Solid plan and evaluation | `crates/param/src/solid.rs` (`SolidPlan`, `PlanBuilder`, `evaluate`), `crates/param/src/constructive.rs` (`build_constructive_mesh`) | whole files |
+| Panel evaluation | `crates/param/src/lib.rs` (`build_panel`, `panel_plan`, `build_cutout_tool`, `validate_extrusion_contour`) | small |
 | Scene file envelope | `crates/project/src/lib.rs` (`SceneFile`, `read`, `write`) | — |
 | Panel card UI | `crates/ui/src/panel_card.rs` (`PanelCard`) | — |
