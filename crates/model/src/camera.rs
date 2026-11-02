@@ -251,7 +251,7 @@ mod tests {
     use crate::*;
 
     use crate::fixtures::*;
-    use furnicraft_geom::DQuat;
+    use furnicraft_geom::{DQuat, DVec3};
 
     #[test]
     fn camera_and_light_nodes_round_trip_in_the_document() {

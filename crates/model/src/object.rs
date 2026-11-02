@@ -321,7 +321,8 @@ mod tests {
     use crate::fixtures::*;
     use crate::*;
 
-    use furnicraft_geom::DQuat;
+    use crate::tree::object_bounds_mm;
+    use furnicraft_geom::{DQuat, DVec3};
 
     #[test]
     fn object_round_trips_in_the_current_schema() {

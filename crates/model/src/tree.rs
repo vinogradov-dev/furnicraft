@@ -263,7 +263,7 @@ mod tests {
     use crate::fixtures::*;
     use crate::*;
 
-    use furnicraft_geom::DQuat;
+    use furnicraft_geom::{DQuat, DVec3};
 
     #[test]
     fn world_placement_composes_the_chain_and_lists_geometry() {
