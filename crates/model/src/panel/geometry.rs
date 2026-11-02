@@ -781,4 +781,32 @@ mod tests {
         assert_eq!(bands[0].edge().get(), 1);
         assert_eq!(bands[1].edge().get(), 4);
     }
+
+    #[test]
+    fn face_sides_are_opposites() {
+        assert_eq!(FaceSide::A.opposite(), FaceSide::B);
+        assert_eq!(FaceSide::B.opposite(), FaceSide::A);
+        assert_eq!(FaceSide::A.normal_sign(), 1);
+        assert_eq!(FaceSide::B.normal_sign(), -1);
+        assert_eq!(FaceSide::A.label(), "A");
+    }
+
+    #[test]
+    fn rectangle_corners_are_counter_clockwise_from_zero() {
+        assert_eq!(RectCorner::ALL.map(RectCorner::label), ["1", "2", "3", "4"]);
+        assert_eq!(RectCorner::ALL.map(|corner| corner.id().get()), [1, 2, 3, 4]);
+        assert_eq!(RectCorner::BottomLeft.next(), RectCorner::BottomRight);
+        assert_eq!(RectCorner::BottomRight.next(), RectCorner::TopRight);
+        assert_eq!(RectCorner::TopRight.next(), RectCorner::TopLeft);
+        assert_eq!(RectCorner::TopLeft.next(), RectCorner::BottomLeft);
+    }
+
+    #[test]
+    fn rectangle_edges_connect_consecutive_corners() {
+        for edge in RectEdge::ALL {
+            assert_eq!(edge.start().next(), edge.end());
+            assert_eq!(RectEdge::between(edge.start(), edge.end()), Some(edge));
+        }
+        assert_eq!(RectEdge::between(RectCorner::BottomLeft, RectCorner::TopLeft), None);
+    }
 }

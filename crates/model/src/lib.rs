@@ -15,16 +15,15 @@
 )]
 
 use std::collections::HashSet;
-use std::fmt;
 
 use furnicraft_geom::DVec3;
 use furnicraft_units::Length;
-use serde::de::{self, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod camera;
 mod catalog;
+mod container;
 mod contour;
 mod contour_edit;
 #[cfg(test)]
@@ -33,15 +32,18 @@ mod furntype;
 mod ids;
 mod light;
 mod mesh;
+mod node;
 mod object;
 mod panel;
 mod panel_features;
 mod placement;
 mod properties;
 mod query;
+mod tree;
 
 pub use camera::{CameraError, CameraNode, CameraProjection};
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
+pub use container::Container;
 pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
     MAX_CONTOUR_SEGMENTS,
@@ -53,6 +55,7 @@ pub use ids::{ContourSegmentId, EdgeId, Id, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
 use light::{valid_light_color, valid_light_intensity};
 pub use mesh::{MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError};
+pub use node::Node;
 pub use object::{Constructive, ConstructiveError, Extrude, Feature, Geometry, MAX_OBJECT_FEATURES, Object};
 pub use panel::{
     BandingSpec, ContourPath, CoreViolation, CornerBanding, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EntryFace,
@@ -68,6 +71,10 @@ pub use properties::{
     SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
 };
 pub use query::{NodeQuery, PropertyPredicate, StructuralKind};
+use tree::{
+    assign_new_ids, count_nodes, default_container_pivot, find_container, find_container_mut, find_node, find_node_mut,
+    find_panel_mut, find_panel_with_depth, find_parent, node_height, object_bounds_mm, panel_bounds, remove_child,
+};
 
 /// The root of a saved document: its schema version, revision, id allocation and node tree.
 ///
@@ -113,7 +120,7 @@ impl Project {
         let max_id = scan_tree(&root)?;
         let next_id = next_id_after(max_id)?;
         let mut root = root;
-        root.pivot = Pivot::ZERO;
+        root.set_pivot(Pivot::ZERO);
         Ok(Self {
             schema_version: Self::CURRENT_SCHEMA_VERSION,
             revision: Revision::ZERO,
@@ -158,7 +165,7 @@ impl Project {
 
     /// Whether the id names a container marked as a furniture component.
     pub fn is_component(&self, id: Id) -> bool {
-        id != self.root.id && self.container(id).is_some_and(Container::is_component)
+        id != self.root.id() && self.container(id).is_some_and(Container::is_component)
     }
 
     /// Finds a panel anywhere in the tree.
@@ -253,7 +260,7 @@ impl Project {
     /// Every node kind counts: a container, a panel, an object, a camera or a light. The root is
     /// included because it owns the document frame.
     pub fn contains_node(&self, id: Id) -> bool {
-        id == self.root.id || self.node(id).is_some()
+        id == self.root.id() || self.node(id).is_some()
     }
 
     /// The world placement of a node: every placement from the root down to it, composed.
@@ -279,7 +286,7 @@ impl Project {
         }
 
         let root_world = self.root.placement();
-        if self.root.id == id {
+        if self.root.id() == id {
             return Some(root_world);
         }
         for child in self.root.children() {
@@ -304,7 +311,7 @@ impl Project {
                 match child {
                     Node::Panel(panel) => ids.push(panel.id()),
                     Node::Object(object) => ids.push(object.id()),
-                    Node::Container(container) => collect(&container.children, ids, depth.saturating_add(1)),
+                    Node::Container(container) => collect(container.children(), ids, depth.saturating_add(1)),
                     Node::Camera(_) | Node::Light(_) => {}
                 }
             }
@@ -326,12 +333,12 @@ impl Project {
     /// bounding box and an empty container starts at its own origin. The root is not selectable and
     /// always has a zero pivot. Returns `None` for an unknown id.
     pub fn pivot(&self, id: Id) -> Option<Pivot> {
-        if id == self.root.id {
-            return Some(self.root.pivot);
+        if id == self.root.id() {
+            return Some(self.root.pivot());
         }
         match self.node(id)? {
             Node::Panel(panel) => Some(panel.pivot()),
-            Node::Container(container) => Some(container.pivot),
+            Node::Container(container) => Some(container.pivot()),
             Node::Object(object) => Some(object.pivot()),
             Node::Camera(camera) => Some(camera.pivot()),
             Node::Light(light) => Some(light.pivot()),
@@ -381,7 +388,7 @@ impl Project {
     /// The pivot is authored data: changing it never moves the node, and changing the geometry never
     /// moves it. The root defines the world frame and has no pivot to edit.
     pub fn set_node_pivot(&mut self, id: Id, pivot: Pivot) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let next_revision = self.next_revision()?;
@@ -390,7 +397,7 @@ impl Project {
         };
         match node {
             Node::Panel(panel) => panel.set_pivot(pivot),
-            Node::Container(container) => container.pivot = pivot,
+            Node::Container(container) => container.set_pivot(pivot),
             Node::Object(object) => object.set_pivot(pivot),
             Node::Camera(camera) => camera.set_pivot(pivot),
             Node::Light(light) => light.set_pivot(pivot),
@@ -404,7 +411,7 @@ impl Project {
     /// A container with no panels has no bounds and is centred at its own origin. Returns
     /// [`ProjectError::RootImmutable`] for the root.
     pub fn center_node_pivot(&mut self, id: Id) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let center = self.bounds_center_local(id).unwrap_or(DVec3::ZERO);
@@ -432,7 +439,7 @@ impl Project {
             if !seen.insert(id.get()) {
                 return Err(ProjectError::DuplicateNode { id });
             }
-            if id == self.root.id {
+            if id == self.root.id() {
                 return Err(ProjectError::RootImmutable { id });
             }
             if self.node(id).is_none() {
@@ -1127,8 +1134,8 @@ impl Project {
     pub fn rename_node(&mut self, id: Id, name: impl Into<String>) -> Result<Revision, ProjectError> {
         let name = name.into();
         let next_revision = self.next_revision()?;
-        if id == self.root.id {
-            self.root.name = name;
+        if id == self.root.id() {
+            self.root.set_name(name);
             self.revision = next_revision;
             return Ok(next_revision);
         }
@@ -1145,7 +1152,7 @@ impl Project {
     /// The root container defines the world frame and cannot be moved. The placement stays relative to
     /// the parent container, so moving a container moves all of its leaves.
     pub fn set_node_placement(&mut self, id: Id, placement: Placement) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let next_revision = self.next_revision()?;
@@ -1172,7 +1179,7 @@ impl Project {
             if !seen.insert(*id) {
                 return Err(ProjectError::DuplicateNode { id: *id });
             }
-            if *id == self.root.id {
+            if *id == self.root.id() {
                 return Err(ProjectError::RootImmutable { id: *id });
             }
             if !self.contains_node(*id) {
@@ -1194,7 +1201,7 @@ impl Project {
     ///
     /// The root cannot be removed. Removed ids are never reused.
     pub fn remove_node(&mut self, id: Id) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         if self.node(id).is_none() {
@@ -1219,7 +1226,7 @@ impl Project {
     /// placement and geometry; only the copied root's name gets a `copy` suffix. The new node is
     /// inserted directly after the original.
     pub fn duplicate_node(&mut self, id: Id) -> Result<Id, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let original = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
@@ -1282,7 +1289,7 @@ impl Project {
     /// cannot be ungrouped by this command; use [`Project::convert_to_group`] first. Panels are
     /// atomic leaves and cannot be ungrouped. The root cannot be ungrouped.
     pub fn ungroup_group(&mut self, id: Id) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
@@ -1300,7 +1307,7 @@ impl Project {
     /// The container becomes an ordinary group and its children take its place in the parent, as
     /// with [`Project::ungroup_group`]. Nothing else about the children changes.
     pub fn convert_to_group(&mut self, id: Id) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
@@ -1313,12 +1320,13 @@ impl Project {
 
     /// Moves a container's children into its parent and removes the container.
     fn flatten_container(&mut self, container: Container) -> Result<Revision, ProjectError> {
-        let id = container.id;
+        let id = container.id();
         let parent_id = self.parent_of(id).ok_or(ProjectError::NodeNotFound { id })?;
         let next_revision = self.next_revision()?;
-        let mut children = Vec::with_capacity(container.children.len());
-        for mut child in container.children {
-            let placement = Placement::compose(container.placement, child.placement())
+        let container_placement = container.placement();
+        let mut children = Vec::with_capacity(container.children().len());
+        for mut child in container.into_children() {
+            let placement = Placement::compose(container_placement, child.placement())
                 .map_err(|_| ProjectError::PlacementCompose { id })?;
             child.set_placement(placement);
             children.push(child);
@@ -1337,11 +1345,11 @@ impl Project {
 
     /// The property bag of a node, including the root.
     pub fn properties(&self, id: Id) -> Option<&Properties> {
-        if id == self.root.id {
-            return Some(&self.root.properties);
+        if id == self.root.id() {
+            return Some(self.root.properties());
         }
         match self.node(id)? {
-            Node::Container(container) => Some(&container.properties),
+            Node::Container(container) => Some(container.properties()),
             Node::Panel(panel) => Some(panel.properties()),
             Node::Object(object) => Some(object.properties()),
             Node::Camera(camera) => Some(camera.properties()),
@@ -1369,7 +1377,7 @@ impl Project {
         if changes.is_empty() {
             return Err(ProjectError::NoPropertyChanges);
         }
-        let root = self.root.id;
+        let root = self.root.id();
         let mut seen: HashSet<(u64, &str)> = HashSet::new();
         for change in changes {
             if change.node == root {
@@ -1402,7 +1410,7 @@ impl Project {
 
     /// Removes one property from one node and bumps the revision once.
     pub fn clear_property(&mut self, id: Id, key: &str) -> Result<Revision, ProjectError> {
-        if id == self.root.id {
+        if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
         let next_revision = self.next_revision()?;
@@ -1454,10 +1462,10 @@ impl Project {
             for child in children {
                 match child {
                     Node::Container(container) => {
-                        if matches(&container.properties, StructuralKind::Container, query) {
-                            ids.push(container.id);
+                        if matches(container.properties(), StructuralKind::Container, query) {
+                            ids.push(container.id());
                         }
-                        walk(&container.children, query, ids, depth.saturating_add(1));
+                        walk(container.children(), query, ids, depth.saturating_add(1));
                     }
                     Node::Panel(panel) => {
                         if matches(panel.properties(), StructuralKind::Panel, query) {
@@ -1483,7 +1491,7 @@ impl Project {
             }
         }
         let mut ids = Vec::new();
-        walk(&self.root.children, query, &mut ids, 1);
+        walk(self.root.children(), query, &mut ids, 1);
         ids
     }
 
@@ -1612,294 +1620,6 @@ fn next_id_after(max_id: u64) -> Result<Id, ProjectError> {
 }
 
 /// Finds any container, including the root.
-fn find_container(root: &Container, id: Id, depth: u32) -> Option<(u32, &Container)> {
-    if root.id == id {
-        return Some((depth, root));
-    }
-    find_container_in(&root.children, id, depth.saturating_add(1))
-}
-
-fn find_container_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Container)> {
-    if depth > Project::MAX_ASSEMBLY_DEPTH {
-        return None;
-    }
-    for child in children {
-        if let Node::Container(container) = child {
-            if container.id == id {
-                return Some((depth, container));
-            }
-            if let Some(found) = find_container_in(&container.children, id, depth.saturating_add(1)) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-/// Finds any container's child list for mutation.
-fn find_container_mut(root: &mut Container, id: Id, depth: u32) -> Option<(u32, &mut Vec<Node>)> {
-    if root.id == id {
-        return Some((depth, &mut root.children));
-    }
-    find_container_in_mut(&mut root.children, id, depth.saturating_add(1))
-}
-
-fn find_container_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, &mut Vec<Node>)> {
-    if depth > Project::MAX_ASSEMBLY_DEPTH {
-        return None;
-    }
-    for child in children {
-        if let Node::Container(container) = child {
-            if container.id == id {
-                return Some((depth, &mut container.children));
-            }
-            if let Some(found) = find_container_in_mut(&mut container.children, id, depth.saturating_add(1)) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-fn find_panel_with_depth(root: &Container, id: Id, depth: u32) -> Option<(u32, &Panel)> {
-    find_panel_in(&root.children, id, depth)
-}
-
-fn find_panel_in(children: &[Node], id: Id, depth: u32) -> Option<(u32, &Panel)> {
-    if depth > Project::MAX_ASSEMBLY_DEPTH {
-        return None;
-    }
-    for child in children {
-        match child {
-            Node::Panel(panel) if panel.id() == id => return Some((depth, panel)),
-            Node::Container(container) => {
-                if let Some(found) = find_panel_in(&container.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
-            }
-            Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
-        }
-    }
-    None
-}
-
-fn find_panel_mut(root: &mut Container, id: Id, depth: u32) -> Option<(u32, &mut Panel)> {
-    find_panel_in_mut(&mut root.children, id, depth)
-}
-
-fn find_panel_in_mut(children: &mut [Node], id: Id, depth: u32) -> Option<(u32, &mut Panel)> {
-    if depth > Project::MAX_ASSEMBLY_DEPTH {
-        return None;
-    }
-    for child in children {
-        match child {
-            Node::Panel(panel) if panel.id() == id => return Some((depth, panel)),
-            Node::Container(container) => {
-                if let Some(found) = find_panel_in_mut(&mut container.children, id, depth.saturating_add(1)) {
-                    return Some(found);
-                }
-            }
-            Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
-        }
-    }
-    None
-}
-
-fn find_node(root: &Container, id: Id) -> Option<&Node> {
-    find_node_in(&root.children, id)
-}
-
-fn find_node_in(children: &[Node], id: Id) -> Option<&Node> {
-    for child in children {
-        if child.id() == id {
-            return Some(child);
-        }
-        if let Some(children) = child.children()
-            && let Some(found) = find_node_in(children, id)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn find_node_mut(root: &mut Container, id: Id) -> Option<&mut Node> {
-    find_node_in_mut(&mut root.children, id)
-}
-
-fn find_node_in_mut(children: &mut [Node], id: Id) -> Option<&mut Node> {
-    for child in children {
-        if child.id() == id {
-            return Some(child);
-        }
-        if let Some(children) = child.children_mut()
-            && let Some(found) = find_node_in_mut(children, id)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn find_parent(root: &Container, id: Id) -> Option<Id> {
-    fn walk(children: &[Node], id: Id, parent: Id) -> Option<Id> {
-        for child in children {
-            if child.id() == id {
-                return Some(parent);
-            }
-            if let Some(children) = child.children()
-                && let Some(found) = walk(children, id, child.id())
-            {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(&root.children, id, root.id)
-}
-
-/// The local axis-aligned bounding box of the nominal panel boxes below `children`.
-///
-/// Returns `(min, max)` in the frame of the container that owns `children`, or `None` when the
-/// subtree holds no panel or no finite corner. The walk starts from an identity parent, so each
-/// child's own placement is relative to the frame being measured and no world lookup is needed per
-/// panel.
-fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> Option<(DVec3, DVec3)> {
-    if depth > Project::MAX_ASSEMBLY_DEPTH {
-        return None;
-    }
-    let mut bounds: Option<(DVec3, DVec3)> = None;
-    let mut include = |point: DVec3| {
-        if point.is_finite() {
-            bounds = Some(match bounds {
-                Some((min, max)) => (min.min(point), max.max(point)),
-                None => (point, point),
-            });
-        }
-    };
-    for child in children {
-        let Ok(relative) = Placement::compose(parent, child.placement()) else {
-            continue;
-        };
-        match child {
-            Node::Panel(panel) => {
-                let size = panel.nominal_size();
-                let length = size.length().millimetres_f64();
-                let width = size.width().millimetres_f64();
-                let thickness = panel.last_known_thickness().millimetres_f64();
-                for x in [0.0, length] {
-                    for y in [0.0, width] {
-                        for z in [0.0, thickness] {
-                            include(relative.transform_point(DVec3::new(x, y, z)));
-                        }
-                    }
-                }
-            }
-            Node::Object(object) => {
-                if let Some((min, max)) = object_bounds_mm(object.geometry()) {
-                    for x in [min.x, max.x] {
-                        for y in [min.y, max.y] {
-                            for z in [min.z, max.z] {
-                                include(relative.transform_point(DVec3::new(x, y, z)));
-                            }
-                        }
-                    }
-                }
-            }
-            Node::Container(container) => {
-                if let Some((min, max)) = panel_bounds(&container.children, relative, depth.saturating_add(1)) {
-                    include(min);
-                    include(max);
-                }
-            }
-            Node::Camera(_) | Node::Light(_) => {}
-        }
-    }
-    bounds
-}
-
-/// The default pivot of a container: the centre of the local panel bounds, or the origin.
-fn default_container_pivot(children: &[Node]) -> Pivot {
-    let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
-        return Pivot::ZERO;
-    };
-    Pivot::from_local((min + max) * 0.5).unwrap_or(Pivot::ZERO)
-}
-
-/// The local bounding box of an object's geometry, in millimetres.
-fn object_bounds_mm(geometry: &Geometry) -> Option<(DVec3, DVec3)> {
-    match geometry {
-        Geometry::Mesh(mesh) => {
-            let (min, max) = mesh.bounds_micrometres();
-            let to_point = |values: [i64; 3]| {
-                DVec3::new(values[0] as f64 / 1000.0, values[1] as f64 / 1000.0, values[2] as f64 / 1000.0)
-            };
-            Some((to_point(min), to_point(max)))
-        }
-        Geometry::Constructive(constructive) => {
-            let extrude = constructive.extrude_feature()?;
-            let (min, max) = extrude.contour().bounds_micrometres();
-            let height = extrude.height().micrometres();
-            Some((
-                DVec3::new(min[0] as f64 / 1000.0, min[1] as f64 / 1000.0, 0.0),
-                DVec3::new(max[0] as f64 / 1000.0, max[1] as f64 / 1000.0, height as f64 / 1000.0),
-            ))
-        }
-    }
-}
-
-fn node_height(node: &Node) -> u32 {
-    match node {
-        Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => 1,
-        Node::Container(container) => container.children.iter().map(node_height).max().unwrap_or(0).saturating_add(1),
-    }
-}
-
-fn count_nodes(node: &Node) -> u64 {
-    match node {
-        Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => 1,
-        Node::Container(container) => {
-            1u64.saturating_add(container.children.iter().map(count_nodes).fold(0, u64::saturating_add))
-        }
-    }
-}
-
-fn remove_child(root: &mut Container, id: Id) -> bool {
-    remove_child_in(&mut root.children, id)
-}
-
-fn remove_child_in(children: &mut Vec<Node>, id: Id) -> bool {
-    if let Some(index) = children.iter().position(|child| child.id() == id) {
-        children.remove(index);
-        return true;
-    }
-    for child in children {
-        if let Some(nested) = child.children_mut()
-            && remove_child_in(nested, id)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-fn assign_new_ids(node: &mut Node, ids: &mut impl Iterator<Item = Id>) -> Result<Id, ProjectError> {
-    let id = ids.next().ok_or(ProjectError::IdSpaceExhausted)?;
-    match node {
-        Node::Panel(panel) => panel.set_node_id(id),
-        Node::Object(object) => object.set_node_id(id),
-        Node::Camera(camera) => camera.set_node_id(id),
-        Node::Light(light) => light.set_node_id(id),
-        Node::Container(container) => {
-            container.id = id;
-            for child in &mut container.children {
-                assign_new_ids(child, ids)?;
-            }
-        }
-    }
-    Ok(id)
-}
-
 fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> {
     let mut seen = HashSet::new();
     for band in panel.edge_banding() {
@@ -2447,7 +2167,7 @@ impl TryFrom<ProjectWire> for Project {
             // start at the centre of their local panel bounds.
             migrate_container_pivots(&mut root, 1)?;
         }
-        root.pivot = Pivot::ZERO;
+        root.set_pivot(Pivot::ZERO);
         let max_id = scan_tree(&root)?;
         let next_id = match wire.next_id {
             Some(next_id) if next_id.get() <= max_id => {
@@ -2486,14 +2206,14 @@ fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), 
         }
         for child in children {
             match child {
-                Node::Container(container) => walk(&mut container.children, depth.saturating_add(1))?,
+                Node::Container(container) => walk(container.children_mut(), depth.saturating_add(1))?,
                 Node::Panel(panel) => panel.migrate_machining_from_core()?,
                 Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
     }
-    walk(&mut root.children, depth.saturating_add(1))
+    walk(root.children_mut(), depth.saturating_add(1))
 }
 
 /// Materializes the default pivot on containers saved before schema 6.
@@ -2508,398 +2228,15 @@ fn migrate_container_pivots(root: &mut Container, depth: u32) -> Result<(), Proj
         for child in children {
             match child {
                 Node::Container(container) => {
-                    container.pivot = default_container_pivot(&container.children);
-                    walk(&mut container.children, depth.saturating_add(1))?;
+                    container.set_pivot(default_container_pivot(container.children()));
+                    walk(container.children_mut(), depth.saturating_add(1))?;
                 }
                 Node::Panel(_) | Node::Object(_) | Node::Camera(_) | Node::Light(_) => {}
             }
         }
         Ok(())
     }
-    walk(&mut root.children, depth.saturating_add(1))
-}
-
-/// A node that can hold children: an ordinary group or a furniture component.
-///
-/// There is one container kind. "Assembly" is a word for a container marked as a component — a
-/// cabinet, a drawer box, a facade or a hinge — by a non-zero `furntype`, a `prototype.id` or an
-/// explicit `component = true`. An unmarked container is an ordinary group and can be flattened by
-/// `node.ungroup`. The project root is a container.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Container {
-    id: Id,
-    name: String,
-    placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
-    children: Vec<Node>,
-    #[serde(default)]
-    properties: Properties,
-}
-
-impl Container {
-    /// Creates an ordinary container. Global id uniqueness is checked by [`Project::validate`].
-    ///
-    /// A non-empty container starts with its pivot at the centre of its local panel bounds, so a
-    /// container created from a selection is grabbed at its visual centre. An empty container
-    /// starts at its own origin. The root has its pivot forced back to zero by [`Project::new`].
-    pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        let pivot = default_container_pivot(&children);
-        Self { id, name: name.into(), placement, pivot, children, properties: Properties::new() }
-    }
-
-    /// The stable container id.
-    pub const fn id(&self) -> Id {
-        self.id
-    }
-
-    /// The user-visible name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The placement relative to the parent frame.
-    pub const fn placement(&self) -> Placement {
-        self.placement
-    }
-
-    /// The manipulation pivot in the container's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
-    }
-
-    /// The panels and nested containers in this container.
-    pub fn children(&self) -> &[Node] {
-        &self.children
-    }
-
-    /// The typed properties of this container.
-    pub const fn properties(&self) -> &Properties {
-        &self.properties
-    }
-
-    /// Whether the container is marked as a furniture component.
-    ///
-    /// A non-zero furniture type, a prototype reference or an explicit `component = true` all mark
-    /// a component; an explicit `component = false` does not erase the other two markers.
-    pub fn is_component(&self) -> bool {
-        if let Some(PropertyValue::Bool { value: true }) = self.properties.get(SYSTEM_COMPONENT) {
-            return true;
-        }
-        if let Some(PropertyValue::FurnType { value }) = self.properties.get(SYSTEM_FURNTYPE)
-            && !value.is_unclassified()
-        {
-            return true;
-        }
-        self.properties.contains_key(SYSTEM_PROTOTYPE_ID)
-    }
-
-    /// Sets the explicit component marker through the validated property path.
-    pub fn set_component_marker(&mut self, component: bool) -> Result<(), PropertyError> {
-        self.properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(component)).map(|_| ())
-    }
-
-    /// Clears the component marker, the prototype keys and the furniture type.
-    pub fn clear_component_marker(&mut self) {
-        self.properties.remove(SYSTEM_COMPONENT);
-        self.properties.remove(SYSTEM_FURNTYPE);
-        self.properties.remove(SYSTEM_PROTOTYPE_ID);
-        self.properties.remove(SYSTEM_PROTOTYPE_VERSION);
-        self.properties.remove(SYSTEM_PROTOTYPE_PARAMETERS);
-    }
-
-    /// Stores one validated property.
-    pub fn set_property(&mut self, key: &str, value: PropertyValue) -> Result<(), PropertyError> {
-        self.properties.insert(key, value).map(|_| ())
-    }
-
-    /// Removes one property; returns whether it was present.
-    pub fn clear_property(&mut self, key: &str) -> bool {
-        self.properties.remove(key).is_some()
-    }
-}
-
-/// A child of a container.
-///
-/// A container is a group or a furniture component; a panel is an atomic leaf. Version-6 files
-/// used separate `assembly` and `group` tags; [`Node`] accepts them on load and normalizes an
-/// assembly to a component container.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Node {
-    /// A group or furniture component with children.
-    Container(Container),
-    /// A panel.
-    Panel(Panel),
-    /// A free-form geometry object.
-    Object(Object),
-    /// An authored camera.
-    Camera(CameraNode),
-    /// An authored light.
-    Light(LightNode),
-}
-
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_map(NodeVisitor)
-    }
-}
-
-/// Accepts current `container`/`panel` nodes and version-6 `assembly`/`group` nodes.
-struct NodeVisitor;
-
-impl<'de> Visitor<'de> for NodeVisitor {
-    type Value = Node;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a node object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        const FIELDS: &[&str] = &["container", "assembly", "group", "panel", "object", "camera", "light"];
-        let mut container: Option<Container> = None;
-        let mut panel: Option<Panel> = None;
-        let mut object: Option<Object> = None;
-        let mut camera: Option<CameraNode> = None;
-        let mut light: Option<LightNode> = None;
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "container" | "assembly" | "group" => {
-                    if container.is_some() {
-                        return Err(de::Error::custom("a node must not have two container entries"));
-                    }
-                    let mut decoded = map.next_value::<Container>()?;
-                    if key == "assembly" {
-                        decoded.set_component_marker(true).map_err(de::Error::custom)?;
-                    }
-                    container = Some(decoded);
-                }
-                "panel" => {
-                    if panel.is_some() {
-                        return Err(de::Error::custom("a node must not have two panel entries"));
-                    }
-                    panel = Some(map.next_value()?);
-                }
-                "object" => {
-                    if object.is_some() {
-                        return Err(de::Error::custom("a node must not have two object entries"));
-                    }
-                    object = Some(map.next_value()?);
-                }
-                "camera" => {
-                    if camera.is_some() {
-                        return Err(de::Error::custom("a node must not have two camera entries"));
-                    }
-                    camera = Some(map.next_value()?);
-                }
-                "light" => {
-                    if light.is_some() {
-                        return Err(de::Error::custom("a node must not have two light entries"));
-                    }
-                    light = Some(map.next_value()?);
-                }
-                _ => return Err(de::Error::unknown_field(&key, FIELDS)),
-            }
-        }
-        let present = usize::from(container.is_some())
-            + usize::from(panel.is_some())
-            + usize::from(object.is_some())
-            + usize::from(camera.is_some())
-            + usize::from(light.is_some());
-        if present > 1 {
-            return Err(de::Error::custom("a node must have exactly one kind"));
-        }
-        match (container, panel, object, camera, light) {
-            (Some(container), None, None, None, None) => Ok(Self::Value::Container(container)),
-            (None, Some(panel), None, None, None) => Ok(Self::Value::Panel(panel)),
-            (None, None, Some(object), None, None) => Ok(Self::Value::Object(object)),
-            (None, None, None, Some(camera), None) => Ok(Self::Value::Camera(camera)),
-            (None, None, None, None, Some(light)) => Ok(Self::Value::Light(light)),
-            _ => Err(de::Error::custom("a node must be a container, a panel, an object, a camera or a light")),
-        }
-    }
-}
-
-impl From<Container> for Node {
-    fn from(container: Container) -> Self {
-        Self::Container(container)
-    }
-}
-
-impl From<Panel> for Node {
-    fn from(panel: Panel) -> Self {
-        Self::Panel(panel)
-    }
-}
-
-impl From<Object> for Node {
-    fn from(object: Object) -> Self {
-        Self::Object(object)
-    }
-}
-
-impl From<CameraNode> for Node {
-    fn from(camera: CameraNode) -> Self {
-        Self::Camera(camera)
-    }
-}
-
-impl From<LightNode> for Node {
-    fn from(light: LightNode) -> Self {
-        Self::Light(light)
-    }
-}
-
-impl Node {
-    /// The stable node id, shared by every node kind.
-    pub const fn id(&self) -> Id {
-        match self {
-            Self::Container(container) => container.id,
-            Self::Panel(panel) => panel.id(),
-            Self::Object(object) => object.id(),
-            Self::Camera(camera) => camera.id(),
-            Self::Light(light) => light.id(),
-        }
-    }
-
-    /// The user-visible node name.
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Container(container) => &container.name,
-            Self::Panel(panel) => panel.name(),
-            Self::Object(object) => object.name(),
-            Self::Camera(camera) => camera.name(),
-            Self::Light(light) => light.name(),
-        }
-    }
-
-    /// The placement relative to the parent container.
-    pub const fn placement(&self) -> Placement {
-        match self {
-            Self::Container(container) => container.placement,
-            Self::Panel(panel) => panel.placement(),
-            Self::Object(object) => object.placement(),
-            Self::Camera(camera) => camera.placement(),
-            Self::Light(light) => light.placement(),
-        }
-    }
-
-    /// The children of a container, or `None` for a leaf.
-    pub fn children(&self) -> Option<&[Node]> {
-        match self {
-            Self::Container(container) => Some(&container.children),
-            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    fn children_mut(&mut self) -> Option<&mut Vec<Node>> {
-        match self {
-            Self::Container(container) => Some(&mut container.children),
-            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The nested container, or `None` for a leaf.
-    pub const fn as_container(&self) -> Option<&Container> {
-        match self {
-            Self::Container(container) => Some(container),
-            Self::Panel(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The panel, or `None` for another node kind.
-    pub const fn as_panel(&self) -> Option<&Panel> {
-        match self {
-            Self::Panel(panel) => Some(panel),
-            Self::Container(_) | Self::Object(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The geometry object, or `None` for another node kind.
-    pub const fn as_object(&self) -> Option<&Object> {
-        match self {
-            Self::Object(object) => Some(object),
-            Self::Container(_) | Self::Panel(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The geometry object for mutation, or `None` for another node kind.
-    pub const fn as_object_mut(&mut self) -> Option<&mut Object> {
-        match self {
-            Self::Object(object) => Some(object),
-            Self::Container(_) | Self::Panel(_) | Self::Camera(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The authored camera, or `None` for another node kind.
-    pub const fn as_camera(&self) -> Option<&CameraNode> {
-        match self {
-            Self::Camera(camera) => Some(camera),
-            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The authored camera for mutation, or `None` for another node kind.
-    pub const fn as_camera_mut(&mut self) -> Option<&mut CameraNode> {
-        match self {
-            Self::Camera(camera) => Some(camera),
-            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Light(_) => None,
-        }
-    }
-
-    /// The authored light for mutation, or `None` for another node kind.
-    pub const fn as_light_mut(&mut self) -> Option<&mut LightNode> {
-        match self {
-            Self::Light(light) => Some(light),
-            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Camera(_) => None,
-        }
-    }
-
-    /// The authored light, or `None` for another node kind.
-    pub const fn as_light(&self) -> Option<&LightNode> {
-        match self {
-            Self::Light(light) => Some(light),
-            Self::Container(_) | Self::Panel(_) | Self::Object(_) | Self::Camera(_) => None,
-        }
-    }
-
-    /// The typed properties of the node.
-    pub const fn properties(&self) -> &Properties {
-        match self {
-            Self::Container(container) => &container.properties,
-            Self::Panel(panel) => panel.properties(),
-            Self::Object(object) => object.properties(),
-            Self::Camera(camera) => camera.properties(),
-            Self::Light(light) => light.properties(),
-        }
-    }
-
-    fn set_name(&mut self, name: String) {
-        match self {
-            Self::Container(container) => container.name = name,
-            Self::Panel(panel) => panel.set_name(name),
-            Self::Object(object) => object.set_name(name),
-            Self::Camera(camera) => camera.set_name(name),
-            Self::Light(light) => light.set_name(name),
-        }
-    }
-
-    fn set_placement(&mut self, placement: Placement) {
-        match self {
-            Self::Container(container) => container.placement = placement,
-            Self::Panel(panel) => panel.set_placement(placement),
-            Self::Object(object) => object.set_placement(placement),
-            Self::Camera(camera) => camera.set_placement(placement),
-            Self::Light(light) => light.set_placement(placement),
-        }
-    }
+    walk(root.children_mut(), depth.saturating_add(1))
 }
 
 #[cfg(test)]
@@ -2909,199 +2246,6 @@ mod tests {
     use furnicraft_geom::DQuat;
 
     use crate::fixtures::*;
-
-    #[test]
-    fn face_sides_are_opposites() {
-        assert_eq!(FaceSide::A.opposite(), FaceSide::B);
-        assert_eq!(FaceSide::B.opposite(), FaceSide::A);
-        assert_eq!(FaceSide::A.normal_sign(), 1);
-        assert_eq!(FaceSide::B.normal_sign(), -1);
-        assert_eq!(FaceSide::A.label(), "A");
-    }
-
-    #[test]
-    fn rectangle_corners_are_counter_clockwise_from_zero() {
-        assert_eq!(RectCorner::ALL.map(RectCorner::label), ["1", "2", "3", "4"]);
-        assert_eq!(RectCorner::ALL.map(|corner| corner.id().get()), [1, 2, 3, 4]);
-        assert_eq!(RectCorner::BottomLeft.next(), RectCorner::BottomRight);
-        assert_eq!(RectCorner::BottomRight.next(), RectCorner::TopRight);
-        assert_eq!(RectCorner::TopRight.next(), RectCorner::TopLeft);
-        assert_eq!(RectCorner::TopLeft.next(), RectCorner::BottomLeft);
-    }
-
-    #[test]
-    fn rectangle_edges_connect_consecutive_corners() {
-        for edge in RectEdge::ALL {
-            assert_eq!(edge.start().next(), edge.end());
-            assert_eq!(RectEdge::between(edge.start(), edge.end()), Some(edge));
-        }
-        assert_eq!(RectEdge::between(RectCorner::BottomLeft, RectCorner::TopLeft), None);
-    }
-
-    #[test]
-    fn world_placement_composes_the_chain_and_lists_geometry() {
-        let mut project = sample_project();
-        let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
-        let shelf = Id::new(2).expect("shelf id");
-        let root = project.root().id();
-
-        project
-            .set_node_placement(
-                drawer,
-                Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2))
-                    .expect("drawer placement"),
-            )
-            .expect("place drawer");
-        project
-            .set_node_placement(
-                front,
-                Placement::new(DVec3::new(1.0, 0.0, 0.0), DQuat::IDENTITY).expect("front placement"),
-            )
-            .expect("place front");
-
-        let world = project.world_placement(front).expect("front world placement");
-        let origin = world.transform_point(DVec3::ZERO);
-        assert!((origin - DVec3::new(10.0, 1.0, 0.0)).length() < 1.0e-12, "origin was {origin:?}");
-        let world = project.world_placement(drawer).expect("drawer world placement");
-        assert!((world.transform_point(DVec3::ZERO) - DVec3::new(10.0, 0.0, 0.0)).length() < 1.0e-12);
-        assert_eq!(project.world_placement(root), Some(Placement::IDENTITY));
-        assert_eq!(project.world_placement(Id::new(999).expect("id")), None);
-
-        let cube = project
-            .add_object(
-                drawer,
-                "Bracket",
-                Placement::IDENTITY,
-                Geometry::Mesh(Mesh::cube(Length::from_millimetres(20).expect("size")).expect("cube")),
-            )
-            .expect("add a geometry object");
-
-        assert_eq!(project.geometry_ids_under(root), Some(vec![shelf, front, cube]));
-        assert_eq!(project.geometry_ids_under(drawer), Some(vec![front, cube]));
-        assert_eq!(project.geometry_ids_under(shelf), Some(vec![shelf]));
-        assert_eq!(project.geometry_ids_under(cube), Some(vec![cube]));
-        assert_eq!(project.geometry_ids_under(Id::new(999).expect("id")), None);
-    }
-
-    #[test]
-    fn default_pivots_are_stored_and_keep_their_meaning() {
-        let mut project = sample_project();
-        let shelf = Id::new(2).expect("shelf id");
-        let drawer = Id::new(3).expect("drawer id");
-        let root = project.root().id();
-
-        // A panel starts at its local zero; a container built with children starts at the centre of
-        // their local bounding box; the root is always zero.
-        assert_eq!(project.pivot(shelf), Some(Pivot::ZERO));
-        assert_eq!(
-            project.pivot(drawer),
-            Some(Pivot::new(
-                Length::from_micrometres(350_000),
-                Length::from_micrometres(250_000),
-                Length::from_micrometres(9_000),
-            ))
-        );
-        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
-
-        project
-            .set_node_placement(
-                shelf,
-                Placement::new(DVec3::new(100.0, 200.0, 300.0), DQuat::IDENTITY).expect("shelf placement"),
-            )
-            .expect("place shelf");
-        project
-            .set_node_placement(
-                drawer,
-                Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
-            )
-            .expect("place drawer");
-
-        // Placing a node changes only its world pivot, never the stored local one.
-        assert_eq!(project.pivot_local(shelf), Some(DVec3::ZERO));
-        assert_eq!(project.pivot_world(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
-        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(360.0, 270.0, 39.0)));
-        assert_eq!(project.pivot_local(root), Some(DVec3::ZERO));
-        assert_eq!(project.pivot_world(root), Some(DVec3::ZERO));
-
-        let empty_placement = Placement::new(DVec3::new(-5.0, 7.0, 9.0), DQuat::IDENTITY).expect("empty placement");
-        let empty = project.add_component(root, "Empty", empty_placement).expect("add empty assembly");
-        assert_eq!(project.pivot_local(empty), Some(DVec3::ZERO));
-        assert_eq!(project.pivot_world(empty), Some(DVec3::new(-5.0, 7.0, 9.0)));
-        assert_eq!(project.pivot_local(Id::new(999).expect("id")), None);
-        assert_eq!(project.pivot_world(Id::new(999).expect("id")), None);
-    }
-
-    #[test]
-    fn a_container_pivot_is_local_and_turns_with_the_container() {
-        let mut project = sample_project();
-        let drawer = Id::new(3).expect("drawer id");
-        project
-            .set_node_placement(
-                drawer,
-                Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
-            )
-            .expect("place drawer");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
-
-        let turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
-        project
-            .set_node_placement(
-                drawer,
-                Placement::new(DVec3::new(10.0, 20.0, 30.0), turn).expect("turned drawer placement"),
-            )
-            .expect("turn drawer");
-
-        let local = project.pivot_local(drawer).expect("local pivot");
-        assert!(
-            (local - DVec3::new(350.0, 250.0, 9.0)).length() < 1.0e-12,
-            "the local pivot must not jump, was {local:?}"
-        );
-        let world = project.pivot_world(drawer).expect("world pivot");
-        assert!((world - DVec3::new(-240.0, 370.0, 39.0)).length() < 1.0e-12, "world pivot was {world:?}");
-    }
-
-    #[test]
-    fn pivots_are_authored_once_and_survive_later_edits() {
-        let mut project = sample_project();
-        let root = project.root().id();
-        let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
-
-        // Centring uses the panel's own local box.
-        project.center_node_pivot(front).expect("centre front");
-        assert_eq!(project.pivot_local(front), Some(DVec3::new(350.0, 250.0, 9.0)));
-
-        // Centring a container uses the union of its panels, including their child placements.
-        project
-            .set_node_placement(
-                front,
-                Placement::new(DVec3::new(1.0, 2.0, 3.0), DQuat::IDENTITY).expect("front placement"),
-            )
-            .expect("place front");
-        project.center_node_pivot(drawer).expect("centre drawer");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(351.0, 252.0, 12.0)));
-
-        // Moving or resizing geometry does not move the stored pivot.
-        let pivot = project.pivot(drawer);
-        project
-            .set_node_placement(
-                drawer,
-                Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
-            )
-            .expect("place drawer");
-        project
-            .set_panel_nominal_size(front, PanelNominalSize::new(millimetres(900), millimetres(600)).expect("size"))
-            .expect("resize front");
-        assert_eq!(project.pivot(drawer), pivot);
-
-        // An explicit zero is a real value, and the root has no editable pivot.
-        project.set_node_pivot(drawer, Pivot::ZERO).expect("clear the pivot");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
-        assert!(matches!(project.set_node_pivot(root, Pivot::ZERO), Err(ProjectError::RootImmutable { .. })));
-        assert!(matches!(project.center_node_pivot(root), Err(ProjectError::RootImmutable { .. })));
-    }
 
     #[test]
     fn clearing_an_unbanded_edge_is_rejected() {
@@ -4183,21 +3327,5 @@ mod tests {
         assert!(!text.contains("\"group\":"));
         let decoded: Project = serde_json::from_str(&text).expect("round trip");
         assert_eq!(decoded, project);
-    }
-    #[test]
-    fn contains_node_covers_every_node_kind() {
-        let mut project = sample_project();
-        let root = project.root().id();
-        let camera =
-            project.add_camera(root, "Camera", Placement::IDENTITY, CameraProjection::DEFAULT).expect("add camera");
-        let light =
-            project.add_light(root, "Key", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("add light");
-
-        assert!(project.contains_node(root), "the root owns the document frame");
-        assert!(project.contains_node(Id::new(2).expect("shelf")), "a panel");
-        assert!(project.contains_node(Id::new(3).expect("drawer")), "a container");
-        assert!(project.contains_node(camera), "a camera is a scene node");
-        assert!(project.contains_node(light), "a light is a scene node");
-        assert!(!project.contains_node(Id::new(999).expect("id")), "an unknown id is not a node");
     }
 }
