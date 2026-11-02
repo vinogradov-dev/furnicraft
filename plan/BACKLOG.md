@@ -12,7 +12,8 @@ those files and their callers, not the workspace.
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans; P is the plan and `xtask` itself,
-L is scene lighting, X is a defect in behaviour that already shipped.
+L is scene lighting, S is a structural refactor that changes module boundaries only, X is a defect in
+behaviour that already shipped.
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -21,6 +22,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[~]` **S1** decompose `crates/model/src/lib.rs` by responsibility: one module per value family,
+  panel rules split into geometry, banding and machining, `Project` split into wire, error, derived
+  queries and command families, tree traversal in one place; public API, serde and behaviour
+  unchanged. `files: crates/model/src, plan/map.md`
 - `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
   `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
 
