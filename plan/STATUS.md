@@ -1,12 +1,11 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A7 state=idle base=bd33056 updated=2026-11-02
+STATE: milestone=M7 phase=S task=S3 state=idle base=020a6cb updated=2026-11-02
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
-only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
-the next step from `STATE` and the `Now` section of the backlog. `cargo xtask status` prints both;
-`AGENTS.md` §1.1 points at the contract that orders that answer when a session was interrupted or the
-plan is broken.
+only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
+and the backlog's `Now` section — `cargo xtask status` prints both. `AGENTS.md` §1.1 points at the
+contract that orders that answer when a session was interrupted or the plan is broken.
 
 ## Where we are
 
@@ -38,7 +37,8 @@ plan is broken.
   cutouts; a ring band with a missing material is a diagnostic like an edge or corner band. D3 lets a
   cutout outline be a contour ring: `CutoutShape::Contour` must stay strictly inside the core for a
   through cut and may touch its edge for a blind one, overlap is decided on the sampled ring rather
-  than its bounds, `param` extrudes the ring as the tool, and the schema moves to 14.
+  than its bounds, `param` extrudes the ring as the tool, and the schema moves to 14. A7 writes the
+  panel and edit-mode rules down in `docs/domain/panels.md`, `docs/domain/geometry.md` and ADR 0042.
 - Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
   taking a bug moves its line into `## Now` in work order. X1 (the concave cap flap) is fixed; X2
   records that a legal ring over 1024 sampled points cannot be extruded, and waits for the owner's
@@ -52,12 +52,12 @@ plan is broken.
 
 ## Next
 
-A7 is next: write the contour panel and the contour edit mode down in `docs/domain/` and an ADR, and
-fold the D1–D3 cutout rules into `docs/domain/panels.md`. Then S3 one contour conversion, G1–G2 exact
-region rings and booleans, and D4–D11 the panel outline, typed operation list, registry, card
-sections, groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring
-hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
-(`plan/questions.md`).
+S3 is next: one contour conversion from `model::Contour` to `geom::Region` to `kernel::Profile`, with
+one sampling tolerance and one place where an arc becomes a polyline, routing the rectangular core,
+shaped core, cutout tool and constructive extrusion through it. Then G1–G2 exact region rings and
+booleans, and D4–D11 the panel outline, typed operation list, registry, card sections, groove/milling
+and banding operations. S4 adds the revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1,
+L1 and P1–P3 follow. X2 waits for a decision on the cap limit (`plan/questions.md`).
 
 ## Index
 

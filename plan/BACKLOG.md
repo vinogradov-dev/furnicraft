@@ -22,8 +22,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **A7** document the contour panel and the contour edit mode in `docs/domain/geometry.md`,
-  `docs/domain/panels.md` and an ADR. `files: docs/domain/geometry.md, docs/decisions/`
+- `[ ]` **S3** one contour conversion: `model::Contour` to `geom::Region` to `kernel::Profile` with one
+  sampling tolerance and one place where arcs become a polyline; route the rectangular core, shaped
+  core, cutout tool and constructive extrusion through it.
+  `files: crates/geom/src/region.rs, crates/param/src`
 
 ## Bugs
 
@@ -37,10 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **S3** one contour conversion: `model::Contour` to `geom::Region` to `kernel::Profile` with one
-  sampling tolerance and one place where arcs become a polyline; route the rectangular core, shaped
-  core, cutout tool and constructive extrusion through it.
-  `files: crates/geom/src/region.rs, crates/param/src`
 - `[ ]` **G1** `geom::Region` holds exact `Contour` rings (outer and holes): rectangle constructor,
   bounds, area, containment and sampling, with the rectangle boolean helpers still passing.
   `files: crates/geom/src/region.rs, crates/geom/src/contour.rs`
@@ -103,6 +101,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **A7** the contour panel and the contour edit mode are written down in `docs/domain/` and
+  ADR 0042: the outline variant, the anchored ring, ring banding, the cutout ring rules and the
+  working-copy edit mode — `020a6cb`
 - `[x]` **S2** one domain-free solid plan: `SolidPlan` is a base extrusion plus boolean steps, a
   `PlanBuilder` assembles it, and one evaluator drives both the kernel and the analytic
   single-extrusion backend; panels, bands, cutout tools and constructive objects compile to it,
