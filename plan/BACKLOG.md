@@ -11,9 +11,9 @@ those files and their callers, not the workspace.
 
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
-variants, E 2D primitives, F revolution and sweep, G 2D booleans; P is the plan and `xtask` itself,
-L is scene lighting, S is a structural refactor that changes module boundaries only, X is a defect in
-behaviour that already shipped.
+variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
+the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
+boundaries only, X is a defect in behaviour that already shipped.
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -37,6 +37,60 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
+- `[ ]` **S2** extract the domain-free solid plan: `SolidPlan`/`SolidOp` with extrude and boolean, an
+  internal builder, one evaluator with an analytic single-extrusion backend and a kernel backend;
+  move `build_constructive_mesh` and the cutout tool onto it without changing the scene, and write
+  the shape-layer ADR. `files: crates/param/src, crates/mesh/src/lib.rs, docs/decisions/`
+- `[ ]` **S3** one contour conversion: `model::Contour` to `geom::Region` to `kernel::Profile` with one
+  sampling tolerance and one place where arcs become a polyline; route the rectangular core, shaped
+  core, cutout tool and constructive extrusion through it.
+  `files: crates/geom/src/region.rs, crates/param/src`
+- `[ ]` **G1** `geom::Region` holds exact `Contour` rings (outer and holes): rectangle constructor,
+  bounds, area, containment and sampling, with the rectangle boolean helpers still passing.
+  `files: crates/geom/src/region.rs, crates/geom/src/contour.rs`
+- `[ ]` **G2** exact 2D region booleans on `Contour` rings: union, difference and intersection, used
+  to union through cutouts and subtract them from the core instead of the rectangle-only tracer.
+  `files: crates/geom/src/region.rs`
+- `[ ]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
+  generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
+  core and overall from the region, and no machining code branches on the outline kind.
+  `files: crates/model/src/panel, crates/param/src`
+- `[ ]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
+  tagged `MachiningParams` and shared `FaceSide`/`EdgeRef` anchors; `panel.machining.add/update/
+  remove/move` commands; migrate `Cutout` and the schema, keeping existing cutout files loading.
+  `files: crates/model/src/panel, crates/model/src/project/wire.rs, crates/engine/src/panel_cmds.rs`
+- `[ ]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
+  attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
+  category, stage, capabilities and default; the panel builder contains no kind match, and a
+  post/deform stage stays reserved for the deferred bend.
+  `files: crates/param/src, crates/model/src/panel`
+- `[ ]` **D7** panel card sections from the registry: common operation chrome plus a per-kind section
+  module, an add menu built from the descriptor table, diagnostics bound to `MachiningId`, collapsed
+  sections in session view state.
+  `files: crates/ui/src/panel_card.rs, crates/ui/src/lib.rs, crates/model/src/panel`
+- `[ ]` **D8** face groove (a groove on a panel face): a region on face A/B with depth and
+  through/blind mode, compiled as a subtractive tool; card section and tests.
+  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **D9** edge groove (a groove on a panel edge): follows an `EdgeRef` with offset, depth and
+  width, compiled as a swept or extruded tool; card section and tests.
+  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **D10** face-anchored milling: a path or region anchored to face A/B with cutter diameter and
+  depth, compiled as a swept tool; card section and tests.
+  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **D11** banding as an operation: `MachiningParams::Banding` references `EdgeRef`, the joint
+  solver returns attachment and cut-region effects, and the separate edge/corner/ring banding
+  vectors migrate with old files loading.
+  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
+  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
+  only changed nodes.
+  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
+- `[ ]` **H1** hardware and accessories as existing nodes: a catalogue definition, an instance that
+  is a single object or a component/group, and a body built through `SolidPlan`; no separate
+  hardware geometry pipeline. `files: crates/model/src, crates/param/src, crates/ui/src`
+- `[ ]` **H2** typed hardware mounts: host panel, anchor, orientation and quantity; the panel
+  evaluator derives machining from mounts and the card shows it read-only; holes are not duplicated
+  on the panel. `files: crates/model/src, crates/engine/src, crates/param/src, crates/ui/src/panel_card.rs`
 - `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
 - `[ ]` **B2** offset a contour inward and outward as a new ring. `files: crates/geom/src/contour.rs`
 - `[ ]` **C1** a sketch on a chosen plane: grid, vertex snapping, translation and rotation steps.
