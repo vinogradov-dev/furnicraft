@@ -13,8 +13,9 @@ Related documents:
 Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-node-data.md),
 [0029](../decisions/0029-view-state-belongs-to-the-session.md),
 [0034](../decisions/0034-nodes-carry-typed-properties.md),
-[0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md) and
-[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md).
+[0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
+[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md) and
+[0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md).
 
 ## 1. Two authoring paths
 
@@ -89,8 +90,14 @@ direct mesh editing, so its contour stays the only way to change it.
 
 ## 5. Evaluation
 
-- A constructive object's mesh is evaluated by `furnicraft-param` through the geometry kernel port and
-  cached by `(Revision, Id)` in `furnicraft-mesh`. It is never written to the file.
+- `furnicraft-param` compiles a constructive object into a domain-free `SolidPlan`: a base
+  extrusion followed by boolean steps. The plan is derived, never written to the file, and rebuilt
+  when a feature changes ([0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md)).
+- A plan with one extrusion is evaluated analytically, because a linear extrusion is exact as
+  polygons; that mesh is also what `object.collapse` bakes. A plan with a boolean goes through the
+  geometry kernel port. Both paths share one evaluator, so collapse cannot drift from the viewport.
+- The derived mesh is cached by `(Revision, Id)` in `furnicraft-mesh`. It is never written to the
+  file.
 - Editing the contour or a feature parameter bumps the revision once, and the next frame rebuilds the
   mesh.
 - An evaluation failure — no kernel, a contour the kernel rejects, a boolean that yields no solid —

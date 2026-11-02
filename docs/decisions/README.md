@@ -45,6 +45,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0038](0038-the-scene-file-lives-in-its-own-crate.md) | The scene file lives in its own crate | Accepted |
 | [0039](0039-point-lights-use-watts-and-inverse-square-falloff.md) | Point lights use watts and inverse-square falloff | Accepted |
 | [0040](0040-a-constructive-contour-is-a-ring-of-segments.md) | A constructive contour is a ring of directed segments | Accepted |
+| [0041](0041-every-solid-compiles-to-one-solid-plan.md) | Every solid compiles to one domain-free plan | Accepted |
 
 ## Format
 
