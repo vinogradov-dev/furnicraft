@@ -177,6 +177,13 @@ impl MachiningKind {
         }
     }
 
+    /// The user-facing name of the kind, shown in the add menu and the operation header.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cutout => "Cutout",
+        }
+    }
+
     /// The static descriptor of this kind.
     pub const fn descriptor(self) -> &'static MachiningDescriptor {
         match self {
@@ -190,6 +197,15 @@ impl MachiningKind {
 pub enum MachiningCategory {
     /// A volume removed from the panel.
     Cut,
+}
+
+impl MachiningCategory {
+    /// The user-facing name of the category, used as the add-menu group heading.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cut => "Cut",
+        }
+    }
 }
 
 /// When an operation applies to the panel body.
@@ -543,6 +559,18 @@ mod tests {
             let descriptor = kind.descriptor();
             assert_eq!(descriptor.kind(), *kind);
             assert_eq!(MACHINING_DESCRIPTORS.iter().filter(|row| row.kind() == *kind).count(), 1);
+        }
+    }
+
+    #[test]
+    fn every_kind_and_category_has_a_user_facing_label() {
+        for kind in MachiningKind::ALL {
+            assert!(!kind.label().trim().is_empty(), "kind {} has no label", kind.id());
+            assert!(
+                !kind.descriptor().category().label().trim().is_empty(),
+                "the category of kind {} has no label",
+                kind.id()
+            );
         }
     }
 

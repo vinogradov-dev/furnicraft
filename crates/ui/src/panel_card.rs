@@ -22,6 +22,7 @@ use furnicraft_units::Length;
 use serde_json::Value;
 
 use crate::command::{dispatch as dispatch_command, json};
+use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
 use crate::section::section;
 
 /// Persistent state of the panel card.
@@ -29,6 +30,7 @@ use crate::section::section;
 pub(crate) struct PanelCard {
     draft: Option<Draft>,
     error: Option<String>,
+    machining: MachiningSection,
 }
 
 /// Editable text that survives frames until the user commits it.
@@ -137,10 +139,14 @@ impl PanelCard {
         };
 
         let mut actions = Vec::new();
+        let mut machining_actions: Vec<MachiningAction> = Vec::new();
         let mut errors = Vec::new();
         let mut contour_request = PanelAction::None;
+        let diagnostics = session.panel_diagnostics(panel_id);
+        let thickness = session
+            .panel_geometry(panel_id)
+            .map_or_else(|_| panel.last_known_thickness(), |geometry| geometry.thickness());
         ui.separator();
-
         section(ui, "panel.name", "Name", true, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
@@ -204,8 +210,12 @@ impl PanelCard {
             self.show_bands(ui, session, panel_id, panel, &mut actions);
         });
         ui.separator();
+        section(ui, "panel.machining", "Machining", true, |ui| {
+            self.machining.show(ui, panel_id, panel, thickness, &diagnostics, &mut machining_actions);
+        });
+        ui.separator();
         section(ui, "panel.diagnostics", "Diagnostics", true, |ui| {
-            self.show_diagnostics(ui, session, panel_id);
+            self.show_diagnostics(ui, &diagnostics);
         });
 
         if let Some(error) = &self.error {
@@ -226,6 +236,17 @@ impl PanelCard {
                 }
                 if matches!(action, Action::Rename { .. } | Action::Resize { .. }) {
                     self.draft = None;
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+        if !machining_actions.is_empty() {
+            if self.error.is_none() {
+                for action in &machining_actions {
+                    if let Err(error) = self.machining.run_action(session, action) {
+                        self.error = Some(error);
+                        break;
+                    }
                 }
             }
             ui.ctx().request_repaint();
@@ -471,14 +492,26 @@ impl PanelCard {
         });
     }
 
-    fn show_diagnostics(&self, ui: &mut Ui, session: &Session, panel_id: Id) {
-        let diagnostics = session.panel_diagnostics(panel_id);
-        if diagnostics.is_empty() {
-            ui.label("No issues.");
-            return;
-        }
+    fn show_diagnostics(&self, ui: &mut Ui, diagnostics: &[PanelDiagnostic]) {
+        let mut listed = 0;
         for diagnostic in diagnostics {
-            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(&diagnostic));
+            if diagnostic_machining(diagnostic).is_some() {
+                continue;
+            }
+            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(diagnostic));
+            listed += 1;
+        }
+        let bound = diagnostics.len().saturating_sub(listed);
+        if bound > 0 {
+            let suffix = if bound == 1 {
+                "issue is shown with its operation."
+            } else {
+                "issues are shown with their operations."
+            };
+            ui.label(format!("{bound} machining {suffix}"));
+        }
+        if listed == 0 && bound == 0 {
+            ui.label("No issues.");
         }
     }
 }
@@ -572,7 +605,7 @@ fn dispatch(session: &mut Session, id: &str, params: &Value) -> Result<(), Strin
     dispatch_command(session, id, params).map(|_| ())
 }
 
-fn edge_label(edge: u32) -> &'static str {
+pub(crate) fn edge_label(edge: u32) -> &'static str {
     match edge {
         1 => "Bottom",
         2 => "Right",
@@ -611,7 +644,11 @@ fn default_feature_length() -> Length {
 /// The widget keeps the text the user types until the edit ends: Enter, losing focus or the end of
 /// a drag. The value is read back from the document on every frame, so updating it on each
 /// keystroke would replace the typed text with the document value while the user is still typing.
-fn millimetre_field(ui: &mut Ui, value: Length, range: std::ops::RangeInclusive<f64>) -> (Option<f64>, egui::Response) {
+pub(crate) fn millimetre_field(
+    ui: &mut Ui,
+    value: Length,
+    range: std::ops::RangeInclusive<f64>,
+) -> (Option<f64>, egui::Response) {
     let mut millimetres = value.millimetres_f64();
     let response = ui
         .add(egui::DragValue::new(&mut millimetres).speed(0.5).range(range).suffix(" mm").update_while_editing(false));
@@ -619,12 +656,12 @@ fn millimetre_field(ui: &mut Ui, value: Length, range: std::ops::RangeInclusive<
     (committed, response)
 }
 
-fn positive_length(millimetres: f64) -> Option<Length> {
+pub(crate) fn positive_length(millimetres: f64) -> Option<Length> {
     let value = millimetres_to_length(millimetres)?;
     value.is_positive().then_some(value)
 }
 
-fn signed_length(millimetres: f64) -> Option<Length> {
+pub(crate) fn signed_length(millimetres: f64) -> Option<Length> {
     millimetres_to_length(millimetres)
 }
 
