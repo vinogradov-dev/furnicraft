@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=D task=D5 state=idle base=67ccca2 updated=2026-11-03
+STATE: milestone=M7 phase=D task=D6 state=idle base=d87a726 updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -22,10 +22,9 @@ contract that orders that answer when a session was interrupted or the plan is b
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
   `object.collapse` keeps the exact mesh the viewport showed (ADR 0041).
 - S3, G1 and G2 are complete: `crates/param/src/profile.rs` is the one planar conversion — document
-  ring to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance.
-  `Region` keeps exact `Contour` rings, so area, bounds and containment read lines and arcs; only
-  sampling is lossy. `geom::region` unions, intersects and subtracts regions by tracing the boundary
-  of the set, so a rectangle and a curved ring take one path (ADR 0043).
+  ring to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance;
+  `Region` keeps exact rings, and `geom::region` unions, intersects and subtracts them by tracing the
+  boundary of the set (ADR 0043).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is either the nominal rectangle or a contour ring (D1). A contour panel keeps the
@@ -37,13 +36,14 @@ contract that orders that answer when a session was interrupted or the plan is b
   cutout be a contour ring, and A7 records it in `docs/domain/` and ADR 0042.
 - D4 is complete: a rectangle's corner features and bows are parameters of its outline, and every
   outline — rectangle or stored ring — resolves to one `geom::Region`. `PanelGeometry` holds the exact
-  core and overall regions, the body extrudes the core, and cutout fit, the core trace and diagnostics
-  are one region-based rule set with no branch on the outline kind: a through cutout may open a notch
-  at the core edge, a blind one may touch but not cross it (ADR 0044, schema 15).
-- Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
-  taking a bug moves its line into `## Now` in work order. X1 (the concave cap flap) is fixed; X2
-  records that a legal ring over 1024 sampled points cannot be extruded, and waits for the owner's
-  choice in `plan/questions.md`.
+  core and overall regions, and cutout fit, the core trace and diagnostics are one region-based rule
+  set with no branch on the outline kind (ADR 0044, schema 15).
+- D5 is complete: machining is one ordered list of records with stable `MachiningId`s, a face or edge
+  anchor and tagged parameters; `panel.machining.add/update/remove/move` edit it as one undo entry
+  each, and schema 16 rewrites legacy cutout entries while still loading them (ADR 0045).
+- Defects live in `## Bugs` with an `X` id and the dashboard prints the section; X1 (the concave cap
+  flap) is fixed, and X2 records that a legal ring over 1024 sampled points cannot be extruded and
+  waits for the owner's choice in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
 - The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
   `STATUS`/`BACKLOG`/`SESSION`, ships templates, the agent section, the README and MIT/Apache-2.0
@@ -53,11 +53,11 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-D5 is next: a typed machining list with stable `MachiningId`s, tagged parameters and
-`add`/`update`/`remove`/`move` commands, migrating the cutout and the schema. D6–D11 follow with the
-operation registry and pipeline, card sections, groove/milling and banding operations. S4 adds the
-revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a
-decision on the cap limit (`plan/questions.md`).
+D6 is next: the machining pipeline, with `CompileMachining`, `OpEffect` and a descriptor table so the
+panel builder folds operations without matching on the kind. D7–D11 follow with card sections,
+groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring hardware and
+mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
+(`plan/questions.md`).
 
 ## Index
 
