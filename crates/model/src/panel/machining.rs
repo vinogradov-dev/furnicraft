@@ -10,7 +10,8 @@ use furnicraft_geom::{DVec2, Rect, Region, RegionError, subtract_regions};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    Contour, ContourSegmentId, EdgeId, FaceSide, Id, Length, MachiningId, Panel, PanelGeometry, PanelRect, ProjectError,
+    Contour, ContourSegmentId, EdgeId, FaceSide, Id, Length, MachiningId, Panel, PanelGeometry, PanelRect,
+    ProjectError, panel::geometry::DEFAULT_CUTOUT_RECT,
 };
 
 /// One machining operation owned by a panel.
@@ -139,6 +140,196 @@ pub enum EdgeRef {
 pub enum MachiningParams {
     /// A volume removed from the panel.
     Cutout(Cutout),
+}
+
+impl MachiningParams {
+    /// The kind of operation this value describes.
+    pub const fn kind(&self) -> MachiningKind {
+        match self {
+            Self::Cutout(_) => MachiningKind::Cutout,
+        }
+    }
+
+    /// The static descriptor of this operation kind.
+    pub const fn descriptor(&self) -> &'static MachiningDescriptor {
+        self.kind().descriptor()
+    }
+}
+
+/// The kind of a machining operation.
+///
+/// The kind is a value, not a rule: the behaviour of a kind lives in its [`MachiningDescriptor`] and
+/// in the compiler that consumes the typed parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MachiningKind {
+    /// A volume removed through or into a face.
+    Cutout,
+}
+
+impl MachiningKind {
+    /// Every kind this build understands, in the order the add menu lists them.
+    pub const ALL: &'static [MachiningKind] = &[Self::Cutout];
+
+    /// The stable name of the kind; it is also the tag the file writes.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Cutout => "cutout",
+        }
+    }
+
+    /// The static descriptor of this kind.
+    pub const fn descriptor(self) -> &'static MachiningDescriptor {
+        match self {
+            Self::Cutout => &CUTOUT_DESCRIPTOR,
+        }
+    }
+}
+
+/// How the panel card groups operation kinds in its add menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MachiningCategory {
+    /// A volume removed from the panel.
+    Cut,
+}
+
+/// When an operation applies to the panel body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MachiningStage {
+    /// Changes the planar core region before the body is extruded.
+    Shape,
+    /// Adds or removes a tool body after the base extrusion.
+    Post,
+    /// Deforms the finished body; reserved for the deferred bend.
+    Deform,
+}
+
+/// What an operation kind accepts as input.
+///
+/// The flags are the rule the load path, the add command and the card share: an operation that
+/// declares no edge anchor cannot be stored on one, and the card shows controls only for a depth
+/// mode the kind offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MachiningCapabilities {
+    face: bool,
+    edge: bool,
+    through: bool,
+    blind: bool,
+}
+
+impl MachiningCapabilities {
+    /// A face operation that cuts through the panel or to a blind depth.
+    pub const FACE_CUT: Self = Self { face: true, edge: false, through: true, blind: true };
+
+    /// Whether the kind accepts this anchor.
+    pub const fn accepts_anchor(self, anchor: MachiningAnchor) -> bool {
+        match anchor {
+            MachiningAnchor::Face { .. } => self.face,
+            MachiningAnchor::Edge { .. } => self.edge,
+        }
+    }
+
+    /// Whether the kind accepts this depth mode.
+    pub const fn accepts_depth(self, depth: CutoutDepth) -> bool {
+        match depth {
+            CutoutDepth::Through => self.through,
+            CutoutDepth::Blind { .. } => self.blind,
+        }
+    }
+
+    /// Whether the kind can enter through a large face.
+    pub const fn face(self) -> bool {
+        self.face
+    }
+
+    /// Whether the kind can follow an outline edge.
+    pub const fn edge(self) -> bool {
+        self.edge
+    }
+
+    /// Whether the kind can remove the full thickness.
+    pub const fn through(self) -> bool {
+        self.through
+    }
+
+    /// Whether the kind can stop at a depth.
+    pub const fn blind(self) -> bool {
+        self.blind
+    }
+}
+
+/// The static description of one machining kind.
+///
+/// The table is the one list the card builds its add menu from and the one place the load path reads
+/// an operation's rules. It is not document data and is never serialized: the file stores the kind
+/// tag, and this build maps it back to a descriptor.
+#[derive(Clone, Copy, Debug)]
+pub struct MachiningDescriptor {
+    kind: MachiningKind,
+    category: MachiningCategory,
+    stage: MachiningStage,
+    capabilities: MachiningCapabilities,
+    default: fn() -> MachiningParams,
+}
+
+impl MachiningDescriptor {
+    /// Builds one table row.
+    pub const fn new(
+        kind: MachiningKind,
+        category: MachiningCategory,
+        stage: MachiningStage,
+        capabilities: MachiningCapabilities,
+        default: fn() -> MachiningParams,
+    ) -> Self {
+        Self { kind, category, stage, capabilities, default }
+    }
+
+    /// The kind this row describes.
+    pub const fn kind(self) -> MachiningKind {
+        self.kind
+    }
+
+    /// The add-menu group of the kind.
+    pub const fn category(self) -> MachiningCategory {
+        self.category
+    }
+
+    /// The stage the operation applies in.
+    pub const fn stage(self) -> MachiningStage {
+        self.stage
+    }
+
+    /// What the kind accepts as input.
+    pub const fn capabilities(self) -> MachiningCapabilities {
+        self.capabilities
+    }
+
+    /// The parameters a new operation of this kind starts with.
+    pub fn default_params(self) -> MachiningParams {
+        (self.default)()
+    }
+}
+
+/// The cutout row of the descriptor table.
+const CUTOUT_DESCRIPTOR: MachiningDescriptor = MachiningDescriptor::new(
+    MachiningKind::Cutout,
+    MachiningCategory::Cut,
+    MachiningStage::Post,
+    MachiningCapabilities::FACE_CUT,
+    default_cutout,
+);
+
+/// Every machining kind this build understands, in add-menu order.
+///
+/// The table and [`MachiningKind::ALL`] name the same kinds; a unit test keeps them in step.
+pub const MACHINING_DESCRIPTORS: &[MachiningDescriptor] = &[CUTOUT_DESCRIPTOR];
+
+/// The starting parameters of a new cutout: a through cutout in the panel's zero corner.
+///
+/// The value is a placeholder the user edits; the add command validates it against the actual panel,
+/// so a panel too small for it rejects the command instead of storing an operation that cannot be
+/// built.
+fn default_cutout() -> MachiningParams {
+    MachiningParams::Cutout(Cutout::new(CutoutShape::Rectangle(DEFAULT_CUTOUT_RECT), CutoutDepth::Through))
 }
 
 /// A cutout in a panel.
@@ -343,6 +534,57 @@ mod tests {
 
     fn cutout_record(id: u64, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> Machining {
         record(id, MachiningAnchor::face(entry), MachiningParams::Cutout(Cutout::new(shape, depth)))
+    }
+
+    #[test]
+    fn every_machining_kind_has_one_descriptor_row() {
+        assert_eq!(MACHINING_DESCRIPTORS.len(), MachiningKind::ALL.len());
+        for kind in MachiningKind::ALL {
+            let descriptor = kind.descriptor();
+            assert_eq!(descriptor.kind(), *kind);
+            assert_eq!(MACHINING_DESCRIPTORS.iter().filter(|row| row.kind() == *kind).count(), 1);
+        }
+    }
+
+    #[test]
+    fn the_cutout_descriptor_declares_its_category_stage_and_capabilities() {
+        let descriptor = MachiningKind::Cutout.descriptor();
+        assert_eq!(descriptor.category(), MachiningCategory::Cut);
+        assert_eq!(descriptor.stage(), MachiningStage::Post);
+        let capabilities = descriptor.capabilities();
+        assert!(capabilities.face());
+        assert!(!capabilities.edge());
+        assert!(capabilities.through());
+        assert!(capabilities.blind());
+        assert!(capabilities.accepts_anchor(MachiningAnchor::face(FaceSide::A)));
+        assert!(
+            !capabilities.accepts_anchor(MachiningAnchor::edge(EdgeRef::Rect { edge: crate::RectEdge::Bottom.id() }))
+        );
+    }
+
+    #[test]
+    fn the_params_kind_matches_the_tag_the_file_writes() {
+        let params = MachiningParams::Cutout(Cutout::new(
+            CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)),
+            CutoutDepth::Through,
+        ));
+        let text = serde_json::to_string(&params).expect("serialize params");
+        assert!(text.contains(&format!("\"kind\":\"{}\"", params.kind().id())), "{text}");
+        assert_eq!(params.descriptor().kind(), params.kind());
+    }
+
+    #[test]
+    fn the_default_cutout_is_a_through_face_operation_the_table_describes() {
+        let params = MachiningKind::Cutout.descriptor().default_params();
+        assert_eq!(params.kind(), MachiningKind::Cutout);
+        assert!(params.descriptor().capabilities().accepts_anchor(MachiningAnchor::face(FaceSide::A)));
+        let MachiningParams::Cutout(cutout) = &params;
+        assert_eq!(cutout.depth(), CutoutDepth::Through);
+        let CutoutShape::Rectangle(rect) = cutout.shape() else {
+            panic!("a new cutout starts as a rectangle");
+        };
+        assert!(rect.width().is_positive() && rect.height().is_positive());
+        assert!(params.descriptor().capabilities().accepts_depth(cutout.depth()));
     }
 
     #[test]

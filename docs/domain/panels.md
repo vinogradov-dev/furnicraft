@@ -264,6 +264,19 @@ Machining is an ordered list of records, not a set of cutouts. Every record has 
 - `MachiningParams::Cutout(Cutout)` is the only operation implemented today. The list order is the
   order the user created the operations in, and `panel.machining.move` changes it.
 
+Every kind also has one static descriptor: `MACHINING_DESCRIPTORS` names its kind, add-menu category,
+pipeline stage, capabilities (face or edge anchor, through or blind depth) and default parameters. The
+load path and the add command read the capabilities instead of matching on a kind, so an operation
+stored on an anchor it does not declare is refused with `MachiningAnchorUnsupported`.
+
+The parametric layer compiles a record to effects, not to one hard-coded boolean: `CompileMachining`
+reads the descriptor and emits `OpEffect`, which is a region cut, a subtracted tool body, an added
+tool body or an edge attachment. `PanelPlan` folds the effects in list order: a cut region changes
+the core before it is extruded, a subtract or add appends a boolean step, an attachment is kept for
+the banding path. The stages are `Shape` (the core region), `Post` (a boolean on the extruded body)
+and `Deform` (reserved for the deferred bend); a cutout is `Post`. The panel builder has no kind
+match: a new operation adds a parameters variant, a descriptor row and one compiler arm (ADR 0046).
+
 A cutout stores only its shape and depth; the entry face is the record's anchor. Machining is stored
 in nominal panel-local coordinates; the document stores the feature, never the removed solid. A
 cutout removes a volume from the panel body:

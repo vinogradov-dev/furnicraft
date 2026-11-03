@@ -22,7 +22,8 @@ pub use geometry::{
     PanelRectError, RectCorner, RectEdge,
 };
 pub use machining::{
-    CoreViolation, Cutout, CutoutDepth, CutoutShape, EdgeRef, Machining, MachiningAnchor, MachiningParams,
+    CoreViolation, Cutout, CutoutDepth, CutoutShape, EdgeRef, MACHINING_DESCRIPTORS, Machining, MachiningAnchor,
+    MachiningCapabilities, MachiningCategory, MachiningDescriptor, MachiningKind, MachiningParams, MachiningStage,
 };
 
 pub(crate) use banding::validate_ring_banding;
@@ -790,7 +791,7 @@ pub enum PanelError {
     },
     /// A stored machining record pairs an operation with an anchor it cannot use.
     #[error("machining {machining} cannot be anchored to {anchor:?}")]
-    MachiningNeedsFace {
+    MachiningAnchorUnsupported {
         /// The record that cannot be anchored.
         machining: MachiningId,
         /// The rejected anchor.
@@ -928,12 +929,13 @@ impl TryFrom<PanelWire> for Panel {
 
 /// Checks that every stored machining record accepts the anchor it carries.
 ///
-/// A cutout enters through a large face. A file that pairs it with an edge is a readable error, not
-/// an operation the evaluator silently ignores. Later edge operations extend this rule.
+/// The rule comes from the kind's descriptor, so a cutout cannot be stored on an edge and a later
+/// edge operation is accepted without touching this function. A file that pairs an operation with a
+/// foreign anchor is a readable error, not an operation the evaluator silently ignores.
 fn validate_machining_records(machining: &[Machining]) -> Result<(), PanelError> {
     for entry in machining {
-        if entry.cutout().is_some() && entry.anchor().as_face().is_none() {
-            return Err(PanelError::MachiningNeedsFace { machining: entry.id(), anchor: entry.anchor() });
+        if !entry.params().descriptor().capabilities().accepts_anchor(entry.anchor()) {
+            return Err(PanelError::MachiningAnchorUnsupported { machining: entry.id(), anchor: entry.anchor() });
         }
     }
     Ok(())
@@ -1287,5 +1289,22 @@ mod tests {
         let decoded: Panel = serde_json::from_value(value).expect("older panel without machining");
         assert_eq!(decoded, panel);
         assert!(decoded.machining().is_empty());
+    }
+
+    #[test]
+    fn a_cutout_stored_on_an_edge_is_a_readable_error() {
+        let panel = sample_panel(Id::new(2).expect("id"), "Shelf");
+        let mut value = serde_json::to_value(&panel).expect("serialize panel");
+        value["machining"] = serde_json::json!([{
+            "id": 5,
+            "anchor": {"kind": "edge", "edge": {"kind": "rect", "edge": 1}},
+            "params": {
+                "kind": "cutout",
+                "shape": {"rectangle": {"x": 10_000, "y": 10_000, "width": 100_000, "height": 50_000}},
+                "depth": "through"
+            }
+        }]);
+        let error = serde_json::from_value::<Panel>(value).expect_err("a cutout cannot follow an edge");
+        assert!(error.to_string().contains("cannot be anchored"), "{error}");
     }
 }

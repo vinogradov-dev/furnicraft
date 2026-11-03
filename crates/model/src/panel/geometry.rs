@@ -59,6 +59,18 @@ impl PanelRect {
     }
 }
 
+/// The starting shape of a new cutout: a 100 mm square in the panel's zero corner.
+///
+/// The value sits in the descriptor table, which has no panel to measure against, so it is the same
+/// for every panel. The add command validates it against the actual core; a panel that cannot hold
+/// it rejects the operation instead of storing one that cannot be built.
+pub(crate) const DEFAULT_CUTOUT_RECT: PanelRect = PanelRect {
+    x: Length::ZERO,
+    y: Length::ZERO,
+    width: Length::from_micrometres(100_000),
+    height: Length::from_micrometres(100_000),
+};
+
 /// Why a panel rectangle is not usable.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum PanelRectError {

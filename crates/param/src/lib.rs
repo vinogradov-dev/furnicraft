@@ -29,17 +29,19 @@
 use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, RegionError, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, MachiningId, Panel,
-    PanelContourError, PanelGeometry, SegmentSource, VertexId,
+    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, MachiningId,
+    MachiningStage, Panel, PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
 
 mod constructive;
+mod machining;
 mod profile;
 mod solid;
 
 pub use constructive::build_constructive_mesh;
+pub use machining::{CompileMachining, CompiledMachining, OpEffect, PanelPlan};
 
 use solid::{PlanBuilder, SolidPlan};
 
@@ -74,12 +76,21 @@ pub enum ParamError {
     /// A rectangle a profile would be built from has no positive extent.
     #[error(transparent)]
     Region(#[from] RegionError),
-    /// A cutout record is not anchored to a face, so it has no entry face to cut from.
-    #[error("machining {machining} needs a face anchor to be built")]
-    MachiningNeedsFace {
-        /// The record without a face anchor.
+    /// The operation cannot be built from the anchor the record carries.
+    #[error("machining {machining} cannot be built from its anchor")]
+    MachiningAnchorUnsupported {
+        /// The record with the wrong anchor.
         machining: MachiningId,
     },
+    /// The operation applies in a stage this build does not evaluate.
+    #[error("this build does not evaluate machining at the {stage:?} stage")]
+    UnsupportedMachiningStage {
+        /// The reserved stage.
+        stage: MachiningStage,
+    },
+    /// A shape-stage effect left no single connected piece of core.
+    #[error("the panel core is not one connected region after its shape-stage machining")]
+    CoreNotOneRegion,
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
@@ -119,28 +130,8 @@ pub fn build_panel(
     panel: &Panel,
     geometry: &PanelGeometry,
 ) -> Result<BodyId, ParamError> {
-    let plan = panel_plan(panel, geometry)?;
+    let plan = PanelPlan::of_panel(panel, geometry)?.solid()?;
     Ok(solid::evaluate(&plan, kernel)?)
-}
-
-/// Compiles the base body and the cutout steps of a panel into one solid plan.
-fn panel_plan(panel: &Panel, geometry: &PanelGeometry) -> Result<SolidPlan, ParamError> {
-    let profile = profile::profile_of_region(geometry.core_region())?;
-    let thickness = geometry.thickness().millimetres_f64();
-    let mut builder = PlanBuilder::new().extrude(profile, Frame::WORLD, thickness)?;
-    // The same 3D subtraction serves every outline kind: tools are nominal panel-local, so they
-    // line up with the body without a core-origin translation.
-    for machining in panel.machining() {
-        let Some(cutout) = machining.cutout() else {
-            continue;
-        };
-        let Some(entry) = machining.anchor().as_face() else {
-            return Err(ParamError::MachiningNeedsFace { machining: machining.id() });
-        };
-        let tool = build_cutout_tool(geometry, cutout, entry)?;
-        builder = builder.boolean(BooleanOp::Difference, tool);
-    }
-    Ok(builder.build()?)
 }
 
 /// What a band body covers.
@@ -292,7 +283,7 @@ where
 }
 
 /// Wraps one extrusion into a plan.
-fn extrusion_plan(profile: Profile, frame: Frame, height: f64) -> Result<SolidPlan, ParamError> {
+pub(crate) fn extrusion_plan(profile: Profile, frame: Frame, height: f64) -> Result<SolidPlan, ParamError> {
     Ok(PlanBuilder::new().extrude(profile, frame, height)?.build()?)
 }
 
@@ -662,7 +653,11 @@ where
 }
 
 /// The plan of one cutout tool, in nominal panel-local coordinates.
-fn build_cutout_tool(geometry: &PanelGeometry, cutout: &Cutout, entry: FaceSide) -> Result<SolidPlan, ParamError> {
+pub(crate) fn build_cutout_tool(
+    geometry: &PanelGeometry,
+    cutout: &Cutout,
+    entry: FaceSide,
+) -> Result<SolidPlan, ParamError> {
     let thickness = geometry.thickness().millimetres_f64();
     let (z, height) = match cutout.depth() {
         CutoutDepth::Through => (-TOOL_OVERSHOOT_MM, thickness + 2.0 * TOOL_OVERSHOOT_MM),

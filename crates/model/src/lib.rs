@@ -55,7 +55,8 @@ pub use node::Node;
 pub use object::{Constructive, ConstructiveError, Extrude, Feature, Geometry, MAX_OBJECT_FEATURES, Object};
 pub use panel::{
     BandingSpec, ContourPath, CoreViolation, CornerBanding, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeRef,
-    EntryFace, FaceSide, Machining, MachiningAnchor, MachiningParams, Panel, PanelContourError, PanelDimensionError,
+    EntryFace, FaceSide, MACHINING_DESCRIPTORS, Machining, MachiningAnchor, MachiningCapabilities, MachiningCategory,
+    MachiningDescriptor, MachiningKind, MachiningParams, MachiningStage, Panel, PanelContourError, PanelDimensionError,
     PanelError, PanelGeometry, PanelGeometryError, PanelNominalSize, PanelOutline, PanelRect, PanelRectError,
     RectCorner, RectEdge, RingBanding, SegmentSource,
 };
