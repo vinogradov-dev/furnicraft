@@ -178,7 +178,7 @@ mod tests {
         let panel = Panel::new(Id::new(1).expect("id"), "Panel", size, None, millimetres(18), Placement::IDENTITY)
             .expect("panel");
         let geometry = panel.geometry_with_fallbacks().expect("geometry");
-        let body = build_panel(&mut kernel, &panel, geometry).expect("kernel body");
+        let body = build_panel(&mut kernel, &panel, &geometry).expect("kernel body");
         let kernel_volume = kernel.measure(body).expect("measure").volume;
         assert!((analytic - kernel_volume).abs() < 1.0, "analytic {analytic} vs kernel {kernel_volume}");
     }

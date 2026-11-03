@@ -656,6 +656,9 @@ pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
             format!("Segment {segment} uses missing edge material {material}.")
         }
         PanelDiagnostic::NonPositiveCore => "The panel core is not positive.".to_owned(),
+        PanelDiagnostic::InvalidOutline => {
+            "The panel outline or its edge banding does not form a valid contour.".to_owned()
+        }
         PanelDiagnostic::MachiningOutsideCore { cutout } => {
             format!("Cutout {cutout} lies outside the core.")
         }
@@ -955,6 +958,10 @@ mod tests {
             "Segment 3 uses missing edge material 101."
         );
         assert_eq!(diagnostic_message(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
+        assert_eq!(
+            diagnostic_message(&PanelDiagnostic::InvalidOutline),
+            "The panel outline or its edge banding does not form a valid contour."
+        );
         assert_eq!(
             diagnostic_message(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(9).expect("id") }),
             "Cutout 9 lies outside the core."

@@ -202,6 +202,7 @@ Diagnostics are computed during loading/rebuild and are not stored as data:
 - `MissingBandingMaterial { edge, material }`;
 - `MissingBandingProfile { edge }`: legacy data has no usable fallback;
 - `NonPositiveCore`;
+- `InvalidOutline`: the outline or its edge banding does not form a valid contour ring;
 - `MachiningOutsideCore`;
 - `BlindDepthNotLessThanThickness`.
 
@@ -230,6 +231,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 12 gives every contour segment a stable id and the ring a counter for the next one. A version 11 ring loads with ids `1..n`, so a later edit can name a segment instead of an index without renumbering the ring.
 - Version 13 adds the contour panel: a panel outline may be a stored ring, and ring banding is one record per segment. A version 12 panel loads with the rectangle outline and its edge and corner banding unchanged.
 - Version 14 lets a cutout outline be a contour ring. A version 13 cutout loads as a rectangle, and every value it stored keeps its place.
+- Version 15 moves a rectangle panel's corner features and bowed edges from the panel into its outline, so the outline is the one source of the panel shape. A version 14 panel keeps its features: they load from the old top-level fields and are written back inside the outline.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 

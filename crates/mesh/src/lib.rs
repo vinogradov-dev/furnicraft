@@ -375,7 +375,7 @@ mod tests {
         let panel = Panel::new(Id::new(1).expect("id"), "Panel", size, None, millimetres(18), Placement::IDENTITY)
             .expect("valid panel");
         let geometry = panel.geometry_with_fallbacks().expect("resolved geometry");
-        let body = build_panel(&mut kernel, &panel, geometry).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry).expect("panel body");
         let mesh = tessellate_panel(&kernel, body, &TessOptions::default()).expect("panel mesh");
 
         assert!(mesh.triangle_count() >= 12, "triangles: {}", mesh.triangle_count());

@@ -303,6 +303,39 @@ mod tests {
     }
 
     #[test]
+    fn version_fourteen_panel_features_move_into_the_outline() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let corner =
+            CornerFeature::new(RectCorner::BottomLeft.id(), CornerFeatureKind::Radius { radius: millimetres(8) })
+                .expect("radius");
+        project.set_corner_feature(panel_id, corner).expect("set corner feature");
+        project
+            .set_edge_bow(panel_id, EdgeBow::new(RectEdge::Bottom.id(), millimetres(5)).expect("bow"))
+            .expect("set bow");
+
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        wire["schema_version"] = serde_json::json!(14);
+        let panel = &mut wire["root"]["children"][0]["panel"];
+        let outline = panel["outline"].as_object_mut().expect("outline is an object");
+        let corner_features = outline.remove("corner_features").expect("embedded corner features");
+        let edge_bows = outline.remove("edge_bows").expect("embedded bows");
+        panel["corner_features"] = corner_features;
+        panel["edge_bows"] = edge_bows;
+
+        let decoded: Project = serde_json::from_value(wire).expect("load a schema 14 file");
+        assert_eq!(decoded.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = decoded.panel(panel_id).expect("panel");
+        assert_eq!(panel.corner_features(), &[corner]);
+        assert_eq!(panel.edge_bows().len(), 1);
+
+        let text = serde_json::to_string(&decoded).expect("serialize migrated project");
+        assert!(text.contains("\"corner_features\":[{\"corner\":1"), "the feature is written inside the outline");
+        let again: Project = serde_json::from_str(&text).expect("reload migrated project");
+        assert_eq!(again, decoded);
+    }
+
+    #[test]
     fn version_six_containers_migrate_to_one_container_kind() {
         let legacy = r#"{
             "schema_version": 6,

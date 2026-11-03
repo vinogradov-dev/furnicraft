@@ -55,7 +55,7 @@ impl Project {
     /// a version 10 point list loads as a ring of lines, so the shape is unchanged. Version 12 gives
     /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
     /// with ids `1..n`.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 14;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 15;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;

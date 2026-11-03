@@ -19,6 +19,7 @@ const V9: &str = include_str!("golden/scene-v9.fcs");
 const V10: &str = include_str!("golden/scene-v10.fcs");
 const V11: &str = include_str!("golden/scene-v11.fcs");
 const V12: &str = include_str!("golden/scene-v12.fcs");
+const V14: &str = include_str!("golden/scene-v14.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -57,6 +58,7 @@ fn every_golden_file_loads_and_round_trips() {
         ("version 10", V10),
         ("version 11", V11),
         ("version 12", V12),
+        ("version 14", V14),
     ] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
@@ -69,6 +71,22 @@ fn every_golden_file_loads_and_round_trips() {
         assert_eq!(again.document(), scene.document(), "{name} document must survive a round trip");
         assert_eq!(again.extra(), scene.extra(), "{name} extra sections must survive a round trip");
     }
+}
+
+#[test]
+fn a_version_fourteen_panel_moves_its_features_into_the_outline() {
+    let scene = SceneFile::parse(V14).expect("version 14");
+
+    let panel = scene.document().panel(Id::new(2).expect("id")).expect("the panel must load");
+    assert_eq!(panel.corner_features().len(), 1, "a top-level corner feature moves into the outline");
+    assert_eq!(panel.edge_bows().len(), 1, "a top-level bow moves into the outline");
+    assert!(panel.has_contour_features());
+
+    let rewritten = scene.to_json().expect("serialize");
+    let again = SceneFile::parse(&rewritten).expect("reload");
+    let panel = again.document().panel(Id::new(2).expect("id")).expect("the panel must reload");
+    assert_eq!(panel.corner_features().len(), 1);
+    assert_eq!(panel.edge_bows().len(), 1);
 }
 
 #[test]

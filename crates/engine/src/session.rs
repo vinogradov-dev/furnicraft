@@ -531,21 +531,31 @@ mod tests {
         assert_eq!(cutout.id(), cutout_id);
         assert_eq!(cutout.shape(), &shape);
 
-        // A through ring that crosses the core edge is refused before any id is consumed.
-        let next_id = session.project().next_id();
+        // A through ring that crosses the core edge opens a notch and is accepted; a ring that
+        // misses the core entirely is refused before any id is consumed.
         let crossing = cutout_request(
             panel_id,
             CutoutShape::Contour(cutout_ring(-10, 200, 100, 50)),
             CutoutDepth::Through,
             FaceSide::A,
         );
-        let error = session.dispatch("cutout.create", &json_params(&crossing)).expect_err("ring outside the core");
+        session.dispatch("cutout.create", &json_params(&crossing)).expect("notch cutout");
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 2);
+
+        let next_id = session.project().next_id();
+        let outside = cutout_request(
+            panel_id,
+            CutoutShape::Contour(cutout_ring(-200, 200, 100, 50)),
+            CutoutDepth::Through,
+            FaceSide::A,
+        );
+        let error = session.dispatch("cutout.create", &json_params(&outside)).expect_err("ring outside the core");
         assert!(matches!(
             error,
             CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
         ));
         assert_eq!(session.project().next_id(), next_id);
-        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 1);
+        assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 2);
     }
 
     #[test]

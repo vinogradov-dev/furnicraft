@@ -1,0 +1,88 @@
+{
+  "format": "furnicraft.scene",
+  "format_version": 1,
+  "document": {
+    "schema_version": 14,
+    "revision": 0,
+    "next_id": 3,
+    "root": {
+      "id": 1,
+      "name": "Root",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "children": [
+        {
+          "panel": {
+            "id": 2,
+            "name": "Shaped",
+            "nominal_size": {
+              "length": 600000,
+              "width": 400000
+            },
+            "outline": {
+              "kind": "rect"
+            },
+            "material": null,
+            "last_known_thickness": 18000,
+            "placement": {
+              "translation": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "rotation": [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "pivot": [
+              0,
+              0,
+              0
+            ],
+            "machining": [],
+            "edge_banding": [],
+            "corner_banding": [],
+            "ring_banding": [],
+            "band_order": [],
+            "corner_features": [
+              {
+                "corner": 1,
+                "feature": {
+                  "kind": "radius",
+                  "radius": 8000
+                }
+              }
+            ],
+            "edge_bows": [
+              {
+                "edge": 1,
+                "sagitta": 5000
+              }
+            ],
+            "properties": {}
+          }
+        }
+      ],
+      "properties": {}
+    }
+  }
+}

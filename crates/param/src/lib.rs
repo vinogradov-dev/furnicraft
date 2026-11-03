@@ -101,37 +101,29 @@ pub fn validate_extrusion_contour(contour: &furnicraft_model::Contour) -> Result
 
 /// Builds the solid body of a panel in its local frame.
 ///
-/// The panel frame is anchored at the nominal minimum corner. The core starts at
-/// `(core_x, core_y)` and has its length along `+X`, its width along `+Y` and its thickness along
-/// `+Z`. A rectangular panel extrudes its core rectangle; a contour panel extrudes the ring itself.
-/// Panel-owned cutouts are nominal panel-local, so their tool bodies are placed directly at
-/// the stored coordinates without a core-origin translation. A through cutout removes the full
-/// thickness, while a blind cutout removes material from its entry face. The caller owns the
-/// returned handle and must eventually release it through [`SolidKernel::clear`].
-pub fn build_panel(kernel: &mut dyn SolidKernel, panel: &Panel, geometry: PanelGeometry) -> Result<BodyId, ParamError> {
-    let plan = panel_plan(panel, geometry, &EdgeBandProfile::from_spec)?;
+/// The panel frame is anchored at the nominal minimum corner. The core is the resolved region, so
+/// a rectangle, a shaped outline and a stored contour ring extrude the same way, with its length
+/// along `+X`, its width along `+Y` and its thickness along `+Z`. Panel-owned cutouts are nominal
+/// panel-local, so their tool bodies are placed directly at the stored coordinates without a
+/// core-origin translation. A through cutout removes the full thickness, while a blind cutout
+/// removes material from its entry face. The caller owns the returned handle and must eventually
+/// release it through [`SolidKernel::clear`].
+pub fn build_panel(
+    kernel: &mut dyn SolidKernel,
+    panel: &Panel,
+    geometry: &PanelGeometry,
+) -> Result<BodyId, ParamError> {
+    let plan = panel_plan(panel, geometry)?;
     Ok(solid::evaluate(&plan, kernel)?)
 }
 
 /// Compiles the base body and the cutout steps of a panel into one solid plan.
-fn panel_plan<F>(panel: &Panel, geometry: PanelGeometry, band_profile: &F) -> Result<SolidPlan, ParamError>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    let mut builder = if panel.has_shaped_outline() {
-        shaped_body_plan(panel, geometry, band_profile)?
-    } else {
-        let core_x = geometry.core_x().millimetres_f64();
-        let core_y = geometry.core_y().millimetres_f64();
-        let length = geometry.core_length().millimetres_f64();
-        let width = geometry.core_width().millimetres_f64();
-        let thickness = geometry.thickness().millimetres_f64();
-        let profile = profile::profile_of_rectangle(length, width)?;
-        let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
-        PlanBuilder::new().extrude(profile, frame, thickness)?
-    };
-    // The same 3D subtraction serves rectangular and shaped cores: tools are nominal
-    // panel-local, so they line up with either body without a core-origin translation.
+fn panel_plan(panel: &Panel, geometry: &PanelGeometry) -> Result<SolidPlan, ParamError> {
+    let profile = profile::profile_of_region(geometry.core_region())?;
+    let thickness = geometry.thickness().millimetres_f64();
+    let mut builder = PlanBuilder::new().extrude(profile, Frame::WORLD, thickness)?;
+    // The same 3D subtraction serves every outline kind: tools are nominal panel-local, so they
+    // line up with the body without a core-origin translation.
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
         let tool = build_cutout_tool(geometry, cutout)?;
@@ -230,7 +222,7 @@ impl EdgeBandProfile {
 fn build_rect_bands_with<F>(
     kernel: &mut dyn SolidKernel,
     panel: &Panel,
-    geometry: PanelGeometry,
+    geometry: &PanelGeometry,
     band_profile: F,
 ) -> Result<Vec<BandPart>, ParamError>
 where
@@ -272,32 +264,20 @@ where
 pub fn build_panel_parts_with<F>(
     kernel: &mut dyn SolidKernel,
     panel: &Panel,
-    geometry: PanelGeometry,
+    geometry: &PanelGeometry,
     band_profile: F,
 ) -> Result<PanelParts, ParamError>
 where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
+    let body = build_panel(kernel, panel, geometry)?;
     if panel.has_shaped_outline() {
-        let plan = panel_plan(panel, geometry, &band_profile)?;
-        let body = solid::evaluate(&plan, kernel)?;
         let bands = build_shaped_bands(kernel, panel, geometry, &band_profile)?;
         return Ok(PanelParts { body, bands });
     }
 
-    let body = build_panel(kernel, panel, geometry)?;
     let bands = build_rect_bands_with(kernel, panel, geometry, |band| band_profile(&band.spec()))?;
     Ok(PanelParts { body, bands })
-}
-
-fn shaped_body_plan<F>(panel: &Panel, geometry: PanelGeometry, band_profile: &F) -> Result<PlanBuilder, ParamError>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    let core = shaped_core_contour(panel, band_profile)?;
-    let profile = profile::profile_of_contour(&core)?;
-    let thickness = geometry.thickness().millimetres_f64();
-    Ok(PlanBuilder::new().extrude(profile, Frame::WORLD, thickness)?)
 }
 
 /// Wraps one extrusion into a plan.
@@ -305,21 +285,11 @@ fn extrusion_plan(profile: Profile, frame: Frame, height: f64) -> Result<SolidPl
     Ok(PlanBuilder::new().extrude(profile, frame, height)?.build()?)
 }
 
-/// Builds the core outline of a shaped panel.
-///
-/// Each nominal segment is offset inward when its own band is included; consecutive offsets are
-/// joined with a straight connector. Unbanded and non-included segments stay nominal.
-fn shaped_core_contour<F>(panel: &Panel, band_profile: &F) -> Result<Contour, ParamError>
-where
-    F: Fn(&BandingSpec) -> EdgeBandProfile,
-{
-    Ok(panel.core_contour_with(|spec| band_profile(spec).thickness())?)
-}
-
+/// Builds one strip per banded path of a shaped or contour outline.
 fn build_shaped_bands<F>(
     kernel: &mut dyn SolidKernel,
     panel: &Panel,
-    geometry: PanelGeometry,
+    geometry: &PanelGeometry,
     band_profile: &F,
 ) -> Result<Vec<BandPart>, ParamError>
 where
@@ -637,7 +607,7 @@ struct BandRect {
 }
 
 fn band_rect<F>(
-    geometry: PanelGeometry,
+    geometry: &PanelGeometry,
     bands: &[EdgeBanding],
     index: usize,
     band: &EdgeBanding,
@@ -681,7 +651,7 @@ where
 }
 
 /// The plan of one cutout tool, in nominal panel-local coordinates.
-fn build_cutout_tool(geometry: PanelGeometry, cutout: &Cutout) -> Result<SolidPlan, ParamError> {
+fn build_cutout_tool(geometry: &PanelGeometry, cutout: &Cutout) -> Result<SolidPlan, ParamError> {
     let thickness = geometry.thickness().millimetres_f64();
     let (z, height) = match cutout.depth() {
         CutoutDepth::Through => (-TOOL_OVERSHOOT_MM, thickness + 2.0 * TOOL_OVERSHOOT_MM),
@@ -956,7 +926,7 @@ mod tests {
     fn included_end_bands_fill_a_bare_chamfer_join() {
         let panel = panel_with_chamfer_and_end_bands(true, true, None);
         let mut kernel = RecordingKernel::default();
-        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+        let parts = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &EdgeBandProfile::from_spec)
             .expect("shaped bands");
         assert_eq!(parts.len(), 2);
         assert_eq!(kernel.profiles.len(), 2);
@@ -972,7 +942,7 @@ mod tests {
     fn non_included_end_bands_are_cut_flush_with_a_bare_chamfer() {
         let panel = panel_with_chamfer_and_end_bands(false, false, None);
         let mut kernel = RecordingKernel::default();
-        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+        let parts = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &EdgeBandProfile::from_spec)
             .expect("shaped bands");
         assert_eq!(parts.len(), 2);
         let bottom = &kernel.profiles[0];
@@ -988,7 +958,7 @@ mod tests {
         let panel = panel_with_chamfer_and_end_bands(true, true, Some(true));
         let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("banded chamfer parts");
         let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
         let band_volume: f64 =
@@ -1220,7 +1190,7 @@ mod tests {
         F: Fn(&BandingSpec) -> EdgeBandProfile,
     {
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, panel, geometry(panel), band_profile).expect("panel parts");
+        let parts = build_panel_parts_with(&mut kernel, panel, &geometry(panel), band_profile).expect("panel parts");
         let volumes =
             parts.bands().iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).collect();
         kernel.clear();
@@ -1233,7 +1203,7 @@ mod tests {
         let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
         let right_band_volume = 2.0 * 500.0 * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("mixed panel parts");
         let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
         let band_volume: f64 =
@@ -1250,7 +1220,7 @@ mod tests {
     fn build_panel_samples_the_nominal_contour_for_a_shaped_panel() {
         let mut kernel = RecordingKernel::default();
         let panel = panel_with_corner(CornerFeatureKind::Radius { radius: millimetres(25) });
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("shaped panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("shaped panel body");
 
         assert_eq!(body, BodyId::from_raw(7));
         let profile = kernel.profile.as_ref().expect("recorded profile");
@@ -1266,7 +1236,7 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let panel =
             panel_with_corner(CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(10) });
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("shaped panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("shaped panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         let expected = (700.0 * 500.0 - 0.5 * 20.0 * 10.0) * 18.0;
@@ -1277,7 +1247,7 @@ mod tests {
     fn build_panel_extrudes_the_contour_ring_not_its_bounds() {
         let panel = contour_panel();
         let mut kernel = TruckKernel::new();
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("ring body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("ring body");
         let volume = kernel.measure(body).expect("body measure").volume;
         let expected = (700.0 * 500.0 - 300.0 * 200.0) * 18.0;
         assert!((volume - expected).abs() < expected * 1.0e-6, "volume was {volume}, expected {expected}");
@@ -1304,7 +1274,7 @@ mod tests {
         assert_eq!(panel.band_order(), &[SegmentSource::Ring(segment)]);
         let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("ring panel parts");
         assert_eq!(parts.bands().len(), 1);
         assert_eq!(parts.bands()[0].source(), BandSource::Ring(segment));
@@ -1323,7 +1293,7 @@ mod tests {
         let panel = panel_with_radius_and_band(false);
         assert_eq!(panel.edge_banding().len(), 1);
         let mut kernel = RecordingKernel::default();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("rounded panel parts");
         assert_eq!(parts.bands().len(), 1);
         assert_eq!(parts.bands()[0].source(), BandSource::Edge(RectEdge::Right.id()));
@@ -1337,7 +1307,7 @@ mod tests {
             &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Corner(RectCorner::BottomRight.id())]
         );
         let mut kernel = RecordingKernel::default();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("panel parts");
         assert_eq!(parts.bands().len(), 2);
         let strip = kernel.profile.as_ref().expect("the chamfer strip is the last extrusion");
@@ -1351,7 +1321,7 @@ mod tests {
         let nominal_area = panel.nominal_contour().expect("contour").signed_area().expect("area");
         let nominal_volume = nominal_area * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("rounded panel parts");
         let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
         let band_volume: f64 =
@@ -1370,7 +1340,7 @@ mod tests {
         let nominal_area = panel.nominal_contour().expect("contour").signed_area().expect("area");
         let nominal_volume = nominal_area * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("rounded panel parts");
         let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
         let band_volume: f64 =
@@ -1384,8 +1354,8 @@ mod tests {
     fn a_non_included_band_on_a_bowed_edge_is_mitred_against_its_neighbours() {
         let panel = panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 2)]);
         let mut kernel = RecordingKernel::default();
-        let parts =
-            build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec).expect("bowed band");
+        let parts = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &EdgeBandProfile::from_spec)
+            .expect("bowed band");
         assert_eq!(parts.len(), 1);
         let profile = kernel.profile.as_ref().expect("band profile");
         let arc = nominal_arc(&panel, RectEdge::Bottom).expect("bottom bow");
@@ -1407,7 +1377,7 @@ mod tests {
         let panel =
             panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)]);
         let mut kernel = RecordingKernel::default();
-        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+        let parts = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &EdgeBandProfile::from_spec)
             .expect("bowed joint bands");
         assert_eq!(parts.len(), 2);
         let left = kernel.profile.as_ref().expect("left band profile");
@@ -1434,13 +1404,14 @@ mod tests {
             panel_with_bow_and_bands(millimetres(10), &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)]);
         let mut kernel = TruckKernel::new();
         let reference =
-            build_panel_parts_with(&mut kernel, &bottom_band, geometry(&bottom_band), EdgeBandProfile::from_spec)
+            build_panel_parts_with(&mut kernel, &bottom_band, &geometry(&bottom_band), EdgeBandProfile::from_spec)
                 .expect("reference parts");
         let reference_volume = kernel.measure(reference.body()).expect("body measure").volume
             + kernel.measure(reference.bands()[0].body()).expect("band measure").volume;
 
-        let parts = build_panel_parts_with(&mut kernel, &both_bands, geometry(&both_bands), EdgeBandProfile::from_spec)
-            .expect("both band parts");
+        let parts =
+            build_panel_parts_with(&mut kernel, &both_bands, &geometry(&both_bands), EdgeBandProfile::from_spec)
+                .expect("both band parts");
         let total = kernel.measure(parts.body()).expect("body measure").volume
             + parts.bands().iter().map(|part| kernel.measure(part.body()).expect("band measure").volume).sum::<f64>();
         assert!(
@@ -1457,7 +1428,7 @@ mod tests {
             &[(RectEdge::Bottom, false, 10), (RectEdge::Left, true, 2)],
         );
         let mut kernel = RecordingKernel::default();
-        let parts = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &EdgeBandProfile::from_spec)
+        let parts = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &EdgeBandProfile::from_spec)
             .expect("arc joint bands");
         assert_eq!(parts.len(), 2);
         let left = kernel.profile.as_ref().expect("left band profile");
@@ -1487,7 +1458,7 @@ mod tests {
         );
         let nominal_volume = panel.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("bowed panel parts");
         let body_volume = kernel.measure(parts.body()).expect("body measure").volume;
         let band_volume: f64 =
@@ -1506,7 +1477,7 @@ mod tests {
         let angle = std::f64::consts::FRAC_PI_2;
         let nominal_volume = included.nominal_contour().expect("contour").signed_area().expect("area") * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &included, geometry(&included), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &included, &geometry(&included), EdgeBandProfile::from_spec)
             .expect("included radius band");
         assert_eq!(parts.bands().len(), 1);
         assert_eq!(parts.bands()[0].source(), BandSource::Corner(RectCorner::BottomRight.id()));
@@ -1518,7 +1489,7 @@ mod tests {
         );
 
         let outside = panel_with_radius_corner_band(false);
-        let parts = build_panel_parts_with(&mut kernel, &outside, geometry(&outside), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &outside, &geometry(&outside), EdgeBandProfile::from_spec)
             .expect("non-included radius band");
         let band_volume = kernel.measure(parts.bands()[0].body()).expect("band measure").volume;
         let expected_area = 0.5 * ((radius + 2.0) * (radius + 2.0) - radius * radius) * angle;
@@ -1557,7 +1528,7 @@ mod tests {
         let panel = project.panel(panel_id).expect("panel").clone();
 
         let mut kernel = RecordingKernel::default();
-        let error = build_shaped_bands(&mut kernel, &panel, geometry(&panel), &|_| {
+        let error = build_shaped_bands(&mut kernel, &panel, &geometry(&panel), &|_| {
             EdgeBandProfile::new(millimetres(80), millimetres(22))
         })
         .expect_err("the outgoing offset consumes the bow radius");
@@ -1573,7 +1544,7 @@ mod tests {
         let nominal_area = panel.nominal_contour().expect("contour").signed_area().expect("area");
         let nominal_volume = nominal_area * 18.0;
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("chamfer panel parts");
         assert_eq!(parts.bands().len(), 1);
         assert_eq!(parts.bands()[0].source(), BandSource::Corner(RectCorner::BottomRight.id()));
@@ -1591,7 +1562,7 @@ mod tests {
     fn outward_bow_extends_the_extruded_profile_outside_the_nominal_frame() {
         let mut kernel = RecordingKernel::default();
         let panel = panel_with_bow(millimetres(10));
-        build_panel(&mut kernel, &panel, geometry(&panel)).expect("bowed panel body");
+        build_panel(&mut kernel, &panel, &geometry(&panel)).expect("bowed panel body");
         let profile = kernel.profile.as_ref().expect("recorded profile");
         let min_y = profile.outer.iter().map(|point| point.y).fold(f64::INFINITY, f64::min);
         assert!((min_y + 10.0).abs() < 0.1, "min y was {min_y}");
@@ -1601,12 +1572,16 @@ mod tests {
     fn build_panel_maps_dimensions_to_a_world_frame_extrusion() {
         let mut kernel = RecordingKernel::default();
         let panel = sample_panel();
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         assert_eq!(body, BodyId::from_raw(7));
         let profile = kernel.profile.as_ref().expect("recorded profile");
+        // The region sampler may start the ring at any vertex; compare it as a closed cycle.
+        let mut outer = profile.outer.clone();
+        let start = outer.iter().position(|point| *point == DVec2::new(0.0, 0.0)).expect("origin corner");
+        outer.rotate_left(start);
         assert_eq!(
-            profile.outer,
+            outer,
             vec![DVec2::new(0.0, 0.0), DVec2::new(700.0, 0.0), DVec2::new(700.0, 500.0), DVec2::new(0.0, 500.0),]
         );
         assert!(profile.holes.is_empty());
@@ -1618,16 +1593,21 @@ mod tests {
     fn build_panel_places_an_included_bottom_core_inside_the_nominal_frame() {
         let mut kernel = RecordingKernel::default();
         let panel = panel_with_bands(&[(1, true)], millimetres(22));
-        let geometry = geometry(&panel);
+        let geometry = &geometry(&panel);
         assert_eq!(geometry.core_y(), millimetres(2));
 
         build_panel(&mut kernel, &panel, geometry).expect("panel body");
 
-        assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 2.0, 0.0), ..Frame::WORLD }));
+        // The core region is already in panel-local coordinates, so the extrusion frame is the
+        // world frame and the profile starts at the moved core origin.
+        assert_eq!(kernel.frame, Some(Frame::WORLD));
         let profile = kernel.profile.as_ref().expect("recorded profile");
+        let mut outer = profile.outer.clone();
+        let start = outer.iter().position(|point| *point == DVec2::new(0.0, 2.0)).expect("core origin corner");
+        outer.rotate_left(start);
         assert_eq!(
-            profile.outer,
-            vec![DVec2::new(0.0, 0.0), DVec2::new(700.0, 0.0), DVec2::new(700.0, 498.0), DVec2::new(0.0, 498.0),]
+            outer,
+            vec![DVec2::new(0.0, 2.0), DVec2::new(700.0, 2.0), DVec2::new(700.0, 500.0), DVec2::new(0.0, 500.0),]
         );
     }
 
@@ -1635,7 +1615,7 @@ mod tests {
     fn included_bands_are_translated_with_the_core_origin() {
         let mut kernel = RecordingKernel::default();
         let bottom = panel_with_bands(&[(1, true)], millimetres(22));
-        build_panel_parts_with(&mut kernel, &bottom, geometry(&bottom), EdgeBandProfile::from_spec).expect("band");
+        build_panel_parts_with(&mut kernel, &bottom, &geometry(&bottom), EdgeBandProfile::from_spec).expect("band");
         assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(0.0, 2.0, 0.0), ..Frame::WORLD }));
         let profile = kernel.profile.as_ref().expect("recorded band profile");
         assert_eq!(
@@ -1645,7 +1625,7 @@ mod tests {
 
         let mut kernel = RecordingKernel::default();
         let left = panel_with_bands(&[(4, true)], millimetres(22));
-        build_panel_parts_with(&mut kernel, &left, geometry(&left), EdgeBandProfile::from_spec).expect("band");
+        build_panel_parts_with(&mut kernel, &left, &geometry(&left), EdgeBandProfile::from_spec).expect("band");
         assert_eq!(kernel.frame, Some(Frame { origin: DVec3::new(2.0, 0.0, 0.0), ..Frame::WORLD }));
         let profile = kernel.profile.as_ref().expect("recorded band profile");
         assert_eq!(
@@ -1676,7 +1656,7 @@ mod tests {
         }
         project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("add cutout");
         let panel = project.panel(panel_id).expect("panel").clone();
-        let geometry = geometry(&panel);
+        let geometry = &geometry(&panel);
         assert_eq!(geometry.core_x(), millimetres(2));
         assert_eq!(geometry.core_y(), millimetres(2));
 
@@ -1690,7 +1670,7 @@ mod tests {
     fn cutout_tool_stays_at_the_nominal_panel_origin_when_the_core_moves() {
         let panel =
             panel_with_bands_and_cutout(&[(1, true), (4, true)], CutoutShape::Rectangle(cutout_rect(10, 20, 30, 40)));
-        let geometry = geometry(&panel);
+        let geometry = &geometry(&panel);
         assert_eq!(geometry.core_x(), millimetres(2));
         assert_eq!(geometry.core_y(), millimetres(2));
         let Machining::Cutout(cutout) = &panel.machining()[0];
@@ -1716,7 +1696,7 @@ mod tests {
     #[test]
     fn contour_cutout_tool_extrudes_the_sampled_ring_from_the_nominal_origin() {
         let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
-        let geometry = geometry(&panel);
+        let geometry = &geometry(&panel);
         let Machining::Cutout(cutout) = &panel.machining()[0];
 
         let plan = build_cutout_tool(geometry, cutout).expect("contour cutout tool");
@@ -1741,7 +1721,7 @@ mod tests {
     fn through_contour_cutout_removes_its_volume() {
         let mut kernel = TruckKernel::new();
         let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         let expected = 6_300_000.0 - 100.0 * 50.0 * 18.0;
@@ -1752,7 +1732,7 @@ mod tests {
     fn build_panel_propagates_kernel_errors() {
         let mut kernel = RecordingKernel { fail: true, ..RecordingKernel::default() };
         let panel = sample_panel();
-        let error = build_panel(&mut kernel, &panel, geometry(&panel)).expect_err("kernel failure");
+        let error = build_panel(&mut kernel, &panel, &geometry(&panel)).expect_err("kernel failure");
         assert!(matches!(error, ParamError::Kernel(KernelError::Failed(_))));
     }
 
@@ -1760,7 +1740,7 @@ mod tests {
     fn truck_kernel_builds_a_panel_with_the_expected_volume() {
         let mut kernel = TruckKernel::new();
         let panel = sample_panel();
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         assert!((measure.volume - 6_300_000.0).abs() < 1.0, "volume was {}", measure.volume);
@@ -1775,7 +1755,7 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let shape = CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50));
         let panel = panel_with_cutout(shape, CutoutDepth::Through, FaceSide::A);
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         let expected = 6_300_000.0 - 100.0 * 50.0 * 18.0;
@@ -1787,11 +1767,11 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let shape = CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50));
         let shaped = panel_with_radius_and_cutout(Some(shape));
-        let body = build_panel(&mut kernel, &shaped, geometry(&shaped)).expect("shaped body with cutout");
+        let body = build_panel(&mut kernel, &shaped, &geometry(&shaped)).expect("shaped body with cutout");
         let with_cutout = kernel.measure(body).expect("shaped measure").volume;
 
         let reference = panel_with_radius_and_cutout(None);
-        let reference_body = build_panel(&mut kernel, &reference, geometry(&reference)).expect("shaped reference");
+        let reference_body = build_panel(&mut kernel, &reference, &geometry(&reference)).expect("shaped reference");
         let without_cutout = kernel.measure(reference_body).expect("reference measure").volume;
 
         let removed = without_cutout - with_cutout;
@@ -1806,7 +1786,7 @@ mod tests {
             (CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50)), CutoutDepth::Through),
             (CutoutShape::Rectangle(cutout_rect(150, 120, 100, 50)), CutoutDepth::Through),
         ]);
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         // The rectangles overlap on 50 x 30 mm, so the union removes 8500 mm^2.
@@ -1819,7 +1799,7 @@ mod tests {
         let mut kernel = TruckKernel::new();
         let panel =
             panel_with_cutouts(&[(CutoutShape::Rectangle(cutout_rect(650, 10, 100, 50)), CutoutDepth::Through)]);
-        let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+        let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
         let measure = kernel.measure(body).expect("panel measure");
         // The 700 mm core keeps only the 50 mm of the cutout that reaches inside it.
@@ -1834,7 +1814,7 @@ mod tests {
             let shape = CutoutShape::Rectangle(cutout_rect(100, 100, 100, 50));
             let depth = CutoutDepth::Blind { depth: millimetres(5) };
             let panel = panel_with_cutout(shape, depth, entry);
-            let body = build_panel(&mut kernel, &panel, geometry(&panel)).expect("panel body");
+            let body = build_panel(&mut kernel, &panel, &geometry(&panel)).expect("panel body");
 
             let measure = kernel.measure(body).expect("panel measure");
             let expected = 6_300_000.0 - 100.0 * 50.0 * 5.0;
@@ -1895,7 +1875,7 @@ mod tests {
     fn panel_parts_return_no_bands_without_banding() {
         let panel = sample_panel();
         let mut kernel = TruckKernel::new();
-        let parts = build_panel_parts_with(&mut kernel, &panel, geometry(&panel), EdgeBandProfile::from_spec)
+        let parts = build_panel_parts_with(&mut kernel, &panel, &geometry(&panel), EdgeBandProfile::from_spec)
             .expect("panel parts");
         assert!(parts.bands().is_empty());
         assert_eq!(kernel.body_count(), 1);

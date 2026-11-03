@@ -6,6 +6,7 @@
 use crate::contour::{MAX_SELF_INTERSECTION_PAIRS, SELF_INTERSECTION_TOLERANCE_MICROMETRES, SegBounds, segments_touch};
 use crate::panel::{core_violation_of, rects_overlap, validate_ring_banding};
 use crate::tree::{find_container_mut, find_panel_mut};
+use furnicraft_geom::Region;
 
 use super::scan_tree;
 use crate::*;
@@ -15,7 +16,7 @@ impl Project {
     pub fn validate_panel_resize(&self, id: Id, nominal_size: PanelNominalSize) -> Result<(), ProjectError> {
         let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
         let geometry = panel.geometry_for(nominal_size, panel.last_known_thickness())?;
-        validate_panel_machining(panel, geometry)
+        validate_panel_machining(panel, &geometry)
     }
 
     /// Replaces a panel's nominal size and bumps the revision once.
@@ -438,7 +439,7 @@ pub(super) fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> 
     Ok(())
 }
 
-fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<(), ProjectError> {
+fn validate_panel_machining(panel: &Panel, geometry: &PanelGeometry) -> Result<(), ProjectError> {
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
         validate_cutout_geometry(panel.id(), geometry, cutout.shape(), cutout.depth())?;
@@ -448,11 +449,8 @@ fn validate_panel_machining(panel: &Panel, geometry: PanelGeometry) -> Result<()
 }
 
 fn validate_new_cutout(panel: &Panel, shape: &CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
-    if panel.has_contour_features() {
-        return Err(ProjectError::ContourMachiningUnsupported { panel: panel.id() });
-    }
     let geometry = panel.geometry_with_fallbacks()?;
-    validate_cutout_geometry(panel.id(), geometry, shape, depth)?;
+    validate_cutout_geometry(panel.id(), &geometry, shape, depth)?;
     for machining in panel.machining() {
         let Machining::Cutout(existing) = machining;
         let both_through = matches!(depth, CutoutDepth::Through) && matches!(existing.depth(), CutoutDepth::Through);
@@ -460,35 +458,28 @@ fn validate_new_cutout(panel: &Panel, shape: &CutoutShape, depth: CutoutDepth) -
             return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
         }
     }
-    let candidate = match (depth, shape) {
-        (CutoutDepth::Through, CutoutShape::Rectangle(rect)) => Some(*rect),
-        _ => None,
+    let candidate = match depth {
+        CutoutDepth::Through => Some(shape.region()?),
+        CutoutDepth::Blind { .. } => None,
     };
-    validate_core(panel, geometry, candidate)
+    validate_core(panel, &geometry, candidate.as_ref())
 }
 
 fn validate_cutout_geometry(
     panel: Id,
-    geometry: PanelGeometry,
+    geometry: &PanelGeometry,
     shape: &CutoutShape,
     depth: CutoutDepth,
 ) -> Result<(), ProjectError> {
+    let region = shape.region()?;
     match depth {
         CutoutDepth::Through => {
-            let reaches = match shape {
-                CutoutShape::Rectangle(rect) => geometry.cutout_reaches_core(*rect),
-                CutoutShape::Contour(contour) => geometry.contour_inside_core(contour),
-            };
-            if !reaches {
+            if !geometry.cutout_reaches_core(&region)? {
                 return Err(ProjectError::CutoutOutsidePanel { panel });
             }
         }
         CutoutDepth::Blind { depth } => {
-            let fits = match shape {
-                CutoutShape::Rectangle(rect) => geometry.cutout_fits_core(*rect),
-                CutoutShape::Contour(contour) => geometry.contour_fits_core(contour),
-            };
-            if !fits {
+            if !geometry.cutout_fits_core(&region)? {
                 return Err(ProjectError::CutoutOutsidePanel { panel });
             }
             let thickness = geometry.thickness();
@@ -520,7 +511,7 @@ fn validate_cutout_overlaps(panel: Id, machining: &[Machining]) -> Result<(), Pr
     Ok(())
 }
 
-fn validate_core(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect>) -> Result<(), ProjectError> {
+fn validate_core(panel: &Panel, geometry: &PanelGeometry, extra: Option<&Region>) -> Result<(), ProjectError> {
     match core_violation_of(panel, geometry, extra)? {
         Some(CoreViolation::Removed) => Err(ProjectError::CutoutRemovesCore { panel: panel.id() }),
         Some(CoreViolation::Split) => Err(ProjectError::CutoutSplitsCore { panel: panel.id() }),
@@ -750,7 +741,7 @@ mod tests {
 
         let panel = project.panel(panel_id).expect("panel");
         let geometry = panel.geometry_with_fallbacks().expect("geometry");
-        assert_eq!(panel.core_violation(geometry), Ok(None));
+        assert_eq!(panel.core_violation(&geometry), Ok(None));
         assert_eq!(panel.machining().len(), 3);
     }
 
@@ -870,21 +861,31 @@ mod tests {
     }
 
     #[test]
-    fn contour_cutout_must_stay_inside_the_core() {
+    fn through_contour_cutout_may_open_a_notch_and_blind_stays_inside() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
+
+        // A through ring is traced against the core exactly, so it may touch or cross the boundary
+        // and open a notch; the core trace decides whether the remaining material is still one
+        // positive component.
+        for shape in [ring(-10, 100, 120, 60), ring(0, 100, 100, 60), ring(690, 100, 20, 60)] {
+            project
+                .add_cutout(panel_id, CutoutShape::Contour(shape), CutoutDepth::Through, FaceSide::A)
+                .expect("through ring that opens a notch");
+        }
+
+        // A through ring that misses the core removes nothing and is rejected.
         let next_id = project.next_id();
         let revision = project.revision();
-
-        // A through ring must be strictly inside: the trace subtracts it exactly, but the opening
-        // has to stay a hole in the nominal outline rather than a notch the outline does not
-        // describe.
-        for shape in [ring(-10, 100, 120, 60), ring(0, 100, 100, 60), ring(690, 100, 20, 60)] {
-            assert_eq!(
-                project.add_cutout(panel_id, CutoutShape::Contour(shape), CutoutDepth::Through, FaceSide::A),
-                Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
-            );
-        }
+        assert_eq!(
+            project.add_cutout(
+                panel_id,
+                CutoutShape::Contour(ring(-200, 100, 100, 60)),
+                CutoutDepth::Through,
+                FaceSide::A
+            ),
+            Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
         assert_eq!(project.next_id(), next_id);
         assert_eq!(project.revision(), revision);
 
@@ -892,7 +893,7 @@ mod tests {
         project
             .add_cutout(
                 panel_id,
-                CutoutShape::Contour(ring(0, 100, 100, 60)),
+                CutoutShape::Contour(ring(0, 300, 100, 60)),
                 CutoutDepth::Blind { depth: millimetres(8) },
                 FaceSide::A,
             )
