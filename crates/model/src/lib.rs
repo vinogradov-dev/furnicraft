@@ -48,15 +48,16 @@ pub use contour::{
 };
 pub use contour_edit::ContourEditError;
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
-pub use ids::{ContourSegmentId, EdgeId, Id, Revision, VertexId};
+pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
 pub use mesh::{MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError};
 pub use node::Node;
 pub use object::{Constructive, ConstructiveError, Extrude, Feature, Geometry, MAX_OBJECT_FEATURES, Object};
 pub use panel::{
-    BandingSpec, ContourPath, CoreViolation, CornerBanding, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EntryFace,
-    FaceSide, Machining, Panel, PanelContourError, PanelDimensionError, PanelError, PanelGeometry, PanelGeometryError,
-    PanelNominalSize, PanelOutline, PanelRect, PanelRectError, RectCorner, RectEdge, RingBanding, SegmentSource,
+    BandingSpec, ContourPath, CoreViolation, CornerBanding, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeRef,
+    EntryFace, FaceSide, Machining, MachiningAnchor, MachiningParams, Panel, PanelContourError, PanelDimensionError,
+    PanelError, PanelGeometry, PanelGeometryError, PanelNominalSize, PanelOutline, PanelRect, PanelRectError,
+    RectCorner, RectEdge, RingBanding, SegmentSource,
 };
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 pub use placement::{EulerAngles, Pivot, Placement, PlacementError};

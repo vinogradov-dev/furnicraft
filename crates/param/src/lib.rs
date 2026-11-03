@@ -29,7 +29,7 @@
 use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, RegionError, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
-    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel,
+    BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, MachiningId, Panel,
     PanelContourError, PanelGeometry, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
@@ -74,6 +74,12 @@ pub enum ParamError {
     /// A rectangle a profile would be built from has no positive extent.
     #[error(transparent)]
     Region(#[from] RegionError),
+    /// A cutout record is not anchored to a face, so it has no entry face to cut from.
+    #[error("machining {machining} needs a face anchor to be built")]
+    MachiningNeedsFace {
+        /// The record without a face anchor.
+        machining: MachiningId,
+    },
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
@@ -125,8 +131,13 @@ fn panel_plan(panel: &Panel, geometry: &PanelGeometry) -> Result<SolidPlan, Para
     // The same 3D subtraction serves every outline kind: tools are nominal panel-local, so they
     // line up with the body without a core-origin translation.
     for machining in panel.machining() {
-        let Machining::Cutout(cutout) = machining;
-        let tool = build_cutout_tool(geometry, cutout)?;
+        let Some(cutout) = machining.cutout() else {
+            continue;
+        };
+        let Some(entry) = machining.anchor().as_face() else {
+            return Err(ParamError::MachiningNeedsFace { machining: machining.id() });
+        };
+        let tool = build_cutout_tool(geometry, cutout, entry)?;
         builder = builder.boolean(BooleanOp::Difference, tool);
     }
     Ok(builder.build()?)
@@ -651,13 +662,13 @@ where
 }
 
 /// The plan of one cutout tool, in nominal panel-local coordinates.
-fn build_cutout_tool(geometry: &PanelGeometry, cutout: &Cutout) -> Result<SolidPlan, ParamError> {
+fn build_cutout_tool(geometry: &PanelGeometry, cutout: &Cutout, entry: FaceSide) -> Result<SolidPlan, ParamError> {
     let thickness = geometry.thickness().millimetres_f64();
     let (z, height) = match cutout.depth() {
         CutoutDepth::Through => (-TOOL_OVERSHOOT_MM, thickness + 2.0 * TOOL_OVERSHOOT_MM),
         CutoutDepth::Blind { depth } => {
             let depth = depth.millimetres_f64();
-            match cutout.entry() {
+            match entry {
                 FaceSide::A => (thickness - depth, depth + TOOL_OVERSHOOT_MM),
                 FaceSide::B => (-TOOL_OVERSHOOT_MM, depth + TOOL_OVERSHOOT_MM),
             }
@@ -1673,9 +1684,11 @@ mod tests {
         let geometry = &geometry(&panel);
         assert_eq!(geometry.core_x(), millimetres(2));
         assert_eq!(geometry.core_y(), millimetres(2));
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let machining = &panel.machining()[0];
+        let entry = machining.anchor().as_face().expect("a face anchor");
+        let cutout = machining.cutout().expect("a cutout record");
 
-        let plan = build_cutout_tool(geometry, cutout).expect("cutout tool");
+        let plan = build_cutout_tool(geometry, cutout, entry).expect("cutout tool");
         assert!(plan.steps().is_empty(), "a cutout tool is one extrusion");
         let frame = plan.base().frame();
         assert_eq!(frame.origin.x, 10.0);
@@ -1697,9 +1710,11 @@ mod tests {
     fn contour_cutout_tool_extrudes_the_sampled_ring_from_the_nominal_origin() {
         let panel = panel_with_cutout(CutoutShape::Contour(cutout_ring()), CutoutDepth::Through, FaceSide::A);
         let geometry = &geometry(&panel);
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let machining = &panel.machining()[0];
+        let entry = machining.anchor().as_face().expect("a face anchor");
+        let cutout = machining.cutout().expect("a cutout record");
 
-        let plan = build_cutout_tool(geometry, cutout).expect("contour cutout tool");
+        let plan = build_cutout_tool(geometry, cutout, entry).expect("contour cutout tool");
         assert!(plan.steps().is_empty(), "a cutout tool is one extrusion");
         let extrude = plan.base();
         assert_eq!(extrude.frame(), Frame { origin: DVec3::new(0.0, 0.0, -TOOL_OVERSHOOT_MM), ..Frame::WORLD });

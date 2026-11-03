@@ -282,14 +282,80 @@ mod tests {
         let project: Project = serde_json::from_str(legacy).expect("migrate version two");
         assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
         let panel = project.panel(Id::new(2).expect("id")).expect("migrated panel");
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let machining = &panel.machining()[0];
+        assert_eq!(machining.id().get(), 5);
+        assert_eq!(machining.anchor().as_face(), Some(FaceSide::A));
+        let cutout = machining.cutout().expect("a legacy record is a cutout");
         assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
 
         let text = serde_json::to_string(&project).expect("serialize migrated project");
         let decoded: Project = serde_json::from_str(&text).expect("reload migrated project");
         let panel = decoded.panel(Id::new(2).expect("id")).expect("reloaded panel");
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let cutout = panel.machining()[0].cutout().expect("a migrated record is a cutout");
         assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(3, 3, 10, 10)));
+    }
+
+    #[test]
+    fn version_fifteen_cutout_records_load_as_face_anchored_machining() {
+        let legacy = r#"{
+            "schema_version": 15,
+            "revision": 2,
+            "next_id": 6,
+            "root": {
+                "id": 1,
+                "name": "Root",
+                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                "children": [{"panel": {
+                    "id": 2,
+                    "name": "Shelf",
+                    "nominal_size": {"length": 700000, "width": 500000},
+                    "last_known_thickness": 18000,
+                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+                    "machining": [{"cutout": {
+                        "id": 5,
+                        "shape": {"rectangle": {"x": 10000, "y": 20000, "width": 100000, "height": 50000}},
+                        "depth": {"blind": {"depth": 8000}},
+                        "entry": "B"
+                    }}]
+                }}]
+            }
+        }"#;
+        let project: Project = serde_json::from_str(legacy).expect("load a schema 15 file");
+        assert_eq!(project.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        let panel = project.panel(Id::new(2).expect("id")).expect("panel");
+        let machining = &panel.machining()[0];
+        assert_eq!(machining.id().get(), 5);
+        assert_eq!(machining.anchor().as_face(), Some(FaceSide::B));
+        let cutout = machining.cutout().expect("a legacy record is a cutout");
+        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(10, 20, 100, 50)));
+        assert_eq!(cutout.depth(), CutoutDepth::Blind { depth: millimetres(8) });
+
+        let text = serde_json::to_string(&project).expect("write the current form");
+        assert!(text.contains("\"anchor\""), "the record writes its anchor: {text}");
+        assert!(text.contains("\"params\""), "the record writes tagged parameters: {text}");
+        assert!(!text.contains("\"cutout\":{\"id\""), "the legacy form is not written back: {text}");
+        let again: Project = serde_json::from_str(&text).expect("reload the current form");
+        assert_eq!(again, project);
+    }
+
+    #[test]
+    fn duplicate_machining_ids_are_rejected_on_load() {
+        let project = sample_project();
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        let panel = &mut wire["root"]["children"][0]["panel"];
+        panel["machining"] = serde_json::json!([
+            {
+                "id": 2,
+                "anchor": {"kind": "face", "side": "A"},
+                "params": {
+                    "kind": "cutout",
+                    "shape": {"rectangle": {"x": 10_000, "y": 10_000, "width": 100_000, "height": 50_000}},
+                    "depth": "through"
+                }
+            }
+        ]);
+        let error = serde_json::from_value::<Project>(wire).expect_err("a machining id repeats the panel id");
+        assert!(error.to_string().contains("duplicate"), "error was {error}");
     }
 
     #[test]

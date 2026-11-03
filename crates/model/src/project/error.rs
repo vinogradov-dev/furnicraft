@@ -282,8 +282,8 @@ pub enum ProjectError {
     CutoutOverlap {
         /// The panel that owns the cutouts.
         panel: Id,
-        /// The other cutout in the conflicting pair.
-        other: Id,
+        /// The other machining record in the conflicting pair.
+        other: MachiningId,
     },
     /// The through cutouts would remove the whole core.
     #[error("cutouts on panel {panel} would remove the whole core")]
@@ -302,6 +302,34 @@ pub enum ProjectError {
     MachiningCoordinateOverflow {
         /// The panel whose machining could not be translated.
         panel: Id,
+    },
+    /// A panel has no machining record with this id.
+    #[error("panel {panel} has no machining {machining}")]
+    MachiningNotFound {
+        /// The panel that was requested.
+        panel: Id,
+        /// The missing machining id.
+        machining: MachiningId,
+    },
+    /// The operation the record describes cannot act from this anchor.
+    #[error("machining on panel {panel} cannot be anchored to {anchor:?}")]
+    MachiningNeedsFace {
+        /// The panel that owns the record.
+        panel: Id,
+        /// The rejected anchor.
+        anchor: MachiningAnchor,
+    },
+    /// A machining record cannot move to that position in the list.
+    #[error("machining {machining} on panel {panel} cannot move to index {index}; the list holds {len}")]
+    MachiningIndexOutOfRange {
+        /// The panel that owns the record.
+        panel: Id,
+        /// The record that was requested.
+        machining: MachiningId,
+        /// The requested final index.
+        index: usize,
+        /// The current number of records.
+        len: usize,
     },
     /// The next id would collide with an id already used by the tree.
     #[error("next document id {next} must be greater than the largest used id {max}")]

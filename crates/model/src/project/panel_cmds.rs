@@ -321,33 +321,137 @@ impl Project {
         Ok(next_revision)
     }
 
-    /// Checks whether a cutout can be added to a panel without changing the document.
-    pub fn validate_cutout(&self, panel: Id, shape: &CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
-        let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
-        validate_new_cutout(panel, shape, depth)
-    }
-
-    /// Adds a cutout to a panel and bumps the revision once.
+    /// Adds a face-anchored cutout and bumps the revision once.
     ///
-    /// The cutout id is allocated from the document; callers must not invent one. A cutout outside
-    /// the panel, a blind cutout that is not shallower than the thickness, or an overlap with an
-    /// existing cutout is rejected before any id is consumed.
+    /// This is the one-operation shorthand over [`Project::add_machining`]: it builds
+    /// [`MachiningParams::Cutout`] and a face anchor from the entry side. The same validation runs,
+    /// so the shorthand cannot accept a cutout the generic command would reject.
     pub fn add_cutout(
         &mut self,
         panel: Id,
         shape: CutoutShape,
         depth: CutoutDepth,
         entry: FaceSide,
-    ) -> Result<Id, ProjectError> {
-        self.validate_cutout(panel, &shape, depth)?;
+    ) -> Result<MachiningId, ProjectError> {
+        self.add_machining(panel, MachiningAnchor::face(entry), MachiningParams::Cutout(Cutout::new(shape, depth)))
+    }
+
+    /// Checks whether one machining record can be added to a panel without changing the document.
+    pub fn validate_machining(
+        &self,
+        panel: Id,
+        anchor: MachiningAnchor,
+        params: &MachiningParams,
+    ) -> Result<(), ProjectError> {
+        let panel = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
+        validate_machining_entry(panel, anchor, params, None)
+    }
+
+    /// Adds a machining record to a panel and bumps the revision once.
+    ///
+    /// The record id is allocated from the document; callers must not invent one. A cutout outside
+    /// the panel, a blind cutout that is not shallower than the thickness, or an overlap with an
+    /// existing cutout is rejected before any id is consumed.
+    pub fn add_machining(
+        &mut self,
+        panel: Id,
+        anchor: MachiningAnchor,
+        params: MachiningParams,
+    ) -> Result<MachiningId, ProjectError> {
+        self.validate_machining(panel, anchor, &params)?;
         let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
         let id = self.allocate_id()?;
         let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
             return Err(ProjectError::PanelNotFound { id: panel });
         };
-        panel_node.push_machining(Machining::Cutout(Cutout::new(id, shape, depth, entry)));
+        let machining = MachiningId::from_id(id);
+        panel_node.push_machining(Machining::new(machining, anchor, params));
         self.revision = next_revision;
-        Ok(id)
+        Ok(machining)
+    }
+
+    /// Checks whether replacing one machining record is valid without changing the document.
+    pub fn validate_machining_update(
+        &self,
+        panel: Id,
+        machining: MachiningId,
+        anchor: MachiningAnchor,
+        params: &MachiningParams,
+    ) -> Result<(), ProjectError> {
+        let panel_node = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
+        if panel_node.machining_at(machining).is_none() {
+            return Err(ProjectError::MachiningNotFound { panel, machining });
+        }
+        validate_machining_entry(panel_node, anchor, params, Some(machining))
+    }
+
+    /// Replaces one machining record in place and bumps the revision once.
+    ///
+    /// The id and the position in the list are kept, so an edit never reorders the pipeline. The
+    /// new anchor and parameters are validated as a whole before anything changes.
+    pub fn update_machining(
+        &mut self,
+        panel: Id,
+        machining: MachiningId,
+        anchor: MachiningAnchor,
+        params: MachiningParams,
+    ) -> Result<Revision, ProjectError> {
+        self.validate_machining_update(panel, machining, anchor, &params)?;
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
+            return Err(ProjectError::PanelNotFound { id: panel });
+        };
+        let Some((index, _existing)) = panel_node.machining_at(machining) else {
+            return Err(ProjectError::MachiningNotFound { panel, machining });
+        };
+        panel_node.replace_machining_at(index, Machining::new(machining, anchor, params));
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Removes one machining record and bumps the revision once.
+    ///
+    /// Removing an operation cannot invalidate the remaining ones: their geometry and the core
+    /// trace only lose a subtraction.
+    pub fn remove_machining(&mut self, panel: Id, machining: MachiningId) -> Result<Revision, ProjectError> {
+        let panel_node = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
+        let Some((index, _existing)) = panel_node.machining_at(machining) else {
+            return Err(ProjectError::MachiningNotFound { panel, machining });
+        };
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
+            return Err(ProjectError::PanelNotFound { id: panel });
+        };
+        panel_node.remove_machining_at(index);
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Moves one machining record to a final list index and bumps the revision once.
+    ///
+    /// The index is the position after the move, in `0..len`. Ids never change, so a caller can
+    /// keep referring to the record.
+    pub fn move_machining(
+        &mut self,
+        panel: Id,
+        machining: MachiningId,
+        index: usize,
+    ) -> Result<Revision, ProjectError> {
+        let panel_node = self.panel(panel).ok_or(ProjectError::PanelNotFound { id: panel })?;
+        let len = panel_node.machining().len();
+        let Some((from, _existing)) = panel_node.machining_at(machining) else {
+            return Err(ProjectError::MachiningNotFound { panel, machining });
+        };
+        if index >= len {
+            return Err(ProjectError::MachiningIndexOutOfRange { panel, machining, index, len });
+        }
+        let next_revision = self.revision.checked_next().ok_or(ProjectError::RevisionExhausted)?;
+        let Some((_depth, panel_node)) = find_panel_mut(&mut self.root, panel, 1) else {
+            return Err(ProjectError::PanelNotFound { id: panel });
+        };
+        panel_node.move_machining_to(from, index);
+        self.revision = next_revision;
+        Ok(next_revision)
     }
 
     /// Checks the schema version, nesting depth, global id uniqueness and the id allocator.
@@ -441,28 +545,48 @@ pub(super) fn validate_panel_banding(panel: &Panel) -> Result<(), ProjectError> 
 
 fn validate_panel_machining(panel: &Panel, geometry: &PanelGeometry) -> Result<(), ProjectError> {
     for machining in panel.machining() {
-        let Machining::Cutout(cutout) = machining;
+        let Some(cutout) = machining.cutout() else {
+            continue;
+        };
         validate_cutout_geometry(panel.id(), geometry, cutout.shape(), cutout.depth())?;
     }
     validate_cutout_overlaps(panel.id(), panel.machining())?;
-    validate_core(panel, geometry, None)
+    validate_core(panel, geometry, None, None)
 }
 
-fn validate_new_cutout(panel: &Panel, shape: &CutoutShape, depth: CutoutDepth) -> Result<(), ProjectError> {
+fn validate_machining_entry(
+    panel: &Panel,
+    anchor: MachiningAnchor,
+    params: &MachiningParams,
+    exclude: Option<MachiningId>,
+) -> Result<(), ProjectError> {
     let geometry = panel.geometry_with_fallbacks()?;
-    validate_cutout_geometry(panel.id(), &geometry, shape, depth)?;
-    for machining in panel.machining() {
-        let Machining::Cutout(existing) = machining;
-        let both_through = matches!(depth, CutoutDepth::Through) && matches!(existing.depth(), CutoutDepth::Through);
-        if !both_through && cutout_shapes_overlap(shape, existing.shape())? {
-            return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: existing.id() });
+    match params {
+        MachiningParams::Cutout(cutout) => {
+            if anchor.as_face().is_none() {
+                return Err(ProjectError::MachiningNeedsFace { panel: panel.id(), anchor });
+            }
+            validate_cutout_geometry(panel.id(), &geometry, cutout.shape(), cutout.depth())?;
+            for machining in panel.machining() {
+                if exclude == Some(machining.id()) {
+                    continue;
+                }
+                let Some(existing) = machining.cutout() else {
+                    continue;
+                };
+                let both_through =
+                    matches!(cutout.depth(), CutoutDepth::Through) && matches!(existing.depth(), CutoutDepth::Through);
+                if !both_through && cutout_shapes_overlap(cutout.shape(), existing.shape())? {
+                    return Err(ProjectError::CutoutOverlap { panel: panel.id(), other: machining.id() });
+                }
+            }
+            let candidate = match cutout.depth() {
+                CutoutDepth::Through => Some(cutout.shape().region()?),
+                CutoutDepth::Blind { .. } => None,
+            };
+            validate_core(panel, &geometry, candidate.as_ref(), exclude)
         }
     }
-    let candidate = match depth {
-        CutoutDepth::Through => Some(shape.region()?),
-        CutoutDepth::Blind { .. } => None,
-    };
-    validate_core(panel, &geometry, candidate.as_ref())
 }
 
 fn validate_cutout_geometry(
@@ -492,27 +616,27 @@ fn validate_cutout_geometry(
 }
 
 fn validate_cutout_overlaps(panel: Id, machining: &[Machining]) -> Result<(), ProjectError> {
-    let cutouts: Vec<&Cutout> = machining
-        .iter()
-        .map(|machining| {
-            let Machining::Cutout(cutout) = machining;
-            cutout
-        })
-        .collect();
-    for (index, cutout) in cutouts.iter().enumerate() {
-        for other in &cutouts[..index] {
+    let cutouts: Vec<(MachiningId, &Cutout)> =
+        machining.iter().filter_map(|machining| machining.cutout().map(|cutout| (machining.id(), cutout))).collect();
+    for (index, (_id, cutout)) in cutouts.iter().enumerate() {
+        for (other_id, other) in &cutouts[..index] {
             let both_through =
                 matches!(cutout.depth(), CutoutDepth::Through) && matches!(other.depth(), CutoutDepth::Through);
             if !both_through && cutout_shapes_overlap(cutout.shape(), other.shape())? {
-                return Err(ProjectError::CutoutOverlap { panel, other: other.id() });
+                return Err(ProjectError::CutoutOverlap { panel, other: *other_id });
             }
         }
     }
     Ok(())
 }
 
-fn validate_core(panel: &Panel, geometry: &PanelGeometry, extra: Option<&Region>) -> Result<(), ProjectError> {
-    match core_violation_of(panel, geometry, extra)? {
+fn validate_core(
+    panel: &Panel,
+    geometry: &PanelGeometry,
+    extra: Option<&Region>,
+    exclude: Option<MachiningId>,
+) -> Result<(), ProjectError> {
+    match core_violation_of(panel, geometry, extra, exclude)? {
         Some(CoreViolation::Removed) => Err(ProjectError::CutoutRemovesCore { panel: panel.id() }),
         Some(CoreViolation::Split) => Err(ProjectError::CutoutSplitsCore { panel: panel.id() }),
         None => Ok(()),
@@ -669,11 +793,12 @@ mod tests {
         assert_eq!(project.revision().get(), 1);
         let panel = project.panel(panel_id).expect("panel exists");
         assert_eq!(panel.machining().len(), 1);
-        let Machining::Cutout(cutout) = &panel.machining()[0];
-        assert_eq!(cutout.id(), cutout_id);
+        let machining = &panel.machining()[0];
+        assert_eq!(machining.id(), cutout_id);
+        assert_eq!(machining.anchor().as_face(), Some(FaceSide::A));
+        let cutout = machining.cutout().expect("a cutout record");
         assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
-        assert_eq!(cutout.entry(), FaceSide::A);
         assert!(project.validate().is_ok());
 
         let text = serde_json::to_string(&project).expect("serialize project");
@@ -827,7 +952,7 @@ mod tests {
         let shape = CutoutShape::Rectangle(sample_rect(10, 10, 20, 20));
         project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add cutout");
         let panel = project.panel(panel_id).expect("panel");
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let cutout = panel.machining()[0].cutout().expect("a cutout record");
         assert_eq!(cutout.shape(), &shape);
 
         // Nominal coordinates: the 2 mm included bands put the core origin at (2, 2), so this
@@ -847,8 +972,9 @@ mod tests {
         let cutout_id =
             project.add_cutout(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A).expect("add contour cutout");
         let panel = project.panel(panel_id).expect("panel");
-        let Machining::Cutout(cutout) = &panel.machining()[0];
-        assert_eq!(cutout.id(), cutout_id);
+        let machining = &panel.machining()[0];
+        assert_eq!(machining.id(), cutout_id);
+        let cutout = machining.cutout().expect("a cutout record");
         assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
 
@@ -856,7 +982,7 @@ mod tests {
         let decoded: Project = serde_json::from_str(&text).expect("deserialize project");
         assert_eq!(decoded, project);
         let panel = decoded.panel(panel_id).expect("reloaded panel");
-        let Machining::Cutout(cutout) = &panel.machining()[0];
+        let cutout = panel.machining()[0].cutout().expect("a reloaded cutout record");
         assert_eq!(cutout.shape(), &shape);
     }
 
@@ -921,7 +1047,7 @@ mod tests {
         let overlapping = CutoutShape::Contour(ring(120, 120, 100, 60));
         assert_eq!(
             project.add_cutout(panel_id, overlapping, blind, FaceSide::A),
-            Err(ProjectError::CutoutOverlap { panel: panel_id, other: Id::new(5).expect("id") })
+            Err(ProjectError::CutoutOverlap { panel: panel_id, other: MachiningId::new(5).expect("id") })
         );
 
         // A C-shaped ring around the rectangle's bounding box leaves the notch free.
@@ -967,6 +1093,135 @@ mod tests {
         assert_eq!(
             project.validate_panel_resize(panel_id, small),
             Err(ProjectError::CutoutOutsidePanel { panel: panel_id })
+        );
+    }
+
+    #[test]
+    fn machining_records_add_update_move_and_remove_in_one_ordered_list() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let first = project
+            .add_machining(
+                panel_id,
+                MachiningAnchor::face(FaceSide::A),
+                MachiningParams::Cutout(Cutout::new(
+                    CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)),
+                    CutoutDepth::Through,
+                )),
+            )
+            .expect("first record");
+        let second = project
+            .add_cutout(
+                panel_id,
+                CutoutShape::Rectangle(sample_rect(200, 200, 100, 50)),
+                CutoutDepth::Blind { depth: millimetres(8) },
+                FaceSide::B,
+            )
+            .expect("second record");
+        assert_eq!(project.revision().get(), 2);
+
+        let changed = CutoutShape::Rectangle(sample_rect(20, 20, 80, 40));
+        let revision = project
+            .update_machining(
+                panel_id,
+                first,
+                MachiningAnchor::face(FaceSide::B),
+                MachiningParams::Cutout(Cutout::new(changed.clone(), CutoutDepth::Blind { depth: millimetres(5) })),
+            )
+            .expect("update record");
+        assert_eq!(revision.get(), 3);
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.machining().iter().map(|entry| entry.id()).collect::<Vec<_>>(), vec![first, second]);
+        let updated = panel.machining_by_id(first).expect("updated record");
+        assert_eq!(updated.anchor().as_face(), Some(FaceSide::B));
+        assert_eq!(updated.cutout().expect("cutout").shape(), &changed);
+        assert_eq!(updated.cutout().expect("cutout").depth(), CutoutDepth::Blind { depth: millimetres(5) });
+
+        let revision = project.move_machining(panel_id, second, 0).expect("move record");
+        assert_eq!(revision.get(), 4);
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.machining().iter().map(|entry| entry.id()).collect::<Vec<_>>(), vec![second, first]);
+
+        let revision = project.remove_machining(panel_id, first).expect("remove record");
+        assert_eq!(revision.get(), 5);
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.machining().len(), 1);
+        assert_eq!(panel.machining()[0].id(), second);
+        assert!(project.validate().is_ok());
+    }
+
+    #[test]
+    fn machining_commands_reject_bad_anchors_ids_and_indices_without_side_effects() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let anchor = MachiningAnchor::edge(EdgeRef::Rect { edge: RectEdge::Bottom.id() });
+        let shape = CutoutShape::Rectangle(sample_rect(10, 10, 100, 50));
+        let next_id = project.next_id();
+        let revision = project.revision();
+        assert_eq!(
+            project.add_machining(
+                panel_id,
+                anchor,
+                MachiningParams::Cutout(Cutout::new(shape.clone(), CutoutDepth::Through)),
+            ),
+            Err(ProjectError::MachiningNeedsFace { panel: panel_id, anchor })
+        );
+        assert_eq!(project.next_id(), next_id);
+        assert_eq!(project.revision(), revision);
+
+        let missing = MachiningId::new(99).expect("id");
+        let params = MachiningParams::Cutout(Cutout::new(shape.clone(), CutoutDepth::Through));
+        assert_eq!(
+            project.update_machining(panel_id, missing, MachiningAnchor::face(FaceSide::A), params.clone()),
+            Err(ProjectError::MachiningNotFound { panel: panel_id, machining: missing })
+        );
+        assert_eq!(
+            project.remove_machining(panel_id, missing),
+            Err(ProjectError::MachiningNotFound { panel: panel_id, machining: missing })
+        );
+        assert_eq!(
+            project.move_machining(panel_id, missing, 0),
+            Err(ProjectError::MachiningNotFound { panel: panel_id, machining: missing })
+        );
+
+        let record = project.add_cutout(panel_id, shape, CutoutDepth::Through, FaceSide::A).expect("record");
+        assert_eq!(
+            project.move_machining(panel_id, record, 1),
+            Err(ProjectError::MachiningIndexOutOfRange { panel: panel_id, machining: record, index: 1, len: 1 })
+        );
+        assert_eq!(project.panel(panel_id).expect("panel").machining().len(), 1);
+    }
+
+    #[test]
+    fn a_machining_update_validates_the_replaced_record() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let blind = CutoutDepth::Blind { depth: millimetres(8) };
+        project
+            .add_cutout(panel_id, CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)), blind, FaceSide::A)
+            .expect("first cutout");
+        let second = project
+            .add_cutout(panel_id, CutoutShape::Rectangle(sample_rect(200, 200, 100, 50)), blind, FaceSide::A)
+            .expect("second cutout");
+        let revision = project.revision();
+
+        // Moving the second cutout onto the first would overlap it; an update replaces the old
+        // geometry, so the check reads the candidate list, not the old record.
+        assert_eq!(
+            project.update_machining(
+                panel_id,
+                second,
+                MachiningAnchor::face(FaceSide::A),
+                MachiningParams::Cutout(Cutout::new(CutoutShape::Rectangle(sample_rect(20, 20, 100, 50)), blind,)),
+            ),
+            Err(ProjectError::CutoutOverlap { panel: panel_id, other: MachiningId::new(5).expect("id") })
+        );
+        assert_eq!(project.revision(), revision);
+        let panel = project.panel(panel_id).expect("panel");
+        let unchanged = panel.machining_by_id(second).expect("second cutout");
+        assert_eq!(
+            unchanged.cutout().expect("cutout").shape(),
+            &CutoutShape::Rectangle(sample_rect(200, 200, 100, 50))
         );
     }
 }

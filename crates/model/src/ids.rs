@@ -40,6 +40,46 @@ impl fmt::Display for Id {
     }
 }
 
+/// A stable id of one machining operation on a panel.
+///
+/// Machining ids share the document id space: they are allocated from the project counter, scanned
+/// for uniqueness together with nodes, and a file whose `next_id` does not exceed them is rejected.
+/// The wrapper keeps a record id from being passed where a node id is expected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MachiningId(Id);
+
+impl MachiningId {
+    /// Creates a machining id from a non-zero raw value.
+    pub const fn new(value: u64) -> Option<Self> {
+        match Id::new(value) {
+            Some(id) => Some(Self(id)),
+            None => None,
+        }
+    }
+
+    /// The raw numeric value.
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The same value as a document id.
+    pub const fn as_id(self) -> Id {
+        self.0
+    }
+
+    /// Builds a machining id from an id that is already known to be non-zero inside this crate.
+    pub(crate) const fn from_id(id: Id) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for MachiningId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
 /// A monotonically increasing document revision.
 ///
 /// The revision changes after every document mutation and keys every derived cache. It starts at

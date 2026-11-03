@@ -36,9 +36,10 @@ pub use object_cmds::{
     ObjectCollapse, ObjectContourReplace, ObjectExtrudeCreate, ObjectPrimitiveCreate, PrimitiveKind,
 };
 pub use panel_cmds::{
-    CutoutCreate, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
-    PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelOutlineSet,
-    PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
+    PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
+    PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMachiningAdd, PanelMachiningMove,
+    PanelMachiningRemove, PanelMachiningUpdate, PanelMaterialSet, PanelOutlineSet, PanelRename, PanelResize,
+    PanelRingBandingClear, PanelRingBandingSet,
 };
 pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
 pub use session::Session;

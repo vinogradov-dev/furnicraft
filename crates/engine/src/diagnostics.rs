@@ -5,7 +5,7 @@
 //! the document and never make a scene unreadable.
 
 use furnicraft_model::{
-    Catalog, ContourSegmentId, CoreViolation, CutoutDepth, EdgeId, Id, Machining, MaterialId, PanelGeometryError,
+    Catalog, ContourSegmentId, CoreViolation, CutoutDepth, EdgeId, Id, MachiningId, MaterialId, PanelGeometryError,
     Project, ProjectError, VertexId,
 };
 use furnicraft_units::Length;
@@ -47,8 +47,8 @@ pub enum PanelDiagnostic {
     InvalidOutline,
     /// A through cutout does not reach the core, or a blind cutout is not fully inside it.
     MachiningOutsideCore {
-        /// The cutout that does not fit.
-        cutout: Id,
+        /// The machining record that does not fit.
+        machining: MachiningId,
     },
     /// The through cutouts remove the whole core.
     CoreRemoved,
@@ -56,8 +56,8 @@ pub enum PanelDiagnostic {
     CoreDisconnected,
     /// A blind cutout is at least as deep as the resolved panel thickness.
     BlindDepthNotLessThanThickness {
-        /// The cutout that is too deep.
-        cutout: Id,
+        /// The machining record that is too deep.
+        machining: MachiningId,
         /// The requested blind depth.
         depth: Length,
         /// The resolved panel thickness.
@@ -120,12 +120,14 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
     };
 
     for machining in panel.machining() {
-        let Machining::Cutout(cutout) = machining;
+        let Some(cutout) = machining.cutout() else {
+            continue;
+        };
         // Every outline is traced exactly against the core: a through cut may open a notch at the
         // edge, while a blind cut may touch the edge but not cross it. A shape whose exact region
         // cannot be built is reported as outside rather than skipped silently.
         let Ok(region) = cutout.shape().region() else {
-            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { machining: machining.id() });
             continue;
         };
         let outside = match cutout.depth() {
@@ -133,13 +135,13 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
             CutoutDepth::Blind { .. } => !geometry.cutout_fits_core(&region).unwrap_or(false),
         };
         if outside {
-            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { cutout: cutout.id() });
+            diagnostics.push(PanelDiagnostic::MachiningOutsideCore { machining: machining.id() });
         }
         if let CutoutDepth::Blind { depth } = cutout.depth()
             && depth >= geometry.thickness()
         {
             diagnostics.push(PanelDiagnostic::BlindDepthNotLessThanThickness {
-                cutout: cutout.id(),
+                machining: machining.id(),
                 depth,
                 thickness: geometry.thickness(),
             });
@@ -373,7 +375,9 @@ mod tests {
         assert!(project.validate().is_ok());
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
         assert!(
-            diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(3).expect("cutout id") })
+            diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore {
+                machining: MachiningId::new(3).expect("cutout id")
+            })
         );
     }
 
@@ -435,41 +439,44 @@ mod tests {
 
     #[test]
     fn a_through_contour_cutout_that_misses_the_core_is_a_diagnostic() {
-        let cutout = Id::new(3).expect("id");
+        let machining = MachiningId::new(3).expect("id");
         let outside = [[-200_000, 100_000], [-100_000, 100_000], [-100_000, 200_000], [-200_000, 200_000]];
 
         let project = project_with_contour_cutout(&outside, serde_json::json!("through"));
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+        assert!(diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { machining }));
 
         // A through ring at the edge opens a notch and is legal; so is a blind ring there.
         let at_the_edge = [[0, 100_000], [100_000, 100_000], [100_000, 200_000], [0, 200_000]];
         let project = project_with_contour_cutout(&at_the_edge, serde_json::json!("through"));
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { machining }));
 
         // A blind ring may open at the edge, because it removes no through material.
         let project = project_with_contour_cutout(&at_the_edge, serde_json::json!({"blind": {"depth": 8_000}}));
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { machining }));
 
         // A blind ring may touch the edge but not cross it.
         let crossing = [[-10_000, 100_000], [100_000, 100_000], [100_000, 200_000], [-10_000, 200_000]];
         let project = project_with_contour_cutout(&crossing, serde_json::json!({"blind": {"depth": 8_000}}));
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+        assert!(diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { machining }));
 
         let inside = [[100_000, 100_000], [200_000, 100_000], [200_000, 150_000], [100_000, 150_000]];
         let project = project_with_contour_cutout(&inside, serde_json::json!("through"));
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout }));
+        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { machining }));
     }
 
     #[test]
     fn a_boundary_notch_is_not_an_outside_cutout() {
         let project = project_with_through_cutout(650_000, 10_000, 100_000, 50_000);
         let diagnostics = diagnose_panel(&project, &sample_catalog(), panel_id());
-        assert!(!diagnostics.contains(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(3).expect("id") }));
+        assert!(
+            !diagnostics
+                .contains(&PanelDiagnostic::MachiningOutsideCore { machining: MachiningId::new(3).expect("id") })
+        );
         assert!(!diagnostics.contains(&PanelDiagnostic::CoreDisconnected));
         assert!(!diagnostics.contains(&PanelDiagnostic::CoreRemoved));
     }
