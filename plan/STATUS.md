@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=G task=G2 state=idle base=c3c00a4 updated=2026-11-03
+STATE: milestone=M7 phase=G task=D4 state=idle base=a0a8e94 updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -21,10 +21,12 @@ contract that orders that answer when a session was interrupted or the plan is b
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
   `object.collapse` keeps the exact mesh the viewport showed (ADR 0041).
-- S3 and G1 are complete: `crates/param/src/profile.rs` is the one planar conversion — document ring
-  to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance. `Region`
-  keeps exact `Contour` rings, so area, bounds and containment read lines and arcs; only sampling is
-  lossy, and the rectangle helpers still trace exact line contours.
+- S3, G1 and G2 are complete: `crates/param/src/profile.rs` is the one planar conversion — document
+  ring to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance.
+  `Region` keeps exact `Contour` rings, so area, bounds and containment read lines and arcs; only
+  sampling is lossy. `geom::region` unions, intersects and subtracts regions by tracing the boundary
+  of the set, so a rectangle and a curved ring take one path and the core trace subtracts a through
+  ring exactly (ADR 0043).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is either the nominal rectangle or a contour ring (D1). A contour panel keeps the
@@ -51,11 +53,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-G2 is next: exact 2D region booleans on `Contour` rings — union, difference and intersection — which
-union through cutouts and subtract them from the core instead of the rectangle-only tracer. D4–D11
-follow with one panel outline source, typed machining, the operation registry and pipeline, card
-sections, groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring
-hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
+D5–D11 follow D4 with typed machining, the operation registry and pipeline, card sections,
+groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring hardware and
+mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
 (`plan/questions.md`).
 
 ## Index
