@@ -14,8 +14,9 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 [0029](../decisions/0029-view-state-belongs-to-the-session.md),
 [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
-[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md) and
-[0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md).
+[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
+[0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md) and
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md).
 
 ## 1. Two authoring paths
 
@@ -82,13 +83,52 @@ direct mesh editing, so its contour stays the only way to change it.
   meet at any angle; a tangent-continuous joint is not required.
 - A shaped ring has no holes yet and its arcs are sampled into the kernel profile within a chord
   tolerance. A version 10 file stored a plain point list; it loads as a ring of lines.
+- The same ring may be the stored outline of a contour panel: the panel copies it, anchors its
+  minimum corner at the panel zero and derives its nominal size from the bounds (see
+  [Panels and edge banding](panels.md)).
 - Later features — a boolean with another object, a chamfer, a fillet — are added to the same list.
   None of them may reference a face or an edge of the evaluated result
   ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 - The height is positive and capped by the document's size limit. An empty or negative feature list
   is invalid.
 
-## 5. Evaluation
+## 5. Contour editing
+
+A constructive contour and a contour panel outline are reshaped in one viewport mode. Its state is
+view state, not document data ([0029](../decisions/0029-view-state-belongs-to-the-session.md)).
+
+- The mode is entered with exactly one selected node that stores a ring: a contour panel outline or a
+  constructive object. A rectangle panel, a mesh object and a multi-selection have nothing to edit.
+  Mesh editing and contour editing are mutually exclusive.
+- The editor keeps the stored ring as a **base** and a **draft** working copy. Every gesture rewrites
+  only the draft, so the document, its revision and the undo history are untouched until the user
+  applies. Leaving the mode without applying drops the draft.
+- A corner handle sits at the start of every segment. Dragging it moves that corner in the node's
+  local XY plane through its world placement; the two adjoining segments follow, and the rest of the
+  ring is unchanged.
+- Double-clicking a side splits it at the projected point. A split near a corner is refused so it
+  cannot mint a segment a few micrometres long.
+- An arc corner slides along its own circle: the drag point is projected onto the arc first, and the
+  edit trims or extends the sweep. The centre and radius of a stored arc are never redefined; a point
+  that misses the circle by more than a micrometre is rejected by the edit math.
+- The model edit API is `move_corner`, `trim_segment` and `split_segment`. The viewport uses the first
+  and the third; trimming along a supporting line or circle is available to a command but is not a
+  gesture yet.
+- Every edit keeps the id of each segment it does not touch. `move_corner` and `trim_segment` keep the
+  edited segment's id; `split_segment` keeps the first part's id and mints the second part from the
+  ring counter. A ring rebuilt this way never reuses an id, so a band or a selection keyed by a
+  segment id survives the edit.
+- Each intermediate draft must be a valid ring: closed, at least three segments, non-zero area,
+  inside the coordinate limit and not self-intersecting. A gesture that would break the ring is
+  rejected and leaves the last valid draft in place, so a corner simply stops at the boundary.
+- **Apply** dispatches exactly one command — `panel.outline.set` for a panel,
+  `object.contour.replace` for an object — and one undo entry is the whole edit. Enter applies and
+  Escape cancels. A rejected apply keeps the draft so the user can fix it or cancel; a successful
+  apply leaves the mode. An untouched draft dispatches no command and creates no empty undo entry.
+- A selection change, a deleted target or a target that no longer stores a ring ends the mode.
+- The whole mode is a client of the commands: the draft never reaches the document by another path.
+
+## 6. Evaluation
 
 - `furnicraft-param` compiles a constructive object into a domain-free `SolidPlan`: a base
   extrusion followed by boolean steps. The plan is derived, never written to the file, and rebuilt
@@ -105,7 +145,7 @@ direct mesh editing, so its contour stays the only way to change it.
   does not delete anything.
 - `object.collapse` refuses to run while the current evaluation fails.
 
-## 6. Collapse
+## 7. Collapse
 
 - `object.collapse` replaces `Constructive` with the evaluated `Mesh` in one command and one undo
   entry.
@@ -115,7 +155,7 @@ direct mesh editing, so its contour stays the only way to change it.
 - Collapse is never automatic: a rebuild happens on every edit, and a failing evaluation is a
   diagnostic to fix, not a reason to bake.
 
-## 7. References and topology
+## 8. References and topology
 
 - The document stores the mesh; the session stores the selection.
 - Vertex editing is editor view state: it names the object and the selected vertex indices, so
@@ -134,7 +174,7 @@ direct mesh editing, so its contour stays the only way to change it.
 - `mesh.vertices.move` validates every index and rejects the whole command if one is out of bounds; it
   never skips a bad entry silently.
 
-## 8. Commands
+## 9. Commands
 
 | Command | Parameters | Effect |
 |---|---|---|
@@ -147,7 +187,7 @@ direct mesh editing, so its contour stays the only way to change it.
 A face move is a `mesh.vertices.move` over the face's vertices; it does not need its own command.
 Every command bumps the revision once and becomes one undo entry.
 
-## 9. Tests
+## 10. Tests
 
 At minimum:
 
@@ -163,9 +203,18 @@ At minimum:
 - `mesh.vertices.move` on a constructive object is refused;
 - one out-of-bounds vertex index rejects the whole move;
 - a failing evaluation keeps the object, its data and its placement and reports a diagnostic;
-- a constructive object's mesh never appears in a saved file.
+- a constructive object's mesh never appears in a saved file;
+- contour editing starts only on a single node that stores a ring, and mesh editing and contour
+  editing exclude each other;
+- moving a corner and splitting a side change only the draft, and applying is one command and one
+  undo entry;
+- a split keeps the first part's id and the new part takes the next id; untouched segments keep
+  theirs;
+- an arc corner slides on its circle, and a corner off the circle is rejected;
+- a draft that would open or cross the ring leaves the last valid shape in place, and cancelling the
+  mode changes nothing.
 
-## 10. Open questions
+## 11. Open questions
 
 - Arcs in a profile: the kernel profile is a polyline, so an arc is sampled; the document keeps the arc.
 - Holes in a profile.

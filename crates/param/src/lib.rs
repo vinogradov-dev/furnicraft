@@ -26,7 +26,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, Segment};
+use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, RegionError, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
     BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, Machining, Panel,
@@ -36,6 +36,7 @@ use furnicraft_units::Length;
 use thiserror::Error;
 
 mod constructive;
+mod profile;
 mod solid;
 
 pub use constructive::build_constructive_mesh;
@@ -44,14 +45,10 @@ use solid::{PlanBuilder, SolidPlan};
 
 /// Extra millimetres added to a cutting tool so booleans do not depend on coincident faces.
 const TOOL_OVERSHOOT_MM: f64 = 0.001;
-/// Chord tolerance used when an analytic contour becomes a kernel polyline.
-const CONTOUR_SAMPLE_TOLERANCE_MM: f64 = 0.05;
 /// Largest distance a band end may reach past its own segment, in millimetres.
 const MAX_JOINT_EXTENSION_MM: f64 = 50.0;
 /// Tolerance for two points at a joint that should coincide, in millimetres.
 const JOINT_TOLERANCE_MM: f64 = 1.0e-6;
-/// Chord tolerance used when a document contour becomes a kernel polyline, in micrometres.
-const CONTOUR_SAMPLE_TOLERANCE_MICROMETRES: f64 = 50.0;
 
 /// An error raised while evaluating a parametric feature.
 #[derive(Debug, Error)]
@@ -72,8 +69,11 @@ pub enum ParamError {
     #[error(transparent)]
     ContourSampling(#[from] ContourError),
     /// The contour of a constructive object is invalid.
-    #[error("the contour of a constructive object is invalid: {0}")]
-    ConstructiveContour(#[from] furnicraft_model::ContourError),
+    #[error("a document contour is invalid: {0}")]
+    DocumentContour(#[from] furnicraft_model::ContourError),
+    /// A rectangle a profile would be built from has no positive extent.
+    #[error(transparent)]
+    Region(#[from] RegionError),
     /// The constructive history has a feature this build cannot evaluate.
     #[error("this build evaluates a constructive object with exactly one extrusion")]
     UnsupportedConstructive,
@@ -96,16 +96,7 @@ pub enum ParamError {
 /// drawn. A command that stores a ring calls this before it mutates the document, so an object
 /// never ends up with a contour that evaluates to nothing.
 pub fn validate_extrusion_contour(contour: &furnicraft_model::Contour) -> Result<(), ParamError> {
-    sampled_cap(contour).map(|_| ())
-}
-
-/// The sampled ring, refused when it cannot be stored as one cap face.
-pub(crate) fn sampled_cap(contour: &furnicraft_model::Contour) -> Result<Vec<[Length; 2]>, ParamError> {
-    let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
-    if points.len() > furnicraft_model::MAX_FACE_VERTICES {
-        return Err(ParamError::ContourTooDetailed { points: points.len(), max: furnicraft_model::MAX_FACE_VERTICES });
-    }
-    Ok(points)
+    profile::profile_of_document_contour(contour).map(|_| ())
 }
 
 /// Builds the solid body of a panel in its local frame.
@@ -135,7 +126,7 @@ where
         let length = geometry.core_length().millimetres_f64();
         let width = geometry.core_width().millimetres_f64();
         let thickness = geometry.thickness().millimetres_f64();
-        let profile = Profile::rectangle(length, width)?;
+        let profile = profile::profile_of_rectangle(length, width)?;
         let frame = Frame { origin: DVec3::new(core_x, core_y, 0.0), ..Frame::WORLD };
         PlanBuilder::new().extrude(profile, frame, thickness)?
     };
@@ -304,8 +295,7 @@ where
     F: Fn(&BandingSpec) -> EdgeBandProfile,
 {
     let core = shaped_core_contour(panel, band_profile)?;
-    let points = core.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let profile = Profile::new(points, Vec::new())?;
+    let profile = profile::profile_of_contour(&core)?;
     let thickness = geometry.thickness().millimetres_f64();
     Ok(PlanBuilder::new().extrude(profile, Frame::WORLD, thickness)?)
 }
@@ -422,8 +412,8 @@ where
     let end = joint.end_points(nominal, true, outer, inner, band_profile);
     let outer = outer.trimmed(start.0, end.0)?;
     let inner = inner.trimmed(start.1, end.1)?;
-    let mut points = Contour::new(vec![outer], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let inner_points = Contour::new(vec![inner], false)?.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let mut points = Contour::new(vec![outer], false)?.sample(profile::CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let inner_points = Contour::new(vec![inner], false)?.sample(profile::CONTOUR_SAMPLE_TOLERANCE_MM)?;
     points.extend(inner_points.into_iter().rev());
     Ok(Profile::new(points, Vec::new())?)
 }
@@ -707,17 +697,10 @@ fn build_cutout_tool(geometry: PanelGeometry, cutout: &Cutout) -> Result<SolidPl
     // nominal panel frame, so it extrudes from the frame origin.
     let (profile, origin) = match cutout.shape() {
         CutoutShape::Rectangle(rect) => (
-            Profile::rectangle(rect.width().millimetres_f64(), rect.height().millimetres_f64())?,
+            profile::profile_of_rectangle(rect.width().millimetres_f64(), rect.height().millimetres_f64())?,
             DVec3::new(rect.x().millimetres_f64(), rect.y().millimetres_f64(), z),
         ),
-        CutoutShape::Contour(contour) => {
-            let points = contour.sampled_points(CONTOUR_SAMPLE_TOLERANCE_MICROMETRES)?;
-            let mut outer = Vec::with_capacity(points.len());
-            for point in points {
-                outer.push(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()));
-            }
-            (Profile::new(outer, Vec::new())?, DVec3::new(0.0, 0.0, z))
-        }
+        CutoutShape::Contour(contour) => (profile::profile_of_document_contour(contour)?, DVec3::new(0.0, 0.0, z)),
     };
     extrusion_plan(profile, Frame { origin, ..Frame::WORLD }, height)
 }

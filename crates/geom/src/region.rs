@@ -40,6 +40,22 @@ impl Region {
         Ok(Self { outer, holes })
     }
 
+    /// The region of one axis-aligned rectangle at the origin.
+    ///
+    /// The outer ring runs counter-clockwise from the minimum corner. A zero, negative or
+    /// non-finite width or height is [`RectError`], so a caller can report the bad dimension.
+    pub fn rectangle(width: f64, height: f64) -> Result<Self, RegionError> {
+        let rect = Rect::new(DVec2::ZERO, DVec2::new(width, height))?;
+        Ok(Self::from_rect(rect))
+    }
+
+    /// The region of an already-validated rectangle.
+    pub fn from_rect(rect: Rect) -> Self {
+        let min = rect.min();
+        let max = rect.max();
+        Self { outer: vec![min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)], holes: Vec::new() }
+    }
+
     /// The outer ring.
     pub fn outer(&self) -> &[DVec2] {
         &self.outer
@@ -115,6 +131,8 @@ pub enum RegionError {
         /// Index of the first of the two points.
         index: usize,
     },
+    /// A rectangle the region would be built from has no positive extent.
+    Rect(RectError),
 }
 
 impl fmt::Display for RegionError {
@@ -127,7 +145,14 @@ impl fmt::Display for RegionError {
             Self::DuplicatePoint { kind, index } => {
                 write!(formatter, "point {index} of the {kind} ring repeats its neighbour")
             }
+            Self::Rect(error) => write!(formatter, "{error}"),
         }
+    }
+}
+
+impl From<RectError> for RegionError {
+    fn from(error: RectError) -> Self {
+        Self::Rect(error)
     }
 }
 
@@ -716,6 +741,25 @@ mod tests {
     fn a_rectangle_has_its_area() {
         let region = Region::new(rect(0.0, 0.0, 100.0, 50.0), vec![]).expect("valid rect");
         assert!((region.area() - 5000.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn the_rectangle_constructor_runs_counter_clockwise_from_the_origin() {
+        let region = Region::rectangle(100.0, 50.0).expect("valid rectangle");
+        assert_eq!(region.outer().len(), 4);
+        assert_eq!(region.outer()[0], DVec2::ZERO);
+        assert_eq!(region.outer()[2], DVec2::new(100.0, 50.0));
+        assert!(ring_area(region.outer()) > 0.0);
+        assert!((region.area() - 5000.0).abs() < 1.0e-9);
+        assert!(region.contains(DVec2::new(50.0, 25.0)));
+        assert!(!region.contains(DVec2::new(150.0, 25.0)));
+    }
+
+    #[test]
+    fn a_rectangle_without_positive_extent_is_rejected() {
+        assert!(matches!(Region::rectangle(0.0, 10.0), Err(RegionError::Rect(RectError::Degenerate))));
+        assert!(matches!(Region::rectangle(10.0, -1.0), Err(RegionError::Rect(RectError::Degenerate))));
+        assert!(matches!(Region::rectangle(f64::NAN, 10.0), Err(RegionError::Rect(RectError::NonFinite))));
     }
 
     #[test]

@@ -9,13 +9,13 @@
 //! whole micrometres at the last moment. The round trip is exact for a contour that was sampled
 //! from document units, which is why collapse does not move a vertex.
 
-use furnicraft_geom::{DVec2, DVec3, Frame};
-use furnicraft_kernel::{BooleanOp, KernelError, Profile};
+use furnicraft_geom::{DVec3, Frame};
+use furnicraft_kernel::{BooleanOp, KernelError};
 use furnicraft_model::{Constructive, Mesh};
 use furnicraft_units::Length;
 
 use crate::solid::{self, Extrude, PlanBackend, PlanBuilder, SolidPlan};
-use crate::{ParamError, sampled_cap};
+use crate::{ParamError, profile};
 
 /// Micrometres in one millimetre, the boundary factor of the geometry layer.
 const MICROMETRES_PER_MILLIMETRE: f64 = 1_000.0;
@@ -41,12 +41,7 @@ fn constructive_plan(constructive: &Constructive) -> Result<SolidPlan, ParamErro
     let Some(extrude) = constructive.extrude_feature() else {
         return Err(ParamError::UnsupportedConstructive);
     };
-    let points = sampled_cap(extrude.contour())?;
-    let mut outer = Vec::with_capacity(points.len());
-    for point in &points {
-        outer.push(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()));
-    }
-    let profile = Profile::new(outer, Vec::new())?;
+    let profile = profile::profile_of_document_contour(extrude.contour())?;
     let plan = PlanBuilder::new().extrude(profile, Frame::WORLD, extrude.height().millimetres_f64())?.build()?;
     Ok(plan)
 }
@@ -122,7 +117,7 @@ fn micrometres(value_mm: f64) -> Result<i64, KernelError> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_kernel::SolidKernel;
+    use furnicraft_kernel::{Profile, SolidKernel};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{Contour, Feature, Id, Panel, PanelNominalSize, Placement};
     use furnicraft_units::Length;
@@ -239,7 +234,12 @@ mod tests {
         ])
         .expect("a simple band");
         let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
-        assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::ContourTooDetailed { .. })));
+        let result = build_constructive_mesh(&constructive);
+        assert!(
+            matches!(result, Err(ParamError::ContourTooDetailed { .. })),
+            "expected a cap refusal, got {:?}",
+            result.as_ref().err()
+        );
     }
 
     #[test]

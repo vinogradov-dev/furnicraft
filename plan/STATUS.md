@@ -1,12 +1,11 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A7 state=idle base=bd33056 updated=2026-11-02
+STATE: milestone=M7 phase=S task=G1 state=idle base=82bd63b updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
-only the files named by the current task in `plan/BACKLOG.md`. Do not scan the workspace, and answer
-the next step from `STATE` and the `Now` section of the backlog. `cargo xtask status` prints both;
-`AGENTS.md` §1.1 points at the contract that orders that answer when a session was interrupted or the
-plan is broken.
+only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
+and the backlog's `Now` section — `cargo xtask status` prints both. `AGENTS.md` §1.1 points at the
+contract that orders that answer when a session was interrupted or the plan is broken.
 
 ## Where we are
 
@@ -22,23 +21,23 @@ plan is broken.
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
   `object.collapse` keeps the exact mesh the viewport showed (ADR 0041).
+- S3 is complete: `crates/param/src/profile.rs` is the one planar conversion — document ring to
+  analytic contour to sampled `geom::Region` to `kernel::Profile` — with one chord tolerance and one
+  sampler. The rectangular core, shaped core, cutout tool and constructive extrusion all use it, and
+  `Contour::new_with_tolerance` accepts the one-micrometre joint a stored ring can close to.
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is either the nominal rectangle or a contour ring (D1). A contour panel keeps the
-  ring as its outline, bands per ring segment through `RingBanding`, and `panel.contour.create` copies
-  a constructive object's contour into a new panel with the ring moved to the panel zero corner; a
-  rectangle panel never converts. Its body and band strips come from the ring in `param`. The edit
-  math is in (A5): `Contour::{move_corner, trim_segment, split_segment}` reshape a ring, keep every
-  untouched segment id and mint a split part from the ring counter; an arc keeps its centre and
-  radius. A3 edits a working copy in the viewport and A6 applies it as one command; both commands
-  validate the ring before the document changes, and a contour too detailed for the cap of one
-  extrusion is refused instead of stored. D2 is the card: a contour panel shows its ring summary,
-  the material-driven thickness, the material and one banding row per ring segment through
-  `panel.ring_banding.set`/`clear`, keeps the `Edit contour` entry and offers no corners, bows or
-  cutouts; a ring band with a missing material is a diagnostic like an edge or corner band. D3 lets a
-  cutout outline be a contour ring: `CutoutShape::Contour` must stay strictly inside the core for a
-  through cut and may touch its edge for a blind one, overlap is decided on the sampled ring rather
-  than its bounds, `param` extrudes the ring as the tool, and the schema moves to 14.
+  ring, bands per ring segment through `RingBanding`, and `panel.contour.create` copies a
+  constructive object's contour with the ring moved to the panel zero corner; a rectangle panel never
+  converts. The edit math (A5) reshapes a ring through `Contour::{move_corner, trim_segment,
+  split_segment}`, keeps every untouched id and an arc's centre and radius; A3 edits a working copy
+  and A6 applies one command, both validating the ring first and refusing one too detailed for the
+  cap. D2 is the card: ring summary, material-driven thickness, material, one banding row per ring
+  segment through `panel.ring_banding.set`/`clear`, `Edit contour`, no corners, bows or cutouts; a
+  missing ring-band material is a diagnostic. D3 lets a cutout be a contour ring kept strictly
+  inside the core (through) or touching its edge (blind), decided on the sampled ring; `param`
+  extrudes it as the tool, schema 14. A7 records it in `docs/domain/` and ADR 0042.
 - Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
   taking a bug moves its line into `## Now` in work order. X1 (the concave cap flap) is fixed; X2
   records that a legal ring over 1024 sampled points cannot be extruded, and waits for the owner's
@@ -52,12 +51,13 @@ plan is broken.
 
 ## Next
 
-A7 is next: write the contour panel and the contour edit mode down in `docs/domain/` and an ADR, and
-fold the D1–D3 cutout rules into `docs/domain/panels.md`. Then S3 one contour conversion, G1–G2 exact
-region rings and booleans, and D4–D11 the panel outline, typed operation list, registry, card
-sections, groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring
-hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
-(`plan/questions.md`).
+G1 is next: `geom::Region` holds exact `Contour` rings instead of sampled points — a rectangle
+constructor, bounds, area, containment and sampling, with the rectangle boolean helpers still
+passing. G2 then adds exact region booleans on contour rings, which replace the rectangle-only
+tracer for cutouts. D4–D11 follow with one panel outline source, typed machining, the operation
+registry and pipeline, card sections, groove/milling and banding operations. S4 adds the
+revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a
+decision on the cap limit (`plan/questions.md`).
 
 ## Index
 

@@ -664,6 +664,37 @@ mod tests {
     }
 
     #[test]
+    fn the_whole_ring_converts_to_geometry_with_its_arc() {
+        let arc = ContourSegment::arc(
+            [millimetres(80), millimetres(30)],
+            millimetres(20),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let contour = Contour::new(vec![
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
+            ContourSegment::line([millimetres(100), Length::ZERO], arc.start().expect("start")).expect("line"),
+            arc,
+            ContourSegment::line(arc.end().expect("end"), [Length::ZERO, millimetres(50)]).expect("line"),
+            ContourSegment::line([Length::ZERO, millimetres(50)], [Length::ZERO, Length::ZERO]).expect("line"),
+        ])
+        .expect("a rounded plate");
+
+        let geometry = contour.to_geometry().expect("geometry ring");
+        assert!(geometry.is_closed());
+        assert!(geometry.is_counter_clockwise().expect("closed ring"));
+        assert_eq!(geometry.segments().len(), 5);
+        assert_eq!(geometry.segments().iter().filter(|segment| matches!(segment, Segment::Arc(_))).count(), 1);
+        let rounded_corner = 20.0 * 20.0 - std::f64::consts::PI * 20.0 * 20.0 / 4.0;
+        assert!(
+            geometry.signed_area().is_some_and(|area| (area - (100.0 * 50.0 - rounded_corner)).abs() < 1.0e-9),
+            "area was {:?}",
+            geometry.signed_area()
+        );
+    }
+
+    #[test]
     fn a_rounded_plate_encloses_the_plate_area_minus_its_corner() {
         // Unit square 100 x 100 with a quarter circle of radius 100 at the origin corner is a disc
         // quarter, so its area is pi r^2 / 4. The sagging arc is direct: start at (100, 0), sweep
@@ -734,6 +765,13 @@ pub const MAX_CONTOUR_SEGMENTS: usize = 256;
 
 /// Largest accepted contour coordinate and extrusion height: ten metres.
 pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
+
+/// Joint tolerance of a ring converted to geometry, in millimetres.
+///
+/// A stored ring closes exactly in whole micrometres, while an arc endpoint is exact only in
+/// floating point: after rounding, an arc and the next segment can miss by up to one document
+/// unit. The small bound lets the geometry layer accept such a ring without hiding a real gap.
+const DOCUMENT_JOINT_TOLERANCE_MM: f64 = 1.0e-3;
 
 /// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
 ///
@@ -951,6 +989,19 @@ impl Contour {
     /// A segment is a copy of the stored curve; ask [`Contour::entries`] when the id matters.
     pub fn segments(&self) -> impl ExactSizeIterator<Item = ContourSegment> + '_ {
         self.entries.iter().map(|entry| entry.segment())
+    }
+
+    /// Converts the whole ring to the geometry layer, in millimetres.
+    ///
+    /// Every segment keeps its curve, so an arc stays an arc until the geometry boundary samples
+    /// it. The ids stay with the document ring; the geometry layer only needs the shape.
+    pub fn to_geometry(&self) -> Result<furnicraft_geom::Contour, ContourError> {
+        let segments = self
+            .entries
+            .iter()
+            .map(|entry| entry.segment().to_geom())
+            .collect::<Result<Vec<_>, ContourSegmentError>>()?;
+        Ok(furnicraft_geom::Contour::new_with_tolerance(segments, true, DOCUMENT_JOINT_TOLERANCE_MM)?)
     }
 
     /// The segment with this id.
@@ -1438,6 +1489,9 @@ pub enum ContourError {
     /// A segment is not a valid line or arc.
     #[error(transparent)]
     Segment(#[from] ContourSegmentError),
+    /// The geometry layer rejected the whole ring despite valid segments.
+    #[error(transparent)]
+    Geometry(#[from] furnicraft_geom::ContourError),
     /// The contour has fewer than three segments.
     #[error("a contour needs at least three segments, got {count}")]
     TooFewSegments {
