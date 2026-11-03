@@ -22,9 +22,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **G1** `geom::Region` holds exact `Contour` rings (outer and holes): rectangle constructor,
-  bounds, area, containment and sampling, with the rectangle boolean helpers still passing.
-  `files: crates/geom/src/region.rs, crates/geom/src/contour.rs`
+- `[ ]` **G2** exact 2D region booleans on `Contour` rings: union, difference and intersection, used
+  to union through cutouts and subtract them from the core instead of the rectangle-only tracer.
+  `files: crates/geom/src/region.rs`
 
 ## Bugs
 
@@ -38,9 +38,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **G2** exact 2D region booleans on `Contour` rings: union, difference and intersection, used
-  to union through cutouts and subtract them from the core instead of the rectangle-only tracer.
-  `files: crates/geom/src/region.rs`
 - `[ ]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
   generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
   core and overall from the region, and no machining code branches on the outline kind.
@@ -97,6 +94,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **G1** `geom::Region` holds exact `Contour` rings (outer and holes): rectangle constructor,
+  bounds, area, containment and sampling, with the rectangle boolean helpers still passing — `c3c00a4`
 - `[x]` **S3** one contour conversion: `crates/param/src/profile.rs` turns a document ring into an
   analytic contour, a sampled `geom::Region` and a `kernel::Profile`; the rectangular core, shaped
   core, cutout tool and constructive extrusion share one sampler and one chord tolerance, and
