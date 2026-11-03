@@ -767,8 +767,25 @@ pub struct Contour {
 
 impl Contour {
     /// Creates a contour after checking that it has at least one segment and that consecutive
-    /// endpoints meet.
+    /// endpoints meet within [`JOIN_TOLERANCE`].
     pub fn new(segments: Vec<Segment>, closed: bool) -> Result<Self, ContourError> {
+        Self::new_with_tolerance(segments, closed, JOIN_TOLERANCE)
+    }
+
+    /// Creates a contour whose joints may miss by at most `joint_tolerance` millimetres.
+    ///
+    /// The document stores whole micrometres, so a ring converted from document units can close
+    /// only to within one micrometre: an arc endpoint rounded into document units and the next
+    /// segment's rounded start differ by less than that. Such a caller passes its own bound rather
+    /// than the strict geometry one.
+    pub fn new_with_tolerance(
+        segments: Vec<Segment>,
+        closed: bool,
+        joint_tolerance: f64,
+    ) -> Result<Self, ContourError> {
+        if !joint_tolerance.is_finite() || joint_tolerance < 0.0 {
+            return Err(ContourError::InvalidInput("a joint tolerance must be finite and non-negative"));
+        }
         if segments.is_empty() {
             return Err(ContourError::Empty);
         }
@@ -785,7 +802,7 @@ impl Contour {
                 None
             };
             if let Some(next) = next
-                && (segment.end() - next.start()).length() > JOIN_TOLERANCE
+                && (segment.end() - next.start()).length() > joint_tolerance
             {
                 return Err(ContourError::Disconnected { index });
             }
@@ -1126,6 +1143,27 @@ mod tests {
             Segment::Line(Line::new(point(11.0, 0.0), point(11.0, 10.0)).expect("second")),
         ];
         assert!(matches!(Contour::new(segments, false), Err(ContourError::Disconnected { index: 0 })));
+    }
+
+    #[test]
+    fn a_document_scale_gap_is_accepted_only_with_its_own_tolerance() {
+        let segments = vec![
+            Segment::Line(Line::new(point(0.0, 0.0), point(10.0, 0.0)).expect("first")),
+            Segment::Line(Line::new(point(10.000_5, 0.0), point(10.0, 10.0)).expect("second")),
+        ];
+        assert!(matches!(Contour::new(segments.clone(), false), Err(ContourError::Disconnected { .. })));
+        assert!(Contour::new_with_tolerance(segments, false, 1.0e-3).is_ok());
+        assert!(matches!(
+            Contour::new_with_tolerance(
+                vec![
+                    Segment::Line(Line::new(point(0.0, 0.0), point(10.0, 0.0)).expect("first")),
+                    Segment::Line(Line::new(point(11.0, 0.0), point(11.0, 10.0)).expect("second")),
+                ],
+                false,
+                1.0e-3
+            ),
+            Err(ContourError::Disconnected { index: 0 })
+        ));
     }
 
     #[test]
