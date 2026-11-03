@@ -2,9 +2,9 @@
 //!
 //! Every planar shape reaches the geometry kernel through this module: the rectangular core, the
 //! shaped panel core, a cutout tool and a constructive extrusion. A document [`model::Contour`]
-//! becomes an analytic [`Contour`], that contour becomes a sampled [`Region`], and the region
-//! becomes a [`Profile`]. [`region_of_contour`] is the one place where an arc turns into a polyline
-//! and [`CONTOUR_SAMPLE_TOLERANCE_MM`] is the one chord tolerance it uses.
+//! becomes an analytic [`Contour`], that contour becomes a [`Region`] whose rings stay exact, and the
+//! region is sampled into a [`Profile`]. [`profile_of_region`] is the one place where an arc turns
+//! into a polyline and [`CONTOUR_SAMPLE_TOLERANCE_MM`] is the one chord tolerance it uses.
 //!
 //! The document keeps micrometres; the conversion to millimetres happens in `model::Contour`, at
 //! the geometry boundary. This module never sees a kernel type from the document.
@@ -23,23 +23,21 @@ pub(crate) fn region_of_rectangle(width: f64, height: f64) -> Result<Region, Par
     Ok(Region::rectangle(width, height)?)
 }
 
-/// The region of an analytic contour.
-///
-/// This is the only place where an arc becomes a polyline: every caller that reaches the kernel
-/// through this module shares the same sampler and the same tolerance.
+/// The region of an analytic contour, with its arc still an arc.
 pub(crate) fn region_of_contour(contour: &Contour) -> Result<Region, ParamError> {
-    let outer = contour.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    Ok(Region::new(outer, Vec::new())?)
+    Ok(Region::new(contour.clone(), Vec::new())?)
 }
 
-/// The region of a document contour, converted exactly and then sampled once.
+/// The region of a document contour, converted exactly.
 pub(crate) fn region_of_document_contour(contour: &furnicraft_model::Contour) -> Result<Region, ParamError> {
     region_of_contour(&contour.to_geometry()?)
 }
 
-/// The kernel profile of a region.
+/// The kernel profile of a region, sampled by the one sampler and one chord tolerance.
 pub(crate) fn profile_of_region(region: &Region) -> Result<Profile, ParamError> {
-    Ok(Profile::new(region.outer().to_vec(), region.holes().to_vec())?)
+    let samples = region.sample(CONTOUR_SAMPLE_TOLERANCE_MM)?;
+    let (outer, holes) = samples.into_parts();
+    Ok(Profile::new(outer, holes)?)
 }
 
 /// The kernel profile of an analytic contour, sampled by the one sampler.
@@ -54,16 +52,16 @@ pub(crate) fn profile_of_rectangle(width: f64, height: f64) -> Result<Profile, P
 
 /// The kernel profile of a document contour, refused when one extrusion cap cannot hold it.
 ///
-/// The cap of a single extrusion is one document face and its vertices are the sampled ring, so a
-/// contour that samples to more points than [`MAX_FACE_VERTICES`] can never be drawn. A command that
-/// stores a ring calls this before it mutates the document, so an object never ends up with a
+/// The cap of a single extrusion is one document face and its vertices are the sampled outer ring,
+/// so a contour that samples to more points than [`MAX_FACE_VERTICES`] can never be drawn. A command
+/// that stores a ring calls this before it mutates the document, so an object never ends up with a
 /// contour that evaluates to nothing.
 pub(crate) fn profile_of_document_contour(contour: &furnicraft_model::Contour) -> Result<Profile, ParamError> {
-    let region = region_of_document_contour(contour)?;
-    if region.outer().len() > MAX_FACE_VERTICES {
-        return Err(ParamError::ContourTooDetailed { points: region.outer().len(), max: MAX_FACE_VERTICES });
+    let profile = profile_of_region(&region_of_document_contour(contour)?)?;
+    if profile.outer.len() > MAX_FACE_VERTICES {
+        return Err(ParamError::ContourTooDetailed { points: profile.outer.len(), max: MAX_FACE_VERTICES });
     }
-    profile_of_region(&region)
+    Ok(profile)
 }
 
 #[cfg(test)]
@@ -130,7 +128,7 @@ mod tests {
             furnicraft_geom::DVec2::new(4.0, 4.0),
             furnicraft_geom::DVec2::new(2.0, 4.0),
         ];
-        let region = Region::new(outer, vec![hole]).expect("region with a hole");
+        let region = Region::from_loops(outer, vec![hole]).expect("region with a hole");
         let profile = profile_of_region(&region).expect("profile");
         assert_eq!(profile.outer.len(), 4);
         assert_eq!(profile.holes.len(), 1);
