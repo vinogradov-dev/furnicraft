@@ -22,10 +22,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
-  generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
-  core and overall from the region, and no machining code branches on the outline kind.
-  `files: crates/model/src/panel, crates/param/src`
+- `[ ]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
+  tagged `MachiningParams` and shared `FaceSide`/`EdgeRef` anchors; `panel.machining.add/update/
+  remove/move` commands; migrate `Cutout` and the schema, keeping existing cutout files loading.
+  `files: crates/model/src/panel, crates/model/src/project/wire.rs, crates/engine/src/panel_cmds.rs`
 
 ## Bugs
 
@@ -39,10 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
-  tagged `MachiningParams` and shared `FaceSide`/`EdgeRef` anchors; `panel.machining.add/update/
-  remove/move` commands; migrate `Cutout` and the schema, keeping existing cutout files loading.
-  `files: crates/model/src/panel, crates/model/src/project/wire.rs, crates/engine/src/panel_cmds.rs`
 - `[ ]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
   attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
   category, stage, capabilities and default; the panel builder contains no kind match, and a
@@ -91,6 +87,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
+  generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
+  core and overall from the region, and no machining code branches on the outline kind —
+  `67ccca2`
 - `[x]` **G2** exact 2D region booleans on `Contour` rings: union, difference and intersection, used
   to union through cutouts and subtract them from the core instead of the rectangle-only tracer;
   `geom::region` traces the boundary of the set and keeps rings exact — `a0a8e94`

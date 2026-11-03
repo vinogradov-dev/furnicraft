@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=G task=D4 state=doing base=4dfb0e0 updated=2026-11-03
+STATE: milestone=M7 phase=D task=D5 state=idle base=67ccca2 updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -25,21 +25,21 @@ contract that orders that answer when a session was interrupted or the plan is b
   ring to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance.
   `Region` keeps exact `Contour` rings, so area, bounds and containment read lines and arcs; only
   sampling is lossy. `geom::region` unions, intersects and subtracts regions by tracing the boundary
-  of the set, so a rectangle and a curved ring take one path and the core trace subtracts a through
-  ring exactly (ADR 0043).
+  of the set, so a rectangle and a curved ring take one path (ADR 0043).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is either the nominal rectangle or a contour ring (D1). A contour panel keeps the
-  ring, bands per ring segment through `RingBanding`, and `panel.contour.create` copies a
-  constructive object's contour with the ring moved to the panel zero corner; a rectangle panel never
-  converts. The edit math (A5) reshapes a ring through `Contour::{move_corner, trim_segment,
-  split_segment}`, keeps every untouched id and an arc's centre and radius; A3 edits a working copy
-  and A6 applies one command, both validating the ring first and refusing one too detailed for the
-  cap. D2 is the card: ring summary, material-driven thickness, material, one banding row per ring
-  segment through `panel.ring_banding.set`/`clear`, `Edit contour`, no corners, bows or cutouts; a
-  missing ring-band material is a diagnostic. D3 lets a cutout be a contour ring kept strictly
-  inside the core (through) or touching its edge (blind), decided on the sampled ring; `param`
-  extrudes it as the tool, schema 14. A7 records it in `docs/domain/` and ADR 0042.
+  ring, bands per ring segment through `RingBanding`, and `panel.contour.create` copies an object's
+  contour with the ring moved to the panel zero corner; a rectangle panel never converts. The edit
+  math (A5) reshapes a ring through `Contour::{move_corner, trim_segment, split_segment}` and keeps
+  every untouched id; A3 edits a working copy, A6 applies one command. D2 is the card: ring summary,
+  material, one banding row per ring segment, `Edit contour`, no corners, bows or cutouts; D3 lets a
+  cutout be a contour ring, and A7 records it in `docs/domain/` and ADR 0042.
+- D4 is complete: a rectangle's corner features and bows are parameters of its outline, and every
+  outline — rectangle or stored ring — resolves to one `geom::Region`. `PanelGeometry` holds the exact
+  core and overall regions, the body extrudes the core, and cutout fit, the core trace and diagnostics
+  are one region-based rule set with no branch on the outline kind: a through cutout may open a notch
+  at the core edge, a blind one may touch but not cross it (ADR 0044, schema 15).
 - Defects live in `## Bugs` of `plan/BACKLOG.md` with an `X` id and the dashboard prints the section;
   taking a bug moves its line into `## Now` in work order. X1 (the concave cap flap) is fixed; X2
   records that a legal ring over 1024 sampled points cannot be extruded, and waits for the owner's
@@ -53,10 +53,11 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-D5–D11 follow D4 with typed machining, the operation registry and pipeline, card sections,
-groove/milling and banding operations. S4 adds the revision-keyed cache; H1–H2 bring hardware and
-mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit
-(`plan/questions.md`).
+D5 is next: a typed machining list with stable `MachiningId`s, tagged parameters and
+`add`/`update`/`remove`/`move` commands, migrating the cutout and the schema. D6–D11 follow with the
+operation registry and pipeline, card sections, groove/milling and banding operations. S4 adds the
+revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits for a
+decision on the cap limit (`plan/questions.md`).
 
 ## Index
 
