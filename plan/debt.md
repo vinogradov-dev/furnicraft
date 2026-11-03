@@ -80,10 +80,6 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   multi-select yet, so a multi-selection comes from the scene tree.
 - `[gizmo]` The orientation widget is hidden in a viewport smaller than its own size plus margins;
   there is no menu fallback for the six views yet.
-- `[panel]` The core is still a rectangle: `PanelGeometry` reports the core extents and the trace
-  subtracts the cutouts from that rectangle, so a shaped or contour panel is traced as its bounds and
-  a through contour cutout must stay strictly inside it, while a blind ring may touch the edge. One
-  panel outline source would let the core itself be the ring region and a through ring cut the edge.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a
   straight connector; only the band strips are intersected analytically.
 - `[panel]` Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt
@@ -92,11 +88,6 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   and it is removed when the corner next becomes a segment.
 - `[panel]` Blind cutouts that overlap any other cutout or cross the core edge are still rejected until
   the 3D edge-pocket stage.
-- `[panel]` Included offsets on a shaped path are checked only through the core extents; a hostile band
-  thickness can still make the core contour self-intersect instead of returning a typed error.
-- `[panel]` `PanelGeometry` reports shaped core extents with a zero core origin; the body and cutout
-  tools use nominal coordinates, but cutout validation on a shaped panel only sees the core bounding
-  box.
 - `[panel]` The panel card does not edit cutouts yet.
 - `[panel]` A contour banding row names its ring segment by number only; the card cannot highlight the
   segment in the viewport, so the user has to count segments to band the one they mean.

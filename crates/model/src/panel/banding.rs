@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn a_partially_banded_path_is_reported() {
         let mut panel = sample_panel(Id::new(2).expect("id"), "Shaped");
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(20) })
                 .expect("radius"),
         );
@@ -770,9 +770,11 @@ mod tests {
         let too_wide =
             EdgeBanding::new(EdgeId::new(1).expect("edge id"), material, true, millimetres(500), millimetres(22))
                 .expect("valid banding dimensions");
+        // A band wider than half the panel folds the core contour on itself, so the ring no longer
+        // closes into usable material. The edit is rejected and nothing is stored.
         assert!(matches!(
             project.set_edge_banding(panel_id, too_wide),
-            Err(ProjectError::PanelGeometry(PanelGeometryError::NonPositive { field: "core_width", .. }))
+            Err(ProjectError::PanelGeometry(PanelGeometryError::Contour))
         ));
         assert!(project.panel(panel_id).expect("panel").edge_banding().is_empty());
     }

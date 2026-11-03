@@ -40,11 +40,6 @@ pub(crate) fn profile_of_region(region: &Region) -> Result<Profile, ParamError> 
     Ok(Profile::new(outer, holes)?)
 }
 
-/// The kernel profile of an analytic contour, sampled by the one sampler.
-pub(crate) fn profile_of_contour(contour: &Contour) -> Result<Profile, ParamError> {
-    profile_of_region(&region_of_contour(contour)?)
-}
-
 /// The kernel profile of a rectangle at its own origin.
 pub(crate) fn profile_of_rectangle(width: f64, height: f64) -> Result<Profile, ParamError> {
     profile_of_region(&region_of_rectangle(width, height)?)

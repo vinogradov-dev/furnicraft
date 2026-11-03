@@ -325,21 +325,7 @@ impl Panel {
     where
         F: Fn(&BandingSpec) -> Length,
     {
-        let nominal = self.nominal_segments_for(nominal_size)?;
-        let mut pieces = Vec::with_capacity(nominal.len());
-        for (segment, source) in &nominal {
-            let distance = self
-                .segment_banding(*source)
-                .filter(|spec| spec.included_in_size())
-                .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
-            let piece = if distance > 0.0 { segment.offset(distance)? } else { *segment };
-            pieces.push((piece, *source));
-        }
-        let nominal_segments = nominal.iter().map(|(segment, _)| *segment).collect();
-        let nominal_contour = Contour::new(nominal_segments, true)?;
-        let (min, max) = nominal_contour.bounds().ok_or(ContourError::InvalidInput("panel outline bounds"))?;
-        trim_straight_joints(&mut pieces, min, max);
-        Ok(pieces)
+        self.offset_segments_for_with(nominal_size, band_thickness, true)
     }
 
     /// Builds the core outline with a per-segment offset for included banding.
@@ -367,6 +353,31 @@ impl Panel {
         join_segments(pieces.into_iter().map(|(segment, _)| segment).collect())
     }
 
+    /// Builds the outer envelope of a panel with a per-segment offset for non-included banding.
+    ///
+    /// An included segment stays nominal, a non-included one is offset outward by its band
+    /// thickness, and consecutive straight pieces are mitred at their supporting lines. The bounds
+    /// of this contour are the overall size of the finished panel.
+    pub fn outer_contour_with<F>(&self, band_thickness: F) -> Result<Contour, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        self.outer_contour_for_with(self.nominal_size(), band_thickness)
+    }
+
+    /// Builds the outer envelope for a candidate size and band thickness.
+    pub fn outer_contour_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        band_thickness: F,
+    ) -> Result<Contour, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        let pieces = self.offset_segments_for_with(nominal_size, band_thickness, false)?;
+        join_segments(pieces.into_iter().map(|(segment, _)| segment).collect())
+    }
+
     /// The bounds of the outer envelope with a per-segment outward offset for non-included banding.
     pub fn outer_bounds_with<F>(&self, band_thickness: F) -> Result<(DVec2, DVec2), PanelContourError>
     where
@@ -384,22 +395,43 @@ impl Panel {
     where
         F: Fn(&BandingSpec) -> Length,
     {
-        let mut min = DVec2::splat(f64::INFINITY);
-        let mut max = DVec2::splat(f64::NEG_INFINITY);
-        for (segment, source) in self.nominal_segments_for(nominal_size)? {
+        self.outer_contour_for_with(nominal_size, band_thickness)?.bounds().ok_or(PanelContourError::InvalidBounds)
+    }
+
+    /// Offsets every nominal segment whose band matches `included` and closes the pieces.
+    ///
+    /// An included band moves the core inward and clips a straight mitre to the nominal outline, so
+    /// a band thicker than the feature it meets cannot fold the core back on itself. A non-included
+    /// band moves the outer envelope outward and may mitre outside the nominal outline.
+    fn offset_segments_for_with<F>(
+        &self,
+        nominal_size: PanelNominalSize,
+        band_thickness: F,
+        included: bool,
+    ) -> Result<Vec<(Segment, SegmentSource)>, PanelContourError>
+    where
+        F: Fn(&BandingSpec) -> Length,
+    {
+        let nominal = self.nominal_segments_for(nominal_size)?;
+        let mut pieces = Vec::with_capacity(nominal.len());
+        for (segment, source) in &nominal {
             let distance = self
-                .segment_banding(source)
-                .filter(|spec| !spec.included_in_size())
+                .segment_banding(*source)
+                .filter(|spec| spec.included_in_size() == included)
                 .map_or(0.0, |spec| band_thickness(&spec).millimetres_f64());
-            let bound = if distance > 0.0 { segment.offset(-distance)? } else { segment };
-            let (segment_min, segment_max) = bound.bounds();
-            min = min.min(segment_min);
-            max = max.max(segment_max);
+            let piece =
+                if distance > 0.0 { segment.offset(if included { distance } else { -distance })? } else { *segment };
+            pieces.push((piece, *source));
         }
-        if !min.is_finite() || !max.is_finite() {
-            return Err(PanelContourError::InvalidBounds);
-        }
-        Ok((min, max))
+        let nominal_segments = nominal.iter().map(|(segment, _)| *segment).collect();
+        let nominal_contour = Contour::new(nominal_segments, true)?;
+        let bounds = if included {
+            nominal_contour.bounds().map(Some).ok_or(ContourError::InvalidInput("panel outline bounds"))?
+        } else {
+            None
+        };
+        trim_straight_joints(&mut pieces, bounds);
+        Ok(pieces)
     }
 
     /// The banding that currently covers a path, if any.
@@ -568,11 +600,12 @@ fn incoming_setback(feature: CornerFeatureKind) -> f64 {
 
 /// Mitres consecutive straight offset segments at the intersection of their supporting lines.
 ///
-/// The intersection is only used when it lies inside the nominal outline and both trimmed pieces
-/// keep their travel direction: a band thicker than the feature it meets is not allowed to fold the
-/// core back on itself. A rejected mitre keeps the untouched offset endpoints and is joined by
-/// [`join_segments`].
-fn trim_straight_joints(pieces: &mut [(Segment, SegmentSource)], min: DVec2, max: DVec2) {
+/// The intersection is only used when it lies inside the nominal outline, if one is given, and both
+/// trimmed pieces keep their travel direction: a band thicker than the feature it meets is not
+/// allowed to fold the core back on itself. An outward offset passes `None`, because its mitre lies
+/// outside the nominal outline by construction. A rejected mitre keeps the untouched offset
+/// endpoints and is joined by [`join_segments`].
+fn trim_straight_joints(pieces: &mut [(Segment, SegmentSource)], bounds: Option<(DVec2, DVec2)>) {
     let count = pieces.len();
     let tolerance = 1.0e-6;
     for index in 0..count {
@@ -583,10 +616,11 @@ fn trim_straight_joints(pieces: &mut [(Segment, SegmentSource)], min: DVec2, max
         let Some(meeting) = current.intersection(neighbour) else {
             continue;
         };
-        if meeting.x < min.x - tolerance
-            || meeting.x > max.x + tolerance
-            || meeting.y < min.y - tolerance
-            || meeting.y > max.y + tolerance
+        if let Some((min, max)) = bounds
+            && (meeting.x < min.x - tolerance
+                || meeting.x > max.x + tolerance
+                || meeting.y < min.y - tolerance
+                || meeting.y > max.y + tolerance)
         {
             continue;
         }
@@ -675,7 +709,7 @@ mod tests {
     #[test]
     fn radius_replaces_one_corner_and_keeps_tangency() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
                 .expect("radius"),
         );
@@ -690,7 +724,7 @@ mod tests {
     #[test]
     fn chamfer_uses_independent_setbacks() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(
                 RectCorner::BottomRight.id(),
                 CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(5) },
@@ -706,7 +740,7 @@ mod tests {
     #[test]
     fn an_included_band_cuts_the_core_at_a_bare_chamfer() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(
                 RectCorner::BottomRight.id(),
                 CornerFeatureKind::Chamfer { incoming: millimetres(20), outgoing: millimetres(5) },
@@ -740,13 +774,13 @@ mod tests {
     #[test]
     fn outward_bow_extends_the_bounds_and_inward_bow_does_not() {
         let mut outward = panel(100, 60);
-        outward.edge_bows.push(EdgeBow::new(RectEdge::Bottom.id(), millimetres(10)).expect("bow"));
+        outward.upsert_edge_bow(EdgeBow::new(RectEdge::Bottom.id(), millimetres(10)).expect("bow"));
         let (min, max) = outward.nominal_contour().expect("contour").bounds().expect("bounds");
         assert!((min.y + 10.0).abs() < 1e-9, "min {min:?}");
         assert!((max.y - 60.0).abs() < 1e-9, "max {max:?}");
 
         let mut inward = panel(100, 60);
-        inward.edge_bows.push(EdgeBow::new(RectEdge::Bottom.id(), millimetres(-10)).expect("bow"));
+        inward.upsert_edge_bow(EdgeBow::new(RectEdge::Bottom.id(), millimetres(-10)).expect("bow"));
         let (min, _) = inward.nominal_contour().expect("contour").bounds().expect("bounds");
         assert!(min.y.abs() < 1e-9, "min {min:?}");
     }
@@ -755,7 +789,7 @@ mod tests {
     fn corner_features_that_consume_an_edge_are_rejected() {
         let mut panel = panel(100, 60);
         for corner in [RectCorner::BottomLeft, RectCorner::BottomRight] {
-            panel.corner_features.push(
+            panel.upsert_corner_feature(
                 CornerFeature::new(corner.id(), CornerFeatureKind::Radius { radius: millimetres(50) }).expect("radius"),
             );
         }
@@ -768,7 +802,7 @@ mod tests {
     #[test]
     fn too_deep_bow_is_rejected() {
         let mut panel = panel(100, 60);
-        panel.edge_bows.push(EdgeBow::new(RectEdge::Bottom.id(), millimetres(51)).expect("bow"));
+        panel.upsert_edge_bow(EdgeBow::new(RectEdge::Bottom.id(), millimetres(51)).expect("bow"));
         assert!(matches!(
             panel.nominal_contour(),
             Err(PanelContourError::BowTooDeep { edge }) if edge == RectEdge::Bottom.id()
@@ -794,7 +828,7 @@ mod tests {
     #[test]
     fn a_radius_joins_its_two_edges_into_one_path() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
                 .expect("radius"),
         );
@@ -815,7 +849,7 @@ mod tests {
     #[test]
     fn banding_an_edge_keeps_the_rest_of_its_path_unbanded() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(RectCorner::TopRight.id(), CornerFeatureKind::Radius { radius: millimetres(10) })
                 .expect("radius"),
         );
@@ -845,7 +879,7 @@ mod tests {
     #[test]
     fn a_chamfer_is_a_separate_path_with_a_butt_joint() {
         let mut panel = panel(100, 60);
-        panel.corner_features.push(
+        panel.upsert_corner_feature(
             CornerFeature::new(
                 RectCorner::TopRight.id(),
                 CornerFeatureKind::Chamfer { incoming: millimetres(10), outgoing: millimetres(14) },
@@ -864,7 +898,7 @@ mod tests {
     fn a_fully_rounded_panel_is_one_closed_path() {
         let mut panel = panel(100, 60);
         for corner in RectCorner::ALL {
-            panel.corner_features.push(
+            panel.upsert_corner_feature(
                 CornerFeature::new(corner.id(), CornerFeatureKind::Radius { radius: millimetres(8) }).expect("radius"),
             );
         }
@@ -879,7 +913,7 @@ mod tests {
     #[test]
     fn a_bowed_edge_stays_one_path() {
         let mut panel = panel(100, 60);
-        panel.edge_bows.push(EdgeBow::new(RectEdge::Bottom.id(), millimetres(5)).expect("bow"));
+        panel.upsert_edge_bow(EdgeBow::new(RectEdge::Bottom.id(), millimetres(5)).expect("bow"));
         let paths = panel.contour_paths().expect("paths");
         assert_eq!(paths.len(), 4);
         let bottom = paths.iter().find(|path| path.edge_ids().eq([RectEdge::Bottom.id()])).expect("bottom path");

@@ -152,12 +152,13 @@ The core `C` is built from `N` by offsetting each banding path inward when its b
 joining consecutive paths at sharp joints with straight butt connectors. The outer envelope `O` is
 `N` on included paths and the outward offset on non-included paths. The card reports core and overall
 sizes from the bounds of `C` and `O`; a trim localized at one corner may therefore not change the
-reported size, because the card shows the envelope rather than a per-edge minimum. The body is built
-directly from `C`, so no stored core origin is needed for a shaped panel.
+reported size, because the card shows the envelope rather than a per-edge minimum. The body is the
+exact core region `C` extruded, so a rectangle, a shaped outline and a stored ring reach the body the
+same way and no stored core origin is needed for a shaped panel.
 
-Edge banding is supported on shaped panels. A panel may keep its machining when its outline changes:
-the cutout tools are subtracted from the shaped body in 3D. Adding new machining to a shaped panel
-still waits for the contour-aware cutout union. Outline controls are never locked by banding or
+Edge banding is supported on shaped panels. Machining is subtracted from the shaped body exactly like
+a rectangle: a through cutout may open a notch at the core boundary, and the core trace decides
+whether the remaining material is still one component. Outline controls are never locked by banding or
 machining: a shape change keeps every edge banding record, and a corner banding belongs to its corner
 segment, so changing a chamfer to a radius keeps it while removing the treatment deletes it.
 
@@ -183,8 +184,8 @@ cutout controls, because those describe a rectangle or wait for their own sectio
 mode is described in [Geometry objects](geometry.md).
 
 Machining is still stored in nominal panel-local coordinates, and a cutout tool is subtracted from
-the contour body in 3D. The core trace and the cutout fit still work on the bounds rectangle of the
-ring; a ring whose material does not fill those bounds is not yet traced as a region.
+the contour body in 3D. The core trace and the cutout fit read the exact ring region, not its bounds
+rectangle, so a ring with a notch or a hole is handled like a rectangle.
 
 ## 5. Edge banding
 
@@ -260,18 +261,18 @@ removed solid. A cutout removes a volume from the panel body:
 - The ring becomes a solid by sampling it into the kernel profile at the shared contour tolerance; the
   document keeps the arcs. A through cutout removes the full thickness, a blind one removes material
   from its entry face by its depth.
-- A **through** contour cutout must lie strictly inside the core: the trace subtracts it exactly, but
-  the opening stays a hole in the nominal outline rather than a notch that outline does not describe.
-  A **blind** contour cutout may touch the core edge, because it removes no through material.
+- A **through** contour cutout may touch or cross the core boundary and open a notch; the core trace
+  decides whether the remaining material is still one positive component. A **blind** contour cutout
+  may touch the core edge but not cross it, because it removes no through material.
 - Whether two cutouts overlap is decided on the shape itself: a rectangle uses the exact rectangle
   test, a ring takes part as its sampled chord polygon. Bounds alone are not enough. Two through
   cutouts may overlap and merge; any other pair may not share area.
 - The core is traced exactly: the union of every through cutout, rectangle or ring, is subtracted from
   the core region and the remaining material must have positive area and one connected component. A
   ring stays a ring in that trace, so a hole, a notch and a cut corner are read without sampling.
-- A panel shaped by corner features or bows still rejects a new cutout until the shaped-core union
-  lands. A contour panel accepts machining through the commands and subtracts the tool from its
-  ring body; the fit is checked against the bounds of the core ring, not its exact material region.
+- Every outline kind takes machining through the same commands and the same validation. The fit and
+  the core trace read the exact core region of a rectangle, a shaped panel or a contour ring; no rule
+  branches on which outline the panel was created with.
 - Machining coordinates never change when an included band moves the core origin; the body is built
   in the nominal frame and the tool is placed there too.
 
@@ -295,6 +296,7 @@ Panel issues are computed during loading/rebuild and are not stored as data:
 - a corner-banding material is missing;
 - a ring-banding material is missing;
 - the core is not positive;
+- the outline or its edge banding does not form a valid contour ring;
 - machining no longer fits the new core;
 - the banding profile is unavailable and there is no fallback.
 
@@ -345,7 +347,7 @@ least three segments, non-zero area, no self-intersection, a usable panel size �
 that would drop a ring segment carrying banding, so no band is lost silently. A failed outline command
 leaves the document, its revision and the id counter unchanged.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. Adding a cutout to a shaped panel is rejected until the shaped-core cutout union lands; shaping a panel that already has machining is accepted and the cutout tools are subtracted from the shaped body. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A cutout is accepted on every outline kind and subtracted from the resolved core body; shaping a panel that already has machining keeps the cutout tools and re-traces them against the new core. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
 commands keep the root immutable and preserve world transforms when a group is created or flattened.
 
 ## 9. Panel tests
@@ -386,19 +388,19 @@ At minimum:
 - an outline edit that moves the minimum corner keeps the world shape, the pivot and the machining in
   place;
 - a ring-banding material missing from the catalogue is a diagnostic, not a load error;
-- a through contour cutout is refused when it touches or crosses the core edge, while a blind contour
-  cutout may touch it; overlap is decided on the sampled ring.
+- a rectangle, a shaped panel and a contour ring take the same cutout validation and core trace;
+- a through contour cutout may touch or cross the core edge and open a notch, while a blind contour
+  cutout may touch but not cross it; overlap is decided on the sampled ring.
 
 Catalogue and scene-loading tests live in [Materials and catalogue](materials.md) and [Scene document](document.md).
 
 ## 10. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the in-house `geom::region` boolean unions, intersects and subtracts exact `Contour` rings, so the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes are read without sampling (ADR 0012, ADR 0043). A shaped or contour core is still traced as the bounds rectangle of its ring, and a through ring still has to stay inside that rectangle; one panel outline source is next.
-3. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
-4. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
-5. Edge banding milling: rounding the faces and corner.
-6. Whether the card should show core and overall size separately from the nominal size.
+2. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
+3. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
+4. Edge banding milling: rounding the faces and corner.
+5. Whether the card should show core and overall size separately from the nominal size.
 
 The target contour rules — tangent-continuous paths, signed bow, union of through cutouts and the
 no-division invariant — are recorded in ADR 0009; segment banding in ADR 0014, band joints on straight
@@ -406,4 +408,5 @@ and arc segments in ADRs 0015 and 0016, and contour panels with their edit mode 
 features, bows, tangent paths, chamfer corner banding, shaped-panel band strips and analytic arc band
 joints are implemented; the exact cutout union and its `Region` ring tracing are implemented, and
 contour panels, ring banding and the viewport edit mode are implemented on top of the ring from
-ADR 0040. Shaped-core rings plus cutout banding are staged next.
+ADR 0040. One outline source now resolves the core region for every panel (ADR 0044), so machining is
+one region-based rule set; cutout banding is staged next.

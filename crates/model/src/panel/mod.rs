@@ -5,7 +5,7 @@
 //! `furnicraft-engine` reach the panel through the crate API and mutate it through the
 //! crate-internal setters here.
 
-use furnicraft_geom::DVec3;
+use furnicraft_geom::{DVec3, Region};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -28,31 +28,65 @@ pub(crate) use geometry::rects_overlap;
 pub(crate) use machining::core_violation_of;
 
 use crate::panel::banding::{normalize_band_order, validate_corner_banding};
-use crate::panel::geometry::{
-    checked_add, checked_add_many, checked_sub_many, length_from_millimetres, validate_dimension,
-};
+use crate::panel::geometry::validate_dimension;
 use crate::panel_features::{CornerFeature, EdgeBow, validate_contour_features};
 use crate::{
     Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MaterialId, Pivot, Placement,
     ProjectError, Properties, PropertyError, PropertyValue, VertexId,
 };
 
-/// Where a panel's outline comes from.
+/// Where a panel's outline comes from: one source for the whole panel.
 ///
 /// A panel is created either as the nominal rectangle or from a contour selected in the scene; the
-/// variant never changes afterwards. The rectangle may carry corner features and bows, the contour
-/// ring may not, because its corners and edges are the ring itself.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// variant never changes afterwards. The rectangle variant keeps its corner features and bows as
+/// the parameters of a contour generator, while the contour variant keeps the finished ring. Both
+/// produce one `geom::Region`, so no later stage branches on which variant a panel was created with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PanelOutline {
-    /// The nominal rectangle, optionally shaped by corner features and bows.
-    #[default]
-    Rect,
+    /// The nominal rectangle, generated from its corner features and bowed edges.
+    Rect {
+        /// Corner radii and chamfers, at most one per nominal corner.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        corner_features: Vec<CornerFeature>,
+        /// Signed bows, at most one per nominal edge.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        edge_bows: Vec<EdgeBow>,
+    },
     /// A closed contour ring anchored at the panel-local zero corner.
     Contour {
         /// The ring of directed lines and arcs, counter-clockwise.
         contour: Contour,
     },
+}
+
+impl Default for PanelOutline {
+    fn default() -> Self {
+        Self::Rect { corner_features: Vec::new(), edge_bows: Vec::new() }
+    }
+}
+
+impl PanelOutline {
+    /// The corner treatments of a generated rectangle outline, empty for a stored ring.
+    pub fn corner_features(&self) -> &[CornerFeature] {
+        match self {
+            Self::Rect { corner_features, .. } => corner_features,
+            Self::Contour { .. } => &[],
+        }
+    }
+
+    /// The bowed edges of a generated rectangle outline, empty for a stored ring.
+    pub fn edge_bows(&self) -> &[EdgeBow] {
+        match self {
+            Self::Rect { edge_bows, .. } => edge_bows,
+            Self::Contour { .. } => &[],
+        }
+    }
+
+    /// Whether the rectangle generator carries any corner treatment or bow.
+    pub fn has_contour_features(&self) -> bool {
+        !self.corner_features().is_empty() || !self.edge_bows().is_empty()
+    }
 }
 
 /// A flat panel in the product tree.
@@ -78,8 +112,6 @@ pub struct Panel {
     ring_banding: Vec<RingBanding>,
     /// Banded segments in application order; the last one is drawn on top.
     band_order: Vec<SegmentSource>,
-    corner_features: Vec<CornerFeature>,
-    edge_bows: Vec<EdgeBow>,
     properties: Properties,
 }
 
@@ -108,7 +140,7 @@ impl Panel {
             id,
             name: name.into(),
             nominal_size,
-            outline: PanelOutline::Rect,
+            outline: PanelOutline::default(),
             material,
             last_known_thickness,
             placement,
@@ -118,8 +150,6 @@ impl Panel {
             corner_banding: Vec::new(),
             ring_banding: Vec::new(),
             band_order: Vec::new(),
-            corner_features: Vec::new(),
-            edge_bows: Vec::new(),
             properties: Properties::new(),
         })
     }
@@ -153,8 +183,6 @@ impl Panel {
             corner_banding: Vec::new(),
             ring_banding: Vec::new(),
             band_order: Vec::new(),
-            corner_features: Vec::new(),
-            edge_bows: Vec::new(),
             properties: Properties::new(),
         })
     }
@@ -173,7 +201,7 @@ impl Panel {
     pub const fn outline_contour(&self) -> Option<&Contour> {
         match &self.outline {
             PanelOutline::Contour { contour } => Some(contour),
-            PanelOutline::Rect => None,
+            PanelOutline::Rect { .. } => None,
         }
     }
 
@@ -322,13 +350,11 @@ impl Panel {
     ///
     /// `Some` means the cutouts would empty the core or split it into disconnected pieces, so a
     /// command must be rejected and a loaded panel must be reported as a problem panel. Blind
-    /// cutouts are not part of the 2D union (ADR 0009); a shaped panel returns `None` because its
-    /// core is not a rectangle. An error means the exact trace refused the input, for example when
-    /// the cutouts hold more segments than one boolean may examine.
-    pub fn core_violation(&self, geometry: PanelGeometry) -> Result<Option<CoreViolation>, ProjectError> {
-        if self.has_contour_features() {
-            return Ok(None);
-        }
+    /// cutouts are not part of the 2D union. The core is the resolved region, so a shaped outline
+    /// and a stored contour ring are traced exactly like a rectangle. An error means the exact trace
+    /// refused the input, for example when the cutouts hold more segments than one boolean may
+    /// examine.
+    pub fn core_violation(&self, geometry: &PanelGeometry) -> Result<Option<CoreViolation>, ProjectError> {
         core_violation_of(self, geometry, None)
     }
 
@@ -364,17 +390,17 @@ impl Panel {
 
     /// Corner treatments in application order.
     pub fn corner_features(&self) -> &[CornerFeature] {
-        &self.corner_features
+        self.outline.corner_features()
     }
 
     /// Bowed edges in application order.
     pub fn edge_bows(&self) -> &[EdgeBow] {
-        &self.edge_bows
+        self.outline.edge_bows()
     }
 
     /// Whether the nominal outline is not a plain rectangle.
     pub fn has_contour_features(&self) -> bool {
-        !self.corner_features.is_empty() || !self.edge_bows.is_empty()
+        self.outline.has_contour_features()
     }
 
     /// Whether the panel has a shaped outline: a contour ring or a corner feature or a bow.
@@ -384,12 +410,12 @@ impl Panel {
 
     /// The corner treatment on a vertex, if present.
     pub fn corner_feature(&self, corner: VertexId) -> Option<CornerFeature> {
-        self.corner_features.iter().copied().find(|feature| feature.corner() == corner)
+        self.corner_features().iter().copied().find(|feature| feature.corner() == corner)
     }
 
     /// The bow on an edge, if present.
     pub fn edge_bow(&self, edge: EdgeId) -> Option<EdgeBow> {
-        self.edge_bows.iter().copied().find(|bow| bow.edge() == edge)
+        self.edge_bows().iter().copied().find(|bow| bow.edge() == edge)
     }
 
     /// Resolves the geometry with the supplied panel thickness and fallback banding thicknesses.
@@ -425,6 +451,10 @@ impl Panel {
     }
 
     /// Resolves geometry for a nominal size with a caller-provided banding thickness.
+    ///
+    /// The nominal outline is generated from the rectangle parameters or read from the stored ring,
+    /// then offset once for included banding (the core) and once for non-included banding (the outer
+    /// envelope). Both are kept as exact regions, so every later stage reads one representation.
     pub fn geometry_for_with<F>(
         &self,
         nominal_size: PanelNominalSize,
@@ -435,84 +465,18 @@ impl Panel {
         F: Fn(&BandingSpec) -> Length,
     {
         validate_dimension("thickness", thickness, Panel::MAX_THICKNESS).map_err(PanelGeometryError::Dimension)?;
-
-        if self.has_shaped_outline() {
-            let core =
-                self.core_contour_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
-            let (core_min, core_max) = core.bounds().ok_or(PanelGeometryError::Contour)?;
-            let (overall_min, overall_max) =
-                self.outer_bounds_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
-            let core_length = length_from_millimetres(core_max.x - core_min.x)?;
-            let core_width = length_from_millimetres(core_max.y - core_min.y)?;
-            let overall_length = length_from_millimetres(overall_max.x - overall_min.x)?;
-            let overall_width = length_from_millimetres(overall_max.y - overall_min.y)?;
-            return PanelGeometry::new(
-                Length::ZERO,
-                Length::ZERO,
-                core_length,
-                core_width,
-                thickness,
-                overall_length,
-                overall_width,
-            );
-        }
-
-        let mut included_bottom = Length::ZERO;
-        let mut included_right = Length::ZERO;
-        let mut included_top = Length::ZERO;
-        let mut included_left = Length::ZERO;
-        let mut total_bottom = Length::ZERO;
-        let mut total_right = Length::ZERO;
-        let mut total_top = Length::ZERO;
-        let mut total_left = Length::ZERO;
-
         for band in &self.edge_banding {
-            let thickness = band_thickness(&band.spec());
-            match band.edge().get() {
-                1 => {
-                    total_bottom = checked_add("bottom_banding", total_bottom, thickness)?;
-                    if band.included_in_size() {
-                        included_bottom = checked_add("included_bottom", included_bottom, thickness)?;
-                    }
-                }
-                2 => {
-                    total_right = checked_add("right_banding", total_right, thickness)?;
-                    if band.included_in_size() {
-                        included_right = checked_add("included_right", included_right, thickness)?;
-                    }
-                }
-                3 => {
-                    total_top = checked_add("top_banding", total_top, thickness)?;
-                    if band.included_in_size() {
-                        included_top = checked_add("included_top", included_top, thickness)?;
-                    }
-                }
-                4 => {
-                    total_left = checked_add("left_banding", total_left, thickness)?;
-                    if band.included_in_size() {
-                        included_left = checked_add("included_left", included_left, thickness)?;
-                    }
-                }
-                _ => return Err(PanelGeometryError::UnsupportedEdge { edge: band.edge() }),
+            if !(1..=4).contains(&band.edge().get()) {
+                return Err(PanelGeometryError::UnsupportedEdge { edge: band.edge() });
             }
         }
-
-        let core_length = checked_sub_many("core_length", nominal_size.length(), [included_left, included_right])?;
-        let core_width = checked_sub_many("core_width", nominal_size.width(), [included_bottom, included_top])?;
-        let overall_length = checked_add_many("overall_length", core_length, [total_left, total_right])?;
-        let overall_width = checked_add_many("overall_width", core_width, [total_bottom, total_top])?;
-
-        // The panel frame is anchored at the nominal minimum corner. An included band takes its
-        // thickness out of the low side of the core, so the core origin moves inward by that amount.
-        PanelGeometry::new(
-            included_left,
-            included_bottom,
-            core_length,
-            core_width,
-            thickness,
-            overall_length,
-            overall_width,
-        )
+        let core_contour =
+            self.core_contour_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
+        let overall_contour =
+            self.outer_contour_for_with(nominal_size, &band_thickness).map_err(|_| PanelGeometryError::Contour)?;
+        let core = Region::new(core_contour, Vec::new()).map_err(|_| PanelGeometryError::Contour)?;
+        let overall = Region::new(overall_contour, Vec::new()).map_err(|_| PanelGeometryError::Contour)?;
+        PanelGeometry::from_regions(core, overall, thickness)
     }
 
     /// Resolves geometry using the stored fallback thickness.
@@ -630,27 +594,39 @@ impl Panel {
     }
 
     pub(crate) fn upsert_corner_feature(&mut self, feature: CornerFeature) {
+        let PanelOutline::Rect { corner_features, .. } = &mut self.outline else {
+            return;
+        };
         let corner = feature.corner();
-        self.corner_features.retain(|existing| existing.corner() != corner);
-        self.corner_features.push(feature);
+        corner_features.retain(|existing| existing.corner() != corner);
+        corner_features.push(feature);
     }
 
     pub(crate) fn remove_corner_feature(&mut self, corner: VertexId) -> bool {
-        let before = self.corner_features.len();
-        self.corner_features.retain(|existing| existing.corner() != corner);
-        self.corner_features.len() != before
+        let PanelOutline::Rect { corner_features, .. } = &mut self.outline else {
+            return false;
+        };
+        let before = corner_features.len();
+        corner_features.retain(|existing| existing.corner() != corner);
+        corner_features.len() != before
     }
 
     pub(crate) fn upsert_edge_bow(&mut self, bow: EdgeBow) {
+        let PanelOutline::Rect { edge_bows, .. } = &mut self.outline else {
+            return;
+        };
         let edge = bow.edge();
-        self.edge_bows.retain(|existing| existing.edge() != edge);
-        self.edge_bows.push(bow);
+        edge_bows.retain(|existing| existing.edge() != edge);
+        edge_bows.push(bow);
     }
 
     pub(crate) fn remove_edge_bow(&mut self, edge: EdgeId) -> bool {
-        let before = self.edge_bows.len();
-        self.edge_bows.retain(|existing| existing.edge() != edge);
-        self.edge_bows.len() != before
+        let PanelOutline::Rect { edge_bows, .. } = &mut self.outline else {
+            return false;
+        };
+        let before = edge_bows.len();
+        edge_bows.retain(|existing| existing.edge() != edge);
+        edge_bows.len() != before
     }
 
     pub(crate) fn upsert_corner_banding(&mut self, band: CornerBanding) {
@@ -684,6 +660,9 @@ pub enum PanelError {
     /// A panel mixes the legacy `size` field with current fields.
     #[error("panel mixes the legacy size field with the current schema")]
     AmbiguousSize,
+    /// A panel stores contour features both in its outline and in the legacy top-level fields.
+    #[error("panel stores corner features both in its outline and in the legacy top-level fields")]
+    AmbiguousOutlineFeatures,
     /// A stored dimension is not usable.
     #[error(transparent)]
     Dimension(#[from] PanelDimensionError),
@@ -795,8 +774,10 @@ pub(crate) struct PanelWire {
     ring_banding: Vec<RingBanding>,
     #[serde(default)]
     band_order: Vec<SegmentSource>,
+    /// Legacy layout: corner features lived on the panel, not in the outline.
     #[serde(default)]
     corner_features: Vec<CornerFeature>,
+    /// Legacy layout: bowed edges lived on the panel, not in the outline.
     #[serde(default)]
     edge_bows: Vec<EdgeBow>,
     #[serde(default)]
@@ -828,7 +809,7 @@ impl TryFrom<PanelWire> for Panel {
                     || !wire.band_order.is_empty()
                     || !wire.corner_features.is_empty()
                     || !wire.edge_bows.is_empty()
-                    || wire.outline != PanelOutline::Rect
+                    || wire.outline != PanelOutline::default()
                 {
                     return Err(PanelError::AmbiguousSize);
                 }
@@ -842,13 +823,28 @@ impl TryFrom<PanelWire> for Panel {
             }
         };
 
-        validate_contour_features(&wire.corner_features, &wire.edge_bows)?;
-        validate_corner_banding(&wire.corner_banding)?;
-        match &wire.outline {
+        let outline = match wire.outline {
+            PanelOutline::Rect { mut corner_features, mut edge_bows } => {
+                if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
+                    if !corner_features.is_empty() || !edge_bows.is_empty() {
+                        return Err(PanelError::AmbiguousOutlineFeatures);
+                    }
+                    corner_features = wire.corner_features;
+                    edge_bows = wire.edge_bows;
+                }
+                PanelOutline::Rect { corner_features, edge_bows }
+            }
             PanelOutline::Contour { contour } => {
                 if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
                     return Err(PanelError::ContourWithFeatures);
                 }
+                PanelOutline::Contour { contour }
+            }
+        };
+        validate_contour_features(outline.corner_features(), outline.edge_bows())?;
+        validate_corner_banding(&wire.corner_banding)?;
+        match &outline {
+            PanelOutline::Contour { contour } => {
                 if !edge_banding.is_empty() || !wire.corner_banding.is_empty() {
                     return Err(PanelError::ContourWithBanding);
                 }
@@ -858,14 +854,14 @@ impl TryFrom<PanelWire> for Panel {
                     return Err(PanelError::ContourSizeMismatch { stored: nominal_size, contour: contour_size });
                 }
             }
-            PanelOutline::Rect => {
+            PanelOutline::Rect { .. } => {
                 if !wire.ring_banding.is_empty() {
                     return Err(PanelError::RectWithRingBanding);
                 }
             }
         }
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
-        panel.outline = wire.outline;
+        panel.outline = outline;
         panel.pivot = wire.pivot;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
@@ -873,8 +869,6 @@ impl TryFrom<PanelWire> for Panel {
         panel.ring_banding = wire.ring_banding;
         panel.band_order =
             normalize_band_order(wire.band_order, &panel.edge_banding, &panel.corner_banding, &panel.ring_banding);
-        panel.corner_features = wire.corner_features;
-        panel.edge_bows = wire.edge_bows;
         panel.properties = wire.properties;
         Ok(panel)
     }
@@ -995,7 +989,7 @@ mod tests {
             project.set_panel_outline(id, rectangle_contour(100, 100)),
             Err(ProjectError::PanelNotContour { id })
         );
-        assert_eq!(project.panel(id).expect("panel").outline(), &PanelOutline::Rect);
+        assert_eq!(project.panel(id).expect("panel").outline(), &PanelOutline::default());
     }
 
     #[test]
@@ -1205,16 +1199,22 @@ mod tests {
         assert!(panel.edge_banding().iter().any(|band| band.edge() == RectEdge::Bottom.id()));
         panel.geometry_with_fallbacks().expect("shaped geometry with machining");
 
-        // Adding new machining to a shaped panel is still the staged contour rule.
-        assert!(matches!(
-            project.add_cutout(
+        // Machining no longer depends on the outline kind: a shaped, banded panel takes a new
+        // cutout through the same validation as a rectangle.
+        let added = project
+            .add_cutout(
                 panel_id,
                 CutoutShape::Rectangle(sample_rect(200, 200, 100, 50)),
                 CutoutDepth::Through,
-                FaceSide::A
-            ),
-            Err(ProjectError::ContourMachiningUnsupported { panel }) if panel == panel_id
-        ));
+                FaceSide::A,
+            )
+            .expect("cutout on a shaped panel");
+        let panel = project.panel(panel_id).expect("panel");
+        assert_eq!(panel.machining().len(), 2);
+        assert!(panel.machining().iter().any(|machining| matches!(
+            machining,
+            Machining::Cutout(cutout) if cutout.id() == added
+        )));
     }
 
     #[test]

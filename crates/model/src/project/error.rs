@@ -303,12 +303,6 @@ pub enum ProjectError {
         /// The panel whose machining could not be translated.
         panel: Id,
     },
-    /// A shaped panel cannot take machining until the contour boolean layer lands.
-    #[error("shaped panel {panel} does not support machining yet")]
-    ContourMachiningUnsupported {
-        /// The shaped panel.
-        panel: Id,
-    },
     /// The next id would collide with an id already used by the tree.
     #[error("next document id {next} must be greater than the largest used id {max}")]
     NextIdNotAfterMax {

@@ -303,7 +303,7 @@ impl<'a> Evaluation<'a> {
         let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
         let session = self.session;
         let geometry = session.panel_geometry(panel.id()).map_err(describe)?;
-        let parts = build_panel_parts_with(&mut *self.kernel, panel, geometry, |spec| session.band_spec_profile(spec))
+        let parts = build_panel_parts_with(&mut *self.kernel, panel, &geometry, |spec| session.band_spec_profile(spec))
             .map_err(describe)?;
         let body_mesh = tessellate_panel(&*self.kernel, parts.body(), &self.options).map_err(describe)?;
         let mut band_meshes = Vec::with_capacity(parts.bands().len());
