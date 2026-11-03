@@ -2,42 +2,65 @@
 //!
 //! Stage 3 (ADR 0009, ADR 0012) models every through cutout on a panel as part of one removed region
 //! `K`, and the material that stays is `C \ K` where `C` is the core outline. This module owns that
-//! 2D boolean layer. A [`Region`] is one material component: a closed outer ring and zero or more
-//! hole rings, in millimetres.
+//! 2D boolean layer. A [`Region`] is one material component: a closed outer [`Contour`] ring and zero
+//! or more hole rings, in millimetres.
 //!
-//! The value type, its area and an even-odd containment test are in place, together with the exact
-//! orthogonal boolean for axis-aligned rectangles: [`union_rects`] merges overlapping cutouts,
-//! [`subtract_rects`] removes them from a rectangular core including boundary notches, and
-//! [`regions_from_rects`] traces the resulting closed rings with holes. Cutouts are rectangles
-//! today, so this covers every v1 panel; shaped cores come next.
+//! A ring stays exact: a line stays a line and an arc stays an arc, so the area, the bounds and the
+//! containment test never depend on a sampling tolerance. [`Region::sample`] is the only lossy step,
+//! and a caller picks its tolerance once, at the polygon-only kernel boundary.
+//!
+//! The rectangle helpers are the exact orthogonal boolean: [`union_rects`] merges overlapping
+//! cutouts, [`subtract_rects`] removes them from a rectangular core including boundary notches, and
+//! [`regions_from_rects`] traces the resulting closed rings with holes. Exact contour booleans land
+//! in the next step (G2).
 
 use std::collections::HashMap;
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::fmt;
 
-use crate::DVec2;
+use crate::{Arc, Contour, ContourError, DVec2, Line, Segment};
 
 /// Coincidence tolerance for ring points, in millimetres.
 const POINT_EPSILON: f64 = 1.0e-9;
 
+/// Tolerance for an arc angle to count as inside the sweep, in radians.
+const ANGLE_EPSILON: f64 = 1.0e-9;
+
 /// One material component in the plane: a closed outer ring and zero or more hole rings.
 ///
-/// Rings are validated on construction: every ring needs at least three finite points with no
-/// consecutive points closer than [`POINT_EPSILON`]. Holes are not checked against the outer ring
-/// here; [`regions_from_rects`] produces consistent regions from the rectangle decomposition.
+/// Every ring is an exact [`Contour`]; a ring built from sampled points is a contour of line
+/// segments, so nothing is lost either way. Rings are validated on construction: each must be
+/// closed. Holes are not checked against the outer ring here; [`regions_from_rects`] produces
+/// consistent regions from the rectangle decomposition.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {
-    outer: Vec<DVec2>,
-    holes: Vec<Vec<DVec2>>,
+    outer: Contour,
+    holes: Vec<Contour>,
 }
 
 impl Region {
-    /// Creates a region after validating every ring.
-    pub fn new(outer: Vec<DVec2>, holes: Vec<Vec<DVec2>>) -> Result<Self, RegionError> {
+    /// Creates a region from exact closed rings.
+    pub fn new(outer: Contour, holes: Vec<Contour>) -> Result<Self, RegionError> {
         validate_ring(&outer, RingKind::Outer)?;
         for (index, hole) in holes.iter().enumerate() {
             validate_ring(hole, RingKind::Hole { index })?;
         }
         Ok(Self { outer, holes })
+    }
+
+    /// Creates a region from sampled rings: every closing edge becomes an exact line segment.
+    ///
+    /// This is the bridge for a traced polyline such as the rectangle decomposition. A ring with
+    /// fewer than three points, a non-finite point or a repeated neighbour is refused with the
+    /// matching [`RegionError`].
+    pub fn from_loops(outer: Vec<DVec2>, holes: Vec<Vec<DVec2>>) -> Result<Self, RegionError> {
+        let outer = loop_to_contour(outer, RingKind::Outer)?;
+        let holes = holes
+            .into_iter()
+            .enumerate()
+            .map(|(index, hole)| loop_to_contour(hole, RingKind::Hole { index }))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::new(outer, holes)
     }
 
     /// The region of one axis-aligned rectangle at the origin.
@@ -46,23 +69,24 @@ impl Region {
     /// non-finite width or height is [`RectError`], so a caller can report the bad dimension.
     pub fn rectangle(width: f64, height: f64) -> Result<Self, RegionError> {
         let rect = Rect::new(DVec2::ZERO, DVec2::new(width, height))?;
-        Ok(Self::from_rect(rect))
+        Self::from_rect(rect)
     }
 
     /// The region of an already-validated rectangle.
-    pub fn from_rect(rect: Rect) -> Self {
+    pub fn from_rect(rect: Rect) -> Result<Self, RegionError> {
         let min = rect.min();
         let max = rect.max();
-        Self { outer: vec![min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)], holes: Vec::new() }
+        let ring = vec![min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)];
+        Self::from_loops(ring, Vec::new())
     }
 
     /// The outer ring.
-    pub fn outer(&self) -> &[DVec2] {
+    pub fn outer(&self) -> &Contour {
         &self.outer
     }
 
     /// The hole rings.
-    pub fn holes(&self) -> &[Vec<DVec2>] {
+    pub fn holes(&self) -> &[Contour] {
         &self.holes
     }
 
@@ -70,11 +94,29 @@ impl Region {
     /// Ring orientation does not matter; an invalid region whose holes exceed the outer ring
     /// yields a non-positive value, which callers turn into a diagnostic, never a panic.
     pub fn area(&self) -> f64 {
-        ring_area(&self.outer).abs() - self.holes.iter().map(|hole| ring_area(hole).abs()).sum::<f64>()
+        contour_area(&self.outer) - self.holes.iter().map(contour_area).sum::<f64>()
+    }
+
+    /// The axis-aligned bounds of every ring, in millimetres.
+    ///
+    /// Returns `None` only for a region with no rings, which the constructors reject. An arc
+    /// contributes its own extremes, not its chord.
+    pub fn bounds(&self) -> Option<(DVec2, DVec2)> {
+        let mut bounds: Option<(DVec2, DVec2)> = None;
+        for ring in std::iter::once(&self.outer).chain(self.holes.iter()) {
+            let Some((min, max)) = ring.bounds() else {
+                continue;
+            };
+            bounds = Some(match bounds {
+                Some((current_min, current_max)) => (current_min.min(min), current_max.max(max)),
+                None => (min, max),
+            });
+        }
+        bounds
     }
 
     /// Even-odd containment: a point is inside the material when it is inside the outer ring and in
-    /// no hole.
+    /// no hole. The ray test walks exact lines and arcs, so a curved edge is never approximated.
     pub fn contains(&self, point: DVec2) -> bool {
         if !ring_contains(&self.outer, point) {
             return false;
@@ -85,6 +127,40 @@ impl Region {
             }
         }
         true
+    }
+
+    /// Samples every ring into a polyline at `tolerance` millimetres.
+    ///
+    /// This is the only lossy step in the module. A caller that reaches the polygon-only kernel
+    /// picks the tolerance once and shares it with every other profile.
+    pub fn sample(&self, tolerance: f64) -> Result<RegionSamples, ContourError> {
+        let outer = self.outer.sample(tolerance)?;
+        let holes = self.holes.iter().map(|hole| hole.sample(tolerance)).collect::<Result<Vec<_>, _>>()?;
+        Ok(RegionSamples { outer, holes })
+    }
+}
+
+/// A region sampled into polylines: the outer ring and then the hole rings in ring order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegionSamples {
+    outer: Vec<DVec2>,
+    holes: Vec<Vec<DVec2>>,
+}
+
+impl RegionSamples {
+    /// The sampled outer ring; the first point is not repeated at the end.
+    pub fn outer(&self) -> &[DVec2] {
+        &self.outer
+    }
+
+    /// The sampled hole rings.
+    pub fn holes(&self) -> &[Vec<DVec2>] {
+        &self.holes
+    }
+
+    /// Consumes the samples into the outer ring and the hole rings.
+    pub fn into_parts(self) -> (Vec<DVec2>, Vec<Vec<DVec2>>) {
+        (self.outer, self.holes)
     }
 }
 
@@ -131,6 +207,18 @@ pub enum RegionError {
         /// Index of the first of the two points.
         index: usize,
     },
+    /// A ring is an open contour, so it bounds no material.
+    OpenRing {
+        /// The ring that is open.
+        kind: RingKind,
+    },
+    /// A ring cannot become a contour of line segments.
+    Ring {
+        /// The ring that cannot be built.
+        kind: RingKind,
+        /// Why the contour was refused.
+        error: ContourError,
+    },
     /// A rectangle the region would be built from has no positive extent.
     Rect(RectError),
 }
@@ -145,6 +233,8 @@ impl fmt::Display for RegionError {
             Self::DuplicatePoint { kind, index } => {
                 write!(formatter, "point {index} of the {kind} ring repeats its neighbour")
             }
+            Self::OpenRing { kind } => write!(formatter, "the {kind} ring is not closed"),
+            Self::Ring { kind, error } => write!(formatter, "the {kind} ring is invalid: {error}"),
             Self::Rect(error) => write!(formatter, "{error}"),
         }
     }
@@ -158,8 +248,13 @@ impl From<RectError> for RegionError {
 
 impl std::error::Error for RegionError {}
 
-/// The signed shoelace area of one ring; zero for a degenerate ring.
-fn ring_area(ring: &[DVec2]) -> f64 {
+/// The unsigned area of one exact ring; zero for a ring that cannot be measured.
+fn contour_area(ring: &Contour) -> f64 {
+    ring.signed_area().unwrap_or(0.0).abs()
+}
+
+/// The signed shoelace area of a point loop; zero for a degenerate loop.
+fn polygon_area(ring: &[DVec2]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
@@ -172,42 +267,139 @@ fn ring_area(ring: &[DVec2]) -> f64 {
     doubled * 0.5
 }
 
-/// Even-odd ray casting: a horizontal ray to the right crosses the ring an odd number of times when
-/// the point is inside.
-fn ring_contains(ring: &[DVec2], point: DVec2) -> bool {
-    if ring.len() < 3 {
+/// Even-odd containment by a ray to the right: an odd number of crossings is inside.
+fn ring_contains(ring: &Contour, point: DVec2) -> bool {
+    if !point.is_finite() {
         return false;
     }
     let mut inside = false;
-    for index in 0..ring.len() {
-        let a = ring[index];
-        let b = ring[(index + 1) % ring.len()];
-        let crosses = (a.y > point.y) != (b.y > point.y);
-        if !crosses {
-            continue;
-        }
-        let at_point = (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x;
-        if point.x < at_point {
+    for segment in ring.segments() {
+        if segment_crossings(*segment, point) % 2 == 1 {
             inside = !inside;
         }
     }
     inside
 }
 
-fn validate_ring(ring: &[DVec2], kind: RingKind) -> Result<(), RegionError> {
-    if ring.len() < 3 {
+/// Crossings of one segment with the horizontal ray that runs right from `point`.
+///
+/// A segment counts its start and not its end, so a shared joint is counted once. A curve that
+/// merely touches the ray is not a crossing.
+fn segment_crossings(segment: Segment, point: DVec2) -> usize {
+    match segment {
+        Segment::Line(line) => line_crossings(line, point),
+        Segment::Arc(arc) => arc_crossings(arc, point),
+    }
+}
+
+fn line_crossings(line: Line, point: DVec2) -> usize {
+    let start = line.start();
+    let end = line.end();
+    if (start.y > point.y) == (end.y > point.y) {
+        return 0;
+    }
+    let parameter = (point.y - start.y) / (end.y - start.y);
+    let x = start.x + (end.x - start.x) * parameter;
+    usize::from(x > point.x)
+}
+
+/// Crossings of an arc with the horizontal ray, split at the arc's Y extremes.
+///
+/// Splitting at every `±π/2` angle makes each piece monotone in Y, so the same half-open rule as a
+/// line applies and a joint between two pieces is counted once.
+fn arc_crossings(arc: Arc, point: DVec2) -> usize {
+    let total = arc.sweep_angle().abs();
+    if !total.is_finite() || total <= ANGLE_EPSILON {
+        return 0;
+    }
+    let mut fractions = vec![0.0_f64];
+    for step in -2..=2 {
+        let angle = FRAC_PI_2 + step as f64 * PI;
+        let delta = if arc.sweep_angle() > 0.0 {
+            turn_angle(angle - arc.start_angle())
+        } else {
+            turn_angle(arc.start_angle() - angle)
+        };
+        if delta > ANGLE_EPSILON && delta < total - ANGLE_EPSILON {
+            fractions.push(delta / total);
+        }
+    }
+    fractions.push(1.0);
+    fractions.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    fractions.dedup_by(|a, b| (*a - *b).abs() < ANGLE_EPSILON);
+
+    let mut crossings = 0;
+    for pair in fractions.windows(2) {
+        let (Some(start), Some(end)) = (arc.point_at(pair[0]), arc.point_at(pair[1])) else {
+            continue;
+        };
+        if (start.y > point.y) == (end.y > point.y) {
+            continue;
+        }
+        let Some(middle) = arc.point_at((pair[0] + pair[1]) * 0.5) else {
+            continue;
+        };
+        let side = (middle.x - arc.center().x).signum();
+        if side == 0.0 {
+            continue;
+        }
+        let ratio = ((point.y - arc.center().y) / arc.radius()).clamp(-1.0, 1.0);
+        let x = arc.center().x + side * arc.radius() * (1.0 - ratio * ratio).max(0.0).sqrt();
+        if x > point.x {
+            crossings += 1;
+        }
+    }
+    crossings
+}
+
+fn turn_angle(angle: f64) -> f64 {
+    let mut value = angle % TAU;
+    if value < 0.0 {
+        value += TAU;
+    }
+    value
+}
+
+fn validate_ring(ring: &Contour, kind: RingKind) -> Result<(), RegionError> {
+    if ring.is_closed() { Ok(()) } else { Err(RegionError::OpenRing { kind }) }
+}
+
+/// Builds an exact line contour from a point loop, closing it from the last point to the first.
+fn loop_to_contour(points: Vec<DVec2>, kind: RingKind) -> Result<Contour, RegionError> {
+    let mut points = points;
+    if points.len() > 1
+        && let (Some(first), Some(last)) = (points.first(), points.last())
+        && (first.x - last.x).abs() <= POINT_EPSILON
+        && (first.y - last.y).abs() <= POINT_EPSILON
+    {
+        points.pop();
+    }
+    if points.len() < 3 {
         return Err(RegionError::Degenerate { kind });
     }
-    for (index, point) in ring.iter().enumerate() {
-        if !point.x.is_finite() || !point.y.is_finite() {
+    for (index, point) in points.iter().enumerate() {
+        if !point.is_finite() {
             return Err(RegionError::NonFinite { kind, index });
         }
-        let next = ring[(index + 1) % ring.len()];
-        if (point.x - next.x).abs() < POINT_EPSILON && (point.y - next.y).abs() < POINT_EPSILON {
-            return Err(RegionError::DuplicatePoint { kind, index });
-        }
     }
-    Ok(())
+
+    let mut segments = Vec::with_capacity(points.len());
+    for (index, &start) in points.iter().enumerate() {
+        let Some(&end) = points.get((index + 1) % points.len()) else {
+            return Err(RegionError::Degenerate { kind });
+        };
+        let line = Line::new(start, end).map_err(|error| match error {
+            ContourError::ZeroLength => RegionError::DuplicatePoint { kind, index },
+            ContourError::InvalidInput(_) => RegionError::NonFinite { kind, index },
+            error => RegionError::Ring { kind, error },
+        })?;
+        segments.push(Segment::Line(line));
+    }
+    match Contour::new(segments, true) {
+        Ok(contour) => Ok(contour),
+        Err(ContourError::Degenerate) => Err(RegionError::Degenerate { kind }),
+        Err(error) => Err(RegionError::Ring { kind, error }),
+    }
 }
 
 /// Why a [`Rect`] cannot be constructed.
@@ -633,12 +825,14 @@ fn simplify_ring(points: &[DVec2]) -> Option<Vec<DVec2>> {
 }
 
 fn regions_from_loops(loops: Vec<Vec<DVec2>>) -> Vec<Region> {
-    let mut outers: Vec<(Vec<DVec2>, Vec<Vec<DVec2>>)> = Vec::new();
+    let mut outers: Vec<(Contour, Vec<Vec<DVec2>>)> = Vec::new();
     let mut holes: Vec<Vec<DVec2>> = Vec::new();
     for ring in loops {
-        let area = ring_area(&ring);
+        let area = polygon_area(&ring);
         if area > POINT_EPSILON {
-            outers.push((ring, Vec::new()));
+            if let Ok(contour) = loop_to_contour(ring, RingKind::Outer) {
+                outers.push((contour, Vec::new()));
+            }
         } else if area < -POINT_EPSILON {
             holes.push(ring);
         }
@@ -652,7 +846,18 @@ fn regions_from_loops(loops: Vec<Vec<DVec2>>) -> Vec<Region> {
         };
         region_holes.push(hole);
     }
-    outers.into_iter().filter_map(|(outer, holes)| Region::new(outer, holes).ok()).collect()
+    outers
+        .into_iter()
+        .filter_map(|(outer, holes)| {
+            let holes = holes
+                .into_iter()
+                .enumerate()
+                .map(|(index, hole)| loop_to_contour(hole, RingKind::Hole { index }))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            Region::new(outer, holes).ok()
+        })
+        .collect()
 }
 
 /// Distinct, sorted vertical slabs between every `x0` and `x1` in the input.
@@ -733,26 +938,54 @@ mod tests {
         vec![DVec2::new(x, y), DVec2::new(x + width, y), DVec2::new(x + width, y + height), DVec2::new(x, y + height)]
     }
 
+    fn rounded_corner() -> f64 {
+        let radius = 20.0;
+        radius * radius - PI * radius * radius / 4.0
+    }
+
+    fn rounded_plate() -> Region {
+        let radius = 20.0;
+        let segments = vec![
+            Segment::Line(Line::new(DVec2::ZERO, DVec2::new(100.0, 0.0)).expect("bottom")),
+            Segment::Line(Line::new(DVec2::new(100.0, 0.0), DVec2::new(100.0, 50.0 - radius)).expect("right")),
+            Segment::Arc(Arc::new(DVec2::new(100.0 - radius, 50.0 - radius), radius, 0.0, FRAC_PI_2).expect("corner")),
+            Segment::Line(Line::new(DVec2::new(100.0 - radius, 50.0), DVec2::new(0.0, 50.0)).expect("top")),
+            Segment::Line(Line::new(DVec2::new(0.0, 50.0), DVec2::ZERO).expect("left")),
+        ];
+        Region::new(Contour::new(segments, true).expect("rounded plate"), vec![]).expect("region")
+    }
+
     fn rect_with_hole() -> Region {
-        Region::new(rect(0.0, 0.0, 100.0, 50.0), vec![rect(10.0, 10.0, 20.0, 10.0)]).expect("a rect with a hole")
+        Region::from_loops(rect(0.0, 0.0, 100.0, 50.0), vec![rect(10.0, 10.0, 20.0, 10.0)]).expect("a rect with a hole")
     }
 
     #[test]
     fn a_rectangle_has_its_area() {
-        let region = Region::new(rect(0.0, 0.0, 100.0, 50.0), vec![]).expect("valid rect");
+        let region = Region::from_loops(rect(0.0, 0.0, 100.0, 50.0), vec![]).expect("valid rect");
         assert!((region.area() - 5000.0).abs() < 1.0e-9);
     }
 
     #[test]
     fn the_rectangle_constructor_runs_counter_clockwise_from_the_origin() {
         let region = Region::rectangle(100.0, 50.0).expect("valid rectangle");
-        assert_eq!(region.outer().len(), 4);
-        assert_eq!(region.outer()[0], DVec2::ZERO);
-        assert_eq!(region.outer()[2], DVec2::new(100.0, 50.0));
-        assert!(ring_area(region.outer()) > 0.0);
+        assert_eq!(region.outer().segments().len(), 4);
+        assert_eq!(region.outer().start(), Some(DVec2::ZERO));
+        assert!(region.outer().is_counter_clockwise() == Some(true));
+        assert_eq!(region.bounds(), Some((DVec2::ZERO, DVec2::new(100.0, 50.0))));
         assert!((region.area() - 5000.0).abs() < 1.0e-9);
         assert!(region.contains(DVec2::new(50.0, 25.0)));
         assert!(!region.contains(DVec2::new(150.0, 25.0)));
+    }
+
+    #[test]
+    fn a_rectangle_sampled_through_the_region_keeps_its_four_corners() {
+        let region = Region::rectangle(100.0, 50.0).expect("valid rectangle");
+        let samples = region.sample(0.05).expect("samples");
+        assert_eq!(samples.outer(), &rect(0.0, 0.0, 100.0, 50.0)[..]);
+        assert!(samples.holes().is_empty());
+        let (outer, holes) = samples.into_parts();
+        assert_eq!(outer.len(), 4);
+        assert!(holes.is_empty());
     }
 
     #[test]
@@ -785,9 +1018,9 @@ mod tests {
 
     #[test]
     fn degenerate_rings_are_rejected() {
-        assert!(matches!(Region::new(vec![], vec![]), Err(RegionError::Degenerate { kind: RingKind::Outer })));
+        assert!(matches!(Region::from_loops(vec![], vec![]), Err(RegionError::Degenerate { kind: RingKind::Outer })));
         assert!(matches!(
-            Region::new(rect(0.0, 0.0, 100.0, 50.0), vec![vec![]]),
+            Region::from_loops(rect(0.0, 0.0, 100.0, 50.0), vec![vec![]]),
             Err(RegionError::Degenerate { kind: RingKind::Hole { index: 0 } })
         ));
     }
@@ -796,7 +1029,7 @@ mod tests {
     fn duplicate_ring_points_are_rejected() {
         let ring = vec![DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(10.0, 0.0), DVec2::new(0.0, 10.0)];
         assert!(matches!(
-            Region::new(ring, vec![]),
+            Region::from_loops(ring, vec![]),
             Err(RegionError::DuplicatePoint { kind: RingKind::Outer, index: 1 })
         ));
     }
@@ -804,7 +1037,53 @@ mod tests {
     #[test]
     fn non_finite_ring_points_are_rejected() {
         let ring = vec![DVec2::new(0.0, 0.0), DVec2::new(f64::NAN, 5.0), DVec2::new(3.0, 0.0)];
-        assert!(matches!(Region::new(ring, vec![]), Err(RegionError::NonFinite { kind: RingKind::Outer, index: 1 })));
+        assert!(matches!(
+            Region::from_loops(ring, vec![]),
+            Err(RegionError::NonFinite { kind: RingKind::Outer, index: 1 })
+        ));
+    }
+
+    #[test]
+    fn an_open_ring_is_rejected() {
+        let open = Contour::new(
+            vec![
+                Segment::Line(Line::new(DVec2::ZERO, DVec2::new(10.0, 0.0)).expect("bottom")),
+                Segment::Line(Line::new(DVec2::new(10.0, 0.0), DVec2::new(10.0, 10.0)).expect("right")),
+            ],
+            false,
+        )
+        .expect("open path");
+        assert!(matches!(Region::new(open, vec![]), Err(RegionError::OpenRing { kind: RingKind::Outer })));
+    }
+
+    #[test]
+    fn an_exact_ring_answers_area_bounds_and_containment_without_sampling() {
+        let region = rounded_plate();
+        assert!((region.area() - (5000.0 - rounded_corner())).abs() < 1.0e-9);
+        assert_eq!(region.bounds(), Some((DVec2::ZERO, DVec2::new(100.0, 50.0))));
+        assert!(region.contains(DVec2::new(50.0, 25.0)));
+        assert!(!region.contains(DVec2::new(95.0, 45.0)), "the rounded corner is cut away");
+        let samples = region.sample(0.05).expect("samples");
+        assert!(samples.outer().len() > region.outer().segments().len());
+    }
+
+    #[test]
+    fn an_arc_ring_contains_points_by_its_own_curve() {
+        let ring = Contour::new(
+            vec![
+                Segment::Line(Line::new(DVec2::ZERO, DVec2::new(20.0, 0.0)).expect("bottom")),
+                Segment::Arc(Arc::new(DVec2::new(20.0, 10.0), 10.0, -FRAC_PI_2, PI).expect("right half")),
+                Segment::Line(Line::new(DVec2::new(20.0, 20.0), DVec2::ZERO).expect("left")),
+            ],
+            true,
+        )
+        .expect("arc ring");
+        let region = Region::new(ring, vec![]).expect("region");
+        assert!(region.contains(DVec2::new(28.0, 10.0)), "inside the bulge");
+        assert!(region.contains(DVec2::new(22.0, 10.0)), "inside the bulge");
+        assert!(!region.contains(DVec2::new(32.0, 10.0)), "right of the bulge");
+        assert!(region.contains(DVec2::new(10.0, 5.0)), "inside the triangle");
+        assert!(!region.contains(DVec2::new(5.0, 10.0)), "above the diagonal");
     }
 
     fn bounds(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -909,9 +1188,9 @@ mod tests {
         let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0)]);
         assert_eq!(regions.len(), 1);
         assert!(regions[0].holes().is_empty());
-        assert_eq!(regions[0].outer().len(), 4);
+        assert_eq!(regions[0].outer().segments().len(), 4);
         assert!((regions[0].area() - 100.0).abs() < 1.0e-9);
-        assert!(ring_area(regions[0].outer()) > 0.0);
+        assert!(regions[0].outer().signed_area().is_some_and(|area| area > 0.0));
         assert!(regions[0].contains(DVec2::new(5.0, 5.0)));
     }
 
@@ -919,7 +1198,7 @@ mod tests {
     fn touching_rectangles_trace_one_outline() {
         let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 0.0, 10.0, 10.0)]);
         assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].outer().len(), 4);
+        assert_eq!(regions[0].outer().segments().len(), 4);
         assert!((regions[0].area() - 200.0).abs() < 1.0e-9);
     }
 
@@ -927,7 +1206,7 @@ mod tests {
     fn a_partial_shared_edge_traces_a_step() {
         let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(10.0, 5.0, 10.0, 10.0)]);
         assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].outer().len(), 8);
+        assert_eq!(regions[0].outer().segments().len(), 8);
         assert!((regions[0].area() - 200.0).abs() < 1.0e-9);
     }
 
@@ -940,7 +1219,7 @@ mod tests {
         assert!((regions[0].area() - 4800.0).abs() < 1.0e-9);
         assert!(!regions[0].contains(DVec2::new(30.0, 15.0)));
         assert!(regions[0].contains(DVec2::new(10.0, 10.0)));
-        assert!(ring_area(&regions[0].holes()[0]) < 0.0);
+        assert!(regions[0].holes()[0].signed_area().is_some_and(|area| area < 0.0));
     }
 
     #[test]
@@ -961,7 +1240,7 @@ mod tests {
         let regions = regions_from_rects(&material);
         assert_eq!(regions.len(), 1);
         assert!(regions[0].holes().is_empty());
-        assert_eq!(regions[0].outer().len(), 8);
+        assert_eq!(regions[0].outer().segments().len(), 8);
         assert!((regions[0].area() - 4600.0).abs() < 1.0e-9);
     }
 
@@ -986,7 +1265,7 @@ mod tests {
     fn overlapping_rectangles_are_normalized_before_tracing() {
         let regions = regions_from_rects(&[bounds(0.0, 0.0, 10.0, 10.0), bounds(5.0, 5.0, 10.0, 10.0)]);
         assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].outer().len(), 8);
+        assert_eq!(regions[0].outer().segments().len(), 8);
         assert!((regions[0].area() - 175.0).abs() < 1.0e-9);
     }
 
@@ -1003,7 +1282,7 @@ mod tests {
             bounds(20.0, 0.0, 10.0, 30.0),
         ]);
         assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0].outer().len(), 8);
+        assert_eq!(regions[0].outer().segments().len(), 8);
         assert!((regions[0].area() - 600.0).abs() < 1.0e-9);
     }
 
@@ -1023,7 +1302,7 @@ mod tests {
     fn area_ignores_ring_orientation() {
         let clockwise_outer =
             vec![DVec2::new(0.0, 0.0), DVec2::new(0.0, 10.0), DVec2::new(10.0, 10.0), DVec2::new(10.0, 0.0)];
-        let region = Region::new(clockwise_outer, vec![rect(2.0, 2.0, 6.0, 6.0)]).expect("valid region");
+        let region = Region::from_loops(clockwise_outer, vec![rect(2.0, 2.0, 6.0, 6.0)]).expect("valid region");
         assert!((region.area() - 64.0).abs() < 1.0e-9);
     }
 }

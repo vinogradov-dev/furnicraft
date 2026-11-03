@@ -20,7 +20,8 @@ pub mod triangulate;
 pub use contour::{Arc, Contour, ContourError, DEFAULT_TANGENT_TOLERANCE, Line, Segment};
 pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4, EulerRot};
 pub use region::{
-    Rect, RectError, Region, RegionError, connected_count, regions_from_rects, subtract_rects, total_area, union_rects,
+    Rect, RectError, Region, RegionError, RegionSamples, connected_count, regions_from_rects, subtract_rects,
+    total_area, union_rects,
 };
 pub use triangulate::{MAX_FACE_POINTS, TriangulateError, triangulate_face};
 
