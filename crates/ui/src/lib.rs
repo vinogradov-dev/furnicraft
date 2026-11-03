@@ -18,6 +18,7 @@ mod command;
 mod container_card;
 mod contour_edit;
 mod light_card;
+mod machining;
 mod mesh_edit;
 mod object_card;
 mod panel_card;

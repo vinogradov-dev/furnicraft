@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=D task=D7 state=idle base=0f1a58a updated=2026-11-03
+STATE: milestone=M7 phase=D task=D8 state=idle base=b067bc4 updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -11,11 +11,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 - M7 — objects and the scene file, after M6: `Container` is the only container kind, every node
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
-  six-digit tree (ADRs 0034–0035).
-- The shape base comes before hardware, output and the assistant: flat contours with arcs, contour
-  operations, a sketch, then two panel variants. `Contour` is a closed ring of directed line and arc
-  `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13); the object card,
-  the extrusion and the file read that one representation.
+  six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of directed line and arc
+  `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13).
 - S2 is complete: `crates/param/src/solid.rs` is the one domain-free plan — a base extrusion plus
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
@@ -35,15 +32,17 @@ contract that orders that answer when a session was interrupted or the plan is b
   outline — rectangle or stored ring — resolves to one `geom::Region`. `PanelGeometry` holds the exact
   core and overall regions, and cutout fit, the core trace and diagnostics are one region-based rule
   set with no branch on the outline kind (ADR 0044, schema 15).
-- D5 and D6 are complete: machining is one ordered list of records with stable `MachiningId`s, a
-  face or edge anchor and tagged parameters, edited by `panel.machining.*` as one undo entry each,
-  with schema 16 rewriting legacy cutouts (ADR 0045). A static descriptor table per kind holds
-  category, stage, capabilities and defaults; `crates/param/src/machining.rs` compiles a record into
+- D5–D7 are complete: machining is one ordered list of records with stable `MachiningId`s, a face or
+  edge anchor and tagged parameters, edited by `panel.machining.*` as one undo entry each, with
+  schema 16 rewriting legacy cutouts (ADR 0045). A static descriptor table per kind holds category,
+  stage, capabilities and defaults; `crates/param/src/machining.rs` compiles a record into
   `OpEffect`s and `PanelPlan` folds them into one solid plan, so the panel builder has no kind match
-  and the deform stage waits for the bend (ADR 0046).
-- Defects live in `## Bugs` with an `X` id and the dashboard prints the section; X1 (the concave cap
-  flap) is fixed, and X2 records that a legal ring over 1024 sampled points cannot be extruded and
-  waits for the owner's choice in `plan/questions.md`.
+  (ADR 0046). The card's Machining section in `crates/ui/src/machining/` is built from that table:
+  one row per record with fold, reorder and remove chrome, a section module per kind, an add menu
+  grouped by category, and diagnostics naming a `MachiningId` shown with their operation; open rows
+  are card view state.
+- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
+  a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
 - The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
   `STATUS`/`BACKLOG`/`SESSION`, ships templates, the agent section, the README and MIT/Apache-2.0
@@ -53,11 +52,11 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-D7 is next: the panel card builds its sections from the descriptor table — common operation chrome,
-a per-kind section module, an add menu from the table, diagnostics bound to `MachiningId` and
-collapsed sections in session view state. D8–D11 follow with face and edge grooves, face milling and
-banding as an operation. S4 adds the revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2,
-C1, L1 and P1–P3 follow. X2 waits for a decision on the cap limit (`plan/questions.md`).
+D8 is next: a face groove — a region on face A/B with depth and through/blind mode, compiled as a
+subtractive tool, with its card section. D9–D11 follow with edge grooves, face milling and banding as
+an operation, each a descriptor plus a section module because D7 removed the kind branches. S4 adds
+the revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits
+for a decision on the cap limit (`plan/questions.md`).
 
 ## Index
 
