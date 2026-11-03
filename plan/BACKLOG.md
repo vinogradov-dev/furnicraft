@@ -22,11 +22,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
-  attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
-  category, stage, capabilities and default; the panel builder contains no kind match, and a
-  post/deform stage stays reserved for the deferred bend.
-  `files: crates/param/src, crates/model/src/panel`
+- `[ ]` **D7** panel card sections from the registry: common operation chrome plus a per-kind section
+  module, an add menu built from the descriptor table, diagnostics bound to `MachiningId`, collapsed
+  sections in session view state.
+  `files: crates/ui/src/panel_card.rs, crates/ui/src/lib.rs, crates/model/src/panel`
 
 ## Bugs
 
@@ -40,10 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D7** panel card sections from the registry: common operation chrome plus a per-kind section
-  module, an add menu built from the descriptor table, diagnostics bound to `MachiningId`, collapsed
-  sections in session view state.
-  `files: crates/ui/src/panel_card.rs, crates/ui/src/lib.rs, crates/model/src/panel`
 - `[ ]` **D8** face groove (a groove on a panel face): a region on face A/B with depth and
   through/blind mode, compiled as a subtractive tool; card section and tests.
   `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
@@ -83,6 +78,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
+  attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
+  category, stage, capabilities and default; the panel builder contains no kind match, and a
+  post/deform stage stays reserved for the deferred bend — `0f1a58a`
 - `[x]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
   tagged `MachiningParams` and shared face/edge anchors; `panel.machining.add/update/remove/move`
   replace `cutout.create`, schema 16 writes the record form while legacy cutout entries still load —
