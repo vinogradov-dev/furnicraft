@@ -1,14 +1,14 @@
 //! Machining features on a panel and the core trace that decides whether they are legal.
 //!
 //! The document stores the feature, never the removed solid. A through cutout may not empty or
-//! split the remaining core; the trace works on rectangles, so a contour cutout is a hole strictly
-//! inside the core and takes no part in it.
+//! split the remaining core; the trace subtracts the exact union of every through cutout from the
+//! core region, so a rectangle and a contour ring take the same part in it.
 
-use furnicraft_geom::{regions_from_rects, subtract_rects};
+use furnicraft_geom::{Region, subtract_regions};
 use serde::{Deserialize, Serialize};
 
 use crate::panel::geometry::geom_rect;
-use crate::{Contour, FaceSide, Id, Length, Panel, PanelGeometry, PanelRect};
+use crate::{Contour, FaceSide, Id, Length, Panel, PanelGeometry, PanelRect, ProjectError};
 
 /// A machining feature owned by a panel.
 ///
@@ -75,9 +75,9 @@ pub enum CutoutShape {
     Rectangle(PanelRect),
     /// A closed ring of directed lines and arcs in nominal panel-local coordinates.
     ///
-    /// A contour cutout is a hole: it must stay inside the core instead of crossing its edge,
-    /// because the core tracer is rectangle-only and a ring that touched or crossed the boundary
-    /// would change the material outline it cannot describe.
+    /// The core trace subtracts a through ring exactly, but a through ring must stay strictly
+    /// inside the core: the panel outline is still the nominal rectangle, so the opening stays a
+    /// hole rather than a notch the outline does not describe. A blind ring may touch the edge.
     Contour(Contour),
 }
 
@@ -108,43 +108,42 @@ pub(crate) fn core_violation_of(
     panel: &Panel,
     geometry: PanelGeometry,
     extra: Option<PanelRect>,
-) -> Option<CoreViolation> {
-    let core = geometry.core_rect()?;
+) -> Result<Option<CoreViolation>, ProjectError> {
+    let Some(core) = geometry.core_rect() else {
+        return Ok(None);
+    };
     let mut cuts = Vec::new();
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
         if matches!(cutout.depth(), CutoutDepth::Through)
-            && let Some(rect) = cutout_rect(cutout.shape()).and_then(geom_rect)
+            && let Some(region) = cutout_region(cutout.shape())?
         {
-            cuts.push(rect);
+            cuts.push(region);
         }
     }
     if let Some(rect) = extra.and_then(geom_rect) {
-        cuts.push(rect);
+        cuts.push(Region::from_rect(rect)?);
     }
     if cuts.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let regions = regions_from_rects(&subtract_rects(core, &cuts));
-    if regions.is_empty() {
-        Some(CoreViolation::Removed)
-    } else if regions.len() > 1 {
-        Some(CoreViolation::Split)
-    } else if regions.first().is_some_and(|region| region.area() <= 0.0) {
-        Some(CoreViolation::Removed)
+    let remaining = subtract_regions(&[Region::from_rect(core)?], &cuts)?;
+    if remaining.is_empty() {
+        Ok(Some(CoreViolation::Removed))
+    } else if remaining.len() > 1 {
+        Ok(Some(CoreViolation::Split))
+    } else if remaining.first().is_some_and(|region| region.area() <= 0.0) {
+        Ok(Some(CoreViolation::Removed))
     } else {
-        None
+        Ok(None)
     }
 }
 
-/// The rectangle a cutout contributes to the rectangle-only core tracer.
-///
-/// A contour cutout is a hole strictly inside the core, so it can neither remove nor split it and
-/// takes no part in the trace.
-fn cutout_rect(shape: &CutoutShape) -> Option<PanelRect> {
+/// The exact region one cutout removes, or `None` for a shape that bounds no area.
+fn cutout_region(shape: &CutoutShape) -> Result<Option<Region>, ProjectError> {
     match shape {
-        CutoutShape::Rectangle(rect) => Some(*rect),
-        CutoutShape::Contour(_) => None,
+        CutoutShape::Rectangle(rect) => Ok(geom_rect(*rect).map(Region::from_rect).transpose()?),
+        CutoutShape::Contour(contour) => Ok(Some(Region::new(contour.to_geometry()?, Vec::new())?)),
     }
 }
 
@@ -191,5 +190,37 @@ mod tests {
         let geometry = panel.geometry_with_fallbacks().expect("shaped geometry with machining");
         assert!(geometry.core_length().is_positive());
         assert!(geometry.core_width().is_positive());
+    }
+
+    fn panel_with_ring(shape: Contour) -> Panel {
+        let mut panel = sample_panel(Id::new(2).expect("id"), "Ring cut");
+        panel.push_machining(Machining::Cutout(Cutout::new(
+            Id::new(5).expect("id"),
+            CutoutShape::Contour(shape),
+            CutoutDepth::Through,
+            FaceSide::A,
+        )));
+        panel
+    }
+
+    #[test]
+    fn a_through_ring_inside_the_core_keeps_one_component() {
+        let panel = panel_with_ring(ring(100, 100, 100, 60));
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(panel.core_violation(geometry), Ok(None));
+    }
+
+    #[test]
+    fn a_through_ring_across_the_core_splits_it() {
+        let panel = panel_with_ring(ring(-10, 200, 720, 60));
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(panel.core_violation(geometry), Ok(Some(CoreViolation::Split)));
+    }
+
+    #[test]
+    fn a_through_ring_that_covers_the_core_removes_it() {
+        let panel = panel_with_ring(ring(-10, -10, 720, 520));
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+        assert_eq!(panel.core_violation(geometry), Ok(Some(CoreViolation::Removed)));
     }
 }

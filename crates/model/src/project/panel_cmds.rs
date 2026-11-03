@@ -521,7 +521,7 @@ fn validate_cutout_overlaps(panel: Id, machining: &[Machining]) -> Result<(), Pr
 }
 
 fn validate_core(panel: &Panel, geometry: PanelGeometry, extra: Option<PanelRect>) -> Result<(), ProjectError> {
-    match core_violation_of(panel, geometry, extra) {
+    match core_violation_of(panel, geometry, extra)? {
         Some(CoreViolation::Removed) => Err(ProjectError::CutoutRemovesCore { panel: panel.id() }),
         Some(CoreViolation::Split) => Err(ProjectError::CutoutSplitsCore { panel: panel.id() }),
         None => Ok(()),
@@ -750,7 +750,7 @@ mod tests {
 
         let panel = project.panel(panel_id).expect("panel");
         let geometry = panel.geometry_with_fallbacks().expect("geometry");
-        assert_eq!(panel.core_violation(geometry), None);
+        assert_eq!(panel.core_violation(geometry), Ok(None));
         assert_eq!(panel.machining().len(), 3);
     }
 
@@ -876,8 +876,9 @@ mod tests {
         let next_id = project.next_id();
         let revision = project.revision();
 
-        // A through ring must be strictly inside: touching the edge could open a notch the
-        // rectangle-only core trace cannot see.
+        // A through ring must be strictly inside: the trace subtracts it exactly, but the opening
+        // has to stay a hole in the nominal outline rather than a notch the outline does not
+        // describe.
         for shape in [ring(-10, 100, 120, 60), ring(0, 100, 100, 60), ring(690, 100, 20, 60)] {
             assert_eq!(
                 project.add_cutout(panel_id, CutoutShape::Contour(shape), CutoutDepth::Through, FaceSide::A),

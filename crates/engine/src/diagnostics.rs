@@ -116,7 +116,8 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
     for machining in panel.machining() {
         let Machining::Cutout(cutout) = machining;
         // A rectangle through cut may open a notch at the core edge; a through ring must stay
-        // strictly inside it, because the rectangle-only core trace cannot describe a curved notch.
+        // strictly inside it, so the opening is a hole in the nominal outline rather than a notch
+        // the outline does not describe.
         let outside = match (cutout.depth(), cutout.shape()) {
             (CutoutDepth::Through, CutoutShape::Rectangle(rect)) => !geometry.cutout_reaches_core(*rect),
             (CutoutDepth::Through, CutoutShape::Contour(contour)) => !geometry.contour_inside_core(contour),
@@ -136,10 +137,12 @@ pub fn diagnose_panel(project: &Project, catalog: &Catalog, panel_id: Id) -> Vec
             });
         }
     }
-    match panel.core_violation(geometry) {
-        Some(CoreViolation::Removed) => diagnostics.push(PanelDiagnostic::CoreRemoved),
-        Some(CoreViolation::Split) => diagnostics.push(PanelDiagnostic::CoreDisconnected),
-        None => {}
+    if let Ok(violation) = panel.core_violation(geometry) {
+        match violation {
+            Some(CoreViolation::Removed) => diagnostics.push(PanelDiagnostic::CoreRemoved),
+            Some(CoreViolation::Split) => diagnostics.push(PanelDiagnostic::CoreDisconnected),
+            None => {}
+        }
     }
 
     diagnostics

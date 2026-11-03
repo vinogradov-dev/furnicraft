@@ -734,6 +734,19 @@ impl Segment {
         }
     }
 
+    /// The same curve with the opposite direction of travel.
+    ///
+    /// A line swaps its endpoints; an arc starts where it used to end and sweeps the other way, so
+    /// the supporting circle, its radius and its extent do not change.
+    pub fn reversed(self) -> Result<Self, ContourError> {
+        match self {
+            Self::Line(line) => Ok(Self::Line(Line::new(line.end(), line.start())?)),
+            Self::Arc(arc) => {
+                Ok(Self::Arc(Arc::new(arc.center, arc.radius, arc.start_angle + arc.sweep_angle, -arc.sweep_angle)?))
+            }
+        }
+    }
+
     /// The segment with its start (`at_end = false`) or end fixed at `point`.
     ///
     /// The other endpoint is kept; an arc may be trimmed or extended within
@@ -921,6 +934,16 @@ impl Contour {
         }
         let segments = self.segments.iter().map(|segment| segment.offset(distance)).collect::<Result<Vec<_>, _>>()?;
         Self::new(segments, self.closed)
+    }
+
+    /// The same path with the opposite direction of travel.
+    ///
+    /// Every segment is reversed and the order is flipped, so the path keeps its geometry and its
+    /// joints; a closed contour that ran counter-clockwise runs clockwise. The result is returned
+    /// without revalidation: it is the same curve as the validated input.
+    pub fn reversed(&self) -> Result<Self, ContourError> {
+        let segments = self.segments.iter().rev().map(|segment| segment.reversed()).collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { segments, closed: self.closed })
     }
 
     /// Samples the contour as a polyline.
@@ -1172,6 +1195,23 @@ mod tests {
         let points = contour.sample(0.05).expect("samples");
         assert!(points.len() > 8);
         assert!((points.first().copied().expect("first") - points.last().copied().expect("last")).length() > 1e-9);
+    }
+
+    #[test]
+    fn reversing_a_contour_flips_its_direction_and_keeps_its_geometry() {
+        let contour = rounded_rectangle(100.0, 60.0, 10.0);
+        let reversed = contour.reversed().expect("reversed");
+
+        assert_eq!(reversed.is_counter_clockwise(), Some(false));
+        let area = contour.signed_area().expect("area");
+        let reversed_area = reversed.signed_area().expect("area");
+        assert!((area + reversed_area).abs() < 1e-9, "areas {area} and {reversed_area}");
+        assert_eq!(reversed.bounds(), contour.bounds());
+        assert_eq!(reversed.segments().len(), contour.segments().len());
+        assert!(reversed.segments().iter().any(|segment| matches!(segment, Segment::Arc(_))));
+
+        let again = reversed.reversed().expect("reversed twice");
+        assert_eq!(again.segments(), contour.segments());
     }
 
     #[test]

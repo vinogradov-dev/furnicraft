@@ -260,14 +260,15 @@ removed solid. A cutout removes a volume from the panel body:
 - The ring becomes a solid by sampling it into the kernel profile at the shared contour tolerance; the
   document keeps the arcs. A through cutout removes the full thickness, a blind one removes material
   from its entry face by its depth.
-- A **through** contour cutout must lie strictly inside the core: the core tracer works on rectangles,
-  so a ring that touched or crossed the boundary could open a notch or split the core without being
-  traced. A **blind** contour cutout may touch the core edge, because it removes no through material.
+- A **through** contour cutout must lie strictly inside the core: the trace subtracts it exactly, but
+  the opening stays a hole in the nominal outline rather than a notch that outline does not describe.
+  A **blind** contour cutout may touch the core edge, because it removes no through material.
 - Whether two cutouts overlap is decided on the shape itself: a rectangle uses the exact rectangle
   test, a ring takes part as its sampled chord polygon. Bounds alone are not enough. Two through
   cutouts may overlap and merge; any other pair may not share area.
-- A contour cutout is a hole and takes no part in the rectangle-only core trace. The core must still
-  have positive area and remain one connected component after the through rectangle cutouts.
+- The core is traced exactly: the union of every through cutout, rectangle or ring, is subtracted from
+  the core region and the remaining material must have positive area and one connected component. A
+  ring stays a ring in that trace, so a hole, a notch and a cut corner are read without sampling.
 - A panel shaped by corner features or bows still rejects a new cutout until the shaped-core union
   lands. A contour panel accepts machining through the commands and subtracts the tool from its
   ring body; the fit is checked against the bounds of the core ring, not its exact material region.
@@ -370,6 +371,7 @@ At minimum:
 - a shaped panel with machining builds and subtracts the cutout volume;
 - machining that no longer fits the core marks the panel as a problem panel without losing data;
 - overlapping through cutouts merge and a cutout crossing the boundary opens a notch;
+- a through ring is subtracted from the core exactly, so a curved cutout is a hole in the traced material;
 - a cutout that would split the core into disconnected pieces or remove it is rejected, and a loaded file with such a core is diagnosed;
 - machining keeps its core-local position when an included band moves the core origin;
 - a contour panel keeps the source ring, anchors its minimum corner at the panel zero, derives the
@@ -392,7 +394,7 @@ Catalogue and scene-loading tests live in [Materials and catalogue](materials.md
 ## 10. Open questions
 
 1. At a sharp joint between two included paths with different thicknesses, the core and each band use butt connectors; the current model leaves the resulting step as-is. Confirm whether a later-band cover rule should replace it.
-2. Stage 3: the in-house `geom::region` rectangle boolean implements the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes for rectangular panels (ADR 0012). Shaped cores are next. A contour panel's core trace and cutout fit still use the bounds rectangle of its ring, so a ring that does not fill those bounds is traced as if it did.
+2. Stage 3: the in-house `geom::region` boolean unions, intersects and subtracts exact `Contour` rings, so the through-cutout union, boundary notches, the one-component core invariant and closed `Region` rings with holes are read without sampling (ADR 0012, ADR 0043). A shaped or contour core is still traced as the bounds rectangle of its ring, and a through ring still has to stay inside that rectangle; one panel outline source is next.
 3. Stage 3: the core outline at a line-arc or arc-arc joint still joins per-segment offsets with a straight connector; only the band strips are intersected analytically. Confirm the step is acceptable or extend the analytic joint to the core.
 4. Stage 4: banding on cutout edges uses the same tangent-path and inclusion rules, but the path representation for inner loops is not designed yet.
 5. Edge banding milling: rounding the faces and corner.
@@ -402,6 +404,6 @@ The target contour rules — tangent-continuous paths, signed bow, union of thro
 no-division invariant — are recorded in ADR 0009; segment banding in ADR 0014, band joints on straight
 and arc segments in ADRs 0015 and 0016, and contour panels with their edit mode in ADR 0042. Corner
 features, bows, tangent paths, chamfer corner banding, shaped-panel band strips and analytic arc band
-joints are implemented; the rectangular cutout union and its `Region` ring tracing are implemented,
-and contour panels, ring banding and the viewport edit mode are implemented on top of the ring from
+joints are implemented; the exact cutout union and its `Region` ring tracing are implemented, and
+contour panels, ring banding and the viewport edit mode are implemented on top of the ring from
 ADR 0040. Shaped-core rings plus cutout banding are staged next.
