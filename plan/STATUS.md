@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=S task=S4 state=idle base=b3db47f updated=2026-11-03
+STATE: milestone=M7 phase=U task=U1 state=idle base=f6acf35 updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -28,19 +28,14 @@ contract that orders that answer when a session was interrupted or the plan is b
   `panel.contour.create` copies an object ring to the panel zero. `Contour::{move_corner,
   trim_segment, split_segment}` edit a working copy that one command applies, keeping untouched ids
   (A3–A7, ADR 0042).
-- D4 is complete: a rectangle's corner features and bows are parameters of its outline, and every
-  outline — rectangle or stored ring — resolves to one `geom::Region`. `PanelGeometry` holds the exact
-  core and overall regions, and cutout fit, the core trace and diagnostics are one region-based rule
-  set with no branch on the outline kind (ADR 0044, schema 15).
-- D5–D7 are complete: machining is one ordered list of records with stable `MachiningId`s, a face or
-  edge anchor and tagged parameters, edited by `panel.machining.*` as one undo entry each, with
-  schema 16 rewriting legacy cutouts (ADR 0045). A static descriptor table per kind holds category,
-  stage, capabilities and defaults; `crates/param/src/machining.rs` compiles a record into
-  `OpEffect`s and `PanelPlan` folds them into one solid plan, so the panel builder has no kind match
-  (ADR 0046). The card's Machining section in `crates/ui/src/machining/` is built from that table:
-  one row per record with fold, reorder and remove chrome, a section module per kind, an add menu
-  grouped by category, and diagnostics naming a `MachiningId` shown with their operation; open rows
-  are card view state.
+- D4–D7 are complete: a rectangle's corner features and bows are parameters of its outline and
+  every outline — rectangle or stored ring — resolves to one `geom::Region`; machining is one ordered
+  list of anchored records whose static kind table drives both the staged effects in `crates/param`
+  and the card sections in `crates/ui/src/machining/` (ADRs 0044–0046, schema 16).
+- The UI plan is approved (2026-11-03, tasks U1–U23): themed toolbars — Scene, Contour, Primitives,
+  Bodies — with SVG icons rasterised at render size, no creation buttons in the scene tree, a flat
+  contour stored as a document `Path` (open or closed, schema 17), a work plane taken from the current
+  ortho view, and an ortho/perspective toggle.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -52,11 +47,12 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-D8–D11, H1–H2, B1–B2, C1 and L1 were dropped from the roadmap on 2026-11-03; the closed D work
-stays in `## Done`. S4 is next: the revision-keyed evaluation cache — `(Revision, Id)` to evaluated
-body and mesh in `furnicraft-mesh`, one evaluator shared by `scene_build` and `object.collapse`, so
-a rebuild touches only changed nodes. P1–P3 follow and tighten the plan gate. X2 waits for a
-decision on the cap limit (`plan/questions.md`).
+U1 is next: the `assets/` tree with an empty SVG per icon, grouped by toolbar theme. U2 adds the
+runtime SVG loader and the icon button, U4–U9 make a flat contour a document `Path` with its own
+commands, U10–U17 add the shape constructors, the work plane, the ortho toggle and the drawing tools,
+and U18–U20 replace the scene-tree creation buttons with the themed toolbars. U21–U23 follow with the
+primitives and the extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit
+(`plan/questions.md`).
 
 ## Index
 
