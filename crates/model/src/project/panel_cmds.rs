@@ -561,11 +561,11 @@ fn validate_machining_entry(
     exclude: Option<MachiningId>,
 ) -> Result<(), ProjectError> {
     let geometry = panel.geometry_with_fallbacks()?;
+    if !params.descriptor().capabilities().accepts_anchor(anchor) {
+        return Err(ProjectError::MachiningAnchorUnsupported { panel: panel.id(), anchor });
+    }
     match params {
         MachiningParams::Cutout(cutout) => {
-            if anchor.as_face().is_none() {
-                return Err(ProjectError::MachiningNeedsFace { panel: panel.id(), anchor });
-            }
             validate_cutout_geometry(panel.id(), &geometry, cutout.shape(), cutout.depth())?;
             for machining in panel.machining() {
                 if exclude == Some(machining.id()) {
@@ -1164,7 +1164,7 @@ mod tests {
                 anchor,
                 MachiningParams::Cutout(Cutout::new(shape.clone(), CutoutDepth::Through)),
             ),
-            Err(ProjectError::MachiningNeedsFace { panel: panel_id, anchor })
+            Err(ProjectError::MachiningAnchorUnsupported { panel: panel_id, anchor })
         );
         assert_eq!(project.next_id(), next_id);
         assert_eq!(project.revision(), revision);

@@ -313,7 +313,7 @@ pub enum ProjectError {
     },
     /// The operation the record describes cannot act from this anchor.
     #[error("machining on panel {panel} cannot be anchored to {anchor:?}")]
-    MachiningNeedsFace {
+    MachiningAnchorUnsupported {
         /// The panel that owns the record.
         panel: Id,
         /// The rejected anchor.

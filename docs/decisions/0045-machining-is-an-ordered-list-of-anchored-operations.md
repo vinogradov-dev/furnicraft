@@ -54,3 +54,4 @@ Machining is an ordered list of `Machining` records at the panel level.
 - [`docs/domain/panels.md`](../domain/panels.md) — machining, commands and diagnostics.
 - [0011](0011-panel-local-machining.md) — machining stays in the nominal panel frame.
 - [0044](0044-one-outline-source-resolves-the-panel-core.md) — the region-based fit and core trace.
+- [0046](0046-machining-compiles-to-staged-effects.md) — the descriptor table and the effect pipeline.
