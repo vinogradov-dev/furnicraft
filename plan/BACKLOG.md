@@ -22,9 +22,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D8** face groove (a groove on a panel face): a region on face A/B with depth and
-  through/blind mode, compiled as a subtractive tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
+  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
+  only changed nodes.
+  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
 
 ## Bugs
 
@@ -38,32 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D9** edge groove (a groove on a panel edge): follows an `EdgeRef` with offset, depth and
-  width, compiled as a swept or extruded tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **D10** face-anchored milling: a path or region anchored to face A/B with cutter diameter and
-  depth, compiled as a swept tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **D11** banding as an operation: `MachiningParams::Banding` references `EdgeRef`, the joint
-  solver returns attachment and cut-region effects, and the separate edge/corner/ring banding
-  vectors migrate with old files loading.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
-  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
-  only changed nodes.
-  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
-- `[ ]` **H1** hardware and accessories as existing nodes: a catalogue definition, an instance that
-  is a single object or a component/group, and a body built through `SolidPlan`; no separate
-  hardware geometry pipeline. `files: crates/model/src, crates/param/src, crates/ui/src`
-- `[ ]` **H2** typed hardware mounts: host panel, anchor, orientation and quantity; the panel
-  evaluator derives machining from mounts and the card shows it read-only; holes are not duplicated
-  on the panel. `files: crates/model/src, crates/engine/src, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
-- `[ ]` **B2** offset a contour inward and outward as a new ring. `files: crates/geom/src/contour.rs`
-- `[ ]` **C1** a sketch on a chosen plane: grid, vertex snapping, translation and rotation steps.
-  `files: crates/ui, apps/furnicraft`
-- `[ ]` **L1** scene exposure and tone mapping, then shadow maps, so point lights stop clipping.
-  `files: crates/render`
 - `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
   `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
   `files: state-contract/src/status.rs, xtask/src/main.rs`

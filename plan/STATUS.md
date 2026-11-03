@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=D task=D8 state=idle base=b067bc4 updated=2026-11-03
+STATE: milestone=M7 phase=S task=S4 state=idle base=b3db47f updated=2026-11-03
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -52,11 +52,11 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-D8 is next: a face groove — a region on face A/B with depth and through/blind mode, compiled as a
-subtractive tool, with its card section. D9–D11 follow with edge grooves, face milling and banding as
-an operation, each a descriptor plus a section module because D7 removed the kind branches. S4 adds
-the revision-keyed cache; H1–H2 bring hardware and mounts. B1–B2, C1, L1 and P1–P3 follow. X2 waits
-for a decision on the cap limit (`plan/questions.md`).
+D8–D11, H1–H2, B1–B2, C1 and L1 were dropped from the roadmap on 2026-11-03; the closed D work
+stays in `## Done`. S4 is next: the revision-keyed evaluation cache — `(Revision, Id)` to evaluated
+body and mesh in `furnicraft-mesh`, one evaluator shared by `scene_build` and `object.collapse`, so
+a rebuild touches only changed nodes. P1–P3 follow and tighten the plan gate. X2 waits for a
+decision on the cap limit (`plan/questions.md`).
 
 ## Index
 
