@@ -323,10 +323,11 @@ impl Panel {
     /// `Some` means the cutouts would empty the core or split it into disconnected pieces, so a
     /// command must be rejected and a loaded panel must be reported as a problem panel. Blind
     /// cutouts are not part of the 2D union (ADR 0009); a shaped panel returns `None` because its
-    /// core is not a rectangle.
-    pub fn core_violation(&self, geometry: PanelGeometry) -> Option<CoreViolation> {
+    /// core is not a rectangle. An error means the exact trace refused the input, for example when
+    /// the cutouts hold more segments than one boolean may examine.
+    pub fn core_violation(&self, geometry: PanelGeometry) -> Result<Option<CoreViolation>, ProjectError> {
         if self.has_contour_features() {
-            return None;
+            return Ok(None);
         }
         core_violation_of(self, geometry, None)
     }

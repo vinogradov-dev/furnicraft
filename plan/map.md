@@ -16,7 +16,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Contour object card UI | `crates/ui/src/object_card.rs` (`ObjectAction::StartContour`) | small |
 | Contour segment value type | `crates/model/src/contour.rs` (`ContourSegment`, Line/Arc) | whole file |
 | Contour geometry math | `crates/geom/src/contour.rs` (`offset`, `trimmed`, `intersections_with`, `sample`) | whole file |
-| Planar regions and rectangle booleans | `crates/geom/src/region.rs` (`Region`, `Region::sample`, `union_rects`, `regions_from_rects`) | whole file |
+| Planar regions and booleans | `crates/geom/src/region.rs` (`Region`, `Region::sample`, `union_regions`, `subtract_regions`, `intersect_regions`, `regions_from_rects`) | whole file |
 | Face triangulation | `crates/geom/src/triangulate.rs` (`triangulate_face`), `crates/mesh/src/lib.rs` (`object_mesh`) | whole files |
 | Contour panel outline | `crates/model/src/panel/contour.rs` (`nominal_contour`, `contour_paths`) | whole file |
 | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |

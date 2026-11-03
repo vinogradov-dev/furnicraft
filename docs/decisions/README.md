@@ -46,6 +46,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0039](0039-point-lights-use-watts-and-inverse-square-falloff.md) | Point lights use watts and inverse-square falloff | Accepted |
 | [0040](0040-a-constructive-contour-is-a-ring-of-segments.md) | A constructive contour is a ring of directed segments | Accepted |
 | [0041](0041-every-solid-compiles-to-one-solid-plan.md) | Every solid compiles to one domain-free plan | Accepted |
+| [0042](0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) | A contour panel keeps its ring and edits a working copy | Accepted |
+| [0043](0043-region-booleans-trace-the-boundary-of-the-set.md) | Region booleans trace the boundary of the set | Accepted |
 
 ## Format
 
