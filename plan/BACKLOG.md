@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U1** the resource tree: `assets/icons/` with one subdirectory per toolbar theme —
+- `[~]` **U1** the resource tree: `assets/icons/` with one subdirectory per toolbar theme —
   `contour` (`line`, `polyline`, `arc`, `rectangle`, `circle`, `close`, `cancel`), `primitives`
   (`cube`, `cylinder`, `sphere`, `cone`), `bodies` (`extrude`, `revolve`, `sweep`), `scene` (`panel`,
   `assembly`, `camera`, `light`) and `view` (`orthographic`, `perspective`, `frame-all`) — as empty
