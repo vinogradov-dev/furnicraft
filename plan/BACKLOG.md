@@ -22,10 +22,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
-  tagged `MachiningParams` and shared `FaceSide`/`EdgeRef` anchors; `panel.machining.add/update/
-  remove/move` commands; migrate `Cutout` and the schema, keeping existing cutout files loading.
-  `files: crates/model/src/panel, crates/model/src/project/wire.rs, crates/engine/src/panel_cmds.rs`
+- `[ ]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
+  attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
+  category, stage, capabilities and default; the panel builder contains no kind match, and a
+  post/deform stage stays reserved for the deferred bend.
+  `files: crates/param/src, crates/model/src/panel`
 
 ## Bugs
 
@@ -39,11 +40,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D6** the machining pipeline: `CompileMachining` and `OpEffect` (cut region, subtract, add,
-  attachment), a `PanelPlan` that folds operations, and a static descriptor table with kind,
-  category, stage, capabilities and default; the panel builder contains no kind match, and a
-  post/deform stage stays reserved for the deferred bend.
-  `files: crates/param/src, crates/model/src/panel`
 - `[ ]` **D7** panel card sections from the registry: common operation chrome plus a per-kind section
   module, an add menu built from the descriptor table, diagnostics bound to `MachiningId`, collapsed
   sections in session view state.
@@ -87,6 +83,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **D5** a typed machining list: ordered `Machining` records with stable `MachiningId`s, a
+  tagged `MachiningParams` and shared face/edge anchors; `panel.machining.add/update/remove/move`
+  replace `cutout.create`, schema 16 writes the record form while legacy cutout entries still load —
+  `d87a726`
 - `[x]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
   generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
   core and overall from the region, and no machining code branches on the outline kind —

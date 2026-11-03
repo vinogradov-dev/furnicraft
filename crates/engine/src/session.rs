@@ -138,9 +138,10 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, CutoutDepth, CutoutShape,
-        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, Machining, PanelMaterial, Pivot, Placement,
-        ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
+        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
+        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, MachiningAnchor, MachiningParams, PanelMaterial,
+        Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, SegmentSource,
+        VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -157,9 +158,9 @@ mod tests {
         NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
-        CutoutCreate, PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
-        PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
-        PanelOutlineSet, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
+        PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
+        PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMachiningAdd,
+        PanelMaterialSet, PanelOutlineSet, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
     };
 
     fn sample_session() -> Session {
@@ -176,8 +177,12 @@ mod tests {
         }
     }
 
-    fn cutout_request(panel: Id, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> CutoutCreate {
-        CutoutCreate { panel, shape, depth, entry }
+    fn cutout_request(panel: Id, shape: CutoutShape, depth: CutoutDepth, entry: FaceSide) -> PanelMachiningAdd {
+        PanelMachiningAdd {
+            panel,
+            anchor: MachiningAnchor::face(entry),
+            params: MachiningParams::Cutout(Cutout::new(shape, depth)),
+        }
     }
 
     /// A session whose root holds a constructive object with a 700 x 500 rectangular contour.
@@ -479,18 +484,19 @@ mod tests {
         let shape = CutoutShape::Rectangle(sample_cutout_rect());
         let params = json_params(&cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A));
 
-        let outcome = session.dispatch("cutout.create", &params).expect("create cutout");
-        let cutout_id = outcome.created_id().expect("cutout id");
+        let outcome = session.dispatch("panel.machining.add", &params).expect("create cutout");
+        let cutout_id = outcome.created_machining_id().expect("cutout id");
         assert_eq!(cutout_id.get(), 5);
         assert_eq!(session.project().revision().get(), 1);
         assert_eq!(session.project().next_id().get(), 6);
         let machining = session.project().panel(panel_id).expect("panel").machining();
         assert_eq!(machining.len(), 1);
-        let Machining::Cutout(cutout) = &machining[0];
-        assert_eq!(cutout.id(), cutout_id);
+        let record = &machining[0];
+        assert_eq!(record.id(), cutout_id);
+        assert_eq!(record.anchor().as_face(), Some(FaceSide::A));
+        let cutout = record.cutout().expect("a cutout record");
         assert_eq!(cutout.shape(), &shape);
         assert_eq!(cutout.depth(), CutoutDepth::Through);
-        assert_eq!(cutout.entry(), FaceSide::A);
         assert!(session.is_dirty());
 
         session.undo().expect("undo");
@@ -524,12 +530,12 @@ mod tests {
         let shape = CutoutShape::Contour(cutout_ring(100, 100, 100, 50));
         let request = cutout_request(panel_id, shape.clone(), CutoutDepth::Through, FaceSide::A);
 
-        let outcome = session.dispatch("cutout.create", &json_params(&request)).expect("create contour cutout");
-        let cutout_id = outcome.created_id().expect("cutout id");
+        let outcome = session.dispatch("panel.machining.add", &json_params(&request)).expect("create contour cutout");
+        let cutout_id = outcome.created_machining_id().expect("cutout id");
         let machining = session.project().panel(panel_id).expect("panel").machining();
-        let Machining::Cutout(cutout) = &machining[0];
-        assert_eq!(cutout.id(), cutout_id);
-        assert_eq!(cutout.shape(), &shape);
+        let record = &machining[0];
+        assert_eq!(record.id(), cutout_id);
+        assert_eq!(record.cutout().expect("a cutout record").shape(), &shape);
 
         // A through ring that crosses the core edge opens a notch and is accepted; a ring that
         // misses the core entirely is refused before any id is consumed.
@@ -539,7 +545,7 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        session.dispatch("cutout.create", &json_params(&crossing)).expect("notch cutout");
+        session.dispatch("panel.machining.add", &json_params(&crossing)).expect("notch cutout");
         assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 2);
 
         let next_id = session.project().next_id();
@@ -549,7 +555,7 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        let error = session.dispatch("cutout.create", &json_params(&outside)).expect_err("ring outside the core");
+        let error = session.dispatch("panel.machining.add", &json_params(&outside)).expect_err("ring outside the core");
         assert!(matches!(
             error,
             CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
@@ -566,11 +572,11 @@ mod tests {
         let depth = CutoutDepth::Blind { depth: sample_blind_depth() };
         let params = json_params(&cutout_request(panel_id, shape, depth, FaceSide::B));
 
-        session.dispatch("cutout.create", &params).expect("create blind cutout");
+        session.dispatch("panel.machining.add", &params).expect("create blind cutout");
         let machining = session.project().panel(panel_id).expect("panel").machining();
-        let Machining::Cutout(cutout) = &machining[0];
-        assert_eq!(cutout.depth(), depth);
-        assert_eq!(cutout.entry(), FaceSide::B);
+        let record = &machining[0];
+        assert_eq!(record.anchor().as_face(), Some(FaceSide::B));
+        assert_eq!(record.cutout().expect("a cutout record").depth(), depth);
     }
 
     #[test]
@@ -584,7 +590,7 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        let error = session.dispatch("cutout.create", &json_params(&outside)).expect_err("outside cutout");
+        let error = session.dispatch("panel.machining.add", &json_params(&outside)).expect_err("outside cutout");
         assert!(matches!(
             error,
             CommandError::Model(ProjectError::CutoutOutsidePanel { panel }) if panel == panel_id
@@ -599,7 +605,7 @@ mod tests {
             CutoutDepth::Blind { depth: thickness },
             FaceSide::A,
         );
-        let error = session.dispatch("cutout.create", &json_params(&invalid_depth)).expect_err("invalid depth");
+        let error = session.dispatch("panel.machining.add", &json_params(&invalid_depth)).expect_err("invalid depth");
         assert!(matches!(
             error,
             CommandError::Model(ProjectError::CutoutDepthInvalid { panel, depth, thickness: rejected })
@@ -620,9 +626,9 @@ mod tests {
             FaceSide::A,
         );
         let first_id = session
-            .dispatch("cutout.create", &json_params(&first))
+            .dispatch("panel.machining.add", &json_params(&first))
             .expect("first cutout")
-            .created_id()
+            .created_machining_id()
             .expect("cutout id");
         assert_eq!(session.project().revision().get(), 1);
         assert_eq!(session.project().next_id().get(), 6);
@@ -633,7 +639,8 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        let error = session.dispatch("cutout.create", &json_params(&overlapping)).expect_err("overlapping cutout");
+        let error =
+            session.dispatch("panel.machining.add", &json_params(&overlapping)).expect_err("overlapping cutout");
         assert!(matches!(
             error,
             CommandError::Model(ProjectError::CutoutOverlap { panel, other })
@@ -655,7 +662,7 @@ mod tests {
         ];
         for shape in requests {
             let request = cutout_request(panel_id, shape, CutoutDepth::Through, FaceSide::A);
-            session.dispatch("cutout.create", &json_params(&request)).expect("through cutout");
+            session.dispatch("panel.machining.add", &json_params(&request)).expect("through cutout");
         }
         assert_eq!(session.project().panel(panel_id).expect("panel").machining().len(), 3);
     }
@@ -664,7 +671,7 @@ mod tests {
     fn cutout_enabled_checks_panel_and_geometry() {
         let mut session = sample_session();
         let registry = CommandRegistry::new();
-        let spec = registry.get("cutout.create").expect("cutout.create is registered");
+        let spec = registry.get("panel.machining.add").expect("panel.machining.add is registered");
         let panel_id = Id::new(2).expect("id");
 
         let valid =
@@ -688,7 +695,7 @@ mod tests {
         assert!(!spec.enabled(&session, &json_params(&missing)));
         assert!(!spec.enabled(&session, &Value::Null));
 
-        session.dispatch("cutout.create", &json_params(&valid)).expect("first cutout");
+        session.dispatch("panel.machining.add", &json_params(&valid)).expect("first cutout");
         let overlapping = cutout_request(
             panel_id,
             CutoutShape::Rectangle(sample_overlapping_cutout_rect()),
@@ -736,7 +743,7 @@ mod tests {
             CutoutDepth::Blind { depth: sample_blind_depth() },
             FaceSide::A,
         );
-        session.dispatch("cutout.create", &json_params(&blind)).expect("blind cutout");
+        session.dispatch("panel.machining.add", &json_params(&blind)).expect("blind cutout");
 
         let params = json_params(&PanelMaterialSet { panel: panel_id, material: sample_material_id() });
         session.dispatch("panel.material.set", &params).expect("thinner material is accepted");
@@ -1297,7 +1304,7 @@ mod tests {
             CutoutDepth::Through,
             FaceSide::A,
         );
-        session.dispatch("cutout.create", &json_params(&cutout)).expect("add edge cutout");
+        session.dispatch("panel.machining.add", &json_params(&cutout)).expect("add edge cutout");
         let too_narrow = PanelResize { panel: panel_id, nominal_size: sample_narrow_panel_nominal_size() };
         assert!(!spec.enabled(&session, &json_params(&too_narrow)));
     }

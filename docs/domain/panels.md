@@ -11,8 +11,9 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 [0007](../decisions/0007-edge-banding-v1.md),
 [0008](../decisions/0008-panel-diagnostics.md),
 [0009](../decisions/0009-contour-first-panel-model.md),
-[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md) and
-[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md).
+[0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) and
+[0045](../decisions/0045-machining-is-an-ordered-list-of-anchored-operations.md).
 
 ## 1. Terms
 
@@ -25,6 +26,7 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 - **Shaped panel** — a panel with at least one contour feature. Its nominal outline is the rectangle with those features applied.
 - **Contour panel** — a panel whose outline is a stored contour ring instead of the rectangle. Its ring is the finished outline; it has no corner features and no bows, and it is never resized to a rectangle.
 - **Ring segment** — one directed line or arc of a contour panel's ring, named by its stable `ContourSegmentId`. It is the banding unit of a contour panel, where an edge or a corner segment is the unit on a rectangle.
+- **Machining record** — one ordered operation on a panel, with a stable `MachiningId`, an anchor (a face or an edge) and tagged parameters. A cutout is the only operation implemented today.
 - **Banding path** — a maximal tangent-continuous chain of nominal contour segments between sharp joints. One path is one banding unit.
 - **Nominal size** — the length and width entered in the panel card. It is not always the finished overall size.
 - **Core** — the actual length and width of the board after trimming for included edge banding.
@@ -251,13 +253,26 @@ Edge banding is a profile extruded along the edge path. The simplest profile is 
 
 ## 6. Machining and cutouts
 
-Machining is stored in nominal panel-local coordinates; the document stores the feature, never the
-removed solid. A cutout removes a volume from the panel body:
+Machining is an ordered list of records, not a set of cutouts. Every record has a stable
+`MachiningId` drawn from the document id space, an anchor and tagged parameters:
+
+- `MachiningAnchor::Face { side }` names the large face the operation enters from: `B` at `z = 0`,
+  `A` at `z = thickness`.
+- `MachiningAnchor::Edge { edge }` names one edge of the outline: `EdgeRef::Rect` for a rectangle
+  panel and `EdgeRef::Ring` for a contour segment. Edge anchors are reserved for edge operations
+  such as grooves and drilling; a cutout stored with an edge anchor is a readable load error.
+- `MachiningParams::Cutout(Cutout)` is the only operation implemented today. The list order is the
+  order the user created the operations in, and `panel.machining.move` changes it.
+
+A cutout stores only its shape and depth; the entry face is the record's anchor. Machining is stored
+in nominal panel-local coordinates; the document stores the feature, never the removed solid. A
+cutout removes a volume from the panel body:
 
 - `CutoutShape::Rectangle` is a rectangle in the panel plane.
 - `CutoutShape::Contour` is a closed ring of directed lines and arcs, with the same ring rules as any
-  contour: at least three segments, closed, non-zero area and not self-intersecting. The schema moves
-  to 14; an older file without the variant loads unchanged.
+  contour: at least three segments, closed, non-zero area and not self-intersecting. The contour
+  variant moved the schema to 14, and anchored machining records moved it to 16; an older file with
+  the legacy `{"cutout": {…}}` entries loads unchanged and is rewritten in the record form.
 - The ring becomes a solid by sampling it into the kernel profile at the shared contour tolerance; the
   document keeps the arcs. A through cutout removes the full thickness, a blind one removes material
   from its entry face by its depth.
@@ -317,6 +332,13 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
   bounds become the nominal size; the placement, pivot and machining move with the frame so the world
   shape stays fixed, and an edit that drops a banded segment is refused.
 - `panel.material.set` — panel, material.
+- `panel.machining.add` — panel, anchor and tagged parameters. Allocates a `MachiningId` and appends
+  the record. A cutout must use a face anchor.
+- `panel.machining.update` — panel, machining id, anchor and parameters. Replaces the anchor and
+  parameters as one validated unit; the id and list position stay.
+- `panel.machining.remove` — panel and machining id. Removes the record.
+- `panel.machining.move` — panel, machining id and the final zero-based index in `0..len`. Reorders
+  the list without changing the id.
 - `panel.edge_banding.set` — panel, edge, material, included_in_size. The command applies to that edge segment only. A new banding is appended to the order; editing an existing one keeps its position.
 - `panel.edge_banding.clear` — panel, edge. Removes that edge's banding.
 - `panel.corner_banding.set` — panel, corner `VertexId`, material, included_in_size. The corner must currently have a chamfer or radius segment. A new banding is appended; editing keeps its position.
@@ -347,7 +369,7 @@ least three segments, non-zero area, no self-intersection, a usable panel size �
 that would drop a ring segment carrying banding, so no band is lost silently. A failed outline command
 leaves the document, its revision and the id counter unchanged.
 
-Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A cutout is accepted on every outline kind and subtracted from the resolved core body; shaping a panel that already has machining keeps the cutout tools and re-traces them against the new core. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
+Commands reject unknown ids, unknown catalogue materials, a non-positive resulting core, a resize that would leave a through cutout entirely outside the core or split the remaining core, and a corner feature that no longer fits. Machining commands reject an unknown machining id, an anchor the operation does not accept, and a move index outside `0..len`; a failed command consumes no id and bumps no revision. A shape command is never rejected by banding or machining: edge records stay on their edges, while a corner banding belongs to its corner segment and is deleted when the corner becomes a point. A valid `panel.material.set` or `panel.edge_banding.set` that only makes machining invalid is accepted: the data stays and the panel becomes a problem panel. Loading a scene with a non-positive core, a cutout outside the core, or a core split by cutouts preserves the panel as a problem panel; those conditions are diagnostics, not load errors. A cutout is accepted on every outline kind and subtracted from the resolved core body; shaping a panel that already has machining keeps the cutout tools and re-traces them against the new core. A successful command is one undo entry; a failed command leaves the document unchanged. Tree
 commands keep the root immutable and preserve world transforms when a group is created or flattened.
 
 ## 9. Panel tests
@@ -365,6 +387,9 @@ At minimum:
 - banding wider than the panel thickness is trimmed; banding narrower than the thickness is drawn partially;
 - the panel group returns `panel.id()` for the body and every banding;
 - panel commands and undo/redo;
+- machining records keep their ids through add, update, move and remove, and one command is one undo entry;
+- an older cutout file loads as a face-anchored record and is written back in the record form;
+- a cutout with an edge anchor, a duplicate machining id or a bad move index is a readable error without side effects;
 - banding one edge leaves the neighbouring segments of its tangent path unbanded;
 - a new banding is appended, a parameter edit keeps its position, and clearing it returns the segment to the add picker;
 - corner banding survives a chamfer-to-radius change and is removed when the corner becomes a point;

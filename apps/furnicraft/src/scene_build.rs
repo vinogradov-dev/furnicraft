@@ -436,7 +436,6 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use furnicraft_model::Machining;
     use furnicraft_testkit::sample_project;
 
     fn panels_in<'a>(children: &'a [Node], panels: &mut Vec<&'a Panel>) {
@@ -624,7 +623,7 @@ mod tests {
         panels_in(project.root().children(), &mut panels);
         let cutouts: usize = panels
             .iter()
-            .map(|panel| panel.machining().iter().filter(|machining| matches!(machining, Machining::Cutout(_))).count())
+            .map(|panel| panel.machining().iter().filter(|machining| machining.cutout().is_some()).count())
             .sum();
         let bands: usize = panels.iter().map(|panel| panel.edge_banding().len()).sum();
         assert_eq!(panels.len(), 3);

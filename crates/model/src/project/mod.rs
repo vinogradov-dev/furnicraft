@@ -54,8 +54,10 @@ impl Project {
     /// still loads as a baked mesh. Version 11 stores the contour as directed line and arc segments;
     /// a version 10 point list loads as a ring of lines, so the shape is unchanged. Version 12 gives
     /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
-    /// with ids `1..n`.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 15;
+    /// with ids `1..n`. Version 16 replaces the tagged `Machining` enum with one ordered list of
+    /// records, each carrying a stable id, a face or edge anchor and tagged parameters; a version-15
+    /// cutout loads as a face-anchored cutout with the same id.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 16;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -204,14 +206,10 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
                     max_id = max_id.max(panel.id().get());
                     validate_panel_banding(panel)?;
                     for machining in panel.machining() {
-                        match machining {
-                            Machining::Cutout(cutout) => {
-                                if !seen.insert(cutout.id().get()) {
-                                    return Err(ProjectError::DuplicateId(cutout.id()));
-                                }
-                                max_id = max_id.max(cutout.id().get());
-                            }
+                        if !seen.insert(machining.id().get()) {
+                            return Err(ProjectError::DuplicateId(machining.id().as_id()));
                         }
+                        max_id = max_id.max(machining.id().get());
                     }
                 }
                 Node::Object(object) => {

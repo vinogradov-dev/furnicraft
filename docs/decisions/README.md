@@ -49,6 +49,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0042](0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) | A contour panel keeps its ring and edits a working copy | Accepted |
 | [0043](0043-region-booleans-trace-the-boundary-of-the-set.md) | Region booleans trace the boundary of the set | Accepted |
 | [0044](0044-one-outline-source-resolves-the-panel-core.md) | One outline source resolves the panel core | Accepted |
+| [0045](0045-machining-is-an-ordered-list-of-anchored-operations.md) | Machining is an ordered list of anchored operations | Accepted |
 
 ## Format
 

@@ -21,7 +21,9 @@ pub use geometry::{
     EntryFace, FaceSide, PanelDimensionError, PanelGeometry, PanelGeometryError, PanelNominalSize, PanelRect,
     PanelRectError, RectCorner, RectEdge,
 };
-pub use machining::{CoreViolation, Cutout, CutoutDepth, CutoutShape, Machining};
+pub use machining::{
+    CoreViolation, Cutout, CutoutDepth, CutoutShape, EdgeRef, Machining, MachiningAnchor, MachiningParams,
+};
 
 pub(crate) use banding::validate_ring_banding;
 pub(crate) use geometry::rects_overlap;
@@ -31,8 +33,8 @@ use crate::panel::banding::{normalize_band_order, validate_corner_banding};
 use crate::panel::geometry::validate_dimension;
 use crate::panel_features::{CornerFeature, EdgeBow, validate_contour_features};
 use crate::{
-    Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MaterialId, Pivot, Placement,
-    ProjectError, Properties, PropertyError, PropertyValue, VertexId,
+    Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MachiningId, MaterialId, Pivot,
+    Placement, ProjectError, Properties, PropertyError, PropertyValue, VertexId,
 };
 
 /// Where a panel's outline comes from: one source for the whole panel.
@@ -336,14 +338,51 @@ impl Panel {
         self.id = id;
     }
 
-    /// Appends a machining feature; the caller has already validated it.
+    /// Appends a machining record; the caller has already validated it.
     pub(crate) fn push_machining(&mut self, machining: Machining) {
         self.machining.push(machining);
     }
 
-    /// Machining owned by this panel, in nominal panel-local coordinates.
+    /// Machining owned by this panel, in nominal panel-local coordinates, in application order.
     pub fn machining(&self) -> &[Machining] {
         &self.machining
+    }
+
+    /// The position and record of one machining id.
+    pub(crate) fn machining_at(&self, id: MachiningId) -> Option<(usize, &Machining)> {
+        self.machining.iter().enumerate().find(|(_index, machining)| machining.id() == id)
+    }
+
+    /// The machining record with this id.
+    pub fn machining_by_id(&self, id: MachiningId) -> Option<&Machining> {
+        self.machining_at(id).map(|(_index, machining)| machining)
+    }
+
+    /// Replaces one record in place; the caller has already validated it.
+    pub(crate) fn replace_machining_at(&mut self, index: usize, machining: Machining) -> Option<Machining> {
+        let slot = self.machining.get_mut(index)?;
+        Some(std::mem::replace(slot, machining))
+    }
+
+    /// Removes one record and closes the gap.
+    pub(crate) fn remove_machining_at(&mut self, index: usize) -> Option<Machining> {
+        if index >= self.machining.len() {
+            return None;
+        }
+        Some(self.machining.remove(index))
+    }
+
+    /// Moves one record to a final index; the caller has already checked the index.
+    pub(crate) fn move_machining_to(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.machining.len() || to >= self.machining.len() {
+            return false;
+        }
+        if from == to {
+            return true;
+        }
+        let machining = self.machining.remove(from);
+        self.machining.insert(to, machining);
+        true
     }
 
     /// Checks whether the through cutouts leave one connected core with positive area.
@@ -355,7 +394,7 @@ impl Panel {
     /// refused the input, for example when the cutouts hold more segments than one boolean may
     /// examine.
     pub fn core_violation(&self, geometry: &PanelGeometry) -> Result<Option<CoreViolation>, ProjectError> {
-        core_violation_of(self, geometry, None)
+        core_violation_of(self, geometry, None, None)
     }
 
     /// Edge banding in application order.
@@ -510,7 +549,9 @@ impl Panel {
             Length::ZERO.checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?,
         ];
         for entry in &mut machining {
-            let Machining::Cutout(cutout) = entry;
+            let Some(cutout) = entry.cutout_mut() else {
+                continue;
+            };
             let shape = match cutout.shape() {
                 CutoutShape::Rectangle(rect) => {
                     let cut_x = rect.x().checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
@@ -564,7 +605,9 @@ impl Panel {
             return Ok(());
         }
         for machining in &mut self.machining {
-            let Machining::Cutout(cutout) = machining;
+            let Some(cutout) = machining.cutout_mut() else {
+                continue;
+            };
             let shape = match cutout.shape() {
                 CutoutShape::Rectangle(rect) => {
                     let x = rect
@@ -745,6 +788,14 @@ pub enum PanelError {
         /// The rejected ring segment.
         segment: ContourSegmentId,
     },
+    /// A stored machining record pairs an operation with an anchor it cannot use.
+    #[error("machining {machining} cannot be anchored to {anchor:?}")]
+    MachiningNeedsFace {
+        /// The record that cannot be anchored.
+        machining: MachiningId,
+        /// The rejected anchor.
+        anchor: MachiningAnchor,
+    },
 }
 
 /// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
@@ -861,6 +912,7 @@ impl TryFrom<PanelWire> for Panel {
             }
         }
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
+        validate_machining_records(&wire.machining)?;
         panel.outline = outline;
         panel.pivot = wire.pivot;
         panel.machining = wire.machining;
@@ -872,6 +924,19 @@ impl TryFrom<PanelWire> for Panel {
         panel.properties = wire.properties;
         Ok(panel)
     }
+}
+
+/// Checks that every stored machining record accepts the anchor it carries.
+///
+/// A cutout enters through a large face. A file that pairs it with an edge is a readable error, not
+/// an operation the evaluator silently ignores. Later edge operations extend this rule.
+fn validate_machining_records(machining: &[Machining]) -> Result<(), PanelError> {
+    for entry in machining {
+        if entry.cutout().is_some() && entry.anchor().as_face().is_none() {
+            return Err(PanelError::MachiningNeedsFace { machining: entry.id(), anchor: entry.anchor() });
+        }
+    }
+    Ok(())
 }
 
 /// The nominal size a contour ring occupies, refusing a ring that is not anchored at zero.
@@ -1211,10 +1276,7 @@ mod tests {
             .expect("cutout on a shaped panel");
         let panel = project.panel(panel_id).expect("panel");
         assert_eq!(panel.machining().len(), 2);
-        assert!(panel.machining().iter().any(|machining| matches!(
-            machining,
-            Machining::Cutout(cutout) if cutout.id() == added
-        )));
+        assert!(panel.machining().iter().any(|machining| machining.id() == added));
     }
 
     #[test]

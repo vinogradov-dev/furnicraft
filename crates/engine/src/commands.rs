@@ -1,6 +1,6 @@
 //! Command metadata, the static registry and dispatch errors.
 
-use furnicraft_model::{Catalog, Id, MaterialId, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, MachiningId, MaterialId, Project, ProjectError};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -15,22 +15,33 @@ use crate::session::Session;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommandOutcome {
     created_id: Option<Id>,
+    created_machining: Option<MachiningId>,
 }
 
 impl CommandOutcome {
     /// A command that changed the document without creating a new entity.
     pub const fn changed() -> Self {
-        Self { created_id: None }
+        Self { created_id: None, created_machining: None }
     }
 
-    /// A command that created an entity.
+    /// A command that created a node.
     pub const fn created(id: Id) -> Self {
-        Self { created_id: Some(id) }
+        Self { created_id: Some(id), created_machining: None }
     }
 
-    /// The created entity id, if the command created one.
+    /// A command that created a machining record.
+    pub const fn created_machining(id: MachiningId) -> Self {
+        Self { created_id: None, created_machining: Some(id) }
+    }
+
+    /// The created node id, if the command created one.
     pub const fn created_id(self) -> Option<Id> {
         self.created_id
+    }
+
+    /// The created machining id, if the command created one.
+    pub const fn created_machining_id(self) -> Option<MachiningId> {
+        self.created_machining
     }
 }
 
@@ -103,7 +114,10 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CORNER_CLEAR,
     panel_cmds::BOW_SET,
     panel_cmds::BOW_CLEAR,
-    panel_cmds::CUTOUT_CREATE,
+    panel_cmds::MACHINING_ADD,
+    panel_cmds::MACHINING_UPDATE,
+    panel_cmds::MACHINING_REMOVE,
+    panel_cmds::MACHINING_MOVE,
     node_cmds::NODE_DELETE,
     node_cmds::NODE_DUPLICATE,
     node_cmds::NODE_GROUP,
@@ -235,9 +249,18 @@ mod tests {
         let bow_clear = registry.get("panel.bow.clear").expect("panel.bow.clear is registered");
         assert_eq!(bow_clear.id(), "panel.bow.clear");
         assert_eq!(bow_clear.label(), "Clear edge bow");
-        let cutout = registry.get("cutout.create").expect("cutout.create is registered");
-        assert_eq!(cutout.id(), "cutout.create");
-        assert_eq!(cutout.label(), "Create cutout");
+        let add = registry.get("panel.machining.add").expect("panel.machining.add is registered");
+        assert_eq!(add.id(), "panel.machining.add");
+        assert_eq!(add.label(), "Add machining");
+        let update = registry.get("panel.machining.update").expect("panel.machining.update is registered");
+        assert_eq!(update.id(), "panel.machining.update");
+        assert_eq!(update.label(), "Update machining");
+        let remove = registry.get("panel.machining.remove").expect("panel.machining.remove is registered");
+        assert_eq!(remove.id(), "panel.machining.remove");
+        assert_eq!(remove.label(), "Remove machining");
+        let reposition = registry.get("panel.machining.move").expect("panel.machining.move is registered");
+        assert_eq!(reposition.id(), "panel.machining.move");
+        assert_eq!(reposition.label(), "Move machining");
         let outline_set = registry.get("panel.outline.set").expect("panel.outline.set is registered");
         assert_eq!(outline_set.id(), "panel.outline.set");
         assert_eq!(outline_set.label(), "Set panel outline");
@@ -291,6 +314,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 41);
+        assert_eq!(registry.specs().len(), 44);
     }
 }

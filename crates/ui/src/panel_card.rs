@@ -659,13 +659,13 @@ pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
         PanelDiagnostic::InvalidOutline => {
             "The panel outline or its edge banding does not form a valid contour.".to_owned()
         }
-        PanelDiagnostic::MachiningOutsideCore { cutout } => {
-            format!("Cutout {cutout} lies outside the core.")
+        PanelDiagnostic::MachiningOutsideCore { machining } => {
+            format!("Machining {machining} lies outside the core.")
         }
         PanelDiagnostic::CoreRemoved => "The cutouts remove the whole panel core.".to_owned(),
         PanelDiagnostic::CoreDisconnected => "The cutouts split the panel core into disconnected pieces.".to_owned(),
-        PanelDiagnostic::BlindDepthNotLessThanThickness { cutout, depth, thickness } => {
-            format!("Cutout {cutout} blind depth {depth} is not less than thickness {thickness}.")
+        PanelDiagnostic::BlindDepthNotLessThanThickness { machining, depth, thickness } => {
+            format!("Machining {machining} blind depth {depth} is not less than thickness {thickness}.")
         }
     }
 }
@@ -903,7 +903,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use furnicraft_model::{Contour, Placement};
+    use furnicraft_model::{Contour, MachiningId, Placement};
 
     fn material(value: u64) -> MaterialId {
         MaterialId::new(value).expect("material id")
@@ -963,8 +963,8 @@ mod tests {
             "The panel outline or its edge banding does not form a valid contour."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MachiningOutsideCore { cutout: Id::new(9).expect("id") }),
-            "Cutout 9 lies outside the core."
+            diagnostic_message(&PanelDiagnostic::MachiningOutsideCore { machining: MachiningId::new(9).expect("id") }),
+            "Machining 9 lies outside the core."
         );
         assert_eq!(diagnostic_message(&PanelDiagnostic::CoreRemoved), "The cutouts remove the whole panel core.");
         assert_eq!(
@@ -973,11 +973,11 @@ mod tests {
         );
         assert_eq!(
             diagnostic_message(&PanelDiagnostic::BlindDepthNotLessThanThickness {
-                cutout: Id::new(9).expect("id"),
+                machining: MachiningId::new(9).expect("id"),
                 depth: Length::from_millimetres(20).expect("depth"),
                 thickness: Length::from_millimetres(18).expect("thickness"),
             }),
-            "Cutout 9 blind depth 20 mm is not less than thickness 18 mm."
+            "Machining 9 blind depth 20 mm is not less than thickness 18 mm."
         );
     }
 
