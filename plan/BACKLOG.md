@@ -22,7 +22,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
+- `[~]` **D4** one panel outline source: a rectangle keeps its corner and bow parameters as a contour
   generator, a contour panel stores the ring, both produce a `geom::Region`; `PanelGeometry` derives
   core and overall from the region, and no machining code branches on the outline kind.
   `files: crates/model/src/panel, crates/param/src`
