@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=S4 state=idle base=HEAD updated=2026-11-04
+STATE: milestone=M7 phase=U task=P2 state=idle base=HEAD updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and the backlog's
@@ -13,13 +13,11 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of directed line and arc
   `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13); `Path` (U4) is the
   open or closed chain, `to_contour` (U5) keeps its ids, and U6 stores it as `Geometry::Path` at schema 17.
-- S2 is complete: `crates/param/src/solid.rs` is the one domain-free plan — a base extrusion plus
-  boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
-  single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
-  `object.collapse` keeps the exact mesh the viewport showed (ADR 0041).
-- S3, G1 and G2 are complete: `crates/param/src/profile.rs` is the one planar conversion —
-  document ring to exact `geom::Region` to `kernel::Profile` with one chord tolerance; `Region`
-  keeps exact rings and `geom::region` traces their boundary for union, difference and intersection.
+- S2, S3, G1 and G2 are complete: `crates/param/src/solid.rs` is the one domain-free plan — a base
+  extrusion plus boolean steps — evaluated by the kernel or by the analytic single-extrusion backend
+  (ADR 0041); `crates/param/src/profile.rs` is the one planar conversion, document ring to exact
+  `geom::Region` to `kernel::Profile` with one chord tolerance, and `geom::region` traces region
+  boundaries for union, difference and intersection.
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is the nominal rectangle or a contour ring (D1–D3): corner features and bows
@@ -31,33 +29,35 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   every outline — rectangle or stored ring — resolves to one `geom::Region`; machining is one ordered
   list of anchored records whose static kind table drives both the staged effects in `crates/param`
   and the card sections in `crates/ui/src/machining/` (ADRs 0044–0046, schema 16).
-- The UI plan is approved (2026-11-03, tasks U1–U23): themed toolbars — Scene, Contour, Primitives,
-  Bodies — with SVG icons rasterised at render size, no creation buttons in the scene tree, a flat
-  contour stored as a document `Path` (open or closed, schema 17), a work plane taken from the current
-  ortho view, and an ortho/perspective toggle. U1 lays `assets/icons/` — one placeholder per icon and
-  `assets/README.md` with the naming and SVG rules. U24 fixes the contract on top of it: one ink on a
-  24 grid, three families, the service grammar in a new `actions` theme, and the guide read only
-  while an icon is drawn or edited (ADR 0047).
-- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted and
-  falling back to its label while an asset is empty, and the 75–200 % zoom slider rasterises at the
-  new pixel size; the Contour icons are drawn (U25).
-- U7–U23 draw and pick a stored `Path`, toggle the projection, take the work plane from the standard
-  views, snap, build a chain with the five tools, preview it and commit it as one path object
-  (ADRs 0048–0052); the themed toolbar strip is the one place a node is created, and it places a
-  primitive at a work-plane click and extrudes a closed path into a body. An open path is refused
-  before the command with a readable reason; the drawing stays beside the body it produced.
+- The UI plan is approved (2026-11-03, U1–U23): themed toolbars — Scene, Contour, Primitives, Bodies —
+  with SVG icons rasterised at render size, no creation buttons in the scene tree, a flat contour
+  stored as a document `Path` (schema 17), a work plane from the current ortho view and an
+  ortho/perspective toggle. U24 fixes the icon contract: one ink on a 24 grid, three families and the
+  service grammar in an `actions` theme (ADR 0047).
+- S4 is complete: `crates/mesh` owns `EvaluationCache`, one entry per node keyed by the derivation
+  inputs the mesh was built from, and a rebuild reuses every node an edit did not touch. An entry
+  keeps the revision that built it as an observable stamp; a pass that visits fewer nodes prunes
+  theirs. The viewport and `object.collapse` share `evaluate_constructive`, so a collapsed object
+  keeps the shape the user saw (ADR 0053).
+- U2–U3 build the icon resources: `assets/icons/**` is embedded in `crates/ui/src/icons.rs`,
+  `icon_button` draws at 16 pt tinted and falls back to its label, and the zoom slider rasterises at
+  the new pixel size. U7–U23 draw and pick a `Path`, toggle the projection, take the work plane from
+  the standard views, snap, build a chain and commit it as one path object (ADRs 0048–0052). The
+  toolbar strip is the only creator: it places a primitive and extrudes a closed path, refusing an
+  open one with a readable reason.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
+- `cargo xtask status` opens a session with the state line, the head commit and the note's
+  `task`/`now`/`blocked`/`run` while a task runs, before the task and the next three.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. The plan gate is its own
-  crate: `state-contract` (L0, no dependencies) parses and checks `STATUS`/`BACKLOG`/`SESSION` and
-  ships the templates, the agent section and the license texts.
-- Gate: `cargo xtask ci` — green. Branches: work on `dev`, merge to `main` with `--no-ff` after a
-  green gate (AGENTS §6.2).
+  crate: `state-contract` (L0, no dependencies) parses and checks the three files, and ships the
+  templates, the agent section and the license texts. Gate: `cargo xtask ci` — green.
+- Branches: work on `dev`, merge to `main` with `--no-ff` after a green gate (AGENTS §6.2).
 
 ## Next
 
-S4 is next: the revision-keyed evaluation cache, so a rebuild touches only changed nodes. P1–P3
-follow; X2 waits.
+P2 is next: `updated=` must be `YYYY-MM-DD` and no earlier than the `base` commit's date, so the
+plan cannot claim a state older than the code it describes. P3 follows; X2 waits.
 
 ## Index
 

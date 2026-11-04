@@ -2,7 +2,9 @@
 //!
 //! Everything here is pure: text in, violations out. The filesystem and git live in [`crate::check`].
 
-use crate::parse::{STATE_PREFIX, backlog_entries, parse_backlog, parse_state, parse_task_line, session_field};
+use crate::parse::{
+    STATE_PREFIX, backlog_entries, parse_backlog, parse_session, parse_state, parse_task_line, session_field,
+};
 use crate::{Summary, Task, TaskStatus};
 
 /// Longest accepted `plan/STATUS.md`, in lines.
@@ -92,7 +94,11 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
         other => violations.push(format!("`STATE: state={other}` must be `idle` or `doing`")),
     }
 
-    if violations.is_empty() { Ok(Summary { state, tasks }) } else { Err(violations) }
+    if violations.is_empty() {
+        Ok(Summary { state, tasks, session: session.map(parse_session), head: None })
+    } else {
+        Err(violations)
+    }
 }
 
 /// A `README.md` that carries a status line or a milestone is a second source of truth, and the

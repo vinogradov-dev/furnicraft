@@ -37,7 +37,7 @@ use furnicraft_engine::mesh_cmds::MESH_VERTICES_MOVE_ID;
 use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
 use furnicraft_engine::{MeshVertexMove, MeshVerticesMove, NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_mesh::object_mesh;
+use furnicraft_mesh::{EvaluationCache, object_mesh};
 use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
@@ -79,6 +79,9 @@ struct FurniCraftApp {
     session: Session,
     editor: Editor,
     kernel: TruckKernel,
+    /// Derived node geometry keyed by the inputs it was built from; a rebuild reuses every node
+    /// the editing did not touch.
+    cache: EvaluationCache,
     scene: SceneFrame,
     /// The navigable view camera. The rendered camera in `scene` is this one unless an authored
     /// camera is active, so orbit, pan and zoom never overwrite authored camera data.
@@ -108,7 +111,8 @@ impl FurniCraftApp {
         furnicraft_ui::icons::install_loaders(&cc.egui_ctx);
         let session = sample_session()?;
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session)?;
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let home_camera = home_camera(evaluated.bounds)?;
         let view_camera = home_camera;
         let mut scene = evaluated.frame;
@@ -128,6 +132,7 @@ impl FurniCraftApp {
             session,
             editor: Editor::new(),
             kernel,
+            cache,
             scene,
             view_camera,
             home_camera,
@@ -155,7 +160,8 @@ impl FurniCraftApp {
     /// catalogue stays: it is session state, not scene data, and the file never carries it.
     fn adopt(&mut self, session: Session, extra: PreservedSections) -> Result<(), String> {
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session)?;
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let home_camera = home_camera(evaluated.bounds)?;
         let view_camera = home_camera;
         let mut scene = evaluated.frame;
@@ -163,6 +169,7 @@ impl FurniCraftApp {
 
         self.session = session;
         self.kernel = kernel;
+        self.cache = cache;
         self.scene = scene;
         self.view_camera = view_camera;
         self.home_camera = home_camera;
@@ -228,7 +235,7 @@ impl FurniCraftApp {
         if revision == self.scene_revision {
             return Ok(());
         }
-        let evaluated = evaluate(&mut self.kernel, &self.session)?;
+        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
         self.scene = scene;

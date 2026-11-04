@@ -3,8 +3,10 @@
 //! Turns a panel body into indexed geometry with normals. Coordinates stay in the body's local
 //! frame; a placement is applied later by the scene. This crate owns no GPU state.
 //!
-//! The revision-keyed evaluation cache arrives with the document skeleton; the first slice only
-//! validates the kernel's tessellation before exposing it.
+//! [`EvaluationCache`] is the one evaluator the viewport and `object.collapse` share. A node is
+//! re-evaluated only when the inputs its mesh was derived from change, so a move, a rename or an
+//! unrelated edit rebuilds no mesh. The cache keeps the derivation inputs beside the mesh and
+//! compares them; a global [`Revision`] alone would invalidate every node on every edit.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -15,10 +17,29 @@
     clippy::unreachable
 )]
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use furnicraft_geom::{DVec3, MeshData, triangulate_face};
 use furnicraft_kernel::{BodyId, KernelError, SolidKernel, TessOptions};
-use furnicraft_model::Mesh;
+use furnicraft_model::{
+    BandingSpec, Constructive, CornerBanding, EdgeBanding, Id, Machining, Mesh, Object, Panel, PanelGeometry,
+    PanelNominalSize, PanelOutline, Path, Revision, RingBanding, SegmentSource,
+};
+use furnicraft_param::{EdgeBandProfile, ParamError, build_constructive_mesh, build_panel_parts_with};
 use thiserror::Error;
+
+/// The viewport's chord tolerance when a stored path becomes a line chain, in millimetres.
+///
+/// It matches the kernel profile tolerance, so the line the user sees follows the curve a later
+/// extrusion is built from.
+pub const PATH_SAMPLE_TOLERANCE_MM: f64 = 0.05;
+
+/// How far two consecutive path joints may miss each other, in millimetres (one micrometre).
+///
+/// The document stores whole micrometres, so an arc endpoint and the next segment's start can
+/// differ by one unit after rounding.
+pub const PATH_JOINT_TOLERANCE_MM: f64 = 0.001;
 
 /// An error raised while building a render mesh.
 #[derive(Debug, Error)]
@@ -26,6 +47,9 @@ pub enum MeshError {
     /// The geometry kernel rejected or failed tessellation.
     #[error(transparent)]
     Kernel(#[from] KernelError),
+    /// The parametric evaluation of a body failed.
+    #[error(transparent)]
+    Param(#[from] ParamError),
     /// The adapter returned a mesh that is not safe to render.
     #[error("invalid panel mesh: {0}")]
     Invalid(String),
@@ -40,6 +64,19 @@ pub fn tessellate_panel(kernel: &dyn SolidKernel, body: BodyId, options: &TessOp
     let mesh = kernel.tessellate(body, options)?;
     validate_mesh(&mesh)?;
     Ok(mesh)
+}
+
+/// Evaluates a constructive object into its document mesh.
+///
+/// This is the one definition of the mesh a feature history produces: the viewport draws it and
+/// `object.collapse` bakes it, so a collapsed object keeps exactly the shape the user saw.
+pub fn evaluate_constructive(constructive: &Constructive) -> Result<Mesh, MeshError> {
+    Ok(build_constructive_mesh(constructive)?)
+}
+
+/// Evaluates a constructive object into flat-shaded render triangles.
+pub fn constructive_mesh(constructive: &Constructive) -> Result<MeshData, MeshError> {
+    object_mesh(&evaluate_constructive(constructive)?)
 }
 
 /// Triangulates a document mesh into flat-shaded renderable triangles.
@@ -87,6 +124,295 @@ pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
     }
     validate_mesh(&data)?;
     Ok(data)
+}
+
+/// Samples a stored path into the local points the viewport draws as a line chain.
+///
+/// The chain is sampled as an open contour even when the path is closed, so the closing segment is
+/// drawn; the one-micrometre joint tolerance is the document's own.
+pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
+    let segments = path
+        .segments()
+        .map(|segment| segment.to_geom())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| MeshError::Invalid(error.to_string()))?;
+    let chain = furnicraft_geom::Contour::new_with_tolerance(segments, false, PATH_JOINT_TOLERANCE_MM)
+        .map_err(|error| MeshError::Invalid(error.to_string()))?;
+    let samples = chain.sample(PATH_SAMPLE_TOLERANCE_MM).map_err(|error| MeshError::Invalid(error.to_string()))?;
+    Ok(samples.into_iter().map(|point| DVec3::new(point.x, point.y, 0.0)).collect())
+}
+
+/// The derived geometry of one node, in its local frame.
+///
+/// A panel contributes its body and one mesh per band, a geometry object contributes one mesh, and
+/// a path contributes a line chain instead. The meshes are shared handles, so a cache hit and a
+/// scene rebuild copy an [`Arc`], never vertex data.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NodeGeometry {
+    body: Option<Arc<MeshData>>,
+    bands: Vec<Arc<MeshData>>,
+    polyline: Option<Arc<[DVec3]>>,
+}
+
+impl NodeGeometry {
+    /// The panel body or the object mesh, when the node has a solid.
+    pub const fn body(&self) -> Option<&Arc<MeshData>> {
+        self.body.as_ref()
+    }
+
+    /// One mesh per evaluated band, in application order.
+    pub fn bands(&self) -> &[Arc<MeshData>] {
+        &self.bands
+    }
+
+    /// The line chain of a path object, when the node has no solid.
+    pub fn polyline(&self) -> Option<&Arc<[DVec3]>> {
+        self.polyline.as_ref()
+    }
+
+    /// Whether the node has nothing to draw.
+    pub fn is_empty(&self) -> bool {
+        self.body.is_none() && self.bands.is_empty() && self.polyline.is_none()
+    }
+}
+
+/// The inputs a panel mesh was derived from.
+///
+/// The document keeps features, not geometry, so the cache records every feature the mesh depends
+/// on and compares it on the next pass. The catalogue reaches the mesh through the resolved
+/// thickness and the resolved band profiles, which are recorded by asking the same closure the
+/// evaluation used, so a material swap rebuilds the panels that use it.
+#[derive(Clone, Debug)]
+struct PanelInputs {
+    outline: PanelOutline,
+    nominal_size: PanelNominalSize,
+    machining: Vec<Machining>,
+    edge_banding: Vec<EdgeBanding>,
+    corner_banding: Vec<CornerBanding>,
+    ring_banding: Vec<RingBanding>,
+    band_order: Vec<SegmentSource>,
+    thickness: furnicraft_units::Length,
+    profiles: Vec<(BandingSpec, EdgeBandProfile)>,
+}
+
+impl PanelInputs {
+    /// Captures the derivation inputs of a panel, resolving every band profile through the same
+    /// closure the evaluation uses.
+    fn capture(panel: &Panel, geometry: &PanelGeometry, profile: &dyn Fn(&BandingSpec) -> EdgeBandProfile) -> Self {
+        let profiles = panel
+            .edge_banding()
+            .iter()
+            .map(|band| band.spec())
+            .chain(panel.corner_banding().iter().map(|band| band.spec()))
+            .chain(panel.ring_banding().iter().map(|band| band.spec()))
+            .map(|spec| (spec, profile(&spec)))
+            .collect();
+        Self {
+            outline: panel.outline().clone(),
+            nominal_size: panel.nominal_size(),
+            machining: panel.machining().to_vec(),
+            edge_banding: panel.edge_banding().to_vec(),
+            corner_banding: panel.corner_banding().to_vec(),
+            ring_banding: panel.ring_banding().to_vec(),
+            band_order: panel.band_order().to_vec(),
+            thickness: geometry.thickness(),
+            profiles,
+        }
+    }
+
+    /// Whether the panel still derives the same mesh as this capture.
+    fn matches(
+        &self,
+        panel: &Panel,
+        geometry: &PanelGeometry,
+        profile: &dyn Fn(&BandingSpec) -> EdgeBandProfile,
+    ) -> bool {
+        self.outline == *panel.outline()
+            && self.nominal_size == panel.nominal_size()
+            && self.machining.as_slice() == panel.machining()
+            && self.edge_banding.as_slice() == panel.edge_banding()
+            && self.corner_banding.as_slice() == panel.corner_banding()
+            && self.ring_banding.as_slice() == panel.ring_banding()
+            && self.band_order.as_slice() == panel.band_order()
+            && self.thickness == geometry.thickness()
+            && self.profiles.iter().all(|(spec, known)| profile(spec) == *known)
+    }
+}
+
+/// The document payload a derived mesh came from.
+#[derive(Clone, Debug)]
+enum Payload {
+    Panel(PanelInputs),
+    Mesh(Mesh),
+    Constructive(Constructive),
+    Path(Path),
+}
+
+/// One cached node: the payload it was derived from, the mesh, and the pass that last saw it.
+#[derive(Clone, Debug)]
+struct Entry {
+    revision: Revision,
+    payload: Payload,
+    geometry: NodeGeometry,
+    pass: u64,
+}
+
+/// A revision-tagged cache of evaluated node geometry.
+///
+/// The cache is a pure derivation store: it never mutates the document and never owns a kernel
+/// body. Each entry remembers the revision that built it and the inputs it was built from, so a
+/// rebuild walks the tree once, reuses every node whose inputs are unchanged, and drops the entries
+/// of nodes that no longer exist.
+///
+/// A caller brackets a walk with [`EvaluationCache::start`] and [`EvaluationCache::finish`]; the
+/// second call prunes every entry the walk did not visit, which is how a deleted node releases its
+/// mesh.
+#[derive(Debug, Default)]
+pub struct EvaluationCache {
+    nodes: HashMap<Id, Entry>,
+    pass: u64,
+}
+
+impl EvaluationCache {
+    /// An empty cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Starts one evaluation pass and marks every existing entry unseen.
+    pub fn start(&mut self) {
+        self.pass = match self.pass.checked_add(1) {
+            Some(next) => next,
+            None => {
+                self.nodes.clear();
+                1
+            }
+        };
+    }
+
+    /// Ends the pass, dropping every node the walk did not visit.
+    pub fn finish(&mut self) {
+        let pass = self.pass;
+        self.nodes.retain(|_, entry| entry.pass == pass);
+    }
+
+    /// Drops every entry, for a new session or a failed evaluation that invalidated the kernel.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+    }
+
+    /// Number of cached nodes.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether no node is cached.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// The revision that produced the cached mesh of one node.
+    ///
+    /// A node whose inputs did not change keeps the earlier revision, which is what "a rebuild
+    /// touches only changed nodes" means in observable terms.
+    pub fn built_at(&self, id: Id) -> Option<Revision> {
+        self.nodes.get(&id).map(|entry| entry.revision)
+    }
+
+    /// The cached geometry of one node, without evaluating it.
+    pub fn cached(&self, id: Id) -> Option<&NodeGeometry> {
+        self.nodes.get(&id).map(|entry| &entry.geometry)
+    }
+
+    /// Evaluates one panel, reusing the cached mesh when its inputs are unchanged.
+    ///
+    /// The profile closure resolves band dimensions from the session catalogue; it is called again
+    /// only to compare banding with the cached inputs. The kernel is touched only on a miss, and
+    /// every body it builds is released before the call returns.
+    pub fn panel(
+        &mut self,
+        revision: Revision,
+        panel: &Panel,
+        geometry: &PanelGeometry,
+        profile: &dyn Fn(&BandingSpec) -> EdgeBandProfile,
+        kernel: &mut dyn SolidKernel,
+        options: &TessOptions,
+    ) -> Result<NodeGeometry, MeshError> {
+        let id = panel.id();
+        let pass = self.pass;
+        if let Some(entry) = self.nodes.get_mut(&id)
+            && let Payload::Panel(inputs) = &entry.payload
+            && inputs.matches(panel, geometry, profile)
+        {
+            entry.pass = pass;
+            return Ok(entry.geometry.clone());
+        }
+
+        let inputs = PanelInputs::capture(panel, geometry, profile);
+        let parts = build_panel_parts_with(kernel, panel, geometry, profile)?;
+        let body = tessellate_panel(&*kernel, parts.body(), options)?;
+        let mut bands = Vec::with_capacity(parts.bands().len());
+        for part in parts.bands() {
+            bands.push(tessellate_panel(&*kernel, part.body(), options)?);
+        }
+        kernel.clear();
+        let geometry = NodeGeometry {
+            body: Some(Arc::new(body)),
+            bands: bands.into_iter().map(Arc::new).collect(),
+            polyline: None,
+        };
+        self.store(id, revision, Payload::Panel(inputs), geometry.clone());
+        Ok(geometry)
+    }
+
+    /// Evaluates one geometry object, reusing the cached mesh when its payload is unchanged.
+    ///
+    /// A baked mesh is triangulated, a constructive payload is evaluated through the same function
+    /// `object.collapse` bakes, and a path becomes a line chain. No kernel body is involved.
+    pub fn object(&mut self, revision: Revision, object: &Object) -> Result<NodeGeometry, MeshError> {
+        let id = object.id();
+        let pass = self.pass;
+        if let Some(entry) = self.nodes.get_mut(&id) {
+            let unchanged = match (&entry.payload, object.geometry()) {
+                (Payload::Mesh(cached), furnicraft_model::Geometry::Mesh(current)) => cached == current,
+                (Payload::Constructive(cached), furnicraft_model::Geometry::Constructive(current)) => cached == current,
+                (Payload::Path(cached), furnicraft_model::Geometry::Path(current)) => cached == current,
+                _ => false,
+            };
+            if unchanged {
+                entry.pass = pass;
+                return Ok(entry.geometry.clone());
+            }
+        }
+
+        let (payload, geometry) = match object.geometry() {
+            furnicraft_model::Geometry::Mesh(mesh) => {
+                let data = object_mesh(mesh)?;
+                (Payload::Mesh(mesh.clone()), NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() })
+            }
+            furnicraft_model::Geometry::Constructive(constructive) => {
+                let data = constructive_mesh(constructive)?;
+                (
+                    Payload::Constructive(constructive.clone()),
+                    NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() },
+                )
+            }
+            furnicraft_model::Geometry::Path(path) => {
+                let points = path_points(path)?;
+                (
+                    Payload::Path(path.clone()),
+                    NodeGeometry { polyline: Some(Arc::from(points)), ..NodeGeometry::default() },
+                )
+            }
+        };
+        self.store(id, revision, payload, geometry.clone());
+        Ok(geometry)
+    }
+
+    /// Stores one freshly derived node and tags it with the current pass.
+    fn store(&mut self, id: Id, revision: Revision, payload: Payload, geometry: NodeGeometry) {
+        self.nodes.insert(id, Entry { revision, payload, geometry, pass: self.pass });
+    }
 }
 
 /// The face's vertices in local millimetres, in face order.
@@ -168,7 +494,7 @@ mod tests {
 
     use furnicraft_kernel::{BooleanOp, Measure, Profile};
     use furnicraft_kernel_truck::TruckKernel;
-    use furnicraft_model::{Id, Panel, PanelNominalSize, Placement};
+    use furnicraft_model::{Contour, EdgeId, Id, Panel, PanelNominalSize, Placement};
     use furnicraft_param::build_panel;
     use furnicraft_units::Length;
 
@@ -316,10 +642,10 @@ mod tests {
     }
 
     /// A 100 x 100 contour with a 20 x 60 notch cut into its top edge, in millimetres.
-    fn notched_contour() -> furnicraft_model::Contour {
+    fn notched_contour() -> Contour {
         let points = [[0, 0], [100, 0], [100, 100], [60, 100], [60, 40], [40, 40], [40, 100], [0, 100]]
             .map(|[x, y]| [millimetres(x), millimetres(y)]);
-        furnicraft_model::Contour::from_polygon(points.to_vec()).expect("a simple contour")
+        Contour::from_polygon(points.to_vec()).expect("a simple contour")
     }
 
     fn inside_notched_contour(point: [f32; 2]) -> bool {
@@ -344,9 +670,8 @@ mod tests {
 
     #[test]
     fn a_concave_extrusion_cap_keeps_its_triangles_inside_the_contour() {
-        let constructive =
-            furnicraft_model::Constructive::extrude(notched_contour(), millimetres(18)).expect("a constructive object");
-        let mesh = furnicraft_param::build_constructive_mesh(&constructive).expect("document mesh");
+        let constructive = Constructive::extrude(notched_contour(), millimetres(18)).expect("a constructive object");
+        let mesh = evaluate_constructive(&constructive).expect("document mesh");
         let data = object_mesh(&mesh).expect("render mesh");
         let mut caps = 0;
         for triangle in data.indices.as_chunks::<3>().0 {
@@ -386,5 +711,205 @@ mod tests {
             assert!((-1.0e-3_f32..=500.0_f32 + 1.0e-3_f32).contains(&position[1]));
             assert!((-1.0e-3_f32..=18.0_f32 + 1.0e-3_f32).contains(&position[2]));
         }
+    }
+
+    fn sample_panel() -> Panel {
+        let size = PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid panel size");
+        Panel::new(Id::new(1).expect("id"), "Panel", size, None, millimetres(18), Placement::IDENTITY)
+            .expect("valid panel")
+    }
+
+    /// The four support-joint bands of a rectangle, resolved from the stored fallbacks.
+    fn panel_profile(spec: &BandingSpec) -> EdgeBandProfile {
+        EdgeBandProfile::from_spec(spec)
+    }
+
+    fn band(material: u64, thickness: i64, width: i64) -> EdgeBanding {
+        EdgeBanding::new(
+            EdgeId::new(1).expect("edge"),
+            furnicraft_model::MaterialId::new(material).expect("material"),
+            false,
+            millimetres(thickness),
+            millimetres(width),
+        )
+        .expect("band")
+    }
+
+    #[test]
+    fn a_panel_is_evaluated_once_and_reused_while_its_inputs_hold() {
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let panel = sample_panel();
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+
+        cache.start();
+        let first = cache
+            .panel(Revision::ZERO, &panel, &geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("panel mesh");
+        cache.finish();
+        assert!(!first.is_empty());
+        assert_eq!(cache.built_at(panel.id()), Some(Revision::ZERO));
+        assert_eq!(kernel.body_count(), 0, "a cached panel releases every kernel body");
+
+        // A later revision with the same panel reuses the mesh instead of tessellating again.
+        cache.start();
+        let second = cache
+            .panel(
+                Revision::ZERO.checked_next().expect("revision"),
+                &panel,
+                &geometry,
+                &panel_profile,
+                &mut kernel,
+                &TessOptions::default(),
+            )
+            .expect("panel mesh");
+        cache.finish();
+        assert!(Arc::ptr_eq(first.body().expect("body"), second.body().expect("body")), "the mesh is shared");
+        assert_eq!(cache.built_at(panel.id()), Some(Revision::ZERO), "an unchanged node keeps its revision");
+    }
+
+    #[test]
+    fn a_changed_band_rebuilds_only_that_panel() {
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let mut project = crate::tests::project_with_two_panels();
+        let first = Id::new(1).expect("id");
+        let second = Id::new(2).expect("id");
+        let first_panel = project.panel(first).expect("panel").clone();
+        let second_panel = project.panel(second).expect("panel").clone();
+        let first_geometry = first_panel.geometry_with_fallbacks().expect("geometry");
+        let second_geometry = second_panel.geometry_with_fallbacks().expect("geometry");
+
+        let revision = Revision::ZERO;
+        cache.start();
+        let before = cache
+            .panel(revision, &first_panel, &first_geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("first");
+        let untouched = cache
+            .panel(revision, &second_panel, &second_geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("second");
+        cache.finish();
+
+        project.set_edge_banding(first, band(1, 2, 22)).expect("banding");
+        let revision = project.revision();
+        let first_panel = project.panel(first).expect("panel").clone();
+        let second_panel = project.panel(second).expect("panel").clone();
+        let first_geometry = first_panel.geometry_with_fallbacks().expect("geometry");
+        let second_geometry = second_panel.geometry_with_fallbacks().expect("geometry");
+
+        cache.start();
+        let after = cache
+            .panel(revision, &first_panel, &first_geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("first");
+        let untouched_after = cache
+            .panel(revision, &second_panel, &second_geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("second");
+        cache.finish();
+
+        assert!(!Arc::ptr_eq(before.body().expect("body"), after.body().expect("body")));
+        assert!(
+            Arc::ptr_eq(untouched.body().expect("body"), untouched_after.body().expect("body")),
+            "a band on one panel leaves the other panel's mesh alone"
+        );
+        assert_eq!(cache.built_at(first), Some(revision));
+        assert_eq!(cache.built_at(second), Some(Revision::ZERO));
+    }
+
+    #[test]
+    fn a_deleted_node_releases_its_cached_mesh() {
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let panel = sample_panel();
+        let geometry = panel.geometry_with_fallbacks().expect("geometry");
+
+        cache.start();
+        cache
+            .panel(Revision::ZERO, &panel, &geometry, &panel_profile, &mut kernel, &TessOptions::default())
+            .expect("panel mesh");
+        cache.finish();
+        assert_eq!(cache.len(), 1);
+
+        cache.start();
+        cache.finish();
+        assert!(cache.is_empty(), "a pass that visits no node drops every entry");
+    }
+
+    #[test]
+    fn an_object_is_reused_until_its_payload_changes() {
+        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let object = Object::new(
+            Id::new(3).expect("id"),
+            "Cube",
+            Placement::IDENTITY,
+            furnicraft_model::Geometry::Mesh(cube.clone()),
+        );
+        let mut cache = EvaluationCache::new();
+        cache.start();
+        let first = cache.object(Revision::ZERO, &object).expect("cube mesh");
+        cache.finish();
+        assert_eq!(first.body().expect("body").triangle_count(), 12);
+
+        cache.start();
+        let second = cache.object(Revision::ZERO.checked_next().expect("revision"), &object).expect("cube mesh");
+        cache.finish();
+        assert!(Arc::ptr_eq(first.body().expect("body"), second.body().expect("body")));
+
+        let scaled = furnicraft_model::Mesh::cube(millimetres(200)).expect("cube");
+        let changed = Object::new(object.id(), "Cube", Placement::IDENTITY, furnicraft_model::Geometry::Mesh(scaled));
+        cache.start();
+        let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("cube mesh");
+        cache.finish();
+        assert!(!Arc::ptr_eq(first.body().expect("body"), third.body().expect("body")));
+    }
+
+    #[test]
+    fn a_path_is_drawn_as_a_line_chain_without_a_solid() {
+        use furnicraft_model::ContourSegment;
+
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("path");
+        let object =
+            Object::new(Id::new(4).expect("id"), "Sketch", Placement::IDENTITY, furnicraft_model::Geometry::Path(path));
+        let mut cache = EvaluationCache::new();
+        cache.start();
+        let geometry = cache.object(Revision::ZERO, &object).expect("path chain");
+        cache.finish();
+        assert!(geometry.body().is_none());
+        assert_eq!(geometry.polyline().expect("chain").len(), 3);
+    }
+
+    /// A project whose root holds two panels with distinct ids, for the invalidation tests.
+    fn project_with_two_panels() -> furnicraft_model::Project {
+        use furnicraft_model::{Container, Project};
+
+        let size = PanelNominalSize::new(millimetres(700), millimetres(500)).expect("valid panel size");
+        let first = Panel::new(Id::new(1).expect("id"), "First", size, None, millimetres(18), Placement::IDENTITY)
+            .expect("first panel");
+        let second = Panel::new(Id::new(2).expect("id"), "Second", size, None, millimetres(18), Placement::IDENTITY)
+            .expect("second panel");
+        let root = Container::new(
+            Id::new(3).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![furnicraft_model::Node::Panel(first), furnicraft_model::Node::Panel(second)],
+        );
+        Project::new(root).expect("project")
+    }
+
+    #[test]
+    fn the_cache_reports_an_empty_state() {
+        let cache = EvaluationCache::new();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.built_at(Id::new(1).expect("id")), None);
+        assert!(cache.cached(Id::new(1).expect("id")).is_none());
     }
 }

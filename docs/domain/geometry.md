@@ -162,10 +162,17 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - A plan with one extrusion is evaluated analytically, because a linear extrusion is exact as
   polygons; that mesh is also what `object.collapse` bakes. A plan with a boolean goes through the
   geometry kernel port. Both paths share one evaluator, so collapse cannot drift from the viewport.
-- The derived mesh is cached by `(Revision, Id)` in `furnicraft-mesh`. It is never written to the
-  file.
-- Editing the contour or a feature parameter bumps the revision once, and the next frame rebuilds the
-  mesh.
+- `furnicraft-mesh` owns the evaluation cache: one entry per node, keyed by the node id and the
+  inputs the mesh was derived from, tagged with the revision that built it. A rebuild walks the tree
+  once and reuses every node whose inputs are unchanged, so a move, a rename or an edit elsewhere
+  reuses the mesh and only changes the world transform. The derived mesh is never written to the file.
+- A derivation input is anything the geometry depends on: a panel's outline, nominal size, machining,
+  banding and band order, its resolved thickness and the catalogue-resolved band profiles; an
+  object's whole geometry payload. A catalogue material change reaches the cache through the resolved
+  thickness and profile, so a material swap rebuilds the panels that use it.
+- Editing the contour or a feature parameter bumps the revision once; the next frame re-evaluates only
+  the nodes it touched. A pass that visits fewer nodes drops the entries of nodes that no longer
+  exist.
 - An evaluation failure — no kernel, a contour the kernel rejects, a boolean that yields no solid —
   keeps the object and its data and reports a diagnostic on the node. It is not a load error and it
   does not delete anything.

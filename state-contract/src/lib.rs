@@ -42,6 +42,27 @@ pub struct Summary {
     pub state: State,
     /// Backlog tasks, in file order.
     pub tasks: Vec<Task>,
+    /// The parsed session note, when `plan/SESSION.md` exists.
+    pub session: Option<Session>,
+    /// The `HEAD` commit, filled in by whichever caller resolved it; `None` outside a checkout.
+    pub head: Option<String>,
+}
+
+/// The parts of `plan/SESSION.md` a fresh session resumes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Session {
+    /// `task:` — the task the note is about.
+    pub task: Option<String>,
+    /// `goal:` — the user-visible result, in one sentence.
+    pub goal: Option<String>,
+    /// `now:` — the exact sub-step in progress.
+    pub now: Option<String>,
+    /// `blocked:` — what the session waits for, or `nothing`.
+    pub blocked: Option<String>,
+    /// `run:` — the command that reproduces the current state.
+    pub run: Option<String>,
+    /// `resume:` — the first action a fresh session takes.
+    pub resume: Option<String>,
 }
 
 /// The parsed `STATE:` line.
@@ -118,14 +139,16 @@ pub fn check_with(root: &Path, git: &dyn Git) -> Result<Summary, Vec<String>> {
     };
 
     let mut violations = Vec::new();
-    let summary = match analyze(&status, &backlog, session.as_deref()) {
+    let mut summary = match analyze(&status, &backlog, session.as_deref()) {
         Ok(summary) => Some(summary),
         Err(errors) => {
             violations.extend(errors);
             None
         }
     };
-    if let Some(summary) = &summary {
+    if let Some(summary) = summary.as_mut() {
+        // One git call answers both the `base` rule and the head line the block prints.
+        summary.head = git.head();
         violations.extend(workspace_violations(root, summary, git));
     }
     match std::fs::read_to_string(root.join("README.md")) {
@@ -177,11 +200,11 @@ fn workspace_violations(root: &Path, summary: &Summary, git: &dyn Git) -> Vec<St
         }
     }
 
-    let head = git.head();
+    let head = summary.head.as_deref();
     let base = summary.state.base.as_str();
     let exists = git.commit_exists(base);
-    let ancestor = head.as_deref().is_some_and(|head| git.is_ancestor(base, head));
-    if let Some(violation) = validate::base_violation(base, head.as_deref(), exists, ancestor) {
+    let ancestor = head.is_some_and(|head| git.is_ancestor(base, head));
+    if let Some(violation) = validate::base_violation(base, head, exists, ancestor) {
         violations.push(violation);
     }
 

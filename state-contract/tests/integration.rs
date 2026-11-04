@@ -140,6 +140,21 @@ fn the_status_block_names_the_current_task_and_its_files() {
     assert!(text.contains("task T1"), "{text}");
     assert!(text.contains("-> [ ] T1 · first task"), "{text}");
     assert!(text.contains("[files: src/lib.rs]"), "{text}");
+    assert!(text.contains("head: fedcba9\n"), "the block names the head commit: {text}");
+}
+
+#[test]
+fn the_status_block_carries_the_note_a_session_resumes_from() {
+    let text = status_with(&fixture("good-note"), &FakeGit::repository()).expect("a consistent plan renders");
+    for line in [
+        "  task: T1\n",
+        "  now: the parser arm in `src/lib.rs`\n",
+        "  blocked: nothing\n",
+        "  run: cargo test -p state-contract\n",
+    ] {
+        assert!(text.contains(line), "the block must carry `{line}`: {text}");
+    }
+    assert!(!text.contains("resume:"), "the four fields are task/now/blocked/run: {text}");
 }
 
 #[test]

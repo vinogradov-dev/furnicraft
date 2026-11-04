@@ -57,6 +57,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0050](0050-the-work-plane-follows-the-view.md) | The work plane follows the view | Accepted |
 | [0051](0051-snapping-composes-the-grid-the-axis-and-the-draft-ends.md) | Snapping composes the grid, the axis and the draft ends | Accepted |
 | [0052](0052-a-drawing-commits-as-one-path-on-the-work-plane.md) | A drawing commits as one path on the work plane | Accepted |
+| [0053](0053-the-evaluation-cache-keys-derivation-inputs.md) | The evaluation cache is keyed by derivation inputs | Accepted |
 
 ## Format
 
