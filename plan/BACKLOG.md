@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U17** commit a drawn path: `object.path.create` with a placement whose local XY is the work
+- `[~]` **U17** commit a drawn path: `object.path.create` with a placement whose local XY is the work
   plane, the new node selected and the tool reset; exactly one undo entry.
   `files: crates/ui/src, crates/engine/src/object_cmds.rs`
 
