@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
+- `[~]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
   `PrimitiveKind` variants and the panel buttons.
   `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
 
