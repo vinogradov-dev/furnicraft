@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U25 state=doing base=152a514 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U4 state=idle base=d122b85 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -38,9 +38,9 @@ contract that orders that answer when a session was interrupted or the plan is b
   `assets/README.md` with the naming and SVG rules. U24 fixes the contract on top of it: one ink on a
   24 grid, three families (geometry, view, service), the service grammar in a new `actions` theme,
   and the guide read only while an icon is drawn or edited (ADR 0047).
-- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt with the
-  theme tint and falls back to its label while an asset is empty, and the viewport strip's 75–200 %
-  slider writes `ctx.set_zoom_factor` so icons rasterise at the new pixel size.
+- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
+  and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
+  sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
