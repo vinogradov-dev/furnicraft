@@ -41,7 +41,7 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, SceneFrame};
-use furnicraft_ui::{Editor, MeshElement};
+use furnicraft_ui::{Editor, MeshElement, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
@@ -783,6 +783,8 @@ impl FurniCraftApp {
                 ui.separator();
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
+                ui.separator();
+                ui_scale::show(ui);
                 ui.separator();
                 if let Some((segments, dirty)) = contour_edit {
                     ui.label(format!(

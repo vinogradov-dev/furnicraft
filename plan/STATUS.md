@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U3 state=idle base=2b453a0 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U4 state=idle base=152a514 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -38,9 +38,9 @@ contract that orders that answer when a session was interrupted or the plan is b
   `assets/README.md` with the naming and SVG rules. U24 fixes the contract on top of it: one ink on a
   24 grid, three families (geometry, view, service), the service grammar in a new `actions` theme,
   and the guide read only while an icon is drawn or edited (ADR 0047).
-- U2 embeds `assets/icons/**` in `crates/ui/src/icons.rs`; the shell installs the `egui_extras` SVG
-  loader, and `icon_button` draws at a fixed 16 pt with the theme text tint, falling back to its label
-  while an asset is empty.
+- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt with the
+  theme tint and falls back to its label while an asset is empty, and the viewport strip's 75–200 %
+  slider writes `ctx.set_zoom_factor` so icons rasterise at the new pixel size.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -51,9 +51,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U3 is next: a 75–200 % UI scale control in the viewport strip, bound to `ctx.set_zoom_factor`, so an
-icon is rasterised at the new pixel size instead of stretched (U2 draws through the same loader).
-U4–U9 make a flat contour a document `Path` with its own commands, U10–U17 add the shape
+U4 is next: a flat contour is a document `Path`, an ordered chain of line and arc segments with
+stable ids, open or closed and with joints that meet within a micrometre. U5–U9 add its ring
+conversion, its object form, drawing and picking, and its commands; U10–U17 add the shape
 constructors, the work plane, the ortho toggle and the drawing tools, and U18–U20 replace the
 scene-tree creation buttons with the themed toolbars. U21–U23 follow with the primitives and the
 extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit
