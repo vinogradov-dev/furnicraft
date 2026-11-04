@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U8 state=idle base=9ce56be updated=2026-11-04
+STATE: milestone=M7 phase=U task=U9 state=idle base=7c544a5 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -42,8 +42,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 - U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
   and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
-- U7 draws a stored path as a scene `Polyline` (local points, rigid transform, gamma colour) through
-  the renderer's shared line pipeline; the shell samples a `Path` and adds it to the camera bounds.
+- U7–U8 draw a stored path as a scene `Polyline` and pick it by the nearest ray-to-segment approach
+  within six viewport points; the shell samples a `Path` and adds it to the camera bounds.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -54,10 +54,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U8 is next: a path is pickable by the nearest ray-to-segment hit and returns a document `Id`, so the
-viewport can select what U7 draws. U9 adds create/replace; U10–U17 add the shape constructors, the
-work plane, the ortho toggle and the drawing tools; U18–U20 replace the scene-tree creation buttons
-with themed toolbars. U21–U23, S4 and P1–P3 follow; X2 waits on the cap limit (`plan/questions.md`).
+U9 is next: `object.path.create` and `object.path.replace`, one undo entry each. U10–U17 add the shape
+constructors, the work plane, the ortho toggle and the drawing tools; U18–U20 replace the scene-tree
+creation buttons with themed toolbars. U21–U23, S4 and P1–P3 follow; X2 waits on the cap limit.
 
 ## Index
 

@@ -1,10 +1,12 @@
-//! Sub-object picking for mesh editing.
+//! Picking for the viewport: sub-object elements of a mesh, and the scene object under the pointer.
 //!
 //! A mesh object's vertices are projected with the viewport camera and tested in screen space, the
 //! same way the gizmo handles are hit-tested. A face is picked by the nearest ray hit against its
-//! polygon, so an occluded face never wins over the one in front. Picking returns an index of one
-//! object, never a mesh pointer or a triangle index; the caller keeps the document immutable and
-//! only changes view state.
+//! polygon, so an occluded face never wins over the one in front. A whole scene object is picked by
+//! casting the pointer ray into the frame, which tests solids and line chains alike.
+//!
+//! Picking returns an index of one object, or a document `Id` for the scene, never a mesh pointer
+//! or a triangle index; the caller keeps the document immutable and only changes view state.
 //!
 //! The object's world placement is composed once per pick rather than once per vertex, so a large
 //! mesh does not walk the node tree for every index.
@@ -12,13 +14,23 @@
 use eframe::egui::{Pos2, Rect};
 use furnicraft_geom::DVec3;
 use furnicraft_model::{Id, Mesh, Placement, Project};
-use furnicraft_scene::{Camera, ray_triangle};
+use furnicraft_scene::{Camera, SceneFrame, ray_triangle};
 use furnicraft_units::Length;
 
 use crate::gizmo_math::{ray_to, screen_point};
 
 /// Radius around a projected vertex that counts as a hit, in viewport points.
 pub(crate) const VERTEX_PICK_RADIUS: f32 = 10.0;
+
+/// The document object under `pointer`: the nearest solid face or the nearest line chain.
+///
+/// The ray is cast into the frame's camera, so the caller passes the frame it will draw rather than
+/// a second camera that could disagree with it. A path has no mass to hit, so the frame widens the
+/// test by a few screen points; the pointer still returns a document `Id`, never an index.
+pub(crate) fn pick_scene(viewport: Rect, frame: &SceneFrame, pointer: Pos2) -> Option<Id> {
+    let ray = ray_to(pointer, viewport, frame.camera);
+    frame.pick(ray, f64::from(viewport.height()))
+}
 
 /// The mesh of an editable object and its world placement, resolved once for bulk work.
 pub(crate) fn vertex_frame(project: &Project, object: Id) -> Option<(Placement, &Mesh)> {
@@ -260,5 +272,18 @@ mod tests {
         }
         let count = f64::from(u32::try_from(polygon.len()).ok()?);
         screen_point(camera, viewport, sum / count)
+    }
+
+    #[test]
+    fn the_scene_pick_returns_a_path_document_id_under_the_pointer() {
+        let camera = camera();
+        let viewport = viewport();
+        let id = Id::new(7).expect("id");
+        let mut frame = SceneFrame { camera, ..SceneFrame::default() };
+        let points = std::sync::Arc::from(vec![DVec3::new(-50.0, 0.0, 0.0), DVec3::new(50.0, 0.0, 0.0)]);
+        frame.push_polyline(furnicraft_scene::Polyline::new(id, points, furnicraft_geom::DMat4::IDENTITY, [1.0; 4]));
+
+        assert_eq!(pick_scene(viewport, &frame, viewport.center()), Some(id));
+        assert_eq!(pick_scene(viewport, &frame, Pos2::new(2.0, 2.0)), None, "far from the path");
     }
 }
