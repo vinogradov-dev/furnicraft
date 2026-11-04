@@ -94,25 +94,25 @@ fn fs_mesh(fragment: MeshIn) -> @location(0) vec4<f32> {
     return vec4<f32>(pow(rgb, vec3<f32>(1.0 / 2.2)), fragment.color.a);
 }
 
-struct GridOut {
+struct LineOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
 };
 
 @vertex
-fn vs_grid(vertex: VertexIn) -> GridOut {
-    var out: GridOut;
+fn vs_line(vertex: VertexIn) -> LineOut {
+    var out: LineOut;
     out.clip_position = camera.view_projection * vec4<f32>(vertex.position, 1.0);
     out.color = vertex.color;
     return out;
 }
 
-struct GridIn {
+struct LineIn {
     @location(0) color: vec4<f32>,
 };
 
 @fragment
-fn fs_grid(fragment: GridIn) -> @location(0) vec4<f32> {
-    // Grid colours are already in gamma space.
+fn fs_line(fragment: LineIn) -> @location(0) vec4<f32> {
+    // Grid and path line colours are already in gamma space.
     return fragment.color;
 }

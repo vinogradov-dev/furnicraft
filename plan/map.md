@@ -10,6 +10,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 |---|---|---|
 | Contour ring, segment ids | `crates/model/src/contour.rs` (`Contour`, `ContourSegmentId`, `assemble`) | whole file |
 | Flat path value | `crates/model/src/contour.rs` (`Path`, `PathError`, `to_contour`) | open or closed chain; `to_contour` applies the ring rules and keeps the ids |
+| Path line primitive | `crates/scene/src/lib.rs` (`Polyline`, `SceneFrame::push_polyline`), `crates/render/src/lib.rs` (`polyline_vertices`), `apps/furnicraft/src/scene_build.rs` (`path_points`) | unlit chain; the renderer's line pipeline |
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`) | whole file |
 | Contour edit mode | `crates/ui/src/contour_edit.rs` (`ContourEdit`), `crates/ui/src/lib.rs` (`Editor`), `apps/furnicraft/src/contour_gizmo.rs` (`ContourGizmo`), `apps/furnicraft/src/main.rs` | whole files |
 | Contour edit commands | `crates/engine/src/panel_cmds.rs` (`PanelOutlineSet`), `crates/engine/src/object_cmds.rs` (`ObjectContourReplace`) | small |

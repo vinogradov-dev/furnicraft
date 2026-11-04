@@ -14,12 +14,12 @@ use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{object_mesh, tessellate_panel};
 use furnicraft_model::{
     CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
-    Geometry, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement,
-    Project, StructuralKind,
+    Geometry, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Path,
+    Placement, Project, StructuralKind,
 };
 use furnicraft_param::{build_constructive_mesh, build_panel_parts_with};
 use furnicraft_scene::{
-    Camera, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Projection, SceneFrame,
+    Camera, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection, SceneFrame,
 };
 use furnicraft_units::Length;
 
@@ -31,6 +31,21 @@ const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
 
 /// The default surface colour of a geometry object; v1 has no per-object material.
 const OBJECT_COLOR: [f32; 4] = [0.58, 0.60, 0.64, 1.0];
+
+/// The colour of a drawn path, in gamma space like the grid lines.
+const PATH_COLOR: [f32; 4] = [0.95, 0.72, 0.20, 1.0];
+
+/// The viewport's chord tolerance, in millimetres.
+///
+/// It matches the kernel profile tolerance, so the line the user sees follows the curve the solid
+/// will be built from.
+const PATH_SAMPLE_TOLERANCE_MM: f64 = 0.05;
+
+/// How far two consecutive path joints may miss each other, in millimetres (one micrometre).
+///
+/// The document stores whole micrometres, so an arc endpoint and the next segment's start can
+/// differ by one unit after rounding.
+const PATH_JOINT_TOLERANCE_MM: f64 = 0.001;
 
 /// Sample catalogue ids. They are stable only for this demonstration document.
 const SAMPLE_OAK_MATERIAL: u64 = 1;
@@ -58,13 +73,17 @@ impl Bounds {
                 f64::from(position[1]),
                 f64::from(position[2]),
             ));
-            if !point.is_finite() {
-                continue;
-            }
-            self.min = DVec3::new(self.min.x.min(point.x), self.min.y.min(point.y), self.min.z.min(point.z));
-            self.max = DVec3::new(self.max.x.max(point.x), self.max.y.max(point.y), self.max.z.max(point.z));
-            self.valid = true;
+            self.include_point(point);
         }
+    }
+
+    fn include_point(&mut self, point: DVec3) {
+        if !point.is_finite() {
+            return;
+        }
+        self.min = DVec3::new(self.min.x.min(point.x), self.min.y.min(point.y), self.min.z.min(point.z));
+        self.max = DVec3::new(self.max.x.max(point.x), self.max.y.max(point.y), self.max.z.max(point.z));
+        self.valid = true;
     }
 
     /// The centre of the box, or `None` when no finite vertex was included.
@@ -338,8 +357,17 @@ impl<'a> Evaluation<'a> {
                     build_constructive_mesh(constructive).map_err(|error| format!("{}: {error}", object.name()))?;
                 &derived
             }
-            // A path has no solid to draw; U7 adds its line primitive.
-            Geometry::Path(_) => return Ok(()),
+            // A path has no solid: it is drawn as an unlit chain of line segments, and its points
+            // are sampled from the same analytic segments a later extrusion uses.
+            Geometry::Path(path) => {
+                let points = path_points(path).map_err(|error| format!("{}: {error}", object.name()))?;
+                let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+                for point in &points {
+                    self.bounds.include_point(transform.transform_point3(*point));
+                }
+                self.frame.push_polyline(Polyline::new(object.id(), Arc::from(points), transform, PATH_COLOR));
+                return Ok(());
+            }
         };
         let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
@@ -347,6 +375,18 @@ impl<'a> Evaluation<'a> {
         self.frame.push(Drawable::new(object.id(), Arc::new(mesh), transform, OBJECT_COLOR));
         Ok(())
     }
+}
+
+/// Samples a stored path into the local XY points the viewport draws.
+///
+/// The chain is sampled as an open contour even when the path is closed, so the closing segment is
+/// drawn; the one-micrometre joint tolerance is the document's own.
+fn path_points(path: &Path) -> Result<Vec<DVec3>, String> {
+    let segments = path.segments().map(|segment| segment.to_geom()).collect::<Result<Vec<_>, _>>().map_err(describe)?;
+    let chain =
+        furnicraft_geom::Contour::new_with_tolerance(segments, false, PATH_JOINT_TOLERANCE_MM).map_err(describe)?;
+    let samples = chain.sample(PATH_SAMPLE_TOLERANCE_MM).map_err(describe)?;
+    Ok(samples.into_iter().map(|point| DVec3::new(point.x, point.y, 0.0)).collect())
 }
 
 /// Places the initial camera so the whole sample fits in the viewport.
@@ -731,6 +771,74 @@ mod tests {
         assert!(!drawable.mesh.positions.is_empty(), "the extrusion is tessellated from its contour");
         let center = evaluated.bounds.center().expect("the object contributes bounds");
         assert!(center.y > 0.0 && center.z > 0.0, "bounds follow the contour and the extrusion height");
+    }
+
+    #[test]
+    fn an_open_path_is_drawn_as_a_polyline() {
+        use furnicraft_model::ContourSegment;
+
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("path");
+
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let placement = Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("placement");
+        let object = project.add_object(root, "Sketch", placement, Geometry::Path(path)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        assert!(evaluated.frame.drawables().is_empty(), "a path has no solid");
+        assert_eq!(evaluated.frame.polylines().len(), 1);
+        let line = &evaluated.frame.polylines()[0];
+        assert_eq!(line.id, object);
+        assert_eq!(line.points.len(), 3, "two segments share one joint");
+        assert_eq!(line.points[0], DVec3::ZERO);
+        assert_eq!(line.points[1], DVec3::new(600.0, 0.0, 0.0));
+        assert_eq!(line.points[2], DVec3::new(600.0, 400.0, 0.0));
+        let origin = line.world_transform.transform_point3(line.points[0]);
+        assert_eq!(origin, DVec3::new(10.0, 20.0, 30.0), "the object placement moves the chain");
+        let center = evaluated.bounds.center().expect("the path contributes bounds");
+        assert!(center.x > 10.0 && center.y > 20.0);
+    }
+
+    #[test]
+    fn a_closed_path_draws_its_closing_segment() {
+        use furnicraft_model::ContourSegment;
+
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let corner = |x: i64, y: i64| [millimetres(x), millimetres(y)];
+        let path = Path::new(
+            vec![
+                ContourSegment::line(corner(0, 0), corner(600, 0)).expect("line"),
+                ContourSegment::line(corner(600, 0), corner(0, 400)).expect("line"),
+                ContourSegment::line(corner(0, 400), corner(0, 0)).expect("line"),
+            ],
+            true,
+        )
+        .expect("closed path");
+
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let line = &evaluated.frame.polylines()[0];
+        assert_eq!(line.points.len(), 4, "the closing segment keeps its end point");
+        assert_eq!(line.points[3], line.points[0], "the chain closes on its first point");
     }
 
     #[test]
