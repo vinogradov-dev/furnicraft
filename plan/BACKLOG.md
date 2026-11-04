@@ -13,7 +13,8 @@ Order is the order of work. Renumbering is not allowed; a new task takes the nex
 phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
 the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
-boundaries only, X is a defect in behaviour that already shipped.
+boundaries only, X is a defect in behaviour that already shipped, and U is the UI: toolbars, drawing
+tools, view controls and icon resources.
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -22,9 +23,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **D8** face groove (a groove on a panel face): a region on face A/B with depth and
-  through/blind mode, compiled as a subtractive tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
+  MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
+  `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,
+  falling back to a text label while an SVG is empty; tests for the rasterised size and the fallback.
+  `files: crates/ui/src, Cargo.toml, apps/furnicraft/src`
 
 ## Bugs
 
@@ -38,32 +41,73 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **D9** edge groove (a groove on a panel edge): follows an `EdgeRef` with offset, depth and
-  width, compiled as a swept or extruded tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **D10** face-anchored milling: a path or region anchored to face A/B with cutter diameter and
-  depth, compiled as a swept tool; card section and tests.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **D11** banding as an operation: `MachiningParams::Banding` references `EdgeRef`, the joint
-  solver returns attachment and cut-region effects, and the separate edge/corner/ring banding
-  vectors migrate with old files loading.
-  `files: crates/model/src/panel, crates/param/src, crates/ui/src/panel_card.rs`
+- `[ ]` **U3** UI scale: a 75–200 % control in the viewport strip bound to `ctx.set_zoom_factor`, so
+  icons are re-rasterised at the new pixel size instead of stretched.
+  `files: apps/furnicraft/src/main.rs, crates/ui/src`
+- `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
+  ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
+  path; tests for a single segment, an arc, an open polyline and a broken joint.
+  `files: crates/model/src/contour.rs, crates/model/src/lib.rs`
+- `[ ]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
+  is closed and simple, otherwise a readable error.
+  `files: crates/model/src/contour.rs`
+- `[ ]` **U6** a path object: `Geometry::Path(Path)`, schema 17, add, replace and query on `Project`,
+  with older files still loading.
+  `files: crates/model/src/object.rs, crates/model/src/project/wire.rs`
+- `[ ]` **U7** draw a stored path: a line primitive in the scene frame and the renderer's line
+  pipeline, so an open chain is visible without a solid.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
+- `[ ]` **U8** pick a path: the nearest ray-to-segment hit returns a document `Id`, never an index.
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/mesh_pick.rs`
+- `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
+  `enabled` check with `run`; ADR "a flat contour is a path of segments" and the geometry document.
+  `files: crates/engine/src/object_cmds.rs, docs/decisions`
+- `[ ]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
+  exact joints, and an arc through three points; degenerate input is an error.
+  `files: crates/model/src/contour.rs`
+- `[ ]` **U11** orthographic ↔ perspective as view state, with a strip button and a key, the ortho
+  height taken from the current frame; an authored camera is untouched.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/gizmo.rs`
+- `[ ]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
+  and perspective, and the screen-to-plane mapping; tests for the six standard views.
+  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
+  free mode, as pure functions with table tests.
+  `files: apps/furnicraft/src/gizmo_math.rs`
+- `[ ]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
+  closing, with the document untouched until commit.
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
+- `[ ]` **U15** the drawing tools: line and polyline, an arc through three points, a rectangle and a
+  circle, each producing a `Path`; tests per tool.
+  `files: crates/ui/src, crates/model/src/contour.rs`
+- `[ ]` **U16** the viewport preview: the draft segments, the snap marker and a live size, with the
+  tool owning the pointer and the gizmos hidden.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/contour_gizmo.rs`
+- `[ ]` **U17** commit a drawn path: `object.path.create` with a placement whose local XY is the work
+  plane, the new node selected and the tool reset; exactly one undo entry.
+  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
+- `[ ]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
+  with a tooltip and a shortcut, and a text label while an icon is empty; the state lives in `Editor`.
+  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
+- `[ ]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
+  assembly, camera, light), Primitives (cube) and Bodies (extrude).
+  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
+- `[ ]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
+  the tree only shows and restructures nodes.
+  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
+- `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
+  with the size field of the panel.
+  `files: crates/ui/src, apps/furnicraft/src/main.rs`
+- `[ ]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
+  `PrimitiveKind` variants and the panel buttons.
+  `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
+- `[ ]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
+  field; an open path is refused with a readable message.
+  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
 - `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
   `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
   only changed nodes.
   `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
-- `[ ]` **H1** hardware and accessories as existing nodes: a catalogue definition, an instance that
-  is a single object or a component/group, and a body built through `SolidPlan`; no separate
-  hardware geometry pipeline. `files: crates/model/src, crates/param/src, crates/ui/src`
-- `[ ]` **H2** typed hardware mounts: host panel, anchor, orientation and quantity; the panel
-  evaluator derives machining from mounts and the card shows it read-only; holes are not duplicated
-  on the panel. `files: crates/model/src, crates/engine/src, crates/param/src, crates/ui/src/panel_card.rs`
-- `[ ]` **B1** fillet and chamfer on a contour corner. `files: crates/geom/src/contour.rs, crates/param`
-- `[ ]` **B2** offset a contour inward and outward as a new ring. `files: crates/geom/src/contour.rs`
-- `[ ]` **C1** a sketch on a chosen plane: grid, vertex snapping, translation and rotation steps.
-  `files: crates/ui, apps/furnicraft`
-- `[ ]` **L1** scene exposure and tone mapping, then shadow maps, so point lights stop clipping.
-  `files: crates/render`
 - `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
   `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
   `files: state-contract/src/status.rs, xtask/src/main.rs`
@@ -74,6 +118,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U1** the icon resource tree: `assets/icons/` with one directory per toolbar theme and one
+  zero-byte SVG per icon (contour, primitives, bodies, scene, view — 21 placeholders), plus
+  `assets/README.md` with the naming, the 24 × 24 grid, the geometry-only format and the empty-file
+  fallback — `19fbb49`
 - `[x]` **D7** the panel card lists and edits machining from the descriptor table: common operation
   chrome (fold, kind and anchor, reorder, remove) with a section module per kind, an add menu built
   from `MACHINING_DESCRIPTORS` and grouped by category, diagnostics naming a `MachiningId` shown with
