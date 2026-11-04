@@ -15,6 +15,7 @@
 )]
 
 mod contour_gizmo;
+mod draw_gizmo;
 mod file_menu;
 mod gizmo;
 mod gizmo_math;
@@ -41,9 +42,10 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Projection, SceneFrame};
-use furnicraft_ui::{Editor, MeshElement, ui_scale};
+use furnicraft_ui::{DrawTool, Editor, MeshElement, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
+use crate::draw_gizmo::DrawGizmo;
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::rotate_gizmo::RotateGizmo;
@@ -90,6 +92,7 @@ struct FurniCraftApp {
     rotate_gizmo: RotateGizmo,
     vertex_gizmo: VertexGizmo,
     contour_gizmo: ContourGizmo,
+    draw_gizmo: DrawGizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
     uploaded_preview: Option<PreviewKey>,
@@ -135,6 +138,7 @@ impl FurniCraftApp {
             rotate_gizmo: RotateGizmo::default(),
             vertex_gizmo: VertexGizmo::default(),
             contour_gizmo: ContourGizmo::default(),
+            draw_gizmo: DrawGizmo::new(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             uploaded_preview: None,
@@ -168,6 +172,7 @@ impl FurniCraftApp {
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
         self.contour_gizmo = ContourGizmo::default();
+        self.draw_gizmo = DrawGizmo::new();
         self.highlighted.clear();
         self.uploaded_preview = None;
         self.extra = extra;
@@ -297,6 +302,12 @@ impl FurniCraftApp {
         self.contour_gizmo.reset();
     }
 
+    /// Leaves a drawing tool and throws the draft away.
+    fn cancel_drawing(&mut self) {
+        self.editor.cancel_drawing();
+        self.draw_gizmo.reset();
+    }
+
     /// Re-uploads the scene when the drag preview moved to a new position.
     ///
     /// A finished or cancelled drag also lands here with no preview, which restores the base
@@ -408,7 +419,10 @@ impl FurniCraftApp {
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         // A contour edit owns the pointer: the object gizmo and picking would fight the corner drag.
         let contour_editing = self.editor.contour_edit().is_some();
-        let mesh_object = if contour_editing { None } else { self.editor.mesh_edit().map(|edit| edit.object()) };
+        // A drawing tool owns it too: the left button places points, not selections.
+        let drawing = self.editor.drawing().is_some();
+        let mesh_object =
+            if contour_editing || drawing { None } else { self.editor.mesh_edit().map(|edit| edit.object()) };
         // Face mode moves the union of the selected faces, so both sub-object modes feed the same
         // vertex gizmo and dispatch the same vertex command.
         let mesh_vertices = mesh_object.map(|object| self.mesh_selection_vertices(object)).unwrap_or_default();
@@ -452,12 +466,30 @@ impl FurniCraftApp {
             self.contour_gizmo.reset();
         }
 
+        if drawing {
+            let axis_lock = ui.input(|input| input.modifiers.shift);
+            match self.draw_gizmo.update(
+                &response,
+                rect,
+                self.scene.camera,
+                &mut self.editor,
+                pointer_over_widget,
+                axis_lock,
+            ) {
+                Ok(true) => ui.ctx().request_repaint(),
+                Ok(false) => {}
+                Err(error) => self.last_error = Some(error),
+            }
+        } else {
+            self.draw_gizmo.reset();
+        }
+
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        let update: Result<Option<PlacementCommit>, String> = if contour_editing || mesh_object.is_some() {
+        let update: Result<Option<PlacementCommit>, String> = if contour_editing || drawing || mesh_object.is_some() {
             Ok(None)
         } else {
             match self.mode {
@@ -487,7 +519,7 @@ impl FurniCraftApp {
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing {
+        let consumed_click = if contour_editing || drawing {
             true
         } else if mesh_object.is_some() {
             self.vertex_gizmo.consumed_click()
@@ -530,6 +562,8 @@ impl FurniCraftApp {
 
         if contour_editing {
             ui.ctx().set_cursor_icon(self.contour_gizmo.cursor());
+        } else if drawing {
+            ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
         } else if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else {
@@ -547,6 +581,7 @@ impl FurniCraftApp {
             response.clicked() || response.double_clicked()
         };
         if !contour_editing
+            && !drawing
             && clicked
             && !pointer_over_gizmo
             && !consumed_click
@@ -637,6 +672,8 @@ impl FurniCraftApp {
         // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
         if let Some(edit) = self.editor.contour_edit() {
             self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+        } else if let Some(draft) = self.editor.drawing() {
+            self.draw_gizmo.paint(ui, rect, self.scene.camera, draft);
         } else if let Some(object) = mesh_object {
             let target = vertex_gizmo::MeshTarget {
                 camera: self.scene.camera,
@@ -765,6 +802,10 @@ impl FurniCraftApp {
             let mut toggle_projection = false;
             let mut apply_contour = false;
             let mut cancel_contour = false;
+            let mut start_tool = None;
+            let mut toggle_grid = false;
+            let mut close_drawing = false;
+            let mut cancel_drawing = false;
             let owns_view = viewport_owns_view(self.session.project());
             let mesh_selection = self.editor.mesh_edit().map(|edit| {
                 let count = match edit.element() {
@@ -777,6 +818,7 @@ impl FurniCraftApp {
                 .editor
                 .contour_edit()
                 .map(|edit| (edit.draft().segments().len(), edit.is_dirty()));
+            let drawing = self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
@@ -809,6 +851,20 @@ impl FurniCraftApp {
                     cancel_contour = ui.button("Cancel").clicked();
                     ui.separator();
                     ui.label("Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
+                } else if let Some((tool, points, closed)) = drawing {
+                    ui.label(format!(
+                        "Draw · {}{}",
+                        tool.label(),
+                        if points == 0 { String::new() } else { format!(" · {points} points") }
+                    ));
+                    ui.separator();
+                    toggle_grid |= ui.selectable_label(self.draw_gizmo.grid(), "Grid 10 mm  (G)").clicked();
+                    ui.separator();
+                    close_drawing |=
+                        ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
+                    cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
+                    ui.separator();
+                    ui.label("LMB add point  ·  Shift axis lock  ·  Esc cancel");
                 } else {
                     ui.label("Gizmo");
                     ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
@@ -822,6 +878,14 @@ impl FurniCraftApp {
                         ui.label(
                             "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
                         );
+                    }
+                    ui.separator();
+                    ui.label("Draw");
+                    for tool in [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::Rectangle, DrawTool::Circle]
+                    {
+                        if ui.button(tool.label()).clicked() {
+                            start_tool = Some(tool);
+                        }
                     }
                 }
                 if let Some(camera) = self
@@ -838,6 +902,22 @@ impl FurniCraftApp {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
             });
+            if toggle_grid {
+                self.draw_gizmo.toggle_grid();
+            }
+            if let Some(tool) = start_tool {
+                if self.editor.start_drawing(tool) {
+                    self.draw_gizmo.reset();
+                } else {
+                    self.last_error = Some("A drawing is already in progress; finish or cancel it first.".to_owned());
+                }
+            }
+            if close_drawing && let Err(error) = self.editor.close_drawing() {
+                self.last_error = Some(error.to_string());
+            }
+            if cancel_drawing {
+                self.cancel_drawing();
+            }
             if apply_contour
                 && let Err(error) = self.apply_contour_edit()
             {
@@ -953,6 +1033,19 @@ impl eframe::App for FurniCraftApp {
                     self.cancel_contour_edit();
                 } else if enter && let Err(error) = self.apply_contour_edit() {
                     self.last_error = Some(error);
+                }
+            }
+        } else if self.editor.drawing().is_some() {
+            // Escape drops the whole draft; Enter closes a polyline, which is the only close action
+            // a keyboard can reach without the strip.
+            if !ui.ctx().text_edit_focused() {
+                if escape {
+                    self.cancel_drawing();
+                } else if enter {
+                    self.editor.close_drawing().ok();
+                }
+                if ui.input(|input| input.key_pressed(egui::Key::G)) {
+                    self.draw_gizmo.toggle_grid();
                 }
             }
         } else if escape

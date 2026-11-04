@@ -217,9 +217,12 @@ impl DrawDraft {
         &self.points
     }
 
-    /// Whether the chain is closed back to its first point, by the user or by the tool itself.
-    pub fn is_closed(&self) -> bool {
-        self.tool.is_closed() || self.closed
+    /// Whether the user closed the chain.
+    ///
+    /// A rectangle or a circle produces a closed path by itself; that is a property of the tool, not
+    /// of this flag, and the draft only counts as closed once the tool has all its points.
+    pub const fn is_closed(&self) -> bool {
+        self.closed
     }
 
     /// Whether the draft holds no point yet.
@@ -301,49 +304,72 @@ impl DrawDraft {
         if self.points.len() < 3 {
             return Err(DrawDraftError::TooFewPoints { need: 3, got: self.points.len() });
         }
-        self.path_of(true)?;
+        self.path_with(None, true)?;
         self.closed = true;
         Ok(())
     }
 
     /// The path these points describe, if the tool has all the points it needs.
     pub fn to_path(&self) -> Result<Path, DrawDraftError> {
+        self.path_with(None, self.closed)
+    }
+
+    /// The path the draft would have if `next` were added, or `None` when the draft already holds
+    /// every point the tool takes.
+    ///
+    /// This is the preview: a rectangle shows its fourth side and a circle its whole rim while the
+    /// pointer still moves. A polyline previews the next point as one more segment without closing.
+    pub fn preview_path(&self, next: [Length; 2]) -> Option<Path> {
+        if self.closed || !point_in_range(next) {
+            return None;
+        }
+        if let Some(need) = self.tool.points()
+            && self.points.len() >= need
+        {
+            return None;
+        }
+        if self.points.len() >= MAX_CONTOUR_SEGMENTS {
+            return None;
+        }
+        if self.points.last() == Some(&next) {
+            return None;
+        }
+        self.path_with(Some(next), false).ok()
+    }
+
+    /// The path with an optional extra point, built by the draft's tool.
+    fn path_with(&self, next: Option<[Length; 2]>, closed: bool) -> Result<Path, DrawDraftError> {
+        let mut points = Vec::with_capacity(self.points.len() + 1);
+        points.extend_from_slice(&self.points);
+        if let Some(next) = next {
+            points.push(next);
+        }
         let need = self.tool.points().unwrap_or(2);
-        if self.points.len() < need {
-            return Err(DrawDraftError::TooFewPoints { need, got: self.points.len() });
+        if points.len() < need {
+            return Err(DrawDraftError::TooFewPoints { need, got: points.len() });
         }
         match self.tool {
-            DrawTool::Line => Path::polyline(self.points.clone(), false).map_err(DrawDraftError::from),
-            DrawTool::Polyline => Path::polyline(self.points.clone(), self.closed).map_err(DrawDraftError::from),
+            DrawTool::Line => Path::polyline(points, false).map_err(DrawDraftError::from),
+            DrawTool::Polyline => Path::polyline(points, closed).map_err(DrawDraftError::from),
             DrawTool::Arc => {
-                let (Some(&start), Some(&through), Some(&end)) =
-                    (self.points.first(), self.points.get(1), self.points.get(2))
-                else {
-                    return Err(DrawDraftError::TooFewPoints { need: 3, got: self.points.len() });
+                let (Some(&start), Some(&through), Some(&end)) = (points.first(), points.get(1), points.get(2)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: points.len() });
                 };
                 Path::arc_through(start, through, end).map_err(DrawDraftError::from)
             }
             DrawTool::Rectangle => {
-                let (Some(&first), Some(&second)) = (self.points.first(), self.points.get(1)) else {
-                    return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
+                let (Some(&first), Some(&second)) = (points.first(), points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
                 };
                 Path::rectangle(first, second).map_err(DrawDraftError::from)
             }
             DrawTool::Circle => {
-                let (Some(&center), Some(&rim)) = (self.points.first(), self.points.get(1)) else {
-                    return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
+                let (Some(&center), Some(&rim)) = (points.first(), points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
                 };
                 Path::circle_through(center, rim).map_err(DrawDraftError::from)
             }
         }
-    }
-
-    /// Builds an explicitly closed path from a polyline's points and validates it.
-    fn path_of(&self, closed: bool) -> Result<Path, DrawDraftError> {
-        if self.points.len() < 2 {
-            return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
-        }
-        Path::polyline(self.points.clone(), closed).map_err(DrawDraftError::from)
     }
 }
 
@@ -705,7 +731,8 @@ mod tests {
         let mut draft = DrawDraft::new(DrawTool::Rectangle);
         draft.push([millimetres(600), millimetres(400)]).expect("first corner");
         draft.push([millimetres(0), millimetres(0)]).expect("opposite corner");
-        assert!(draft.is_closed(), "a rectangle is closed without a close action");
+        assert!(draft.tool().is_closed(), "the tool produces a closed path");
+        assert!(!draft.is_closed(), "the user did not close anything");
         assert!(!draft.can_close(), "there is nothing left to close");
         let path = draft.to_path().expect("a rectangle");
         assert!(path.is_closed());

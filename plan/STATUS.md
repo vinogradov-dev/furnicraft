@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U16 state=idle base=5c487dd updated=2026-11-04
+STATE: milestone=M7 phase=U task=U17 state=idle base=b203763 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -42,9 +42,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 - U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
   and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
-- U7–U15 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, toggle the
+- U7–U16 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, toggle the
   projection, take the work plane from the standard views, snap, draft a chain and build it with
-  the line, polyline, arc, rectangle and circle tools (ADRs 0048–0051).
+  the five tools while the viewport previews it (ADRs 0048–0051).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -55,9 +55,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U16 is next: the viewport preview — the draft segments, the snap marker and a live size, with the
-tool owning the pointer and the gizmos hidden. U17 commits the drawing; U18–U20 replace the
-scene-tree create buttons with toolbars. U21–U23, S4 and P1–P3 follow; X2 waits.
+U17 is next: commit a drawn path — `object.path.create`, the work plane as its local XY, the new
+node selected and the tool reset, in exactly one undo entry. U18–U20 replace the scene-tree create
+buttons with toolbars. U21–U23, S4 and P1–P3 follow; X2 waits.
 
 ## Index
 

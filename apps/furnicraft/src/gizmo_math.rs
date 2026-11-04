@@ -14,6 +14,7 @@ use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
 use furnicraft_geom::{DQuat, DVec2, DVec3};
 use furnicraft_model::{Id, Placement, Project};
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection, Ray};
+use furnicraft_units::Length;
 
 /// Length of an axis handle, in points.
 pub(crate) const HANDLE_LENGTH: f32 = 84.0;
@@ -360,6 +361,15 @@ pub(crate) fn screen_point(camera: Camera, viewport: egui::Rect, point: DVec3) -
     let x = viewport.left() + (ndc.x as f32 + 1.0) * 0.5 * viewport.width();
     let y = viewport.top() + (1.0 - ndc.y as f32) * 0.5 * viewport.height();
     (x.is_finite() && y.is_finite()).then_some(Pos2::new(x, y))
+}
+
+/// Rounds a millimetre coordinate to a whole micrometre, or `None` when it is not representable.
+pub(crate) fn length_from_millimetres(value: f64) -> Option<Length> {
+    let micrometres = value * 1_000.0;
+    if !micrometres.is_finite() || micrometres < i64::MIN as f64 || micrometres > i64::MAX as f64 {
+        return None;
+    }
+    Some(Length::from_micrometres(micrometres.round() as i64))
 }
 
 /// Distance from `point` to a screen-space segment.
