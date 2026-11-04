@@ -33,7 +33,7 @@ pub use node_cmds::{
     NodePropertySetMany, NodeRename, NodeUngroup,
 };
 pub use object_cmds::{
-    ObjectCollapse, ObjectContourReplace, ObjectExtrudeCreate, ObjectPrimitiveCreate, PrimitiveKind,
+    ObjectCollapse, ObjectContourReplace, ObjectExtrudeCreate, ObjectPathCreate, ObjectPrimitiveCreate, PrimitiveKind,
 };
 pub use panel_cmds::{
     PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,

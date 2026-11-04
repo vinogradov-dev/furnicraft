@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U17** commit a drawn path: `object.path.create` with a placement whose local XY is the work
-  plane, the new node selected and the tool reset; exactly one undo entry.
-  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
+- `[ ]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
+  with a tooltip and a shortcut, and a text label while an icon is empty; the state lives in `Editor`.
+  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
-  with a tooltip and a shortcut, and a text label while an icon is empty; the state lives in `Editor`.
-  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 - `[ ]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
   assembly, camera, light), Primitives (cube) and Bodies (extrude).
   `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
@@ -71,6 +68,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U17** commit a drawn path: one `object.path.create` on the work plane, the node selected
+  and the tool reset, in one undo entry (ADR 0052) — `a8e75b6`
 - `[x]` **U16** the viewport preview: `DrawGizmo` draws the draft, the snap marker and a live size
   while it owns the pointer, and the strip starts each tool — `b203763`
 - `[x]` **U15** the drawing tools: line and polyline, an arc, a rectangle and a circle each build a

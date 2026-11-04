@@ -10,12 +10,12 @@
 //! A [`DrawDraft`] is the same pattern without a base ring: the tool appends plane points, undoes
 //! the last one, closes the chain or cancels it, and no command runs until the drawing is committed.
 
-use furnicraft_engine::object_cmds::OBJECT_CONTOUR_REPLACE_ID;
+use furnicraft_engine::object_cmds::{OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_CREATE_ID};
 use furnicraft_engine::panel_cmds::OUTLINE_SET_ID;
-use furnicraft_engine::{ObjectContourReplace, PanelOutlineSet, Session};
+use furnicraft_engine::{ObjectContourReplace, ObjectPathCreate, PanelOutlineSet, Session};
 use furnicraft_model::{
     Contour, ContourEditError, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, Path, PathError,
-    Project,
+    Placement, Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -248,6 +248,14 @@ impl DrawDraft {
         self.tool.closes() && !self.closed && self.points.len() >= 3
     }
 
+    /// Whether the tool is done with this drawing and it should be committed.
+    ///
+    /// A fixed tool finishes on its last point; a polyline finishes when the user closes the chain;
+    /// an open polyline is committed explicitly, because a chain is a valid drawing.
+    pub fn is_finished(&self) -> bool {
+        self.closed || self.tool.points().is_some_and(|need| self.points.len() >= need)
+    }
+
     /// Appends a point, refusing a repeat of the previous point, an out-of-range point, a point
     /// beyond a fixed tool's count and an overflow of the ring cap.
     ///
@@ -423,6 +431,31 @@ pub enum DrawDraftError {
     /// The points do not form a path.
     #[error(transparent)]
     Path(#[from] PathError),
+}
+
+/// A path committed to the document, with the tool that drew it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawnPath {
+    /// The created node.
+    pub object: Id,
+    /// The tool that produced the path.
+    pub tool: DrawTool,
+}
+
+impl DrawDraft {
+    /// Commits the drawing as one `object.path.create`.
+    ///
+    /// The path is placed on the work plane: `placement` maps local X and Y onto the plane's `u` and
+    /// `v`, so the stored coordinates are the visible drawing. A fixed tool commits its finished
+    /// path, a polyline commits what it has whether it was closed or not. On success the caller
+    /// drops the draft; a rejected path leaves it intact so the user can undo or cancel.
+    pub fn commit(&self, session: &mut Session, parent: Id, placement: Placement) -> Result<Id, String> {
+        let path = self.to_path().map_err(|error| error.to_string())?;
+        let name = format!("{} drawing", self.tool.label());
+        let params = json(&ObjectPathCreate { parent, name, path, placement })?;
+        let outcome = dispatch(session, OBJECT_PATH_CREATE_ID, &params)?;
+        outcome.created_id().ok_or_else(|| "the path command created no node".to_owned())
+    }
 }
 
 #[cfg(test)]
@@ -767,6 +800,31 @@ mod tests {
         let path = draft.to_path().expect("a closed polyline");
         assert!(path.is_closed());
         assert_eq!(path.entries().len(), 3);
+    }
+
+    #[test]
+    fn a_draft_finishes_when_its_tool_is_done() {
+        let mut line = DrawDraft::new(DrawTool::Line);
+        line.push([millimetres(0), millimetres(0)]).expect("first");
+        assert!(!line.is_finished());
+        line.push([millimetres(600), millimetres(0)]).expect("second");
+        assert!(line.is_finished(), "a complete line commits on its last click");
+
+        let mut polyline = DrawDraft::new(DrawTool::Polyline);
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
+        {
+            polyline.push(point).expect("point");
+        }
+        assert!(!polyline.is_finished(), "an open chain waits for close or commit");
+        polyline.close().expect("close");
+        assert!(polyline.is_finished());
+
+        let mut circle = DrawDraft::new(DrawTool::Circle);
+        circle.push([millimetres(100), millimetres(50)]).expect("centre");
+        assert!(!circle.is_finished());
+        circle.push([millimetres(130), millimetres(90)]).expect("rim");
+        assert!(circle.is_finished());
     }
 
     #[test]
