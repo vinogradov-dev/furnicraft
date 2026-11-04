@@ -28,6 +28,7 @@ mod placement_card;
 mod properties_card;
 mod scene_tree;
 mod section;
+pub mod toolbars;
 pub mod ui_scale;
 
 use std::collections::HashSet;
@@ -64,6 +65,7 @@ use crate::scene_tree::{Selection, TreeAction};
 
 pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
+pub use toolbars::ToolPanel;
 
 /// Default length of a newly created panel, in millimetres.
 const NEW_PANEL_LENGTH_MM: i64 = 600;
@@ -87,6 +89,7 @@ pub struct Editor {
     mesh_edit: Option<MeshEdit>,
     contour_edit: Option<ContourEdit>,
     drawing: Option<DrawDraft>,
+    toolbars: toolbars::Toolbars,
     card: PanelCard,
     container_card: ContainerCard,
     object_card: ObjectCard,
@@ -451,6 +454,24 @@ impl Editor {
     /// Drops open flags for nodes that no longer exist or no longer own children.
     fn retain_open(&mut self, project: &Project) {
         self.open.retain(|id| project.is_container(*id));
+    }
+
+    /// Draws the themed toolbar strip: one collapsible panel per tool theme.
+    ///
+    /// The open panels are view state owned by the editor, so they survive a selection change and a
+    /// document command and never reach the scene file.
+    pub fn show_toolbars(&mut self, ui: &mut Ui) {
+        toolbars::show(ui, &mut self.toolbars);
+    }
+
+    /// Whether the panel of the toolbar strip is open.
+    pub fn toolbar_open(&self, panel: ToolPanel) -> bool {
+        self.toolbars.is_open(panel)
+    }
+
+    /// Opens or closes one panel of the toolbar strip.
+    pub fn set_toolbar_open(&mut self, panel: ToolPanel, open: bool) -> bool {
+        self.toolbars.set_open(panel, open)
     }
 
     /// Draws the scene tree and dispatches the tree actions.

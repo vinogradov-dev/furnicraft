@@ -216,6 +216,30 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
     if label.is_empty() { response } else { response.on_hover_text(label) }
 }
 
+/// A tool button: the theme icon with a hint that names the tool and its shortcut.
+///
+/// The hint is the tooltip of a drawn icon. An icon whose asset is still a placeholder becomes the
+/// button text itself, shortcut included, because a tooltip alone would leave the button unreadable.
+/// `enabled` disables the button without changing either face, so a panel can keep its layout while
+/// a tool is unavailable.
+pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>, enabled: bool) -> Response {
+    let hint = tool_hint(label, shortcut);
+    if !icon.is_drawn() {
+        return ui.add_enabled(enabled, Button::new(hint.clone())).on_hover_text(hint);
+    }
+    let tint = ui.visuals().text_color();
+    let response = ui.add_enabled(enabled, Button::new(icon_image(tint, icon, &hint)));
+    response.on_hover_text(hint)
+}
+
+/// The readable hint of a tool button: the label and, when it has one, its shortcut.
+pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
+    match shortcut {
+        Some(shortcut) if !shortcut.is_empty() => format!("{label}  ({shortcut})"),
+        _ => label.to_owned(),
+    }
+}
+
 /// The image atom an icon button carries: the fixed draw size, the theme tint and the alt text.
 fn icon_image(tint: Color32, icon: Icon, label: &str) -> Image<'static> {
     Image::from_bytes(icon.uri(), icon.asset())
@@ -278,6 +302,33 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 51);
+    }
+
+    #[test]
+    fn a_tool_hint_names_the_shortcut_and_a_placeholder_shows_it() {
+        assert_eq!(tool_hint("Line", Some("L")), "Line  (L)");
+        assert_eq!(tool_hint("Line", None), "Line");
+        assert_eq!(tool_hint("Line", Some("")), "Line");
+
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            tool_button(ui, placeholder(), "Line", Some("L"), true);
+        });
+        let has_hint = drawn_text(&output.shapes).iter().any(|text| text == "Line  (L)");
+        output.drop_without_applying_deltas();
+        assert!(has_hint, "an empty icon falls back to the labelled shortcut");
+    }
+
+    #[test]
+    fn a_disabled_tool_button_still_draws_its_label() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let response = tool_button(ui, placeholder(), "Circle", Some("C"), false);
+            assert!(!response.enabled(), "the caller disabled the tool");
+        });
+        let has_hint = drawn_text(&output.shapes).iter().any(|text| text == "Circle  (C)");
+        output.drop_without_applying_deltas();
+        assert!(has_hint);
     }
 
     #[test]
