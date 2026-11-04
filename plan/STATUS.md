@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U6 state=idle base=1c74ea5 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U7 state=idle base=847cbbb updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -13,7 +13,7 @@ contract that orders that answer when a session was interrupted or the plan is b
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of directed line and arc
   `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13); `Path` (U4) is the
-  open or closed chain, and `to_contour` (U5) keeps its ids and makes a counter-clockwise ring.
+  open or closed chain, `to_contour` (U5) keeps its ids, and U6 stores it as `Geometry::Path` at schema 17.
 - S2 is complete: `crates/param/src/solid.rs` is the one domain-free plan — a base extrusion plus
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
@@ -52,8 +52,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U6 is next: `Geometry::Path(Path)` joins the object kinds at schema 17, with add, replace and query
-on `Project`, and older files still loading. U7–U9 add drawing, picking and the create/replace
+U7 is next: a stored path becomes a line primitive in the scene frame, drawn by the renderer's line
+pipeline, so an open chain is visible without a solid. U8–U9 add picking and the create/replace
 commands; U10–U17 add the shape constructors, the work plane, the ortho toggle and the drawing
 tools, and U18–U20 replace the scene-tree creation buttons with the themed toolbars. U21–U23 follow
 with the primitives and the extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap
