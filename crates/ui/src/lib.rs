@@ -17,6 +17,7 @@ mod camera_card;
 mod command;
 mod container_card;
 mod contour_edit;
+pub mod icons;
 mod light_card;
 mod machining;
 mod mesh_edit;
