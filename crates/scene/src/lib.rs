@@ -575,6 +575,31 @@ impl Drawable {
     }
 }
 
+/// One unlit polyline in world space.
+///
+/// A path is drawn as a chain of line segments, not a solid: it has no faces and no shading. The
+/// points are local-space and `world_transform` is the rigid transform of the node that owns the
+/// path, exactly like [`Drawable`], so a drag preview moves the matrix instead of copying the
+/// points. The colour is gamma-space, like [`Grid`] colours, because the line pipeline is unlit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Polyline {
+    /// The document object this chain belongs to.
+    pub id: Id,
+    /// Local-space points in travel order; at least two.
+    pub points: Arc<[DVec3]>,
+    /// Rigid local-to-world transform.
+    pub world_transform: DMat4,
+    /// Gamma-space RGB and opacity.
+    pub color: [f32; 4],
+}
+
+impl Polyline {
+    /// Creates a polyline from a document id, local points, a rigid world transform and a colour.
+    pub fn new(id: Id, points: Arc<[DVec3]>, world_transform: DMat4, color: [f32; 4]) -> Self {
+        Self { id, points, world_transform, color }
+    }
+}
+
 /// Everything needed to draw and light one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneFrame {
@@ -588,6 +613,8 @@ pub struct SceneFrame {
     pub background: [f32; 4],
     /// Shaded meshes in world space.
     pub drawables: Vec<Drawable>,
+    /// Unlit line chains in world space.
+    pub polylines: Vec<Polyline>,
 }
 
 impl Default for SceneFrame {
@@ -598,6 +625,7 @@ impl Default for SceneFrame {
             lighting: Lighting::default(),
             background: [0.10, 0.11, 0.13, 1.0],
             drawables: Vec::new(),
+            polylines: Vec::new(),
         }
     }
 }
@@ -608,9 +636,19 @@ impl SceneFrame {
         self.drawables.push(drawable);
     }
 
+    /// Adds an unlit line chain to the frame.
+    pub fn push_polyline(&mut self, polyline: Polyline) {
+        self.polylines.push(polyline);
+    }
+
     /// The frame's drawables.
     pub fn drawables(&self) -> &[Drawable] {
         &self.drawables
+    }
+
+    /// The frame's unlit line chains.
+    pub fn polylines(&self) -> &[Polyline] {
+        &self.polylines
     }
 
     /// The document id of the nearest drawable hit by `ray`.
@@ -631,7 +669,7 @@ impl SceneFrame {
         nearest.map(|(_, id)| id)
     }
 
-    /// A copy of the frame with every selected drawable tinted for picking feedback.
+    /// A copy of the frame with every selected drawable and line chain tinted for picking feedback.
     ///
     /// The base frame keeps its material colours, so clearing the selection restores them without
     /// rebuilding meshes. Passing the panels below a selected container highlights the container as
@@ -642,20 +680,22 @@ impl SceneFrame {
             return frame;
         }
         for drawable in &mut frame.drawables {
-            if !selected.contains(&drawable.id) {
-                continue;
+            if selected.contains(&drawable.id) {
+                tint_selected(&mut drawable.color);
             }
-            for (channel, tint) in drawable.color.iter_mut().zip(SELECTION_TINT) {
-                let base = f64::from(*channel);
-                *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+        }
+        for polyline in &mut frame.polylines {
+            if selected.contains(&polyline.id) {
+                tint_selected(&mut polyline.color);
             }
         }
         frame
     }
 
-    /// A copy of the frame with the given drawables shifted by a world-space translation.
+    /// A copy of the frame with the given drawables and line chains shifted by a world-space
+    /// translation.
     ///
-    /// This is a drag preview: it moves the listed drawables without touching the document, so the
+    /// This is a drag preview: it moves the listed primitives without touching the document, so the
     /// renderer can follow the pointer before one command commits the result. A non-finite delta
     /// leaves the frame unchanged.
     pub fn with_world_translation(&self, ids: &[Id], delta: DVec3) -> Self {
@@ -669,12 +709,18 @@ impl SceneFrame {
                 drawable.world_transform = translation * drawable.world_transform;
             }
         }
+        for polyline in &mut frame.polylines {
+            if ids.contains(&polyline.id) {
+                polyline.world_transform = translation * polyline.world_transform;
+            }
+        }
         frame
     }
 
-    /// A copy of the frame with the given drawables rotated about a world-space pivot.
+    /// A copy of the frame with the given drawables and line chains rotated about a world-space
+    /// pivot.
     ///
-    /// This is a drag preview: it turns the listed drawables without touching the document, so the
+    /// This is a drag preview: it turns the listed primitives without touching the document, so the
     /// renderer can follow the pointer before one command commits the result. The rotation must be a
     /// finite unit quaternion and the pivot finite; anything else leaves the frame unchanged.
     pub fn with_world_rotation(&self, ids: &[Id], pivot: DVec3, rotation: DQuat) -> Self {
@@ -686,6 +732,11 @@ impl SceneFrame {
         for drawable in &mut frame.drawables {
             if ids.contains(&drawable.id) {
                 drawable.world_transform = about_pivot * drawable.world_transform;
+            }
+        }
+        for polyline in &mut frame.polylines {
+            if ids.contains(&polyline.id) {
+                polyline.world_transform = about_pivot * polyline.world_transform;
             }
         }
         frame
@@ -712,6 +763,14 @@ const SELECTION_TINT: [f64; 3] = [1.0, 0.55, 0.15];
 
 /// Fraction of [`SELECTION_TINT`] mixed into the base colour.
 const SELECTION_MIX: f64 = 0.35;
+
+/// Mixes the selection tint into an RGB colour, leaving the alpha channel untouched.
+fn tint_selected(color: &mut [f32; 4]) {
+    for (channel, tint) in color.iter_mut().zip(SELECTION_TINT) {
+        let base = f64::from(*channel);
+        *channel = (base * (1.0 - SELECTION_MIX) + tint * SELECTION_MIX) as f32;
+    }
+}
 
 fn ray_hit_drawable(ray: Ray, drawable: &Drawable) -> Option<f64> {
     let mesh = &drawable.mesh;
@@ -939,6 +998,69 @@ mod tests {
         frame.push(Drawable::new(id, mesh, DMat4::IDENTITY, [1.0; 4]));
         assert_eq!(frame.drawables().len(), 1);
         assert_eq!(frame.drawables()[0].id, id);
+    }
+
+    fn line_chain(id: Id) -> Polyline {
+        Polyline::new(id, Arc::from(vec![DVec3::ZERO, DVec3::X]), DMat4::IDENTITY, [0.5, 0.5, 0.5, 1.0])
+    }
+
+    #[test]
+    fn scene_accepts_polylines() {
+        let mut frame = SceneFrame::default();
+        let id = Id::new(7).expect("id");
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X, DVec3::new(1.0, 1.0, 0.0)]);
+        frame.push_polyline(Polyline::new(id, points.clone(), DMat4::IDENTITY, [1.0; 4]));
+
+        assert_eq!(frame.polylines().len(), 1);
+        assert_eq!(frame.polylines()[0].id, id);
+        assert_eq!(frame.polylines()[0].points, points);
+        assert!(frame.drawables().is_empty(), "a line chain is not a solid drawable");
+    }
+
+    #[test]
+    fn a_world_translation_preview_moves_only_the_listed_polylines() {
+        let moved = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_polyline(line_chain(moved));
+        frame.push_polyline(line_chain(other));
+
+        let translated = frame.with_world_translation(&[moved], DVec3::new(1.0, 2.0, 3.0));
+        let position = translated.polylines()[0].world_transform.transform_point3(DVec3::ZERO);
+        assert!((position - DVec3::new(1.0, 2.0, 3.0)).length() < 1.0e-12);
+        assert_eq!(translated.polylines()[1].world_transform, DMat4::IDENTITY);
+        assert_eq!(frame.polylines()[0].world_transform, DMat4::IDENTITY, "the base frame keeps its transform");
+    }
+
+    #[test]
+    fn a_world_rotation_preview_turns_only_the_listed_polylines() {
+        let turned = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        let offset = DMat4::from_translation(DVec3::new(2.0, 0.0, 0.0));
+        frame.push_polyline(Polyline::new(turned, Arc::from(vec![DVec3::ZERO, DVec3::X]), offset, [1.0; 4]));
+        frame.push_polyline(line_chain(other));
+
+        let quarter_turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
+        let rotated = frame.with_world_rotation(&[turned], DVec3::new(1.0, 0.0, 0.0), quarter_turn);
+        let position = rotated.polylines()[0].world_transform.transform_point3(DVec3::ZERO);
+        assert!((position - DVec3::new(1.0, 1.0, 0.0)).length() < 1.0e-12, "position was {position:?}");
+        assert_eq!(rotated.polylines()[1].world_transform, DMat4::IDENTITY);
+        assert_eq!(frame.polylines()[0].world_transform, offset);
+    }
+
+    #[test]
+    fn selection_highlight_tints_every_selected_polyline() {
+        let selected = Id::new(2).expect("id");
+        let other = Id::new(3).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push_polyline(line_chain(selected));
+        frame.push_polyline(line_chain(other));
+
+        let highlighted = frame.with_selection_highlight(&[selected]);
+        assert_ne!(highlighted.polylines()[0].color, frame.polylines()[0].color);
+        assert_eq!(highlighted.polylines()[1].color, frame.polylines()[1].color);
+        assert_eq!(frame.polylines()[0].color, [0.5, 0.5, 0.5, 1.0], "the base frame keeps its colour");
     }
 
     fn quad_mesh() -> Arc<MeshData> {

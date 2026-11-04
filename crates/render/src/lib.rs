@@ -16,7 +16,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{Grid, Lighting, MAX_POINT_LIGHTS, SceneFrame};
+use furnicraft_scene::{Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
@@ -25,7 +25,8 @@ use wgpu::util::DeviceExt as _;
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// Largest mesh, in vertices, that the renderer accepts from one drawable.
+/// Largest vertex count the renderer accepts for one uploaded primitive: a drawable's mesh or the
+/// whole frame's line list.
 const MAX_VERTICES: usize = 4_000_000;
 
 /// Largest number of grid divisions on each side of the origin.
@@ -50,6 +51,24 @@ pub enum RenderError {
     #[error("drawable {index} has too many vertices")]
     MeshTooLarge {
         /// Position of the drawable in the frame.
+        index: usize,
+    },
+    /// A polyline has fewer than two points, so it has no segment to draw.
+    #[error("polyline {index} has fewer than two points")]
+    EmptyPolyline {
+        /// Position of the polyline in the frame.
+        index: usize,
+    },
+    /// A polyline has malformed points or a non-finite transform.
+    #[error("polyline {index} has invalid points")]
+    InvalidPolyline {
+        /// Position of the polyline in the frame.
+        index: usize,
+    },
+    /// A polyline exceeds the renderer's vertex budget.
+    #[error("polyline {index} has too many points")]
+    PolylineTooLarge {
+        /// Position of the polyline in the frame.
         index: usize,
     },
 }
@@ -94,7 +113,8 @@ struct GpuMesh {
     index_count: u32,
 }
 
-struct GpuGrid {
+/// One line-list vertex buffer: the grid and the frame's polylines each own one.
+struct GpuLineList {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
 }
@@ -141,11 +161,12 @@ impl RenderTargets {
 /// exposes the colour view that egui should display.
 pub struct ViewportRenderer {
     mesh_pipeline: wgpu::RenderPipeline,
-    grid_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     drawables: Vec<GpuMesh>,
-    grid: Option<GpuGrid>,
+    grid: Option<GpuLineList>,
+    polylines: Option<GpuLineList>,
     targets: RenderTargets,
     size: [u32; 2],
 }
@@ -237,12 +258,12 @@ impl ViewportRenderer {
             cache: None,
         });
 
-        let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("FurniCraft grid pipeline"),
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("FurniCraft line pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_grid"),
+                entry_point: Some("vs_line"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(vertex_layout())],
             },
@@ -265,7 +286,7 @@ impl ViewportRenderer {
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_grid"),
+                entry_point: Some("fs_line"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[color_target],
             }),
@@ -275,11 +296,12 @@ impl ViewportRenderer {
 
         Self {
             mesh_pipeline,
-            grid_pipeline,
+            line_pipeline,
             camera_buffer,
             camera_bind_group,
             drawables: Vec::new(),
             grid: None,
+            polylines: None,
             targets,
             size,
         }
@@ -333,22 +355,12 @@ impl ViewportRenderer {
             drawables.push(GpuMesh { vertex_buffer, index_buffer, index_count });
         }
 
-        let grid_vertices = grid_vertices(&frame.grid);
-        let grid = if grid_vertices.is_empty() {
-            None
-        } else {
-            let vertex_count =
-                u32::try_from(grid_vertices.len()).map_err(|_| RenderError::MeshTooLarge { index: 0 })?;
-            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("FurniCraft grid vertices"),
-                contents: bytemuck::cast_slice(&grid_vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            Some(GpuGrid { vertex_buffer, vertex_count })
-        };
+        let grid = line_list(device, "FurniCraft grid vertices", grid_vertices(&frame.grid))?;
+        let polylines = line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines())?)?;
 
         self.drawables = drawables;
         self.grid = grid;
+        self.polylines = polylines;
         Ok(())
     }
 
@@ -432,10 +444,16 @@ impl ViewportRenderer {
                 }
             }
 
-            if let Some(grid) = &self.grid {
-                pass.set_pipeline(&self.grid_pipeline);
-                pass.set_vertex_buffer(0, grid.vertex_buffer.slice(..));
-                pass.draw(0..grid.vertex_count, 0..1);
+            if self.grid.is_some() || self.polylines.is_some() {
+                pass.set_pipeline(&self.line_pipeline);
+                if let Some(grid) = &self.grid {
+                    pass.set_vertex_buffer(0, grid.vertex_buffer.slice(..));
+                    pass.draw(0..grid.vertex_count, 0..1);
+                }
+                if let Some(polylines) = &self.polylines {
+                    pass.set_vertex_buffer(0, polylines.vertex_buffer.slice(..));
+                    pass.draw(0..polylines.vertex_count, 0..1);
+                }
             }
         }
         queue.submit(Some(encoder.finish()));
@@ -445,6 +463,71 @@ impl ViewportRenderer {
 fn clamp_size(width: u32, height: u32, max_dimension: u32) -> [u32; 2] {
     let max_dimension = max_dimension.max(1);
     [width.clamp(1, max_dimension), height.clamp(1, max_dimension)]
+}
+
+/// Uploads a line-list vertex buffer, or nothing when there are no vertices.
+fn line_list(
+    device: &wgpu::Device,
+    label: &str,
+    vertices: Vec<MeshVertex>,
+) -> Result<Option<GpuLineList>, RenderError> {
+    if vertices.is_empty() {
+        return Ok(None);
+    }
+    let vertex_count = u32::try_from(vertices.len()).map_err(|_| RenderError::MeshTooLarge { index: 0 })?;
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(&vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    Ok(Some(GpuLineList { vertex_buffer, vertex_count }))
+}
+
+/// Flattens every frame polyline into one line-list vertex buffer.
+///
+/// Points are transformed into world space here, the same way a drawable's mesh is. A malformed
+/// chain is an error instead of a silently missing path, so the shell can report it.
+fn polyline_vertices(polylines: &[Polyline]) -> Result<Vec<MeshVertex>, RenderError> {
+    let mut vertices = Vec::new();
+    for (index, polyline) in polylines.iter().enumerate() {
+        push_polyline_vertices(index, polyline, &mut vertices)?;
+    }
+    Ok(vertices)
+}
+
+/// Appends one polyline as pairs of line-list vertices in world space.
+fn push_polyline_vertices(
+    index: usize,
+    polyline: &Polyline,
+    vertices: &mut Vec<MeshVertex>,
+) -> Result<(), RenderError> {
+    let point_count = polyline.points.len();
+    if point_count < 2 {
+        return Err(RenderError::EmptyPolyline { index });
+    }
+    let needed = (point_count - 1).checked_mul(2).ok_or(RenderError::PolylineTooLarge { index })?;
+    let total = vertices.len().checked_add(needed).ok_or(RenderError::PolylineTooLarge { index })?;
+    if total > MAX_VERTICES {
+        return Err(RenderError::PolylineTooLarge { index });
+    }
+    if !polyline.world_transform.is_finite() || polyline.points.iter().any(|point| !point.is_finite()) {
+        return Err(RenderError::InvalidPolyline { index });
+    }
+    let color = sanitize_color(polyline.color);
+    let mut previous = None;
+    for point in polyline.points.iter() {
+        let world = polyline.world_transform.transform_point3(*point);
+        if !world.is_finite() {
+            return Err(RenderError::InvalidPolyline { index });
+        }
+        let position = to_array(world);
+        if let Some(previous) = previous {
+            vertices.push(MeshVertex { position: previous, normal: [0.0, 0.0, 1.0], color });
+            vertices.push(MeshVertex { position, normal: [0.0, 0.0, 1.0], color });
+        }
+        previous = Some(position);
+    }
+    Ok(())
 }
 
 /// Converts a local mesh into world-space vertices and indices.
@@ -616,7 +699,10 @@ fn point_uniforms(lighting: &Lighting) -> ([u32; 4], [[f32; 4]; MAX_POINT_LIGHTS
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::sync::Arc;
+
     use super::*;
+    use furnicraft_model::Id;
 
     fn triangle() -> MeshData {
         MeshData {
@@ -657,6 +743,44 @@ mod tests {
         assert_eq!(vertices.len(), 3);
         assert_eq!(indices, vec![0, 1, 2]);
         assert!((vertices[0].normal[2] - 1.0).abs() < 1.0e-6);
+    }
+
+    fn line_chain(transform: DMat4) -> Polyline {
+        let points: Arc<[DVec3]> =
+            Arc::from(vec![DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 0.0)]);
+        Polyline::new(Id::new(1).expect("id"), points, transform, [1.0, 0.5, 0.25, 1.0])
+    }
+
+    #[test]
+    fn a_polyline_becomes_one_line_list_segment_per_pair() {
+        let transform = DMat4::from_translation(DVec3::new(100.0, 20.0, 5.0));
+        let vertices = polyline_vertices(&[line_chain(transform)]).expect("valid polyline");
+
+        assert_eq!(vertices.len(), 4, "two segments, two vertices each");
+        assert_eq!(vertices[0].position, [100.0, 20.0, 5.0]);
+        assert_eq!(vertices[1].position, [110.0, 20.0, 5.0]);
+        assert_eq!(vertices[2].position, [110.0, 20.0, 5.0]);
+        assert_eq!(vertices[3].position, [110.0, 30.0, 5.0]);
+        assert_eq!(vertices[0].color, [1.0, 0.5, 0.25, 1.0]);
+    }
+
+    #[test]
+    fn a_polyline_needs_two_finite_points() {
+        let id = Id::new(1).expect("id");
+        let empty = Polyline::new(id, Arc::from(Vec::<DVec3>::new()), DMat4::IDENTITY, [1.0; 4]);
+        assert_eq!(polyline_vertices(&[empty]), Err(RenderError::EmptyPolyline { index: 0 }));
+
+        let bad_point =
+            Polyline::new(id, Arc::from(vec![DVec3::ZERO, DVec3::new(f64::NAN, 0.0, 0.0)]), DMat4::IDENTITY, [1.0; 4]);
+        assert_eq!(polyline_vertices(&[bad_point]), Err(RenderError::InvalidPolyline { index: 0 }));
+
+        let bad_transform = Polyline::new(
+            id,
+            Arc::from(vec![DVec3::ZERO, DVec3::X]),
+            DMat4::from_translation(DVec3::new(f64::NAN, 0.0, 0.0)),
+            [1.0; 4],
+        );
+        assert_eq!(polyline_vertices(&[bad_transform]), Err(RenderError::InvalidPolyline { index: 0 }));
     }
 
     #[test]

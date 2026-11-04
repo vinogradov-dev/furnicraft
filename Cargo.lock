@@ -1402,6 +1402,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "furnicraft-geom",
+ "furnicraft-model",
  "furnicraft-scene",
  "naga",
  "thiserror 2.0.21",

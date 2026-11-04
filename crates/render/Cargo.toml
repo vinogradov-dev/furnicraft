@@ -18,3 +18,5 @@ wgpu = { workspace = true }
 [dev-dependencies]
 # Parses and validates `scene.wgsl` in tests; already in the tree through `wgpu`.
 naga = { version = "30", features = ["wgsl-in"] }
+# Tests build a polyline, which carries a document id; already in the tree through `scene`.
+furnicraft-model = { workspace = true }
