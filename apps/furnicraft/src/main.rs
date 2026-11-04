@@ -592,10 +592,7 @@ impl FurniCraftApp {
                     self.last_error = Some(error);
                 }
             } else {
-                let ndc_x = f64::from((pointer.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
-                let ndc_y = 1.0 - f64::from((pointer.y - rect.min.y) / rect.height()) * 2.0;
-                let ray = self.scene.camera.ray_ndc(ndc_x, ndc_y, f64::from(rect.width() / rect.height()));
-                let hit = self.scene.pick(ray);
+                let hit = mesh_pick::pick_scene(rect, &self.scene, pointer);
                 if response.double_clicked() {
                     self.editor.enter_viewport_level(self.session.project(), hit);
                 } else {

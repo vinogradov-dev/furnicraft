@@ -31,3 +31,15 @@ transform.
 - The highlight re-uploads the scene's vertex buffers when the selection changes. A later
   incremental colour update or a GPU id pass can replace either side without touching the document
   or the command layer.
+
+## Amendment: line chains (2026-11-04)
+
+A stored path is drawn as an unlit line chain ([0040](0040-a-constructive-contour-is-a-ring-of-segments.md)),
+and a line has no triangles and no thickness, so a triangle-ray test never hits it. `pick` therefore
+also walks the frame's polylines: each segment is tested by the closest approach of the pointer ray
+(`ray_segment`), and the segment counts as hit when that separation is within
+`LINE_PICK_RADIUS_POINTS` viewport points. `Camera::world_per_point` turns those points into
+millimetres at the segment's depth, so the radius is the same on screen near and far, and picking
+still needs no renderer state. A path wins a tie with a solid it lies on, so a contour drawn on a
+face stays selectable; the returned value is still a document `Id`.
+

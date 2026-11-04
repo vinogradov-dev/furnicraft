@@ -36,6 +36,12 @@ pub const MAX_PITCH: f64 = 85.0 * PI / 180.0;
 /// accidental huge coordinate from turning the ray into an unusable vector.
 const NDC_LIMIT: f64 = 16.0;
 
+/// Pick radius around an unlit line chain, in viewport points.
+///
+/// A path is drawn one pixel wide, so a ray rarely crosses it exactly; this radius makes a click
+/// near the line select the path without making a whole viewport region its target.
+pub const LINE_PICK_RADIUS_POINTS: f64 = 6.0;
+
 /// Closest camera distance from its target, in millimetres.
 pub const MIN_DISTANCE_MM: f64 = 10.0;
 
@@ -371,6 +377,21 @@ impl Camera {
         ndc.is_finite().then_some(ndc)
     }
 
+    /// World millimetres covered by one viewport point at `depth` millimetres from the eye.
+    ///
+    /// A perspective view widens with depth; an orthographic one does not, so its value is the
+    /// same everywhere. Broken input yields zero: a tolerance built from it can then only accept an
+    /// exact hit instead of rejecting a valid one.
+    pub fn world_per_point(self, depth: f64, viewport_height: f64) -> f64 {
+        if !depth.is_finite() || !viewport_height.is_finite() || viewport_height <= 0.0 {
+            return 0.0;
+        }
+        match self.projection {
+            Projection::Perspective { fov_y } => 2.0 * depth.max(0.0) * (fov_y * 0.5).tan() / viewport_height,
+            Projection::Orthographic { height } => height.max(1.0e-6) / viewport_height,
+        }
+    }
+
     /// Pans the target across the screen plane, in points.
     ///
     /// The world distance per point is measured at the target, so the scene follows the pointer.
@@ -651,12 +672,17 @@ impl SceneFrame {
         &self.polylines
     }
 
-    /// The document id of the nearest drawable hit by `ray`.
+    /// The document id of the nearest drawable or line chain hit by `ray`.
     ///
-    /// Only triangles are tested, so a malformed mesh or a drawable that misses the ray is skipped.
-    /// Picking returns a document id, never a mesh index or a pointer: the caller can select it or
-    /// send it to a command.
-    pub fn pick(&self, ray: Ray) -> Option<Id> {
+    /// A drawable is hit when one of its triangles crosses the ray. A line chain has no thickness,
+    /// so it is hit when the ray passes within [`LINE_PICK_RADIUS_POINTS`] points of a segment at
+    /// that segment's depth; `viewport_height` is the viewport's height in points, and a
+    /// non-positive or non-finite one accepts only an exact crossing. A path wins a tie with a
+    /// solid it lies on, so a contour drawn on a face stays selectable.
+    ///
+    /// Malformed vertices, indices and world transforms are skipped. Picking returns a document
+    /// id, never a mesh index or a pointer: the caller can select it or send it to a command.
+    pub fn pick(&self, ray: Ray, viewport_height: f64) -> Option<Id> {
         let mut nearest: Option<(f64, Id)> = None;
         for drawable in &self.drawables {
             let Some(distance) = ray_hit_drawable(ray, drawable) else {
@@ -664,6 +690,14 @@ impl SceneFrame {
             };
             if nearest.is_none_or(|(best, _)| distance < best) {
                 nearest = Some((distance, drawable.id));
+            }
+        }
+        for polyline in &self.polylines {
+            let Some(distance) = ray_hit_polyline(ray, polyline, self.camera, viewport_height) else {
+                continue;
+            };
+            if nearest.is_none_or(|(best, _)| distance <= best) {
+                nearest = Some((distance, polyline.id));
             }
         }
         nearest.map(|(_, id)| id)
@@ -801,6 +835,68 @@ fn world_vertex(mesh: &MeshData, index: u32, transform: DMat4) -> Option<DVec3> 
     }
     let world = transform.transform_point3(local);
     world.is_finite().then_some(world)
+}
+
+/// The distance along `ray` to its closest approach to a line chain, if the ray passes near it.
+///
+/// A segment counts as hit when the separation at its depth is within the pick radius the camera
+/// gives for that depth, so a near path does not need as wide a world-space tolerance as a far one.
+fn ray_hit_polyline(ray: Ray, polyline: &Polyline, camera: Camera, viewport_height: f64) -> Option<f64> {
+    let mut nearest = f64::INFINITY;
+    for pair in polyline.points.windows(2) {
+        let (Some(&start), Some(&end)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        let start = polyline.world_transform.transform_point3(start);
+        let end = polyline.world_transform.transform_point3(end);
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        let Some((along, separation)) = ray_segment(ray, start, end) else {
+            continue;
+        };
+        let tolerance = camera.world_per_point(along, viewport_height) * LINE_PICK_RADIUS_POINTS;
+        if separation <= tolerance && along < nearest {
+            nearest = along;
+        }
+    }
+    nearest.is_finite().then_some(nearest)
+}
+
+/// Distance along `ray` to its closest approach to the segment `a..b`, and the separation there.
+///
+/// A line has no thickness, so the caller compares the second value with its own tolerance while
+/// the first orders the hit against a solid. The closest approach must be in front of the ray; a
+/// segment entirely behind the camera yields `None`. A zero-length segment is treated as the point
+/// `a`, and a non-finite endpoint yields `None`.
+pub fn ray_segment(ray: Ray, a: DVec3, b: DVec3) -> Option<(f64, f64)> {
+    if !a.is_finite() || !b.is_finite() {
+        return None;
+    }
+    let offset = ray.origin - a;
+    let along_offset = ray.direction.dot(offset);
+    let segment = b - a;
+    let length_squared = segment.length_squared();
+    let parameter = if length_squared <= 1.0e-12 {
+        0.0
+    } else {
+        let along_segment = ray.direction.dot(segment);
+        let denominator = length_squared - along_segment * along_segment;
+        let raw = if denominator.abs() <= 1.0e-12 {
+            0.0
+        } else {
+            (segment.dot(offset) - along_segment * along_offset) / denominator
+        };
+        raw.clamp(0.0, 1.0)
+    };
+    let along = parameter.mul_add(ray.direction.dot(segment), -along_offset);
+    if along < 0.0 || !along.is_finite() {
+        return None;
+    }
+    let closest = ray.origin + ray.direction * along;
+    let point = a + segment * parameter;
+    let separation = point.distance(closest);
+    separation.is_finite().then_some((along, separation))
 }
 
 /// Möller–Trumbore intersection; returns the positive distance along the ray.
@@ -1197,12 +1293,12 @@ mod tests {
         frame.push(Drawable::new(far, quad_mesh(), DMat4::from_translation(DVec3::new(0.0, 0.0, 1.0)), [1.0; 4]));
 
         let from_above = Ray::new(DVec3::new(0.5, 0.5, 10.0), -DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(from_above), Some(far));
+        assert_eq!(frame.pick(from_above, 600.0), Some(far));
         let from_below = Ray::new(DVec3::new(0.5, 0.5, -10.0), DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(from_below), Some(near));
+        assert_eq!(frame.pick(from_below, 600.0), Some(near));
 
         let miss = Ray::new(DVec3::new(2.0, 2.0, 10.0), -DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(miss), None);
+        assert_eq!(frame.pick(miss, 600.0), None);
     }
 
     #[test]
@@ -1213,9 +1309,9 @@ mod tests {
         frame.push(Drawable::new(id, quad_mesh(), transform, [1.0; 4]));
 
         let hit = Ray::new(DVec3::new(10.5, 0.5, 10.0), -DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(hit), Some(id));
+        assert_eq!(frame.pick(hit, 600.0), Some(id));
         let original_position = Ray::new(DVec3::new(0.5, 0.5, 10.0), -DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(original_position), None);
+        assert_eq!(frame.pick(original_position, 600.0), None);
     }
 
     #[test]
@@ -1226,7 +1322,121 @@ mod tests {
         let mut frame = SceneFrame::default();
         frame.push(Drawable::new(id, mesh, DMat4::IDENTITY, [1.0; 4]));
         let ray = Ray::new(DVec3::new(0.0, 0.0, 1.0), -DVec3::Z).expect("ray");
-        assert_eq!(frame.pick(ray), None);
+        assert_eq!(frame.pick(ray, 600.0), None);
+    }
+
+    #[test]
+    fn world_per_point_follows_the_projection_and_the_depth() {
+        let camera = Camera::new(DVec3::ZERO, 1000.0).expect("camera");
+        let expected = 2.0 * 1000.0 * (DEFAULT_FOV_Y * 0.5).tan() / 1000.0;
+        assert!((camera.world_per_point(1000.0, 1000.0) - expected).abs() < 1.0e-12);
+        assert!(camera.world_per_point(2000.0, 1000.0) > camera.world_per_point(1000.0, 1000.0));
+
+        let orthographic = camera.with_projection(Projection::Orthographic { height: 500.0 });
+        assert_eq!(orthographic.world_per_point(10.0, 1000.0), 0.5);
+        assert_eq!(orthographic.world_per_point(900.0, 1000.0), 0.5);
+
+        assert_eq!(camera.world_per_point(f64::NAN, 1000.0), 0.0);
+        assert_eq!(camera.world_per_point(10.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn ray_segment_measures_the_closest_approach() {
+        let ray = Ray::new(DVec3::new(0.5, 0.0, 10.0), -DVec3::Z).expect("ray");
+        let (along, separation) = ray_segment(ray, DVec3::ZERO, DVec3::X).expect("crossing");
+        assert!((along - 10.0).abs() < 1.0e-9);
+        assert!(separation < 1.0e-9);
+
+        let offset = DVec3::new(0.0, 0.25, 0.0);
+        let (_, separation) = ray_segment(ray, offset, offset + DVec3::X).expect("near miss");
+        assert!((separation - 0.25).abs() < 1.0e-9);
+
+        let past_the_end = Ray::new(DVec3::new(2.0, 0.0, 10.0), -DVec3::Z).expect("ray");
+        let (_, separation) = ray_segment(past_the_end, DVec3::ZERO, DVec3::X).expect("clamped to the end");
+        assert!((separation - 1.0).abs() < 1.0e-9);
+
+        let (along, separation) = ray_segment(ray, DVec3::ZERO, DVec3::ZERO).expect("a point");
+        assert!((along - 10.0).abs() < 1.0e-9);
+        assert!((separation - 0.5).abs() < 1.0e-9, "the zero-length segment is its own start point");
+
+        let behind = Ray::new(DVec3::new(0.5, 0.0, -10.0), -DVec3::Z).expect("ray");
+        assert_eq!(ray_segment(behind, DVec3::ZERO, DVec3::X), None);
+        assert_eq!(ray_segment(ray, DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X), None);
+    }
+
+    #[test]
+    fn picking_a_path_returns_its_document_id_near_the_line() {
+        let id = Id::new(6).expect("id");
+        let mut frame = SceneFrame::default();
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X]);
+        frame.push_polyline(Polyline::new(id, points, DMat4::IDENTITY, [1.0; 4]));
+
+        // At ten millimetres deep and a 600-point viewport, six points are about 0.083 mm.
+        let near = Ray::new(DVec3::new(0.5, 0.04, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(near, 600.0), Some(id));
+        let far = Ray::new(DVec3::new(0.5, 0.4, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(far, 600.0), None);
+
+        let exact = Ray::new(DVec3::new(0.5, 0.0, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(exact, 0.0), Some(id), "an exact crossing needs no tolerance");
+        assert_eq!(frame.pick(near, 0.0), None, "a broken viewport height means no radius");
+
+        let miss = Ray::new(DVec3::new(5.0, 0.0, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(miss, 600.0), None, "past the end of the chain");
+    }
+
+    #[test]
+    fn picking_follows_the_polyline_world_transform() {
+        let id = Id::new(7).expect("id");
+        let mut frame = SceneFrame::default();
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X]);
+        let transform = DMat4::from_translation(DVec3::new(10.0, 0.0, 0.0));
+        frame.push_polyline(Polyline::new(id, points, transform, [1.0; 4]));
+
+        let hit = Ray::new(DVec3::new(10.5, 0.01, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(hit, 600.0), Some(id));
+        let original_position = Ray::new(DVec3::new(0.5, 0.0, 10.0), -DVec3::Z).expect("ray");
+        assert_eq!(frame.pick(original_position, 600.0), None);
+    }
+
+    #[test]
+    fn the_nearest_of_a_solid_and_a_path_wins_and_a_path_wins_a_tie() {
+        let solid = Id::new(8).expect("id");
+        let path = Id::new(9).expect("id");
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::new(0.0, 0.5, 0.0), DVec3::new(1.0, 0.5, 0.0)]);
+        let above = Ray::new(DVec3::new(0.5, 0.5, 10.0), -DVec3::Z).expect("ray");
+
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(solid, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        frame.push_polyline(Polyline::new(path, points.clone(), DMat4::IDENTITY, [1.0; 4]));
+        assert_eq!(frame.pick(above, 600.0), Some(path), "a path on a face stays selectable");
+
+        frame = SceneFrame::default();
+        frame.push(Drawable::new(solid, quad_mesh(), DMat4::IDENTITY, [1.0; 4]));
+        let below = DMat4::from_translation(DVec3::new(0.0, 0.0, -1.0));
+        frame.push_polyline(Polyline::new(path, points, below, [1.0; 4]));
+        assert_eq!(frame.pick(above, 600.0), Some(solid), "an occluded path loses to the solid");
+    }
+
+    #[test]
+    fn malformed_polylines_are_skipped_instead_of_panicking() {
+        let id = Id::new(10).expect("id");
+        let ray = Ray::new(DVec3::new(0.5, 0.0, 10.0), -DVec3::Z).expect("ray");
+        let mut frame = SceneFrame::default();
+        let broken: Arc<[DVec3]> = Arc::from(vec![DVec3::new(f64::NAN, 0.0, 0.0), DVec3::X]);
+        frame.push_polyline(Polyline::new(id, broken, DMat4::IDENTITY, [1.0; 4]));
+        assert_eq!(frame.pick(ray, 600.0), None);
+
+        let mut frame = SceneFrame::default();
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X]);
+        let broken = DMat4::from_translation(DVec3::new(f64::INFINITY, 0.0, 0.0));
+        frame.push_polyline(Polyline::new(id, points, broken, [1.0; 4]));
+        assert_eq!(frame.pick(ray, 600.0), None);
+
+        let mut frame = SceneFrame::default();
+        let single: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO]);
+        frame.push_polyline(Polyline::new(id, single, DMat4::IDENTITY, [1.0; 4]));
+        assert_eq!(frame.pick(ray, 600.0), None, "one point has no segment");
     }
 
     #[test]
