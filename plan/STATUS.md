@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U4 state=idle base=d122b85 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U5 state=idle base=25e330f updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -12,7 +12,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 - M7 — objects and the scene file, after M6: `Container` is the only container kind, every node
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of directed line and arc
-  `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13).
+  `ContourSegment`s with stable ids and a per-ring counter (ADR 0040, schema 13); `Path` (U4) is the
+  open or closed chain of the same segments, stored as drawn, up to `MAX_CONTOUR_SEGMENTS` long.
 - S2 is complete: `crates/param/src/solid.rs` is the one domain-free plan — a base extrusion plus
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
@@ -51,13 +52,12 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U4 is next: a flat contour is a document `Path`, an ordered chain of line and arc segments with
-stable ids, open or closed and with joints that meet within a micrometre. U5–U9 add its ring
-conversion, its object form, drawing and picking, and its commands; U10–U17 add the shape
-constructors, the work plane, the ortho toggle and the drawing tools, and U18–U20 replace the
-scene-tree creation buttons with the themed toolbars. U21–U23 follow with the primitives and the
-extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit
-(`plan/questions.md`).
+U5 is next: `Path::to_contour` turns a closed, simple path into the ring a panel or an extrusion
+needs, and refuses an open or crossing chain with a readable error. U6–U9 add the path object,
+drawing, picking and the create/replace commands; U10–U17 add the shape constructors, the work
+plane, the ortho toggle and the drawing tools, and U18–U20 replace the scene-tree creation buttons
+with the themed toolbars. U21–U23 follow with the primitives and the extrude operation, then S4 and
+P1–P3. X2 waits for a decision on the cap limit (`plan/questions.md`).
 
 ## Index
 

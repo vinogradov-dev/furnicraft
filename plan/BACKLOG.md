@@ -23,10 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
-  ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
-  path; tests for a single segment, an arc, an open polyline and a broken joint.
-  `files: crates/model/src/contour.rs, crates/model/src/lib.rs`
+- `[ ]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
+  is closed and simple, otherwise a readable error.
+  `files: crates/model/src/contour.rs`
 
 ## Bugs
 
@@ -40,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
-  is closed and simple, otherwise a readable error.
-  `files: crates/model/src/contour.rs`
 - `[ ]` **U6** a path object: `Geometry::Path(Path)`, schema 17, add, replace and query on `Project`,
   with older files still loading.
   `files: crates/model/src/object.rs, crates/model/src/project/wire.rs`
@@ -110,6 +106,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
+  ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
+  path; tests for a single segment, an arc, an open polyline and a broken joint — `25e330f`
 - `[x]` **U25** the contour icon set: `line`, `polyline` and `arc` as flat constructions with
   control points, `rectangle` from two opposite corners, `circle` from its centre, `close` as an
   open chain joined by a heavy segment and `cancel` as the service X; every file reads at 16 px on

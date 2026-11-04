@@ -9,6 +9,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Feature | Where | Notes |
 |---|---|---|
 | Contour ring, segment ids | `crates/model/src/contour.rs` (`Contour`, `ContourSegmentId`, `assemble`) | whole file |
+| Flat path value | `crates/model/src/contour.rs` (`Path`, `PathError`) | open or closed chain of one to `MAX_CONTOUR_SEGMENTS` segments |
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`) | whole file |
 | Contour edit mode | `crates/ui/src/contour_edit.rs` (`ContourEdit`), `crates/ui/src/lib.rs` (`Editor`), `apps/furnicraft/src/contour_gizmo.rs` (`ContourGizmo`), `apps/furnicraft/src/main.rs` | whole files |
 | Contour edit commands | `crates/engine/src/panel_cmds.rs` (`PanelOutlineSet`), `crates/engine/src/object_cmds.rs` (`ObjectContourReplace`) | small |
