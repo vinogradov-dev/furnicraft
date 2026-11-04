@@ -1,14 +1,15 @@
-//! Free-form geometry objects: a baked mesh or a contour with a feature history.
+//! Free-form geometry objects: a baked mesh, a path or a contour with a feature history.
 //!
 //! An object is a leaf in the container tree, placed like a panel but carrying no manufacturing
 //! rules. A constructive payload stores the features it was built from; the mesh is derived and
-//! replaces the history only when the user collapses it.
+//! replaces the history only when the user collapses it. A path payload is a flat drawing that has
+//! no solid yet.
 
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE};
+use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE, Path};
 use crate::mesh::Mesh;
 use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
 
@@ -180,7 +181,8 @@ pub enum ConstructiveError {
 ///
 /// Exactly one payload is stored. A `Mesh` is edited directly; a [`Constructive`] payload is
 /// rebuilt from its features and is not editable as a mesh until the object is collapsed
-/// ([ADR 0037]).
+/// ([ADR 0037]). A [`Path`] is a flat chain of drawn segments: it has no solid yet, and it becomes
+/// one only when it is closed and extruded.
 ///
 /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -190,6 +192,8 @@ pub enum Geometry {
     Mesh(Mesh),
     /// A contour and its feature history; the mesh is derived.
     Constructive(Constructive),
+    /// A flat, open or closed chain of drawn segments.
+    Path(Path),
 }
 
 impl Geometry {
@@ -197,7 +201,7 @@ impl Geometry {
     pub const fn as_mesh(&self) -> Option<&Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
-            Self::Constructive(_) => None,
+            Self::Constructive(_) | Self::Path(_) => None,
         }
     }
 
@@ -205,7 +209,7 @@ impl Geometry {
     pub const fn as_mesh_mut(&mut self) -> Option<&mut Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
-            Self::Constructive(_) => None,
+            Self::Constructive(_) | Self::Path(_) => None,
         }
     }
 
@@ -213,7 +217,7 @@ impl Geometry {
     pub const fn as_constructive(&self) -> Option<&Constructive> {
         match self {
             Self::Constructive(constructive) => Some(constructive),
-            Self::Mesh(_) => None,
+            Self::Mesh(_) | Self::Path(_) => None,
         }
     }
 
@@ -221,7 +225,23 @@ impl Geometry {
     pub const fn as_constructive_mut(&mut self) -> Option<&mut Constructive> {
         match self {
             Self::Constructive(constructive) => Some(constructive),
-            Self::Mesh(_) => None,
+            Self::Mesh(_) | Self::Path(_) => None,
+        }
+    }
+
+    /// The flat drawing, when the payload is a path.
+    pub const fn as_path(&self) -> Option<&Path> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Mesh(_) | Self::Constructive(_) => None,
+        }
+    }
+
+    /// The flat drawing for mutation, when the payload is a path.
+    pub const fn as_path_mut(&mut self) -> Option<&mut Path> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Mesh(_) | Self::Constructive(_) => None,
         }
     }
 }
@@ -497,6 +517,80 @@ mod tests {
         let (min, max) = object_bounds_mm(&geometry).expect("bounds");
         assert!((min - DVec3::ZERO).length() < 1.0e-9);
         assert!((max - DVec3::new(100.0, 50.0, 18.0)).length() < 1.0e-9);
+    }
+
+    fn sample_path() -> Path {
+        Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("open path")
+    }
+
+    #[test]
+    fn a_path_object_round_trips_and_replaces_its_drawing() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let root = project.root().id();
+        let path = sample_path();
+        let id = project
+            .add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path.clone()))
+            .expect("a path object is added like any other object");
+
+        assert_eq!(project.object_path(id), Ok(&path), "the drawing is queried by node id");
+        assert!(project.object(id).expect("object").geometry().as_mesh().is_none(), "a path has no mesh");
+        assert!(project.object(id).expect("object").geometry().as_constructive().is_none());
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"kind\":\"path\""), "the payload is tagged: {text}");
+        let decoded: Project = serde_json::from_str(&text).expect("load");
+        assert_eq!(decoded, project, "the path survives a save and load");
+        assert_eq!(decoded.object_path(id), Ok(&path));
+
+        let longer = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("longer path");
+        let revision = project.set_object_path(id, longer.clone()).expect("replace the drawing");
+        assert_eq!(revision.get(), 2, "creation was revision one");
+        assert_eq!(project.object_path(id), Ok(&longer));
+        assert_eq!(project.object(id).expect("object").name(), "Sketch", "the node identity is unchanged");
+    }
+
+    #[test]
+    fn a_path_command_refuses_other_payloads_and_missing_nodes() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
+        let mut project = Project::new(root).expect("valid project");
+        let mesh_id = Id::new(5).expect("id");
+
+        assert_eq!(project.object_path(mesh_id), Err(ProjectError::NotAPathObject { id: mesh_id }));
+        assert_eq!(project.set_object_path(mesh_id, sample_path()), Err(ProjectError::NotAPathObject { id: mesh_id }));
+        assert_eq!(
+            project.object_path(Id::new(99).expect("id")),
+            Err(ProjectError::NodeNotFound { id: Id::new(99).expect("id") })
+        );
+        assert_eq!(project.revision(), Revision::ZERO, "a refused command does not bump the revision");
+    }
+
+    #[test]
+    fn a_path_object_bounds_use_the_chain_extents() {
+        let geometry = Geometry::Path(sample_path());
+        let (min, max) = object_bounds_mm(&geometry).expect("bounds");
+        assert!((min - DVec3::ZERO).length() < 1.0e-9);
+        assert!((max - DVec3::new(100.0, 50.0, 0.0)).length() < 1.0e-9, "a path has no height");
     }
 
     #[test]

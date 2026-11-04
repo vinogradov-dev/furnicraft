@@ -147,6 +147,12 @@ pub enum ProjectError {
         /// The node that was asked.
         id: Id,
     },
+    /// The node is not a path object, so it has no flat drawing to replace.
+    #[error("node {id} is not a path object")]
+    NotAPathObject {
+        /// The node that was asked.
+        id: Id,
+    },
     /// The node is not a contour panel, so it has no outline ring to replace.
     #[error("panel {id} is not a contour panel")]
     PanelNotContour {

@@ -3,7 +3,8 @@
 //! An object is a leaf with one geometry payload. A mesh object is edited directly and has no
 //! feature history. A constructive object shows its contour instead: the contour and the feature
 //! height are the source of truth, the mesh is derived, and `object.collapse` bakes it into an
-//! editable mesh ([ADR 0037]).
+//! editable mesh ([ADR 0037]). A path object shows its flat drawing: it has no mesh and no feature
+//! height until it becomes a contour or is extruded.
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 
@@ -11,7 +12,7 @@ use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::object_cmds::{OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID};
 use furnicraft_engine::{NodeRename, ObjectCollapse, ObjectContourReplace, Session};
-use furnicraft_model::{Contour, Geometry, Id, Project};
+use furnicraft_model::{Contour, Geometry, Id, Path, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
@@ -71,9 +72,11 @@ impl ContourDraft {
 struct ObjectSummary {
     name: String,
     kind: &'static str,
+    is_mesh: bool,
     vertices: usize,
     faces: usize,
     contour: Option<Contour>,
+    path: Option<Path>,
     height: Option<Length>,
 }
 
@@ -83,18 +86,32 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
         Geometry::Mesh(mesh) => Some(ObjectSummary {
             name: object.name().to_owned(),
             kind: "Mesh",
+            is_mesh: true,
             vertices: mesh.positions().len(),
             faces: mesh.faces().len(),
             contour: None,
+            path: None,
             height: None,
         }),
         Geometry::Constructive(constructive) => Some(ObjectSummary {
             name: object.name().to_owned(),
             kind: "Constructive",
+            is_mesh: false,
             vertices: 0,
             faces: 0,
             contour: constructive.contour().cloned(),
+            path: None,
             height: constructive.height(),
+        }),
+        Geometry::Path(path) => Some(ObjectSummary {
+            name: object.name().to_owned(),
+            kind: "Path",
+            is_mesh: false,
+            vertices: 0,
+            faces: 0,
+            contour: None,
+            path: Some(path.clone()),
+            height: None,
         }),
     }
 }
@@ -128,8 +145,8 @@ impl ObjectCard {
             self.contour_draft = None;
             self.draft = Some(Draft { object: object_id, name: summary.name.clone() });
         }
-        let is_mesh = summary.contour.is_none();
-        if is_mesh {
+        let is_constructive = summary.contour.is_some();
+        if !is_constructive {
             self.contour_draft = None;
         } else if self
             .contour_draft
@@ -148,8 +165,11 @@ impl ObjectCard {
         // The viewport owns the working copy while the mode is live; a text replacement or a
         // collapse would silently make that copy stale.
         let contour_result = if contour_editing { None } else { self.contour_section(ui, &summary) };
-        let (collapse, cancel) =
-            if is_mesh || contour_editing { (false, false) } else { self.collapse_section(ui, single_selection) };
+        let (collapse, cancel) = if !is_constructive || contour_editing {
+            (false, false)
+        } else {
+            self.collapse_section(ui, single_selection)
+        };
 
         if let Some(error) = name_error {
             self.error = Some(error);
@@ -236,6 +256,14 @@ impl ObjectCard {
                     ui.label(format!("Height  {height}"));
                 }
                 ui.label("The contour and height are the source of truth; the mesh is derived.");
+            } else if let Some(path) = &summary.path {
+                let arcs = path.segments().filter(|segment| segment.is_arc()).count();
+                ui.label(format!("Path segments  {}", path.segments().len()));
+                if arcs > 0 {
+                    ui.label(format!("Arcs  {arcs}"));
+                }
+                ui.label(if path.is_closed() { "Closed chain" } else { "Open chain" });
+                ui.label("The drawing is the source of truth; it has no mesh yet.".to_owned());
             } else {
                 ui.label(format!("Vertices  {}", summary.vertices));
                 ui.label(format!("Faces  {}", summary.faces));
@@ -258,6 +286,8 @@ impl ObjectCard {
         section(ui, "object.mesh_edit", "Mesh editing", true, |ui| {
             if summary.contour.is_some() {
                 ui.label("Collapse the object to a mesh before editing its elements.");
+            } else if !summary.is_mesh {
+                ui.label("A path object has no mesh; its drawing is the source of truth.");
             } else if single_selection {
                 let editing = mesh_edit.is_some_and(|edit| edit.object() == object_id);
                 let label = if editing { "Done" } else { "Edit mesh" };
@@ -547,6 +577,33 @@ mod tests {
     fn an_unknown_id_has_no_summary() {
         let (project, _) = object_project();
         assert_eq!(object_summary(&project, Id::new(99).expect("id")), None);
+    }
+
+    #[test]
+    fn summary_reports_a_path_object_as_a_flat_drawing() {
+        use furnicraft_model::{ContourSegment, Path};
+
+        let mut project = sample_project();
+        let root = project.root().id();
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("open path");
+        let id = project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("add");
+
+        let summary = object_summary(&project, id).expect("summary");
+        assert_eq!(summary.kind, "Path");
+        assert!(!summary.is_mesh, "a path has no editable mesh");
+        assert_eq!(summary.contour, None);
+        assert_eq!(summary.path.as_ref().map(|path| path.segments().len()), Some(2));
+        assert_eq!(summary.path.as_ref().map(Path::is_closed), Some(false));
     }
 
     #[test]

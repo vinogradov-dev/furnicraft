@@ -56,8 +56,9 @@ impl Project {
     /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
     /// with ids `1..n`. Version 16 replaces the tagged `Machining` enum with one ordered list of
     /// records, each carrying a stable id, a face or edge anchor and tagged parameters; a version-15
-    /// cutout loads as a face-anchored cutout with the same id.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 16;
+    /// cutout loads as a face-anchored cutout with the same id. Version 17 adds a flat path payload,
+    /// an open or closed chain of drawn segments; a version 16 file contains none.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 17;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;

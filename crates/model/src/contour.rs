@@ -776,6 +776,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_bounds_include_the_arc_extremes_it_crosses() {
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let path = Path::new(vec![arc], false).expect("a one-arc path");
+        assert_eq!(path.bounds_micrometres(), ([0, 0], [100_000, 100_000]));
+    }
+
+    #[test]
     fn a_single_full_turn_arc_is_a_closed_path_and_round_trips() {
         let arc = ContourSegment::arc([millimetres(100), millimetres(0)], millimetres(100), Degrees::ZERO, FULL_TURN)
             .expect("a full turn");
@@ -905,6 +918,117 @@ mod tests {
         assert!(!extended.is_closed(), "the open flag is kept");
         assert_eq!(extended.segment(first), path.segment(first), "an untouched id keeps its curve");
         assert_eq!(extended.next_segment_id().get(), 3, "the minted id is spent");
+    }
+
+    #[test]
+    fn a_closed_path_becomes_a_ring_with_its_ids() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a closed square");
+        let contour = path.to_contour().expect("a simple closed path is a ring");
+        assert_eq!(contour.entries().len(), 4);
+        assert_eq!(
+            contour.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            path.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            "the drawn ids travel into the ring"
+        );
+        assert_eq!(contour.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+    }
+
+    #[test]
+    fn a_clockwise_path_becomes_a_counter_clockwise_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a clockwise square");
+        let contour = path.to_contour().expect("a clockwise ring is turned around");
+        assert_eq!(
+            contour.segments().next(),
+            Some(ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line")),
+            "the ring is stored counter-clockwise"
+        );
+        assert_eq!(contour.id_at(0), Some(segment_id(4)), "the reversed segment keeps its id");
+    }
+
+    #[test]
+    fn a_closed_path_keeps_its_id_counter() {
+        let json = r#"{"next_segment_id":9,"closed":true,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let path: Path = serde_json::from_str(json).expect("a stored closed path");
+        let contour = path.to_contour().expect("a stored simple ring");
+        assert_eq!(contour.next_segment_id().get(), 9, "the path counter survives the conversion");
+    }
+
+    #[test]
+    fn an_open_path_cannot_become_a_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("an open path");
+        assert_eq!(path.to_contour(), Err(PathError::Open));
+        let error = path.to_contour().expect_err("an open chain owns no ring");
+        assert!(error.to_string().contains("open path"), "the reason is readable: {error}");
+    }
+
+    #[test]
+    fn a_crossing_path_cannot_become_a_ring() {
+        let corners = [
+            [millimetres(0), millimetres(0)],
+            [millimetres(30), millimetres(0)],
+            [millimetres(20), millimetres(20)],
+            [millimetres(10), millimetres(-10)],
+        ];
+        let segments = (0..corners.len())
+            .map(|index| ContourSegment::line(corners[index], corners[(index + 1) % corners.len()]).expect("line"))
+            .collect::<Vec<_>>();
+        let path = Path::new(segments, true).expect("a closed self-crossing chain");
+        assert!(matches!(path.to_contour(), Err(PathError::Contour(ContourError::SelfIntersecting { .. }))));
+    }
+
+    #[test]
+    fn a_flat_closed_path_cannot_become_a_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(10), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(10), millimetres(0)], [millimetres(20), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(20), millimetres(0)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a closed collinear chain");
+        assert_eq!(path.to_contour(), Err(PathError::Contour(ContourError::ZeroArea)));
     }
 }
 
@@ -1241,41 +1365,7 @@ impl Contour {
     ///
     /// An arc contributes the axis extremes it crosses, not only its endpoints.
     pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
-        let mut min = [i64::MAX; 2];
-        let mut max = [i64::MIN; 2];
-        let mut include = |point: [Length; 2]| {
-            for (axis, value) in point.iter().enumerate() {
-                let value = value.micrometres();
-                min[axis] = min[axis].min(value);
-                max[axis] = max[axis].max(value);
-            }
-        };
-        for entry in &self.entries {
-            let segment = entry.segment();
-            if let (Ok(start), Ok(end)) = (segment.start(), segment.end()) {
-                include(start);
-                include(end);
-            }
-            if let ContourSegment::Arc { start_angle, sweep, .. } = segment
-                && let Ok(geometry) = segment.to_geom()
-            {
-                for turn in 0..4_i64 {
-                    let quarter = Degrees::from_millidegrees(turn.saturating_mul(90_000));
-                    if !arc_reaches(start_angle, sweep, quarter) {
-                        continue;
-                    }
-                    if let Some(point) = geometry.point_at(arc_fraction(start_angle, sweep, quarter))
-                        && let Ok(point) = point_to_document(point)
-                    {
-                        include(point);
-                    }
-                }
-            }
-        }
-        if min[0] > max[0] {
-            return ([0; 2], [0; 2]);
-        }
-        (min, max)
+        entries_bounds_micrometres(&self.entries)
     }
 
     /// Twice the signed area of the ring, in square micrometres; positive for counter-clockwise.
@@ -1387,6 +1477,48 @@ impl Contour {
         }
         Ok(None)
     }
+}
+
+/// The two axis-aligned extents of a chain of segments, in micrometres.
+///
+/// An arc contributes the axis extremes it crosses, not only its endpoints. Both a ring and an
+/// open path use the same rule, so their drawing extents never disagree.
+fn entries_bounds_micrometres(entries: &[ContourSegmentEntry]) -> ([i64; 2], [i64; 2]) {
+    let mut min = [i64::MAX; 2];
+    let mut max = [i64::MIN; 2];
+    let mut include = |point: [Length; 2]| {
+        for (axis, value) in point.iter().enumerate() {
+            let value = value.micrometres();
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    };
+    for entry in entries {
+        let segment = entry.segment();
+        if let (Ok(start), Ok(end)) = (segment.start(), segment.end()) {
+            include(start);
+            include(end);
+        }
+        if let ContourSegment::Arc { start_angle, sweep, .. } = segment
+            && let Ok(geometry) = segment.to_geom()
+        {
+            for turn in 0..4_i64 {
+                let quarter = Degrees::from_millidegrees(turn.saturating_mul(90_000));
+                if !arc_reaches(start_angle, sweep, quarter) {
+                    continue;
+                }
+                if let Some(point) = geometry.point_at(arc_fraction(start_angle, sweep, quarter))
+                    && let Ok(point) = point_to_document(point)
+                {
+                    include(point);
+                }
+            }
+        }
+    }
+    if min[0] > max[0] {
+        return ([0; 2], [0; 2]);
+    }
+    (min, max)
 }
 
 /// A path is one chain of at most this many segments, the ring size it has to fit.
@@ -1524,6 +1656,14 @@ impl Path {
         self.closed
     }
 
+    /// The two axis-aligned extents of the chain, in micrometres.
+    ///
+    /// An arc contributes the axis extremes it crosses, not only its endpoints. A path encloses no
+    /// area by itself, so these are the extents of the drawing in the local XY plane.
+    pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
+        entries_bounds_micrometres(&self.entries)
+    }
+
     /// The segment with this id.
     pub fn segment(&self, id: ContourSegmentId) -> Option<ContourSegment> {
         self.entries.iter().find(|entry| entry.id() == id).map(|entry| entry.segment())
@@ -1542,6 +1682,21 @@ impl Path {
     /// The next id an edit may hand out; ids are never reused.
     pub const fn next_segment_id(&self) -> ContourSegmentId {
         self.next_segment_id
+    }
+
+    /// The ring this path encloses, when it is a ring the document accepts.
+    ///
+    /// The segments and their ids travel into the ring, so anchors the user drew and any
+    /// per-segment banding stay meaningful; the path's id counter is kept as well. The ring is
+    /// stored counter-clockwise, so a path drawn clockwise comes back reversed with its ids
+    /// intact. An open chain is refused before the ring rules run, and a chain that crosses itself
+    /// or encloses no area is refused with the reason: those are ring rules, and a panel or an
+    /// extrusion only takes a ring.
+    pub fn to_contour(&self) -> Result<Contour, PathError> {
+        if !self.closed {
+            return Err(PathError::Open);
+        }
+        Contour::assemble(self.entries.clone(), self.next_segment_id).map_err(PathError::Contour)
     }
 }
 
@@ -1609,6 +1764,12 @@ pub enum PathError {
     /// A stored path carries a segment without an id.
     #[error("a path must carry an id for every segment and a next segment id")]
     AmbiguousSegmentIds,
+    /// The path is open, so it does not enclose a ring.
+    #[error("an open path encloses no ring; close it before it becomes a contour")]
+    Open,
+    /// The closed chain is not a valid ring.
+    #[error(transparent)]
+    Contour(#[from] ContourError),
 }
 
 /// Serialized form of [`Path`]; validation happens in its `TryFrom` implementation.

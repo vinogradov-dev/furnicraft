@@ -338,6 +338,8 @@ impl<'a> Evaluation<'a> {
                     build_constructive_mesh(constructive).map_err(|error| format!("{}: {error}", object.name()))?;
                 &derived
             }
+            // A path has no solid to draw; U7 adds its line primitive.
+            Geometry::Path(_) => return Ok(()),
         };
         let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());

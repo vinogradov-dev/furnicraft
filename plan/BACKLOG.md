@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
-  is closed and simple, otherwise a readable error.
-  `files: crates/model/src/contour.rs`
+- `[ ]` **U7** draw a stored path: a line primitive in the scene frame and the renderer's line
+  pipeline, so an open chain is visible without a solid.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
 
 ## Bugs
 
@@ -39,12 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U6** a path object: `Geometry::Path(Path)`, schema 17, add, replace and query on `Project`,
-  with older files still loading.
-  `files: crates/model/src/object.rs, crates/model/src/project/wire.rs`
-- `[ ]` **U7** draw a stored path: a line primitive in the scene frame and the renderer's line
-  pipeline, so an open chain is visible without a solid.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
 - `[ ]` **U8** pick a path: the nearest ray-to-segment hit returns a document `Id`, never an index.
   `files: crates/scene/src/lib.rs, apps/furnicraft/src/mesh_pick.rs`
 - `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
@@ -106,6 +100,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U6** a path object: `Geometry::Path(Path)` at schema 17, with `Project::object_path` and
+  `Project::set_object_path`, its chain extents in the node bounds, and older files still
+  loading — `847cbbb`
+- `[x]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
+  is closed and simple, otherwise a readable error — `1c74ea5`
 - `[x]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
   ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
   path; tests for a single segment, an arc, an open polyline and a broken joint — `25e330f`

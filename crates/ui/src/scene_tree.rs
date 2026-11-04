@@ -286,6 +286,7 @@ fn show_object(
     let kind = match object.geometry() {
         furnicraft_model::Geometry::Mesh(_) => "mesh",
         furnicraft_model::Geometry::Constructive(_) => "contour",
+        furnicraft_model::Geometry::Path(_) => "path",
     };
     let label = RichText::new(format!("{}  [{kind}]", object.name()));
     let response = ui.selectable_label(selection.contains(id), label);
