@@ -23,8 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U8** pick a path: the nearest ray-to-segment hit returns a document `Id`, never an index.
-  `files: crates/scene/src/lib.rs, apps/furnicraft/src/mesh_pick.rs`
+- `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
+  `enabled` check with `run`; ADR "a flat contour is a path of segments" and the geometry document.
+  `files: crates/engine/src/object_cmds.rs, docs/decisions`
 
 ## Bugs
 
@@ -38,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
-  `enabled` check with `run`; ADR "a flat contour is a path of segments" and the geometry document.
-  `files: crates/engine/src/object_cmds.rs, docs/decisions`
 - `[ ]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
   exact joints, and an arc through three points; degenerate input is an error.
   `files: crates/model/src/contour.rs`
@@ -97,6 +95,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U8** pick a path: `SceneFrame::pick` measures the ray-to-segment closest approach and
+  returns a document `Id` within six viewport points, through one shell helper — `7c544a5`
 - `[x]` **U7** draw a stored path: a `Polyline` line primitive in the scene frame, the renderer's
   shared line pipeline, and the shell's sampling of a `Path` into a chain with its bounds — `9ce56be`
 - `[x]` **U6** a path object: `Geometry::Path(Path)` at schema 17, with `Project::object_path` and
