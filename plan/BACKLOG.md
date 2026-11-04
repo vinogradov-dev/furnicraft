@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
-  `enabled` check with `run`; ADR "a flat contour is a path of segments" and the geometry document.
-  `files: crates/engine/src/object_cmds.rs, docs/decisions`
+- `[ ]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
+  exact joints, and an arc through three points; degenerate input is an error.
+  `files: crates/model/src/contour.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
-  exact joints, and an arc through three points; degenerate input is an error.
-  `files: crates/model/src/contour.rs`
 - `[ ]` **U11** orthographic ↔ perspective as view state, with a strip button and a key, the ortho
   height taken from the current frame; an authored camera is untouched.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/gizmo.rs`
@@ -95,6 +92,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, with ADR 0048 and
+  the path payload in the geometry document — `546fb28`
 - `[x]` **U8** pick a path: `SceneFrame::pick` measures the ray-to-segment closest approach and
   returns a document `Id` within six viewport points, through one shell helper — `7c544a5`
 - `[x]` **U7** draw a stored path: a `Polyline` line primitive in the scene frame, the renderer's

@@ -133,6 +133,8 @@ static COMMANDS: &[CommandSpec] = &[
     object_cmds::OBJECT_PRIMITIVE_CREATE,
     object_cmds::OBJECT_EXTRUDE_CREATE,
     object_cmds::OBJECT_CONTOUR_REPLACE,
+    object_cmds::OBJECT_PATH_CREATE,
+    object_cmds::OBJECT_PATH_REPLACE,
     object_cmds::OBJECT_COLLAPSE,
     mesh_cmds::MESH_VERTICES_MOVE,
     scene_cmds::CAMERA_CREATE,
@@ -310,10 +312,16 @@ mod tests {
         let create_object = registry.get("object.primitive.create").expect("object.primitive.create is registered");
         assert_eq!(create_object.id(), "object.primitive.create");
         assert_eq!(create_object.label(), "Create primitive");
+        let create_path = registry.get("object.path.create").expect("object.path.create is registered");
+        assert_eq!(create_path.id(), "object.path.create");
+        assert_eq!(create_path.label(), "Create path");
+        let replace_path = registry.get("object.path.replace").expect("object.path.replace is registered");
+        assert_eq!(replace_path.id(), "object.path.replace");
+        assert_eq!(replace_path.label(), "Replace path");
         let move_vertices = registry.get("mesh.vertices.move").expect("mesh.vertices.move is registered");
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 44);
+        assert_eq!(registry.specs().len(), 46);
     }
 }
