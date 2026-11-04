@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U15** the drawing tools: line and polyline, an arc through three points, a rectangle and a
+- `[~]` **U15** the drawing tools: line and polyline, an arc through three points, a rectangle and a
   circle, each producing a `Path`; tests per tool.
   `files: crates/ui/src, crates/model/src/contour.rs`
 
