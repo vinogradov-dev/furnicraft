@@ -19,6 +19,26 @@ pub const MAX_MESH_FACES: usize = 1_000_000;
 /// Largest accepted number of vertices in one polygon face.
 pub const MAX_FACE_VERTICES: usize = 1_024;
 
+/// Sides around a curved primitive. A multiple of four, so the silhouette has axis points.
+pub const PRIMITIVE_SEGMENTS: usize = 32;
+
+/// Latitude bands between the two poles of a sphere.
+pub const PRIMITIVE_SPHERE_BANDS: usize = 16;
+
+/// The sine and cosine of one segment around a ring, in the XY plane.
+fn ring_angle(segment: usize, segments: usize) -> (f64, f64) {
+    let angle = std::f64::consts::TAU * segment as f64 / segments as f64;
+    angle.sin_cos()
+}
+
+/// Rounds a float micrometre coordinate into a document length, refusing a non-finite value.
+fn millimetres_to_length(value: f64) -> Result<Length, MeshError> {
+    if !value.is_finite() || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return Err(MeshError::NonFiniteCoordinate);
+    }
+    Ok(Length::from_micrometres(value.round() as i64))
+}
+
 /// A rejected mesh.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum MeshError {
@@ -83,6 +103,9 @@ pub enum MeshError {
         /// The rejected size in micrometres.
         edge: i64,
     },
+    /// A computed primitive coordinate is not finite or does not fit a length.
+    #[error("primitive coordinate is not a representable length")]
+    NonFiniteCoordinate,
 }
 
 /// Serialized form of [`Mesh`]; validation happens in its `TryFrom` implementation.
@@ -212,6 +235,99 @@ impl Mesh {
             ],
         )
     }
+
+    /// Builds an upright cylinder whose diameter and height both equal `edge`.
+    ///
+    /// The sides are [`PRIMITIVE_SEGMENTS`] quads and the two caps are one polygon each, so a later
+    /// face or vertex edit has real faces to work with instead of a triangle fan. Every ring runs
+    /// counter-clockwise seen from outside, and the side quads share their vertices with the caps.
+    pub fn cylinder(edge: Length) -> Result<Self, MeshError> {
+        let radius = edge.micrometres() / 2;
+        let half = radius;
+        if radius <= 0 || half <= 0 {
+            return Err(MeshError::NonPositiveSize { edge: edge.micrometres() });
+        }
+        let segments = PRIMITIVE_SEGMENTS;
+        let mut positions = Vec::with_capacity(segments * 2);
+        for z in [-half, half] {
+            for segment in 0..segments {
+                let (sin, cos) = ring_angle(segment, segments);
+                positions.push([
+                    millimetres_to_length(cos * radius as f64)?,
+                    millimetres_to_length(sin * radius as f64)?,
+                    Length::from_micrometres(z),
+                ]);
+            }
+        }
+        let mut faces = Vec::with_capacity(segments + 2);
+        for segment in 0..segments {
+            let next = (segment + 1) % segments;
+            let bottom = u32::try_from(segment).unwrap_or(0);
+            let bottom_next = u32::try_from(next).unwrap_or(0);
+            let top = u32::try_from(segments + segment).unwrap_or(0);
+            let top_next = u32::try_from(segments + next).unwrap_or(0);
+            faces.push(vec![bottom, bottom_next, top_next, top]);
+        }
+        let bottom = (0..segments).rev().filter_map(|index| u32::try_from(index).ok()).collect::<Vec<_>>();
+        let top = (segments..segments * 2).filter_map(|index| u32::try_from(index).ok()).collect::<Vec<_>>();
+        faces.push(bottom);
+        faces.push(top);
+        Self::new(positions, faces)
+    }
+
+    /// Builds a sphere whose diameter is `edge`, as latitude bands.
+    ///
+    /// The poles are single vertices and every other latitude is a ring of [`PRIMITIVE_SEGMENTS`]
+    /// vertices, joined by triangles at the poles and quads in between. Latitude 0 is the equator.
+    pub fn sphere(edge: Length) -> Result<Self, MeshError> {
+        let radius = edge.micrometres() / 2;
+        if radius <= 0 {
+            return Err(MeshError::NonPositiveSize { edge: edge.micrometres() });
+        }
+        let segments = PRIMITIVE_SEGMENTS;
+        let bands = PRIMITIVE_SPHERE_BANDS;
+        let mut positions = Vec::with_capacity(segments * (bands - 1) + 2);
+        positions.push([Length::ZERO, Length::ZERO, Length::from_micrometres(-radius)]);
+        for band in 1..bands {
+            let z = -radius as f64 + 2.0 * radius as f64 * band as f64 / bands as f64;
+            let ring = ((radius as f64).powi(2) - z * z).max(0.0).sqrt();
+            for segment in 0..segments {
+                let (sin, cos) = ring_angle(segment, segments);
+                positions.push([
+                    millimetres_to_length(cos * ring)?,
+                    millimetres_to_length(sin * ring)?,
+                    Length::from_micrometres(z.round() as i64),
+                ]);
+            }
+        }
+        let top = u32::try_from(positions.len()).unwrap_or(0);
+        positions.push([Length::ZERO, Length::ZERO, Length::from_micrometres(radius)]);
+        let ring_index = |band: usize, segment: usize| -> u32 {
+            let index = 1 + (band - 1) * segments + segment % segments;
+            u32::try_from(index).unwrap_or(0)
+        };
+        let mut faces = Vec::new();
+        for segment in 0..segments {
+            let next = (segment + 1) % segments;
+            faces.push(vec![0, ring_index(1, next), ring_index(1, segment)]);
+        }
+        for band in 1..bands - 1 {
+            for segment in 0..segments {
+                let next = (segment + 1) % segments;
+                faces.push(vec![
+                    ring_index(band, segment),
+                    ring_index(band, next),
+                    ring_index(band + 1, next),
+                    ring_index(band + 1, segment),
+                ]);
+            }
+        }
+        for segment in 0..segments {
+            let next = (segment + 1) % segments;
+            faces.push(vec![top, ring_index(bands - 1, segment), ring_index(bands - 1, next)]);
+        }
+        Self::new(positions, faces)
+    }
 }
 
 impl TryFrom<MeshWire> for Mesh {
@@ -257,5 +373,88 @@ mod tests {
             Mesh::new(positions, vec![face]),
             Err(MeshError::FaceVertexCount { face: 0, count: MAX_FACE_VERTICES + 1, max: MAX_FACE_VERTICES })
         );
+    }
+
+    /// The outward normal of a polygon, from its vertex order (Newell's method).
+    fn normal(mesh: &Mesh, face: &[u32]) -> [f64; 3] {
+        let point = |index: u32| {
+            let position = mesh.positions()[index as usize];
+            [position[0].millimetres_f64(), position[1].millimetres_f64(), position[2].millimetres_f64()]
+        };
+        let mut normal = [0.0; 3];
+        for (index, vertex) in face.iter().enumerate() {
+            let current = point(*vertex);
+            let next = point(face[(index + 1) % face.len()]);
+            normal[0] += (current[1] - next[1]) * (current[2] + next[2]);
+            normal[1] += (current[2] - next[2]) * (current[0] + next[0]);
+            normal[2] += (current[0] - next[0]) * (current[1] + next[1]);
+        }
+        normal
+    }
+
+    /// Every face of a convex primitive centred on the origin points away from it.
+    fn assert_outward(mesh: &Mesh) {
+        for (index, face) in mesh.faces().iter().enumerate() {
+            let mut centroid = [0.0; 3];
+            for vertex in face {
+                let position = mesh.positions()[*vertex as usize];
+                for axis in 0..3 {
+                    centroid[axis] += position[axis].millimetres_f64() / face.len() as f64;
+                }
+            }
+            let normal = normal(mesh, face);
+            let dot = (0..3).map(|axis| normal[axis] * centroid[axis]).sum::<f64>();
+            assert!(dot > 0.0, "face {index} at {centroid:?} has normal {normal:?} pointing inward");
+        }
+    }
+
+    #[test]
+    fn a_cylinder_is_a_capped_tube_of_the_full_edge_length() {
+        let edge = millimetres(100);
+        let mesh = Mesh::cylinder(edge).expect("a cylinder");
+        assert_eq!(mesh.positions().len(), PRIMITIVE_SEGMENTS * 2);
+        assert_eq!(mesh.faces().len(), PRIMITIVE_SEGMENTS + 2, "one quad per side and two caps");
+        assert_eq!(mesh.faces().last().map(Vec::len), Some(PRIMITIVE_SEGMENTS), "the top cap is one polygon");
+        assert_eq!(mesh.bounds_micrometres(), ([-50_000, -50_000, -50_000], [50_000, 50_000, 50_000]));
+        assert_outward(&mesh);
+
+        let max_radius = mesh
+            .positions()
+            .iter()
+            .map(|point| (point[0].millimetres_f64().powi(2) + point[1].millimetres_f64().powi(2)).sqrt())
+            .fold(0.0_f64, f64::max);
+        assert!((max_radius - 50.0).abs() < 0.001, "the diameter is the edge length");
+    }
+
+    #[test]
+    fn a_sphere_is_a_closed_banded_surface_of_the_full_edge_length() {
+        let edge = millimetres(100);
+        let mesh = Mesh::sphere(edge).expect("a sphere");
+        assert_eq!(mesh.positions().len(), 2 + PRIMITIVE_SEGMENTS * (PRIMITIVE_SPHERE_BANDS - 1));
+        let triangles = PRIMITIVE_SEGMENTS * 2;
+        let quads = PRIMITIVE_SEGMENTS * (PRIMITIVE_SPHERE_BANDS - 2);
+        assert_eq!(mesh.faces().len(), triangles + quads, "a ring of triangles at each pole and quads between");
+        assert_eq!(mesh.bounds_micrometres(), ([-50_000, -50_000, -50_000], [50_000, 50_000, 50_000]));
+        assert_outward(&mesh);
+
+        let max_radius = mesh
+            .positions()
+            .iter()
+            .map(|point| {
+                (point[0].millimetres_f64().powi(2)
+                    + point[1].millimetres_f64().powi(2)
+                    + point[2].millimetres_f64().powi(2))
+                .sqrt()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!((max_radius - 50.0).abs() < 0.001, "the diameter is the edge length");
+    }
+
+    #[test]
+    fn a_curved_primitive_needs_a_positive_edge() {
+        for edge in [Length::ZERO, Length::from_micrometres(-100)] {
+            assert_eq!(Mesh::cylinder(edge), Err(MeshError::NonPositiveSize { edge: edge.micrometres() }));
+            assert_eq!(Mesh::sphere(edge), Err(MeshError::NonPositiveSize { edge: edge.micrometres() }));
+        }
     }
 }

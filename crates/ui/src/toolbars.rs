@@ -7,6 +7,7 @@
 //! an undrawn icon needs.
 
 use egui::{TextEdit, Ui};
+use furnicraft_engine::PrimitiveKind;
 use furnicraft_model::Id;
 use furnicraft_units::Length;
 
@@ -31,11 +32,13 @@ pub enum ToolAction {
         /// The receiving container.
         parent: Id,
     },
-    /// Creates the default cube.
-    CreateCube {
+    /// Creates a primitive once the work plane is clicked.
+    CreatePrimitive {
         /// The receiving container.
         parent: Id,
-        /// Edge length of the cube.
+        /// Which primitive to build.
+        kind: PrimitiveKind,
+        /// Full extent of the primitive.
         size: Length,
     },
     /// Creates the default extrusion.
@@ -280,10 +283,16 @@ fn show_panel(
             }
             let size = state.primitive_size();
             let enabled = size.is_ok();
-            if icons::tool_button(ui, icons::primitives::CUBE, "Cube: click the work plane", None, enabled).clicked()
-                && let Ok(size) = size
-            {
-                actions.push(ToolAction::CreateCube { parent, size });
+            for (kind, icon, label) in [
+                (PrimitiveKind::Cube, icons::primitives::CUBE, "Cube"),
+                (PrimitiveKind::Cylinder, icons::primitives::CYLINDER, "Cylinder"),
+                (PrimitiveKind::Sphere, icons::primitives::SPHERE, "Sphere"),
+            ] {
+                if icons::tool_button(ui, icon, &format!("{label}: click the work plane"), None, enabled).clicked()
+                    && let Ok(size) = size
+                {
+                    actions.push(ToolAction::CreatePrimitive { parent, kind, size });
+                }
             }
         }
         ToolPanel::Bodies => {
@@ -361,6 +370,21 @@ mod tests {
             "the primitives panel is filled: {texts:?}"
         );
         assert!(actions.is_empty(), "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn the_three_primitive_buttons_are_filled() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        for label in ["Cube: click the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"] {
+            assert!(texts.iter().any(|text| text == label), "{label} is missing: {texts:?}");
+        }
     }
 
     #[test]

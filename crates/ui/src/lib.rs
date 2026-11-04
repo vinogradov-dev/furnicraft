@@ -85,7 +85,9 @@ const NEW_EXTRUDE_HEIGHT_MM: i64 = 18;
 struct PendingPrimitive {
     /// The container that receives the node.
     parent: Id,
-    /// Edge length of the cube.
+    /// Which primitive to build.
+    kind: PrimitiveKind,
+    /// Full extent: an edge, a diameter and a height, or a diameter.
     size: Length,
 }
 
@@ -487,7 +489,7 @@ impl Editor {
                 }
                 ToolAction::CreatePanel { parent } => self.create_panel(session, parent)?,
                 ToolAction::CreateAssembly { parent } => self.create_assembly(session, parent)?,
-                ToolAction::CreateCube { parent, size } => self.arm_cube(parent, size)?,
+                ToolAction::CreatePrimitive { parent, kind, size } => self.arm_primitive(parent, kind, size)?,
                 ToolAction::CreateExtrude { parent } => self.create_extrude(session, parent)?,
                 ToolAction::CreateCamera { parent } => self.create_camera(session, parent)?,
                 ToolAction::CreateLight { parent } => self.create_light(session, parent)?,
@@ -525,25 +527,25 @@ impl Editor {
         Ok(())
     }
 
-    /// Arms a cube that the next work-plane click places.
+    /// Arms a primitive that the next work-plane click places.
     ///
     /// The panel asks for a click instead of creating at the origin: the tool is a placement, and a
-    /// stale cube at the world origin is never what the user wanted. Arming leaves the other pointer
-    /// modes, because the next click creates rather than selects.
-    fn arm_cube(&mut self, parent: Id, size: Length) -> Result<(), String> {
+    /// stale primitive at the world origin is never what the user wanted. Arming leaves the other
+    /// pointer modes, because the next click creates rather than selects.
+    fn arm_primitive(&mut self, parent: Id, kind: PrimitiveKind, size: Length) -> Result<(), String> {
         if size.micrometres() <= 0 {
-            return Err("The cube edge must be positive.".to_owned());
+            return Err("The primitive size must be positive.".to_owned());
         }
         self.mesh_edit = None;
         self.contour_edit = None;
         self.drawing = None;
-        self.pending_primitive = Some(PendingPrimitive { parent, size });
+        self.pending_primitive = Some(PendingPrimitive { parent, kind, size });
         Ok(())
     }
 
-    /// The cube waiting for a work-plane click: its parent and edge length.
-    pub fn pending_primitive(&self) -> Option<(Id, Length)> {
-        self.pending_primitive.map(|pending| (pending.parent, pending.size))
+    /// The primitive waiting for a work-plane click: its parent, kind and size.
+    pub fn pending_primitive(&self) -> Option<(Id, PrimitiveKind, Length)> {
+        self.pending_primitive.map(|pending| (pending.parent, pending.kind, pending.size))
     }
 
     /// Drops an armed primitive without creating anything.
@@ -551,29 +553,29 @@ impl Editor {
         self.pending_primitive = None;
     }
 
-    /// Creates the armed cube at `placement` and selects it.
+    /// Creates the armed primitive at `placement` and selects it.
     pub fn place_primitive(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
         let pending = self.pending_primitive.ok_or_else(|| "No primitive is waiting for a click.".to_owned())?;
-        self.create_cube_at(session, pending.parent, pending.size, placement)?;
+        self.create_primitive(session, pending.parent, pending.kind, pending.size, placement)?;
         self.pending_primitive = None;
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
     }
 
-    /// Dispatches `object.primitive.create` for a cube at `placement`.
-    fn create_cube_at(
+    /// Dispatches `object.primitive.create` for one primitive at `placement`.
+    fn create_primitive(
         &mut self,
         session: &mut Session,
         parent: Id,
+        kind: PrimitiveKind,
         size: Length,
         placement: Placement,
     ) -> Result<(), String> {
-        let params = json(&ObjectPrimitiveCreate {
-            parent,
-            name: "Cube".to_owned(),
-            primitive: PrimitiveKind::Cube,
-            size,
-            placement,
-        })?;
+        let name = match kind {
+            PrimitiveKind::Cube => "Cube",
+            PrimitiveKind::Cylinder => "Cylinder",
+            PrimitiveKind::Sphere => "Sphere",
+        };
+        let params = json(&ObjectPrimitiveCreate { parent, name: name.to_owned(), primitive: kind, size, placement })?;
         let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
         Ok(())
@@ -1181,8 +1183,8 @@ mod tests {
         let mut editor = Editor::new();
         let root = Id::new(1).expect("root");
         let size = Length::from_millimetres(300).expect("size");
-        editor.arm_cube(root, size).expect("arm the cube");
-        assert_eq!(editor.pending_primitive(), Some((root, size)));
+        editor.arm_primitive(root, PrimitiveKind::Cube, size).expect("arm the cube");
+        assert_eq!(editor.pending_primitive(), Some((root, PrimitiveKind::Cube, size)));
         assert!(editor.drawing().is_none(), "an armed primitive leaves a drawing");
 
         let placement = Placement::IDENTITY
@@ -1200,7 +1202,7 @@ mod tests {
         assert_eq!(session.project().revision().get(), 1);
         assert!(session.project().panel(panel).is_some());
 
-        editor.arm_cube(root, size).expect("arm again");
+        editor.arm_primitive(root, PrimitiveKind::Sphere, size).expect("arm again");
         editor.cancel_primitive();
         assert!(editor.pending_primitive().is_none());
         assert_eq!(session.project().revision().get(), 1, "cancelling creates nothing");
@@ -1209,7 +1211,47 @@ mod tests {
     #[test]
     fn a_cube_edge_must_be_positive() {
         let mut editor = Editor::new();
-        assert!(editor.arm_cube(Id::new(1).expect("root"), Length::ZERO).is_err());
+        assert!(editor.arm_primitive(Id::new(1).expect("root"), PrimitiveKind::Cylinder, Length::ZERO).is_err());
+    }
+
+    #[test]
+    fn every_primitive_kind_can_be_armed() {
+        let size = Length::from_millimetres(120).expect("size");
+        for kind in [PrimitiveKind::Cube, PrimitiveKind::Cylinder, PrimitiveKind::Sphere] {
+            let mut editor = Editor::new();
+            let root = Id::new(1).expect("root");
+            editor.arm_primitive(root, kind, size).expect("arm");
+            assert_eq!(editor.pending_primitive(), Some((root, kind, size)));
+            assert!(
+                Session::with_catalog(sample_project(), sample_catalog())
+                    .project()
+                    .object(Id::new(5).expect("id"))
+                    .is_none(),
+                "arming alone creates nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn placing_a_cylinder_and_a_sphere_names_and_shapes_them() {
+        for (kind, name, vertices) in [
+            (PrimitiveKind::Cylinder, "Cylinder", furnicraft_model::PRIMITIVE_SEGMENTS * 2),
+            (
+                PrimitiveKind::Sphere,
+                "Sphere",
+                2 + furnicraft_model::PRIMITIVE_SEGMENTS * (furnicraft_model::PRIMITIVE_SPHERE_BANDS - 1),
+            ),
+        ] {
+            let (project, _panel) = contour_panel_project();
+            let mut session = Session::with_catalog(project, sample_catalog());
+            let mut editor = Editor::new();
+            let root = Id::new(1).expect("root");
+            editor.arm_primitive(root, kind, Length::from_millimetres(100).expect("size")).expect("arm");
+            let id = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place");
+            let object = session.project().object(id).expect("object");
+            assert_eq!(object.name(), name);
+            assert_eq!(object.geometry().as_mesh().expect("mesh").positions().len(), vertices);
+        }
     }
 
     #[test]
@@ -1232,7 +1274,7 @@ mod tests {
         let mut editor = Editor::new();
         let root = Id::new(1).expect("root");
         editor.select_node(Some(root));
-        editor.arm_cube(root, Length::from_millimetres(200).expect("size")).expect("arm");
+        editor.arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
         editor.place_primitive(&mut session, Placement::IDENTITY).expect("cube");
         let cube = editor.selected_node().expect("the new cube is selected");
         assert!(session.project().object(cube).is_some());
@@ -1493,7 +1535,7 @@ mod tests {
         let mut editor = Editor::new();
         let root = session.project().root().id();
 
-        editor.arm_cube(root, Length::from_millimetres(200).expect("size")).expect("arm");
+        editor.arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
         editor.place_primitive(&mut session, Placement::IDENTITY).expect("create cube");
 
         let id = editor.selected_node().expect("the new object is selected");

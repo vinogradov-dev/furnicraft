@@ -936,8 +936,13 @@ impl FurniCraftApp {
                     cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
                     ui.separator();
                     ui.label("LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
-                } else if let Some((parent, size)) = placing {
-                    ui.label(format!("Primitive · Cube {size}"));
+                } else if let Some((parent, kind, size)) = placing {
+                    let name = match kind {
+                        furnicraft_engine::PrimitiveKind::Cube => "Cube",
+                        furnicraft_engine::PrimitiveKind::Cylinder => "Cylinder",
+                        furnicraft_engine::PrimitiveKind::Sphere => "Sphere",
+                    };
+                    ui.label(format!("Primitive · {name} {size}"));
                     ui.separator();
                     ui.label("LMB place on the work plane  ·  Esc cancel");
                     let _ = parent;

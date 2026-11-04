@@ -50,7 +50,9 @@ pub use contour_edit::ContourEditError;
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
-pub use mesh::{MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError};
+pub use mesh::{
+    MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError, PRIMITIVE_SEGMENTS, PRIMITIVE_SPHERE_BANDS,
+};
 pub use node::Node;
 pub use object::{Constructive, ConstructiveError, Extrude, Feature, Geometry, MAX_OBJECT_FEATURES, Object};
 pub use panel::{
