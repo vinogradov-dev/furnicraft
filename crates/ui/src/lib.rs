@@ -46,8 +46,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, Contour, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize,
-    Placement, Project,
+    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize, Path, Placement,
+    Project,
 };
 use furnicraft_units::Length;
 
@@ -72,13 +72,6 @@ pub use toolbars::ToolPanel;
 const NEW_PANEL_LENGTH_MM: i64 = 600;
 /// Default width of a newly created panel, in millimetres.
 const NEW_PANEL_WIDTH_MM: i64 = 400;
-
-/// Longer side of the default extrusion contour, in millimetres.
-const NEW_EXTRUDE_LENGTH_MM: i64 = 600;
-/// Shorter side of the default extrusion contour, in millimetres.
-const NEW_EXTRUDE_WIDTH_MM: i64 = 400;
-/// Height of the default extrusion, in millimetres.
-const NEW_EXTRUDE_HEIGHT_MM: i64 = 18;
 
 /// A primitive waiting for its work-plane click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -476,8 +469,10 @@ impl Editor {
     pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
         let parent = drawing_parent(session.project(), self.selection.primary());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
+        let selected = self.selection.primary();
+        let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, parent, has_panel_material, &mut actions);
+        toolbars::show(ui, &mut self.toolbars, parent, has_panel_material, selected, selected_path, &mut actions);
         let mut started_drawing = false;
         for action in actions {
             match action {
@@ -490,9 +485,9 @@ impl Editor {
                 ToolAction::CreatePanel { parent } => self.create_panel(session, parent)?,
                 ToolAction::CreateAssembly { parent } => self.create_assembly(session, parent)?,
                 ToolAction::CreatePrimitive { parent, kind, size } => self.arm_primitive(parent, kind, size)?,
-                ToolAction::CreateExtrude { parent } => self.create_extrude(session, parent)?,
                 ToolAction::CreateCamera { parent } => self.create_camera(session, parent)?,
                 ToolAction::CreateLight { parent } => self.create_light(session, parent)?,
+                ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
             }
         }
         Ok(started_drawing)
@@ -581,28 +576,20 @@ impl Editor {
         Ok(())
     }
 
-    /// Dispatches `object.extrude.create` with the default rectangle and height.
-    fn create_extrude(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
-        let length = Length::from_millimetres(NEW_EXTRUDE_LENGTH_MM)
-            .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
-        let width = Length::from_millimetres(NEW_EXTRUDE_WIDTH_MM)
-            .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
-        let height = Length::from_millimetres(NEW_EXTRUDE_HEIGHT_MM)
-            .ok_or_else(|| "The default extrusion height does not fit a length.".to_owned())?;
-        let contour = Contour::from_polygon(vec![
-            [Length::ZERO, Length::ZERO],
-            [length, Length::ZERO],
-            [length, width],
-            [Length::ZERO, width],
-        ])
-        .map_err(|error| format!("The default extrusion contour is invalid: {error}"))?;
-        let params = json(&ObjectExtrudeCreate {
-            parent,
-            name: "Extrude".to_owned(),
-            contour,
-            height,
-            placement: Placement::IDENTITY,
-        })?;
+    /// Extrudes a selected path into a body in the path's own frame.
+    ///
+    /// Only a closed path encloses a ring, so an open one is refused with the reason from
+    /// `Path::to_contour` before a command runs. The body is a sibling of the path with the path's
+    /// placement, because the ring is stored in the path's local XY; the path stays so the user can
+    /// extrude again or edit the drawing.
+    fn extrude_path(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
+        let project = session.project();
+        let path = project.object_path(object).map_err(|error| error.to_string())?;
+        let contour = path.to_contour().map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
+        let parent = project.parent_of(object).unwrap_or(project.root().id());
+        let placement = project.node(object).map_or(Placement::IDENTITY, |node| node.placement());
+        let name = project.object(object).map_or_else(|| "Body".to_owned(), |object| format!("{} body", object.name()));
+        let params = json(&ObjectExtrudeCreate { parent, name, contour, height, placement })?;
         let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
         Ok(())
@@ -868,6 +855,7 @@ mod tests {
 
     use furnicraft_engine::NodePropertySet;
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
+    use furnicraft_model::Contour;
     use furnicraft_model::{Container, FurnType, Geometry, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE};
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
@@ -1254,6 +1242,107 @@ mod tests {
         }
     }
 
+    /// A project whose root holds one closed path object.
+    fn path_project(closed: bool) -> (Project, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let path = Path::rectangle([millimetres(0), millimetres(0)], [millimetres(600), millimetres(400)])
+            .expect("a rectangle path");
+        let path = if closed {
+            path
+        } else {
+            let segments = path.segments().take(2).collect::<Vec<_>>();
+            Path::new(segments, false).expect("an open chain")
+        };
+        let id = project.add_object(root, "Drawing", Placement::IDENTITY, Geometry::Path(path)).expect("path object");
+        (project, id)
+    }
+
+    #[test]
+    fn the_extrude_action_turns_a_closed_path_into_a_body() {
+        let (project, path) = path_project(true);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(path));
+        let height = Length::from_millimetres(18).expect("height");
+
+        editor.extrude_path(&mut session, path, height).expect("extrude the path");
+        let body = editor.selected_node().expect("the new body is selected");
+        let object = session.project().object(body).expect("object");
+        assert_eq!(object.name(), "Drawing body");
+        let constructive = object.geometry().as_constructive().expect("a constructive body");
+        assert_eq!(constructive.height(), Some(height));
+        assert_eq!(session.project().parent_of(body), session.project().parent_of(path));
+        assert!(session.project().object_path(path).is_ok(), "the drawing stays so it can be extruded again");
+        let revision = session.project().revision();
+        editor.extrude_path(&mut session, path, height).expect("extrude the path");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+    }
+
+    #[test]
+    fn one_undo_removes_the_body_and_keeps_the_drawing() {
+        let (project, path) = path_project(true);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(path));
+        editor
+            .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"))
+            .expect("extrude the path");
+        let body = editor.selected_node().expect("the new body is selected");
+
+        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        assert!(session.project().object(body).is_none(), "undo removes the body");
+        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
+        assert!(session.project().object_path(path).is_ok(), "the drawing the body came from stays");
+        assert!(!session.can_undo(), "one extrusion is one undo step");
+    }
+
+    #[test]
+    fn an_open_path_is_refused_with_a_readable_reason() {
+        let (project, path) = path_project(false);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let revision = session.project().revision();
+        let error = editor
+            .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"))
+            .expect_err("an open chain is no ring");
+        assert!(error.contains("open path"), "the message names the problem: {error}");
+        assert_eq!(session.project().revision(), revision, "a refused extrusion changes nothing");
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn a_body_keeps_the_paths_placement_and_frame() {
+        let (project, path) = path_project(true);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let placement = Placement::IDENTITY
+            .with_translation(
+                Length::from_millimetres(100).expect("x"),
+                Length::from_millimetres(50).expect("y"),
+                Length::ZERO,
+            )
+            .expect("placement");
+        let params =
+            crate::command::json(&furnicraft_engine::NodePlacementSet { node: path, placement }).expect("params");
+        session.dispatch(furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID, &params).expect("move the drawing");
+        editor.extrude_path(&mut session, path, Length::from_millimetres(18).expect("height")).expect("extrude");
+        let body = editor.selected_node().expect("the body");
+        assert_eq!(session.project().node(body).expect("body node").placement(), placement);
+    }
+
+    #[test]
+    fn the_extrude_height_field_parses_a_positive_length() {
+        let mut state = crate::toolbars::Toolbars::new();
+        assert_eq!(state.extrude_height_text(), "18");
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+        state.set_extrude_height_text("-2");
+        assert!(state.extrude_height().is_err());
+        state.set_extrude_height_text("thick");
+        assert!(state.extrude_height().is_err());
+    }
+
     #[test]
     fn the_primitive_size_field_parses_millimetres() {
         let mut state = crate::toolbars::Toolbars::new();
@@ -1543,40 +1632,6 @@ mod tests {
         assert_eq!(object.name(), "Cube");
         assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
         assert_eq!(session.project().revision().get(), 1, "one command is one revision");
-
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
-        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
-        assert!(session.project().object(id).is_none());
-    }
-
-    #[test]
-    fn creating_an_extrude_dispatches_the_extrude_command_and_selects_it() {
-        let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let mut editor = Editor::new();
-        let root = session.project().root().id();
-
-        editor.create_extrude(&mut session, root).expect("create extrusion");
-
-        let id = editor.selected_node().expect("the new object is selected");
-        let object = session.project().object(id).expect("object");
-        assert_eq!(object.name(), "Extrude");
-        let constructive = object.geometry().as_constructive().expect("a constructive payload");
-        let height = Length::from_millimetres(18).expect("height");
-        assert_eq!(constructive.height(), Some(height));
-        let contour = constructive.contour().expect("the default contour");
-        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
-        assert_eq!(
-            contour,
-            &Contour::from_polygon(vec![
-                [millimetres(0), millimetres(0)],
-                [millimetres(600), millimetres(0)],
-                [millimetres(600), millimetres(400)],
-                [millimetres(0), millimetres(400)],
-            ])
-            .expect("rectangle")
-        );
-        assert!(object.geometry().as_mesh().is_none());
-        assert_eq!(session.project().revision().get(), 1);
 
         editor.run_action(&mut session, TreeAction::Undo).expect("undo");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");

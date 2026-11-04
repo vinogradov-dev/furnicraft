@@ -1,11 +1,10 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U23 state=idle base=49a8246 updated=2026-11-04
+STATE: milestone=M7 phase=U task=S4 state=idle base=HEAD updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
-only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
-and the backlog's `Now` section — `cargo xtask status` prints both. `AGENTS.md` §1.1 points at the
-contract that orders that answer when a session was interrupted or the plan is broken.
+only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and the backlog's
+`Now` section — `cargo xtask status` prints both; `AGENTS.md` §1.1 orders a broken or interrupted plan.
 
 ## Where we are
 
@@ -37,27 +36,28 @@ contract that orders that answer when a session was interrupted or the plan is b
   contour stored as a document `Path` (open or closed, schema 17), a work plane taken from the current
   ortho view, and an ortho/perspective toggle. U1 lays `assets/icons/` — one placeholder per icon and
   `assets/README.md` with the naming and SVG rules. U24 fixes the contract on top of it: one ink on a
-  24 grid, three families (geometry, view, service), the service grammar in a new `actions` theme,
-  and the guide read only while an icon is drawn or edited (ADR 0047).
-- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
-  and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
-  sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
-- U7–U17 draw and pick a stored `Path`, toggle the projection, take the work plane from the standard
+  24 grid, three families, the service grammar in a new `actions` theme, and the guide read only
+  while an icon is drawn or edited (ADR 0047).
+- U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted and
+  falling back to its label while an asset is empty, and the 75–200 % zoom slider rasterises at the
+  new pixel size; the Contour icons are drawn (U25).
+- U7–U23 draw and pick a stored `Path`, toggle the projection, take the work plane from the standard
   views, snap, build a chain with the five tools, preview it and commit it as one path object
-  (ADRs 0048–0052). U18–U22 add the themed toolbar strip, fill its four panels, make it the one
-  place a node is created, and place a cube, a cylinder or a sphere at a work-plane click.
+  (ADRs 0048–0052); the themed toolbar strip is the one place a node is created, and it places a
+  primitive at a work-plane click and extrudes a closed path into a body. An open path is refused
+  before the command with a readable reason; the drawing stays beside the body it produced.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
-- Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
-- The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
-  `STATUS`/`BACKLOG`/`SESSION` and ships the templates, the agent section and the license texts.
+- Faber's architecture is recorded (ADRs 0028–0032) but not implemented. The plan gate is its own
+  crate: `state-contract` (L0, no dependencies) parses and checks `STATUS`/`BACKLOG`/`SESSION` and
+  ships the templates, the agent section and the license texts.
 - Gate: `cargo xtask ci` — green. Branches: work on `dev`, merge to `main` with `--no-ff` after a
   green gate (AGENTS §6.2).
 
 ## Next
 
-U23 is next: extrude a selected closed path into a body with `object.extrude.create` and a height
-field; an open path is refused with a readable message. S4 and P1–P3 follow; X2 waits.
+S4 is next: the revision-keyed evaluation cache, so a rebuild touches only changed nodes. P1–P3
+follow; X2 waits.
 
 ## Index
 
