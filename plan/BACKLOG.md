@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
+- `[~]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
   closing, with the document untouched until commit.
   `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
 
