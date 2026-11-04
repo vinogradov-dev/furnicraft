@@ -1,10 +1,10 @@
 //! Themed toolbars: the strip of panels that own the tools.
 //!
 //! Four panels group the tools by the theme of the assets they draw: Contour, Scene, Primitives and
-//! Bodies. A panel is a collapsible section; whether it opens, and what the strip remembers, is view
-//! state in the editor and never reaches the document. The strip itself has no tool yet: U19 fills
-//! the panels, and the buttons here are the shape every tool will use, including the text fallback
-//! an undrawn icon needs.
+//! Bodies. A panel is a collapsible section; whether it opens, and what the numeric fields remember,
+//! is view state in the editor and never reaches the document. Every button is the hinted tool
+//! button, including the text fallback an undrawn icon needs, and a panel that edits a number keeps
+//! the text until the user commits it.
 
 use egui::{TextEdit, Ui};
 use furnicraft_engine::PrimitiveKind;
