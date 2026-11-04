@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
+- `[~]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
   with a tooltip and a shortcut, and a text label while an icon is empty; the state lives in `Editor`.
   `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 
