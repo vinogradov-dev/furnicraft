@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U11** orthographic ↔ perspective as view state, with a strip button and a key, the ortho
+- `[~]` **U11** orthographic ↔ perspective as view state, with a strip button and a key, the ortho
   height taken from the current frame; an authored camera is untouched.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/gizmo.rs`
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/main.rs`
 
 ## Bugs
 
