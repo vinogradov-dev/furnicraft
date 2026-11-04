@@ -1,16 +1,24 @@
-//! Contour editing state: a working copy of a panel outline or an object contour.
+//! Contour and drawing state: a working copy of a panel outline or an object contour, and the
+//! chain a drawing tool is building.
 //!
-//! The mode is view state. Entering it reads the stored ring into a draft; moving a corner or
-//! splitting a side only changes the draft, so the document, its revision and the undo history stay
-//! untouched until the user applies. Applying dispatches exactly one command
+//! Both are view state. Entering a contour edit reads the stored ring into a draft; moving a corner
+//! or splitting a side only changes the draft, so the document, its revision and the undo history
+//! stay untouched until the user applies. Applying dispatches exactly one command
 //! (`panel.outline.set` or `object.contour.replace`), so the whole edit is one undo entry. Leaving
 //! without applying drops the draft and changes nothing.
+//!
+//! A [`DrawDraft`] is the same pattern without a base ring: the tool appends plane points, undoes
+//! the last one, closes the chain or cancels it, and no command runs until the drawing is committed.
 
 use furnicraft_engine::object_cmds::OBJECT_CONTOUR_REPLACE_ID;
 use furnicraft_engine::panel_cmds::OUTLINE_SET_ID;
 use furnicraft_engine::{ObjectContourReplace, PanelOutlineSet, Session};
-use furnicraft_model::{Contour, ContourEditError, ContourSegmentId, Id, Project};
+use furnicraft_model::{
+    Contour, ContourEditError, ContourSegment, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS,
+    Path, PathError, Project,
+};
 use furnicraft_units::Length;
+use thiserror::Error;
 
 use crate::command::{dispatch, json};
 
@@ -122,6 +130,163 @@ impl ContourEdit {
             }
         }
     }
+}
+
+/// A chain of work-plane points a drawing tool is building.
+///
+/// The points are whole micrometres in the work-plane frame, so a draft becomes a document
+/// [`Path`] without a float ever entering the document. A draft is view state: it runs no command
+/// and bumps no revision until the drawing is committed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DrawDraft {
+    points: Vec<[Length; 2]>,
+    closed: bool,
+}
+
+impl DrawDraft {
+    /// An empty, open draft.
+    pub const fn new() -> Self {
+        Self { points: Vec::new(), closed: false }
+    }
+
+    /// The points in the order they were added; a closed chain stores each point once.
+    pub fn points(&self) -> &[[Length; 2]] {
+        &self.points
+    }
+
+    /// Whether the chain is closed back to its first point.
+    pub const fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Whether the draft holds no point yet.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// The number of points, not segments.
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// Whether the chain has enough points to close into a ring.
+    pub fn can_close(&self) -> bool {
+        !self.closed && self.points.len() >= 3
+    }
+
+    /// Appends a point, refusing a repeat of the previous point, an out-of-range point and an
+    /// overflow of the ring cap.
+    ///
+    /// A path may touch or cross itself — the ring rules run only when it becomes a contour — but
+    /// two equal neighbours would make a zero-length segment the document cannot store.
+    pub fn push(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
+        if self.closed {
+            return Err(DrawDraftError::AlreadyClosed);
+        }
+        if self.points.len() >= MAX_CONTOUR_SEGMENTS {
+            return Err(DrawDraftError::Full);
+        }
+        if !point_in_range(point) {
+            return Err(DrawDraftError::PointOutOfRange);
+        }
+        if self.points.last() == Some(&point) {
+            return Err(DrawDraftError::DuplicatePoint);
+        }
+        self.points.push(point);
+        Ok(())
+    }
+
+    /// Removes the last action: a close first, then the last point.
+    ///
+    /// Returns `false` for an empty, open draft.
+    pub fn undo(&mut self) -> bool {
+        if self.closed {
+            self.closed = false;
+            return true;
+        }
+        self.points.pop().is_some()
+    }
+
+    /// Closes the chain back to its first point.
+    ///
+    /// Three points are the fewest a ring can have, so a shorter chain is refused. The closed
+    /// chain is validated before the state changes, so a draft that cannot become a path — for
+    /// example because its last point repeats the first — stays open and editable. Whether the ring
+    /// is simple and non-degenerate is a ring rule that runs when the path becomes a contour.
+    pub fn close(&mut self) -> Result<(), DrawDraftError> {
+        if self.closed {
+            return Err(DrawDraftError::AlreadyClosed);
+        }
+        if self.points.len() < 3 {
+            return Err(DrawDraftError::TooFewPoints { need: 3, got: self.points.len() });
+        }
+        self.path_of(true)?;
+        self.closed = true;
+        Ok(())
+    }
+
+    /// The path these points describe, open or closed.
+    pub fn to_path(&self) -> Result<Path, DrawDraftError> {
+        self.path_of(self.closed)
+    }
+
+    /// Builds the path with an explicit closing flag and validates it.
+    fn path_of(&self, closed: bool) -> Result<Path, DrawDraftError> {
+        if self.points.len() < 2 {
+            return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
+        }
+        let mut segments = Vec::with_capacity(self.points.len());
+        for pair in self.points.windows(2) {
+            let (Some(&start), Some(&end)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            segments.push(ContourSegment::line(start, end).map_err(PathError::from)?);
+        }
+        if closed && let (Some(&first), Some(&last)) = (self.points.first(), self.points.last()) {
+            segments.push(ContourSegment::line(last, first).map_err(PathError::from)?);
+        }
+        Ok(Path::new(segments, closed)?)
+    }
+}
+
+/// Whether a point lies inside the coordinate range the document accepts.
+fn point_in_range(point: [Length; 2]) -> bool {
+    let max = MAX_CONTOUR_COORDINATE.micrometres();
+    point.iter().all(|coordinate| {
+        let value = coordinate.micrometres();
+        (-max..=max).contains(&value)
+    })
+}
+
+/// Why a drawing draft refused an edit.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum DrawDraftError {
+    /// No drawing is in progress.
+    #[error("no drawing is in progress")]
+    NotStarted,
+    /// A point lies outside the coordinate range the document accepts.
+    #[error("the point is outside the drawing range")]
+    PointOutOfRange,
+    /// The point repeats the previous one, so the segment would have no length.
+    #[error("a drawing point must differ from the previous one")]
+    DuplicatePoint,
+    /// The draft already holds the largest chain one contour ring can take.
+    #[error("a drawing holds at most {MAX_CONTOUR_SEGMENTS} points")]
+    Full,
+    /// The draft needs more points for this action.
+    #[error("the drawing needs at least {need} points, it has {got}")]
+    TooFewPoints {
+        /// The smallest accepted count.
+        need: usize,
+        /// The current count.
+        got: usize,
+    },
+    /// The chain is already closed.
+    #[error("the drawing is already closed")]
+    AlreadyClosed,
+    /// The points do not form a path.
+    #[error(transparent)]
+    Path(#[from] PathError),
 }
 
 #[cfg(test)]
@@ -261,5 +426,140 @@ mod tests {
         assert!(edit.apply(&mut session).is_err(), "the panel is gone");
         assert_eq!(session.project().revision(), revision, "a failed apply changes nothing");
         assert!(edit.is_dirty(), "the draft stays so the user can cancel or retry");
+    }
+
+    #[test]
+    fn a_drawing_draft_builds_an_open_path_from_its_points() {
+        let mut draft = DrawDraft::new();
+        assert!(draft.is_empty());
+        assert!(!draft.can_close());
+        assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 0 }));
+
+        let points = [
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+        ];
+        for point in points {
+            draft.push(point).expect("a fresh point");
+        }
+        assert_eq!(draft.len(), 3);
+        assert!(!draft.is_closed());
+        assert!(draft.can_close(), "three points enclose an area");
+
+        let path = draft.to_path().expect("an open path");
+        assert!(!path.is_closed());
+        assert_eq!(path.entries().len(), 2);
+        let mut ends = path.segments().map(|segment| segment.start().expect("start"));
+        assert_eq!(ends.next(), Some(points[0]));
+        assert_eq!(path.entries().last().and_then(|entry| entry.segment().end().ok()), Some(points[2]));
+    }
+
+    #[test]
+    fn closing_a_drawing_draft_adds_the_last_segment_once() {
+        let mut draft = DrawDraft::new();
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
+        {
+            draft.push(point).expect("point");
+        }
+        draft.close().expect("a triangle closes");
+        assert!(draft.is_closed());
+        assert!(!draft.can_close());
+        assert_eq!(draft.len(), 3, "a closed chain stores each point once");
+
+        let path = draft.to_path().expect("a closed path");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 3);
+        let last = path.entries().last().expect("the closing segment");
+        assert_eq!(last.segment().end().ok(), Some([millimetres(0), millimetres(0)]));
+
+        assert_eq!(draft.close(), Err(DrawDraftError::AlreadyClosed));
+        assert_eq!(draft.push([millimetres(1), millimetres(1)]), Err(DrawDraftError::AlreadyClosed));
+    }
+
+    #[test]
+    fn a_drawing_draft_needs_three_points_to_close() {
+        let mut draft = DrawDraft::new();
+        draft.push([millimetres(0), millimetres(0)]).expect("point");
+        assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 1 }));
+        assert_eq!(draft.close(), Err(DrawDraftError::TooFewPoints { need: 3, got: 1 }));
+        assert!(!draft.can_close());
+    }
+
+    #[test]
+    fn undoing_a_drawing_draft_reopens_before_it_drops_a_point() {
+        let mut draft = DrawDraft::new();
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
+        {
+            draft.push(point).expect("point");
+        }
+        draft.close().expect("close");
+
+        assert!(draft.undo(), "the first undo opens the chain");
+        assert!(!draft.is_closed());
+        assert_eq!(draft.len(), 3, "opening keeps every point");
+        assert!(draft.undo(), "the next undo drops the last point");
+        assert_eq!(draft.len(), 2);
+        assert!(draft.undo());
+        assert!(draft.undo());
+        assert!(draft.is_empty());
+        assert!(!draft.undo(), "an empty open draft has nothing to undo");
+    }
+
+    #[test]
+    fn a_drawing_draft_refuses_a_repeat_and_a_point_out_of_range() {
+        let mut draft = DrawDraft::new();
+        draft.push([millimetres(0), millimetres(0)]).expect("point");
+        draft.push([millimetres(600), millimetres(0)]).expect("point");
+        assert_eq!(draft.push([millimetres(600), millimetres(0)]), Err(DrawDraftError::DuplicatePoint));
+        draft.push([millimetres(600), millimetres(400)]).expect("a chain may touch an earlier point");
+        draft.push([millimetres(0), millimetres(0)]).expect("a path need not be simple");
+
+        let too_far = MAX_CONTOUR_COORDINATE.checked_add(Length::from_micrometres(1)).expect("length");
+        assert_eq!(
+            draft.push([too_far, Length::ZERO]),
+            Err(DrawDraftError::PointOutOfRange),
+            "a point outside the document range never enters a draft"
+        );
+    }
+
+    #[test]
+    fn a_drawing_draft_stops_at_the_ring_cap() {
+        let mut draft = DrawDraft::new();
+        for index in 0..MAX_CONTOUR_SEGMENTS {
+            let x = Length::from_micrometres(i64::try_from(index).expect("index") * 1_000);
+            draft.push([x, Length::ZERO]).expect("a point below the cap");
+        }
+        assert_eq!(draft.len(), MAX_CONTOUR_SEGMENTS);
+        let next = Length::from_micrometres(i64::try_from(MAX_CONTOUR_SEGMENTS).expect("index") * 1_000);
+        assert_eq!(draft.push([next, Length::ZERO]), Err(DrawDraftError::Full));
+    }
+
+    #[test]
+    fn a_drawing_draft_refuses_a_close_that_cannot_form_a_path() {
+        let mut draft = DrawDraft::new();
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(0), millimetres(0)]]
+        {
+            draft.push(point).expect("a path need not be simple");
+        }
+        assert!(draft.close().is_err(), "closing would make a zero-length segment");
+        assert!(!draft.is_closed(), "a refused close leaves the draft open and editable");
+        assert_eq!(draft.len(), 3);
+    }
+
+    #[test]
+    fn a_drawing_draft_shows_its_reason_to_a_user() {
+        assert_eq!(DrawDraftError::NotStarted.to_string(), "no drawing is in progress");
+        assert_eq!(
+            DrawDraftError::TooFewPoints { need: 3, got: 1 }.to_string(),
+            "the drawing needs at least 3 points, it has 1"
+        );
+        assert!(!DrawDraftError::Full.to_string().is_empty());
+        assert!(!DrawDraftError::DuplicatePoint.to_string().is_empty());
+        assert!(!DrawDraftError::PointOutOfRange.to_string().is_empty());
+        assert!(!DrawDraftError::AlreadyClosed.to_string().is_empty());
     }
 }
