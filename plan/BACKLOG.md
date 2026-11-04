@@ -23,9 +23,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
-  field; an open path is refused with a readable message.
-  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
+- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
+  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
+  only changed nodes.
+  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
 
 ## Bugs
 
@@ -39,10 +40,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
-  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
-  only changed nodes.
-  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
 - `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
   `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
   `files: state-contract/src/status.rs, xtask/src/main.rs`
@@ -53,6 +50,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U23** extrude a selected closed path: a height field and one Extrude button in the Bodies
+  panel, `Path::to_contour` under `object.extrude.create`, the body a sibling at the path's
+  placement, and an open path refused with a readable reason — `098b4a3`
 - `[x]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere`, their `PrimitiveKind`
   variants and three Primitive-panel buttons — `49a8246`
 - `[x]` **U21** a primitive from its panel: an edge-length field, a Cube tool that arms a placement,
