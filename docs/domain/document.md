@@ -134,8 +134,9 @@ orthographic ([ADR 0049](../decisions/0049-the-viewport-toggles-its-own-projecti
   mesh is rebuilt on load;
 - colours, brushes and textures;
 - diagnostics and "problem panel" states;
-- viewport navigation, selection, hover, open containers, grid, shading and projection — they belong
-  to the session, not to the document ([ADR 0029](../decisions/0029-view-state-belongs-to-the-session.md));
+- viewport navigation, selection, hover, open containers, grid, shading, projection and the work
+  plane — they belong to the session, not to the document
+  ([ADR 0029](../decisions/0029-view-state-belongs-to-the-session.md));
 - the undo and redo history;
 - anything about an order: number, customer, version or status; the order program owns them
   ([Scene file](scene-file.md) §4);

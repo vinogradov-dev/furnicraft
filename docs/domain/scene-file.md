@@ -84,7 +84,8 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 - derived geometry: the evaluated mesh of a constructive object, tessellation, bounds, caches;
 - diagnostics and problem states;
 - the undo and redo history;
-- selection, hover, open containers, viewport navigation, grid, shading and projection;
+- selection, hover, open containers, viewport navigation, grid, shading, projection and the work
+  plane;
 - window layout, panel sizes, the list of recently opened files;
 - credentials, endpoints, conversations and any assistant state.
 

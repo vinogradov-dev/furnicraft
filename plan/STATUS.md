@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U12 state=idle base=c195d45 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U13 state=idle base=6c61962 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -42,9 +42,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 - U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
   and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
-- U7–U11 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, build it
-  from a rectangle, a circle or a three-point arc, and toggle the viewport projection; ADR 0048 makes
-  a drawing a `Path`, ADR 0049 keeps the projection in the view camera.
+- U7–U12 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, build it
+  from a rectangle, a circle or a three-point arc, toggle the viewport projection and take the work
+  plane from the standard ortho views; ADR 0048/0049/0050 record the drawing, view and plane.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -55,9 +55,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U12 is next: the work plane — an axis-aligned plane from each of the six standard ortho views, world
-XY otherwise, and the screen-to-plane mapping. U13–U17 add snapping and the drawing tools; U18–U20
-replace the scene-tree create buttons with toolbars. U21–U23, S4 and P1–P3 follow; X2 waits.
+U13 is next: snapping on the work plane — a 10 mm grid, the ends of the draft, an axis lock and a
+free mode as pure functions. U14–U17 add the draft, the tools and their commit; U18–U20 replace the
+scene-tree create buttons with toolbars. U21–U23, S4 and P1–P3 follow; X2 waits.
 
 ## Index
 

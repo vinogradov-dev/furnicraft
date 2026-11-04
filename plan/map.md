@@ -38,4 +38,5 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Panel card UI | `crates/ui/src/panel_card.rs` (`PanelCard`), `crates/ui/src/machining/` (`MachiningSection`) | — |
 | UI scale | `crates/ui/src/ui_scale.rs` (`percent`, `factor`, `show`), `apps/furnicraft/src/main.rs` (`workspace`) | the control reads and writes `ctx.zoom_factor()` |
 | View camera and projection | `crates/scene/src/lib.rs` (`Camera`, `Projection`, `toggle_projection`), `apps/furnicraft/src/main.rs` (`viewport`, `viewport_owns_view`) | view state only; an authored camera pins navigation and the projection |
+| Work plane | `apps/furnicraft/src/gizmo_math.rs` (`WorkPlane`, `from_camera`, `pointer_point`) | view state; the six standard ortho views select XY, XZ or YZ, every other view uses XY |
 | UI icon resources | `assets/icons/`, `assets/README.md` (`Theme`, `Icon`, `icon_button`) | meaning in `assets/icons/STYLE_GUIDE.md`, format and naming in `assets/README.md`; the loader and button live in `crates/ui/src/icons.rs` |

@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
-  and perspective, and the screen-to-plane mapping; tests for the six standard views.
-  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
+  free mode, as pure functions with table tests.
+  `files: apps/furnicraft/src/gizmo_math.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
-  free mode, as pure functions with table tests.
-  `files: apps/furnicraft/src/gizmo_math.rs`
 - `[ ]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
   closing, with the document untouched until commit.
   `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
@@ -86,6 +83,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U12** the work plane: `WorkPlane` maps the pointer onto XY, XZ or YZ from the six standard
+  ortho views, world XY otherwise, with a strip label — `6c61962`
 - `[x]` **U11** orthographic ↔ perspective as view state: `Camera::toggle_projection` keeps the
   visible height, the strip has a button and `O`, and an authored camera is untouched — `c195d45`
 - `[x]` **U10** shape constructors: `Path::rectangle` from two corners, `Path::circle` as four

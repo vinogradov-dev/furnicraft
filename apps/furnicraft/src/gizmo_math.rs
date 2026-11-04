@@ -1,15 +1,18 @@
-//! Shared math and presentation for the viewport transform gizmos.
+//! Shared math and presentation for the viewport.
 //!
 //! The translate and rotate gizmos project world points with the camera, hit-test their handles in
 //! screen space and compute one placement per moved node; the shell dispatches them as a single
-//! `node.placement.set_many`. Keeping the axis colours, the projection and the commit types here
-//! means the two gizmos cannot drift apart.
+//! `node.placement.set_many`. The work plane turns a pointer into the world plane a drawing lands
+//! on. Keeping the axis colours, the projection, the work plane and the commit types here means the
+//! gizmos and the drawing tools cannot drift apart.
+
+use std::f64::consts::FRAC_PI_2;
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
-use furnicraft_geom::{DQuat, DVec3};
+use furnicraft_geom::{DQuat, DVec2, DVec3};
 use furnicraft_model::{Id, Placement, Project};
-use furnicraft_scene::{Camera, Ray};
+use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection, Ray};
 
 /// Length of an axis handle, in points.
 pub(crate) const HANDLE_LENGTH: f32 = 84.0;
@@ -22,6 +25,13 @@ const ORIGIN_DEAD_ZONE: f32 = 10.0;
 
 /// Axes closer than this to the view direction are not drawn.
 const VIEW_ALIGNMENT_LIMIT: f64 = 0.985;
+
+/// How close the orbit angles must be to a standard view, in radians.
+///
+/// A snapped view is exact; any orbit moves the camera far outside this tolerance and becomes an
+/// axonometric view. The top and bottom views are the exception: the camera pitch stops five
+/// degrees short of the pole (ADR 0019) and that clamped pitch is still the standard view.
+const STANDARD_VIEW_TOLERANCE: f64 = 1.0e-9;
 
 /// Gamma-space colours for the three axes.
 const X_COLOR: Color32 = Color32::from_rgb(232, 80, 80);
@@ -372,6 +382,94 @@ pub(crate) fn ray_plane(ray: Ray, plane_point: DVec3, normal: DVec3) -> Option<D
     Some(ray.origin() + ray.direction() * distance)
 }
 
+/// A right-handed world plane the drawing tools place points on.
+///
+/// The plane passes through the world origin, so a drawing is stored in world-aligned plane
+/// coordinates. `u` and `v` follow the screen of the view that selected the plane: a shape drawn to
+/// the right and up lands on positive `u` and `v` in both the viewport and the document.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WorkPlane {
+    normal: DVec3,
+    u: DVec3,
+    v: DVec3,
+}
+
+impl WorkPlane {
+    /// World XY: the plane a perspective or axonometric view draws on.
+    pub(crate) const WORLD_XY: Self = Self { normal: DVec3::Z, u: DVec3::X, v: DVec3::Y };
+
+    /// The plane an axis-aligned orthographic view draws on, or world XY for every other view.
+    ///
+    /// A top or bottom view is recognised by its clamped pitch; a side view needs an exact
+    /// quarter-turn yaw, because any other yaw is an axonometric view and draws on world XY.
+    pub(crate) fn from_camera(camera: Camera) -> Self {
+        if !matches!(camera.projection(), Projection::Orthographic { .. }) {
+            return Self::WORLD_XY;
+        }
+        let pitch = camera.pitch();
+        if (pitch - MAX_PITCH).abs() <= STANDARD_VIEW_TOLERANCE {
+            return Self { normal: DVec3::Z, u: DVec3::X, v: DVec3::Y };
+        }
+        if (pitch - MIN_PITCH).abs() <= STANDARD_VIEW_TOLERANCE {
+            return Self { normal: -DVec3::Z, u: DVec3::X, v: -DVec3::Y };
+        }
+        if pitch.abs() > STANDARD_VIEW_TOLERANCE {
+            return Self::WORLD_XY;
+        }
+        let quarter = camera.yaw() / FRAC_PI_2;
+        let nearest = quarter.round();
+        if (quarter - nearest).abs() > STANDARD_VIEW_TOLERANCE {
+            return Self::WORLD_XY;
+        }
+        match (nearest as i64).rem_euclid(4) {
+            0 => Self { normal: DVec3::X, u: DVec3::Y, v: DVec3::Z },
+            1 => Self { normal: DVec3::Y, u: -DVec3::X, v: DVec3::Z },
+            2 => Self { normal: -DVec3::X, u: -DVec3::Y, v: DVec3::Z },
+            _ => Self { normal: -DVec3::Y, u: DVec3::X, v: DVec3::Z },
+        }
+    }
+
+    /// The plane normal, pointing from the plane towards the viewer in a standard view.
+    pub(crate) const fn normal(self) -> DVec3 {
+        self.normal
+    }
+
+    /// The world point at plane coordinates `local`.
+    #[allow(dead_code, reason = "the commit and snap steps place local points in U13-U17")]
+    pub(crate) fn world(self, local: DVec2) -> DVec3 {
+        self.u * local.x + self.v * local.y
+    }
+
+    /// The plane coordinates of a world point on the plane.
+    pub(crate) fn local(self, world: DVec3) -> DVec2 {
+        DVec2::new(world.dot(self.u), world.dot(self.v))
+    }
+
+    /// The world point where a ray meets the plane, or `None` when it is parallel or behind.
+    #[allow(dead_code, reason = "the drawing tools start from these points in U13-U14")]
+    pub(crate) fn ray_point(self, ray: Ray) -> Option<DVec3> {
+        ray_plane(ray, DVec3::ZERO, self.normal())
+    }
+
+    /// The plane coordinates under a viewport position.
+    #[allow(dead_code, reason = "the drawing tools consume the mapping in U13-U14")]
+    pub(crate) fn pointer_point(self, camera: Camera, viewport: egui::Rect, pointer: Pos2) -> Option<DVec2> {
+        self.ray_point(ray_to(pointer, viewport, camera)).map(|world| self.local(world))
+    }
+
+    /// The plane name shown in the strip: `XY`, `XZ` or `YZ`.
+    pub(crate) fn label(self) -> &'static str {
+        let normal = self.normal();
+        if normal.x.abs() > 0.5 {
+            "YZ"
+        } else if normal.y.abs() > 0.5 {
+            "XZ"
+        } else {
+            "XY"
+        }
+    }
+}
+
 fn normalized_pointer(pointer: Pos2, viewport: egui::Rect) -> (f64, f64) {
     let width = f64::from(viewport.width());
     let height = f64::from(viewport.height());
@@ -542,6 +640,18 @@ mod tests {
 
     fn id(number: u64) -> Id {
         Id::new(number).expect("id")
+    }
+
+    fn assert_vector(actual: DVec3, expected: DVec3) {
+        assert!((actual - expected).length() < 1.0e-9, "actual {actual:?}, expected {expected:?}");
+    }
+
+    /// An orthographic camera snapped to the standard view that looks from `eye` towards the target.
+    fn orthographic_view(eye: DVec3) -> Camera {
+        let mut camera = Camera::default();
+        camera.look_from(eye);
+        camera.toggle_projection();
+        camera
     }
 
     fn target<'a>(project: &'a Project, selection: &'a [Id]) -> Target<'a> {
@@ -758,6 +868,74 @@ mod tests {
 
         let parallel = Ray::new(DVec3::new(0.0, 0.0, 10.0), DVec3::X).expect("ray");
         assert!(ray_plane(parallel, DVec3::ZERO, DVec3::Z).is_none());
+    }
+
+    #[test]
+    fn the_six_standard_views_select_their_world_plane() {
+        let cases = [
+            (DVec3::X, DVec3::X, DVec3::Y, DVec3::Z, "YZ"),
+            (-DVec3::X, -DVec3::X, -DVec3::Y, DVec3::Z, "YZ"),
+            (DVec3::Y, DVec3::Y, -DVec3::X, DVec3::Z, "XZ"),
+            (-DVec3::Y, -DVec3::Y, DVec3::X, DVec3::Z, "XZ"),
+            (DVec3::Z, DVec3::Z, DVec3::X, DVec3::Y, "XY"),
+            (-DVec3::Z, -DVec3::Z, DVec3::X, -DVec3::Y, "XY"),
+        ];
+        for (eye, normal, u, v, label) in cases {
+            let plane = WorkPlane::from_camera(orthographic_view(eye));
+            assert_eq!(plane.label(), label, "looking from {eye:?}");
+            assert_vector(plane.normal(), normal);
+            assert_vector(plane.world(DVec2::new(1.0, 0.0)), u);
+            assert_vector(plane.world(DVec2::new(0.0, 1.0)), v);
+            assert_vector(u.cross(v), normal);
+        }
+    }
+
+    #[test]
+    fn a_perspective_or_axonometric_view_draws_on_world_xy() {
+        assert_eq!(WorkPlane::from_camera(Camera::default()), WorkPlane::WORLD_XY);
+
+        let mut axonometric = Camera::default();
+        axonometric.look_from(DVec3::new(1.0, 1.0, 1.0));
+        axonometric.toggle_projection();
+        assert_eq!(WorkPlane::from_camera(axonometric), WorkPlane::WORLD_XY);
+
+        let mut orbited = orthographic_view(DVec3::Y);
+        orbited.orbit(0.2, 0.0);
+        assert_eq!(WorkPlane::from_camera(orbited), WorkPlane::WORLD_XY, "a view off the axis is axonometric");
+
+        let mut tilted = orthographic_view(DVec3::X);
+        tilted.orbit(0.0, 0.2);
+        assert_eq!(WorkPlane::from_camera(tilted), WorkPlane::WORLD_XY);
+    }
+
+    #[test]
+    fn a_pointer_maps_to_the_work_plane_and_back() {
+        for eye in [DVec3::X, -DVec3::X, DVec3::Y, -DVec3::Y, DVec3::Z, -DVec3::Z] {
+            let camera = orthographic_view(eye);
+            let plane = WorkPlane::from_camera(camera);
+            for local in [DVec2::ZERO, DVec2::new(120.0, -45.0), DVec2::new(-300.0, 75.0)] {
+                let world = plane.world(local);
+                let pixel = screen_point(camera, viewport(), world).expect("the point is in front");
+                let mapped = plane.pointer_point(camera, viewport(), pixel).expect("the ray meets the plane");
+                assert!((mapped - local).length() < 1.0e-3, "from {eye:?}: {mapped:?} != {local:?}");
+            }
+        }
+
+        let camera = Camera::default();
+        let plane = WorkPlane::from_camera(camera);
+        let world = DVec3::new(100.0, 50.0, 0.0);
+        let pixel = screen_point(camera, viewport(), world).expect("the point is in front");
+        let mapped = plane.pointer_point(camera, viewport(), pixel).expect("the ray meets the plane");
+        assert!((mapped - DVec2::new(100.0, 50.0)).length() < 1.0e-3, "a perspective view lands on world XY");
+    }
+
+    #[test]
+    fn a_work_plane_behind_or_parallel_to_the_ray_has_no_point() {
+        let plane = WorkPlane::WORLD_XY;
+        let behind = Ray::new(DVec3::new(0.0, 0.0, 10.0), DVec3::Z).expect("ray");
+        assert!(plane.ray_point(behind).is_none());
+        let parallel = Ray::new(DVec3::new(0.0, 0.0, 10.0), DVec3::X).expect("ray");
+        assert!(plane.ray_point(parallel).is_none());
     }
 
     #[test]
