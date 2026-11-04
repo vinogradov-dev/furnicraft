@@ -906,6 +906,117 @@ mod tests {
         assert_eq!(extended.segment(first), path.segment(first), "an untouched id keeps its curve");
         assert_eq!(extended.next_segment_id().get(), 3, "the minted id is spent");
     }
+
+    #[test]
+    fn a_closed_path_becomes_a_ring_with_its_ids() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a closed square");
+        let contour = path.to_contour().expect("a simple closed path is a ring");
+        assert_eq!(contour.entries().len(), 4);
+        assert_eq!(
+            contour.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            path.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
+            "the drawn ids travel into the ring"
+        );
+        assert_eq!(contour.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+    }
+
+    #[test]
+    fn a_clockwise_path_becomes_a_counter_clockwise_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a clockwise square");
+        let contour = path.to_contour().expect("a clockwise ring is turned around");
+        assert_eq!(
+            contour.segments().next(),
+            Some(ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line")),
+            "the ring is stored counter-clockwise"
+        );
+        assert_eq!(contour.id_at(0), Some(segment_id(4)), "the reversed segment keeps its id");
+    }
+
+    #[test]
+    fn a_closed_path_keeps_its_id_counter() {
+        let json = r#"{"next_segment_id":9,"closed":true,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let path: Path = serde_json::from_str(json).expect("a stored closed path");
+        let contour = path.to_contour().expect("a stored simple ring");
+        assert_eq!(contour.next_segment_id().get(), 9, "the path counter survives the conversion");
+    }
+
+    #[test]
+    fn an_open_path_cannot_become_a_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("an open path");
+        assert_eq!(path.to_contour(), Err(PathError::Open));
+        let error = path.to_contour().expect_err("an open chain owns no ring");
+        assert!(error.to_string().contains("open path"), "the reason is readable: {error}");
+    }
+
+    #[test]
+    fn a_crossing_path_cannot_become_a_ring() {
+        let corners = [
+            [millimetres(0), millimetres(0)],
+            [millimetres(30), millimetres(0)],
+            [millimetres(20), millimetres(20)],
+            [millimetres(10), millimetres(-10)],
+        ];
+        let segments = (0..corners.len())
+            .map(|index| ContourSegment::line(corners[index], corners[(index + 1) % corners.len()]).expect("line"))
+            .collect::<Vec<_>>();
+        let path = Path::new(segments, true).expect("a closed self-crossing chain");
+        assert!(matches!(path.to_contour(), Err(PathError::Contour(ContourError::SelfIntersecting { .. }))));
+    }
+
+    #[test]
+    fn a_flat_closed_path_cannot_become_a_ring() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(10), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(10), millimetres(0)], [millimetres(20), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(20), millimetres(0)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ],
+            true,
+        )
+        .expect("a closed collinear chain");
+        assert_eq!(path.to_contour(), Err(PathError::Contour(ContourError::ZeroArea)));
+    }
 }
 
 /// Largest number of segments in a constructive contour.
@@ -1543,6 +1654,21 @@ impl Path {
     pub const fn next_segment_id(&self) -> ContourSegmentId {
         self.next_segment_id
     }
+
+    /// The ring this path encloses, when it is a ring the document accepts.
+    ///
+    /// The segments and their ids travel into the ring, so anchors the user drew and any
+    /// per-segment banding stay meaningful; the path's id counter is kept as well. The ring is
+    /// stored counter-clockwise, so a path drawn clockwise comes back reversed with its ids
+    /// intact. An open chain is refused before the ring rules run, and a chain that crosses itself
+    /// or encloses no area is refused with the reason: those are ring rules, and a panel or an
+    /// extrusion only takes a ring.
+    pub fn to_contour(&self) -> Result<Contour, PathError> {
+        if !self.closed {
+            return Err(PathError::Open);
+        }
+        Contour::assemble(self.entries.clone(), self.next_segment_id).map_err(PathError::Contour)
+    }
 }
 
 /// Whether the end of `current` meets the start of `next` within the joint tolerance.
@@ -1609,6 +1735,12 @@ pub enum PathError {
     /// A stored path carries a segment without an id.
     #[error("a path must carry an id for every segment and a next segment id")]
     AmbiguousSegmentIds,
+    /// The path is open, so it does not enclose a ring.
+    #[error("an open path encloses no ring; close it before it becomes a contour")]
+    Open,
+    /// The closed chain is not a valid ring.
+    #[error(transparent)]
+    Contour(#[from] ContourError),
 }
 
 /// Serialized form of [`Path`]; validation happens in its `TryFrom` implementation.
