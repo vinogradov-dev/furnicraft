@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
+- `[~]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
   field; an open path is refused with a readable message.
   `files: crates/ui/src, crates/engine/src/object_cmds.rs`
 
