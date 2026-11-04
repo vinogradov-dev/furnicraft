@@ -62,7 +62,7 @@ use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
-pub use contour_edit::{ContourEdit, ContourTarget};
+pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError};
 pub use mesh_edit::{MeshEdit, MeshElement};
 
 /// Default length of a newly created panel, in millimetres.
@@ -86,6 +86,7 @@ pub struct Editor {
     open: HashSet<Id>,
     mesh_edit: Option<MeshEdit>,
     contour_edit: Option<ContourEdit>,
+    drawing: Option<DrawDraft>,
     card: PanelCard,
     container_card: ContainerCard,
     object_card: ObjectCard,
@@ -138,6 +139,7 @@ impl Editor {
             return false;
         }
         self.contour_edit = None;
+        self.drawing = None;
         self.mesh_edit = Some(MeshEdit::new(object));
         true
     }
@@ -238,6 +240,7 @@ impl Editor {
             return false;
         };
         self.mesh_edit = None;
+        self.drawing = None;
         self.contour_edit = Some(edit);
         true
     }
@@ -305,6 +308,47 @@ impl Editor {
         }
         self.contour_edit = None;
         Ok(())
+    }
+
+    /// The live drawing draft, when a drawing tool is building a chain.
+    pub fn drawing(&self) -> Option<&DrawDraft> {
+        self.drawing.as_ref()
+    }
+
+    /// Starts an empty drawing draft and leaves the other pointer modes.
+    ///
+    /// A running draft is never replaced silently; the caller ends or commits it first. Returns
+    /// whether the draft started.
+    pub fn start_drawing(&mut self) -> bool {
+        if self.drawing.is_some() {
+            return false;
+        }
+        self.mesh_edit = None;
+        self.contour_edit = None;
+        self.drawing = Some(DrawDraft::new());
+        true
+    }
+
+    /// Appends a work-plane point to the running draft.
+    pub fn drawing_point(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
+        self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.push(point)
+    }
+
+    /// Undoes the last drawing action: a close first, then the last point.
+    ///
+    /// Returns `false` when no draft is running or it is empty and open.
+    pub fn undo_drawing(&mut self) -> bool {
+        self.drawing.as_mut().is_some_and(DrawDraft::undo)
+    }
+
+    /// Closes the running draft back to its first point.
+    pub fn close_drawing(&mut self) -> Result<(), DrawDraftError> {
+        self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.close()
+    }
+
+    /// Drops the running draft; the document never changed.
+    pub fn cancel_drawing(&mut self) {
+        self.drawing = None;
     }
 
     /// Replaces the selection with one node, or clears it for `None`.
@@ -846,6 +890,50 @@ mod tests {
         assert!(editor.contour_edit().is_none());
         assert_eq!(session.project().revision(), revision, "an untouched draft dispatches nothing");
         assert!(!session.can_undo(), "no empty undo entry is left behind");
+    }
+
+    #[test]
+    fn a_drawing_draft_is_view_state_until_it_is_committed() {
+        let (project, _panel) = contour_panel_project();
+        let session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        assert!(editor.drawing().is_none());
+        assert_eq!(
+            editor.drawing_point([Length::ZERO; 2]),
+            Err(DrawDraftError::NotStarted),
+            "a point needs a running draft"
+        );
+
+        let revision = session.project().revision();
+        assert!(editor.start_drawing());
+        assert!(!editor.start_drawing(), "a running draft is not replaced");
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first point");
+        editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("second point");
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(2));
+        assert_eq!(session.project().revision(), revision, "the draft changes no document");
+        assert!(!session.can_undo(), "the draft leaves no undo entry behind");
+
+        assert!(editor.undo_drawing());
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1));
+        assert!(editor.close_drawing().is_err(), "two points enclose nothing");
+
+        editor.cancel_drawing();
+        assert!(editor.drawing().is_none());
+        assert_eq!(session.project().revision(), revision);
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn starting_a_drawing_leaves_the_other_pointer_modes() {
+        let (project, panel) = contour_panel_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        assert!(editor.start_drawing());
+        assert!(editor.contour_edit().is_none(), "a drawing owns the pointer");
+
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        assert!(editor.drawing().is_none(), "a contour edit takes the pointer back");
     }
 
     #[test]

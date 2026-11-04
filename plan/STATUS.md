@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U14 state=idle base=6d64dc7 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U15 state=idle base=307d745 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -42,9 +42,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 - U2–U3 embed `assets/icons/**` in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt, tinted
   and falling back to its label while an asset is empty, and the viewport strip's 75–200 % slider
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
-- U7–U13 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, build it
+- U7–U14 draw and pick a stored `Path`, store it through `object.path.create`/`.replace`, build it
   from a rectangle, a circle or an arc, toggle the projection, take the work plane from the standard
-  ortho views and snap to an end, an axis or the 10 mm grid (ADRs 0048–0051).
+  views, snap, and draft a chain with undo and close (ADRs 0048–0051).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -55,8 +55,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U14 is next: a drawing draft in the UI — a chain of segments, undo, Escape and closing, with the
-document untouched until commit. U15–U17 add the tools, the preview and the commit; U18–U20 replace
+U15 is next: the drawing tools — line and polyline, an arc through three points, a rectangle and a
+circle, each producing a `Path`. U16–U17 add the viewport preview and the commit; U18–U20 replace
 the scene-tree create buttons with toolbars. U21–U23, S4 and P1–P3 follow; X2 waits.
 
 ## Index
