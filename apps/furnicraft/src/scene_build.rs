@@ -11,13 +11,12 @@ use furnicraft_engine::Session;
 use furnicraft_geom::{DMat4, DQuat, DVec3, MeshData};
 use furnicraft_kernel::{SolidKernel, TessOptions};
 use furnicraft_kernel_truck::TruckKernel;
-use furnicraft_mesh::{object_mesh, tessellate_panel};
+use furnicraft_mesh::EvaluationCache;
 use furnicraft_model::{
     CameraProjection, Catalog, Container, CutoutDepth, CutoutShape, EdgeBanding, EdgeBandingMaterial, EdgeId, FaceSide,
-    Geometry, Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Path,
-    Placement, Project, StructuralKind,
+    Id, LightKind, MaterialId, Node, NodeQuery, Panel, PanelMaterial, PanelNominalSize, PanelRect, Placement, Project,
+    StructuralKind,
 };
-use furnicraft_param::{build_constructive_mesh, build_panel_parts_with};
 use furnicraft_scene::{
     Camera, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection, SceneFrame,
 };
@@ -34,18 +33,6 @@ const OBJECT_COLOR: [f32; 4] = [0.58, 0.60, 0.64, 1.0];
 
 /// The colour of a drawn path, in gamma space like the grid lines.
 const PATH_COLOR: [f32; 4] = [0.95, 0.72, 0.20, 1.0];
-
-/// The viewport's chord tolerance, in millimetres.
-///
-/// It matches the kernel profile tolerance, so the line the user sees follows the curve the solid
-/// will be built from.
-const PATH_SAMPLE_TOLERANCE_MM: f64 = 0.05;
-
-/// How far two consecutive path joints may miss each other, in millimetres (one micrometre).
-///
-/// The document stores whole micrometres, so an arc endpoint and the next segment's start can
-/// differ by one unit after rounding.
-const PATH_JOINT_TOLERANCE_MM: f64 = 0.001;
 
 /// Sample catalogue ids. They are stable only for this demonstration document.
 const SAMPLE_OAK_MATERIAL: u64 = 1;
@@ -198,22 +185,32 @@ pub fn sample_catalog() -> Result<Catalog, String> {
     Catalog::new(vec![oak, white], vec![oak_edge, white_edge]).map_err(describe)
 }
 
-/// Evaluates every panel in the session into world-space drawables.
+/// Evaluates a constructive object into world-space drawables.
 ///
-/// Catalogue values decide panel and banding geometry; the kernel is cleared on error so a failed
-/// evaluation cannot leak bodies into the next rebuild.
-pub fn evaluate(kernel: &mut TruckKernel, session: &Session) -> Result<EvaluatedScene, String> {
+/// The cache is the only evaluator: a node whose derivation inputs did not change is reused, so a
+/// move, a rename or an unrelated edit rebuilds no mesh.
+pub fn evaluate(
+    cache: &mut EvaluationCache,
+    kernel: &mut TruckKernel,
+    session: &Session,
+) -> Result<EvaluatedScene, String> {
     let project = session.project();
     let root_world = Placement::compose(Placement::IDENTITY, project.root().placement()).map_err(describe)?;
-    let mut evaluation = Evaluation::new(kernel, session);
+    cache.start();
+    let mut evaluation = Evaluation::new(cache, kernel, session);
     if let Err(error) = evaluation.collect(project.root().children(), root_world) {
+        // A failed pass must not leave half-evaluated bodies in the kernel, nor a stale entry that
+        // claims a mesh the document no longer produces.
         evaluation.kernel.clear();
         return Err(error);
     }
+    let Evaluation { cache, frame, bounds, .. } = evaluation;
+    cache.finish();
+    let mut frame = frame;
     if let Some(lighting) = authored_lighting(project) {
-        evaluation.frame.lighting = lighting;
+        frame.lighting = lighting;
     }
-    Ok(EvaluatedScene { frame: evaluation.frame, bounds: evaluation.bounds })
+    Ok(EvaluatedScene { frame, bounds })
 }
 
 /// The frame lighting from the authored lights.
@@ -283,6 +280,7 @@ pub fn previewed_world(project: &Project, id: Id, previewed: &[(Id, Placement)])
 
 /// Mutable state shared by one scene evaluation.
 struct Evaluation<'a> {
+    cache: &'a mut EvaluationCache,
     kernel: &'a mut TruckKernel,
     session: &'a Session,
     options: TessOptions,
@@ -292,8 +290,9 @@ struct Evaluation<'a> {
 }
 
 impl<'a> Evaluation<'a> {
-    fn new(kernel: &'a mut TruckKernel, session: &'a Session) -> Self {
+    fn new(cache: &'a mut EvaluationCache, kernel: &'a mut TruckKernel, session: &'a Session) -> Self {
         Self {
+            cache,
             kernel,
             session,
             options: TessOptions::default(),
@@ -322,71 +321,51 @@ impl<'a> Evaluation<'a> {
         let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
         let session = self.session;
         let geometry = session.panel_geometry(panel.id()).map_err(describe)?;
-        let parts = build_panel_parts_with(&mut *self.kernel, panel, &geometry, |spec| session.band_spec_profile(spec))
+        let revision = session.project().revision();
+        let evaluated = self
+            .cache
+            .panel(revision, panel, &geometry, &|spec| session.band_spec_profile(spec), self.kernel, &self.options)
             .map_err(describe)?;
-        let body_mesh = tessellate_panel(&*self.kernel, parts.body(), &self.options).map_err(describe)?;
-        let mut band_meshes = Vec::with_capacity(parts.bands().len());
-        for part in parts.bands() {
-            band_meshes.push(tessellate_panel(&*self.kernel, part.body(), &self.options).map_err(describe)?);
-        }
-        self.kernel.clear();
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
-        self.bounds.include_mesh(&body_mesh, transform);
         let color = PANEL_COLORS[self.palette_index % PANEL_COLORS.len()];
         self.palette_index = self.palette_index.saturating_add(1);
-        self.frame.push(Drawable::new(panel.id(), Arc::new(body_mesh), transform, color));
-        for mesh in band_meshes {
-            self.bounds.include_mesh(&mesh, transform);
-            self.frame.push(Drawable::new(panel.id(), Arc::new(mesh), transform, EDGE_BAND_COLOR));
+        if let Some(body) = evaluated.body() {
+            self.bounds.include_mesh(body, transform);
+            self.frame.push(Drawable::new(panel.id(), Arc::clone(body), transform, color));
+        }
+        for mesh in evaluated.bands() {
+            self.bounds.include_mesh(mesh, transform);
+            self.frame.push(Drawable::new(panel.id(), Arc::clone(mesh), transform, EDGE_BAND_COLOR));
         }
         Ok(())
     }
 
-    /// Turns a geometry object into one flat-shaded drawable in world space.
+    /// Turns a geometry object into one flat-shaded drawable or one line chain in world space.
     ///
     /// A mesh payload is drawn as stored. A constructive payload is evaluated from its features
-    /// with the same function `object.collapse` bakes, so the collapsed object keeps the shape the
-    /// viewport showed.
+    /// through the cache's one evaluator — the same function `object.collapse` bakes — so the
+    /// collapsed object keeps the shape the viewport showed.
     fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
         let world = Placement::compose(parent, object.placement()).map_err(describe)?;
-        let derived;
-        let mesh = match object.geometry() {
-            Geometry::Mesh(mesh) => mesh,
-            Geometry::Constructive(constructive) => {
-                derived =
-                    build_constructive_mesh(constructive).map_err(|error| format!("{}: {error}", object.name()))?;
-                &derived
-            }
-            // A path has no solid: it is drawn as an unlit chain of line segments, and its points
-            // are sampled from the same analytic segments a later extrusion uses.
-            Geometry::Path(path) => {
-                let points = path_points(path).map_err(|error| format!("{}: {error}", object.name()))?;
-                let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
-                for point in &points {
-                    self.bounds.include_point(transform.transform_point3(*point));
-                }
-                self.frame.push_polyline(Polyline::new(object.id(), Arc::from(points), transform, PATH_COLOR));
-                return Ok(());
-            }
-        };
-        let mesh = object_mesh(mesh).map_err(|error| format!("{}: {error}", object.name()))?;
+        let revision = self.session.project().revision();
+        let evaluated = self.cache.object(revision, object).map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
-        self.bounds.include_mesh(&mesh, transform);
-        self.frame.push(Drawable::new(object.id(), Arc::new(mesh), transform, OBJECT_COLOR));
-        Ok(())
+        // A path has no solid: it is drawn as an unlit chain of line segments, and its points are
+        // sampled from the same analytic segments a later extrusion uses.
+        if let Some(points) = evaluated.polyline() {
+            for point in points.iter() {
+                self.bounds.include_point(transform.transform_point3(*point));
+            }
+            self.frame.push_polyline(Polyline::new(object.id(), Arc::clone(points), transform, PATH_COLOR));
+            return Ok(());
+        }
+        if let Some(mesh) = evaluated.body() {
+            self.bounds.include_mesh(mesh, transform);
+            self.frame.push(Drawable::new(object.id(), Arc::clone(mesh), transform, OBJECT_COLOR));
+            return Ok(());
+        }
+        Err(format!("{}: the object has no drawable geometry", object.name()))
     }
-}
-
-/// Samples a stored path into the local XY points the viewport draws.
-///
-/// The chain is sampled as an open contour even when the path is closed, so the closing segment is
-/// drawn; the one-micrometre joint tolerance is the document's own.
-fn path_points(path: &Path) -> Result<Vec<DVec3>, String> {
-    let segments = path.segments().map(|segment| segment.to_geom()).collect::<Result<Vec<_>, _>>().map_err(describe)?;
-    let chain =
-        furnicraft_geom::Contour::new_with_tolerance(segments, false, PATH_JOINT_TOLERANCE_MM).map_err(describe)?;
-    let samples = chain.sample(PATH_SAMPLE_TOLERANCE_MM).map_err(describe)?;
-    Ok(samples.into_iter().map(|point| DVec3::new(point.x, point.y, 0.0)).collect())
 }
 
 /// Places the initial camera so the whole sample fits in the viewport.
@@ -478,6 +457,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use furnicraft_model::{ContourSegment, Geometry, Path, Revision};
     use furnicraft_testkit::sample_project;
 
     fn panels_in<'a>(children: &'a [Node], panels: &mut Vec<&'a Panel>) {
@@ -723,7 +703,8 @@ mod tests {
         assert!(!session.is_dirty());
 
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty());
         assert_eq!(evaluated.bounds.center(), None);
         assert!(home_camera(evaluated.bounds).is_ok(), "an empty scene still has a usable camera");
@@ -764,7 +745,8 @@ mod tests {
         let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
 
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
         assert_eq!(evaluated.frame.drawables().len(), 1, "the derived mesh is one drawable");
         let drawable = &evaluated.frame.drawables()[0];
         assert_eq!(drawable.id, object, "the drawable carries the object id, so picking and selection work");
@@ -775,8 +757,6 @@ mod tests {
 
     #[test]
     fn an_open_path_is_drawn_as_a_polyline() {
-        use furnicraft_model::ContourSegment;
-
         let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
         let path = Path::new(
             vec![
@@ -797,7 +777,8 @@ mod tests {
         let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
 
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty(), "a path has no solid");
         assert_eq!(evaluated.frame.polylines().len(), 1);
         let line = &evaluated.frame.polylines()[0];
@@ -814,8 +795,6 @@ mod tests {
 
     #[test]
     fn a_closed_path_draws_its_closing_segment() {
-        use furnicraft_model::ContourSegment;
-
         let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
         let corner = |x: i64, y: i64| [millimetres(x), millimetres(y)];
         let path = Path::new(
@@ -835,7 +814,8 @@ mod tests {
         let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
 
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
         let line = &evaluated.frame.polylines()[0];
         assert_eq!(line.points.len(), 4, "the closing segment keeps its end point");
         assert_eq!(line.points[3], line.points[0], "the chain closes on its first point");
@@ -845,7 +825,8 @@ mod tests {
     fn sample_scene_evaluates_panels_and_banding() {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
-        let evaluated = evaluate(&mut kernel, &session).expect("evaluated scene");
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.drawables().len(), 6);
         let mut groups = std::collections::HashMap::new();
@@ -860,5 +841,106 @@ mod tests {
         assert!(evaluated.bounds.center().is_some());
         assert!(home_camera(evaluated.bounds).is_ok());
         assert_eq!(kernel.body_count(), 0, "evaluation releases every kernel body");
+    }
+
+    /// The mesh handle of the first drawable carrying `id`.
+    fn mesh_of(scene: &EvaluatedScene, id: Id) -> &Arc<MeshData> {
+        scene
+            .frame
+            .drawables()
+            .iter()
+            .find(|drawable| drawable.id == id)
+            .map(|drawable| &drawable.mesh)
+            .expect("drawable")
+    }
+
+    fn panel_id(session: &Session, name: &str) -> Id {
+        let mut panels = Vec::new();
+        panels_in(session.project().root().children(), &mut panels);
+        panels.iter().find(|panel| panel.name() == name).map(|panel| panel.id()).expect("panel by name")
+    }
+
+    #[test]
+    fn a_rebuild_at_a_new_revision_reuses_every_unchanged_mesh() {
+        let mut session = sample_session().expect("sample session");
+        let renamed = panel_id(&session, "Loose shelf");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let first = evaluate(&mut cache, &mut kernel, &session).expect("first scene");
+
+        // A rename bumps the document revision but none of the derived geometry depends on it.
+        let params = serde_json::json!({ "node": renamed, "name": "Shelf" });
+        session.dispatch("node.rename", &params).expect("rename");
+
+        let second = evaluate(&mut cache, &mut kernel, &session).expect("second scene");
+        assert!(session.project().revision() > Revision::ZERO);
+        assert_eq!(first.frame.drawables().len(), second.frame.drawables().len());
+        for (before, after) in first.frame.drawables().iter().zip(second.frame.drawables()) {
+            assert_eq!(before.id, after.id);
+            assert!(Arc::ptr_eq(&before.mesh, &after.mesh), "an unchanged node keeps its mesh across a rebuild");
+        }
+        assert_eq!(kernel.body_count(), 0, "a hit touches no kernel body");
+    }
+
+    #[test]
+    fn moving_a_panel_keeps_its_mesh_and_only_moves_its_transform() {
+        let mut session = sample_session().expect("sample session");
+        let id = panel_id(&session, "Loose shelf");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let before = evaluate(&mut cache, &mut kernel, &session).expect("before move");
+
+        let placement = Placement::new(DVec3::new(400.0, -500.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let params = serde_json::json!({ "node": id, "placement": placement });
+        session.dispatch("node.placement.set", &params).expect("move");
+
+        let after = evaluate(&mut cache, &mut kernel, &session).expect("after move");
+        assert!(
+            Arc::ptr_eq(mesh_of(&before, id), mesh_of(&after, id)),
+            "a placement is not a derivation input, so the mesh is reused"
+        );
+        let transform = after.frame.drawables().iter().find(|drawable| drawable.id == id).map(|d| d.world_transform);
+        assert!(transform.is_some_and(|transform| transform.w_axis.x > 0.0));
+    }
+
+    #[test]
+    fn a_resize_rebuilds_only_the_resized_panel() {
+        let mut session = sample_session().expect("sample session");
+        let resized = panel_id(&session, "Loose shelf");
+        let untouched = panel_id(&session, "Back panel");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let before = evaluate(&mut cache, &mut kernel, &session).expect("before resize");
+
+        let size = furnicraft_model::PanelNominalSize::new(
+            millimetres(650).expect("length"),
+            millimetres(420).expect("width"),
+        )
+        .expect("size");
+        let params = serde_json::json!({ "panel": resized, "nominal_size": size });
+        session.dispatch("panel.resize", &params).expect("resize");
+
+        let after = evaluate(&mut cache, &mut kernel, &session).expect("after resize");
+        assert!(!Arc::ptr_eq(mesh_of(&before, resized), mesh_of(&after, resized)), "the resized panel rebuilds");
+        assert!(
+            Arc::ptr_eq(mesh_of(&before, untouched), mesh_of(&after, untouched)),
+            "an edit elsewhere leaves a panel's mesh alone"
+        );
+    }
+
+    #[test]
+    fn deleting_a_node_drops_its_cache_entry() {
+        let mut session = sample_session().expect("sample session");
+        let id = panel_id(&session, "Loose shelf");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        evaluate(&mut cache, &mut kernel, &session).expect("scene");
+        assert!(cache.cached(id).is_some());
+
+        let params = serde_json::json!({ "node": id });
+        session.dispatch("node.delete", &params).expect("delete");
+        let after = evaluate(&mut cache, &mut kernel, &session).expect("scene after delete");
+        assert!(cache.cached(id).is_none(), "a deleted node releases its mesh");
+        assert!(after.frame.drawables().iter().all(|drawable| drawable.id != id));
     }
 }

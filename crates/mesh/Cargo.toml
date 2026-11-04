@@ -12,9 +12,9 @@ workspace = true
 furnicraft-geom = { workspace = true }
 furnicraft-kernel = { workspace = true }
 furnicraft-model = { workspace = true }
+furnicraft-param = { workspace = true }
 furnicraft-units = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 furnicraft-kernel-truck = { workspace = true }
-furnicraft-param = { workspace = true }

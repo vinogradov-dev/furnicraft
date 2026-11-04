@@ -8,8 +8,9 @@
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 
+use furnicraft_mesh::evaluate_constructive;
 use furnicraft_model::{Constructive, Contour, Geometry, Id, Mesh, Path, Placement, Project, ProjectError};
-use furnicraft_param::{build_constructive_mesh, validate_extrusion_contour};
+use furnicraft_param::validate_extrusion_contour;
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -339,7 +340,7 @@ fn object_collapse_run(
         .object(params.object)
         .and_then(|object| object.geometry().as_constructive())
         .ok_or(ProjectError::NotConstructiveObject { id: params.object })?;
-    let mesh = build_constructive_mesh(constructive)
+    let mesh = evaluate_constructive(constructive)
         .map_err(|error| CommandError::Evaluation { command: OBJECT_COLLAPSE_ID, message: error.to_string() })?;
     project.collapse_object(params.object, mesh)?;
     Ok(CommandOutcome::changed())
@@ -646,6 +647,31 @@ mod tests {
             session.project().object(id).expect("object").geometry().as_constructive().is_some(),
             "undo restores the history"
         );
+    }
+
+    #[test]
+    fn a_collapse_bakes_exactly_the_mesh_the_evaluator_produces() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let height = Length::from_millimetres(18).expect("height");
+        let id = session
+            .dispatch(OBJECT_EXTRUDE_CREATE_ID, &extrude_params(&session, "Top", height))
+            .expect("create extrusion")
+            .created_id()
+            .expect("a new object id");
+        let constructive = session
+            .project()
+            .object(id)
+            .expect("object")
+            .geometry()
+            .as_constructive()
+            .expect("a constructive payload")
+            .clone();
+        let evaluated = furnicraft_mesh::evaluate_constructive(&constructive).expect("evaluated mesh");
+
+        let value = serde_json::to_value(ObjectCollapse { object: id }).expect("params");
+        session.dispatch(OBJECT_COLLAPSE_ID, &value).expect("collapse");
+        let baked = session.project().object(id).expect("object").geometry().as_mesh().expect("a baked mesh").clone();
+        assert_eq!(baked, evaluated, "the viewport and the collapse share one evaluator");
     }
 
     #[test]
