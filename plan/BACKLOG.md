@@ -23,6 +23,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[~]` **U24** the icon contract: one ink on a 24 grid, three icon families, a service-action grammar
+  in a new `actions` theme, one ADR, and a read trigger that fires only while an icon is drawn or
+  edited.
+  `files: assets/icons/STYLE_GUIDE.md, assets/README.md, AGENTS.md`
 - `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
   MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
   `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,

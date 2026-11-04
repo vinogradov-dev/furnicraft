@@ -50,6 +50,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0043](0043-region-booleans-trace-the-boundary-of-the-set.md) | Region booleans trace the boundary of the set | Accepted |
 | [0044](0044-one-outline-source-resolves-the-panel-core.md) | One outline source resolves the panel core | Accepted |
 | [0045](0045-machining-is-an-ordered-list-of-anchored-operations.md) | Machining is an ordered list of anchored operations | Accepted |
+| [0046](0046-machining-compiles-to-staged-effects.md) | Machining compiles to staged effects through one descriptor table | Accepted |
+| [0047](0047-icons-are-one-ink-on-a-24-grid.md) | Icons are one ink on a 24 grid, in three families | Accepted |
 
 ## Format
 

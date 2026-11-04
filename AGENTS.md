@@ -163,6 +163,23 @@ second way into the document.
   require explicit confirmation and an idempotency key.
 - Any capability the assistant has must also be reachable from the UI or a CLI.
 
+### 4.12 Icons are assets, not improvisation
+
+Toolbar and service icons are authored SVG under `assets/icons/<theme>/<name>.svg`, embedded and
+rasterised by `crates/ui` at the size they draw; they are not drawn in code and not fetched at
+runtime.
+
+- Read `assets/icons/STYLE_GUIDE.md` (what an icon must mean) and `assets/README.md` (what the file
+  must contain) **only when adding, editing or reviewing an icon**. They are not session reading and
+  do not constrain code that merely displays an icon.
+- The guide wins on meaning, the README wins on file format; when they disagree, fix the losing file
+  in the same change.
+- A new icon ships with its file, its row in the README theme table, the button that draws it and a
+  test for the empty-file fallback. Renaming or moving an icon or theme is an API change and updates
+  `crates/ui` in the same commit.
+- An icon never replaces a label on a destructive or irreversible action, and never comes from
+  another product without `ATTRIBUTION.md` (§4.6).
+
 ## 5. Stack
 
 | Area | Choice |
@@ -282,6 +299,8 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `AGENTS.md` — this file: the rules.
 - `BRIEF.md` — the owner's original brief; do not edit it to match the code.
 - `ATTRIBUTION.md` — vendored and bundled third-party components, their licenses and modifications.
+- `assets/icons/STYLE_GUIDE.md` — icon visual language; read only when drawing or editing an icon
+  (`assets/README.md` holds the file format).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
