@@ -180,13 +180,13 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
 ///
 /// The headings are collapsible sections. A section that is open draws its tools; every button is
 /// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label.
-pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, actions: &mut Vec<ToolAction>) {
+pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, has_panel_material: bool, actions: &mut Vec<ToolAction>) {
     ui.heading("Tools");
     ui.separator();
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, parent, actions);
+            show_panel(ui, panel, parent, has_panel_material, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -195,7 +195,7 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, actions: &mut Vec<Too
 }
 
 /// The body of one open panel.
-fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, actions: &mut Vec<ToolAction>) {
+fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, has_panel_material: bool, actions: &mut Vec<ToolAction>) {
     ui.horizontal_wrapped(|ui| match panel {
         ToolPanel::Contour => {
             for tool in CONTOUR_TOOLS {
@@ -205,7 +205,7 @@ fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, actions: &mut Vec<ToolA
             }
         }
         ToolPanel::Scene => {
-            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), true).clicked() {
+            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), has_panel_material).clicked() {
                 actions.push(ToolAction::CreatePanel { parent });
             }
             if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true).clicked() {
@@ -282,7 +282,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -295,6 +295,18 @@ mod tests {
         );
         assert!(texts.iter().any(|text| text == "Cube"), "the primitives panel is filled: {texts:?}");
         assert!(actions.is_empty(), "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn a_panel_without_a_catalogue_material_cannot_create_a_panel() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, Id::new(1).expect("root"), false, &mut actions);
+        });
+        output.drop_without_applying_deltas();
+        assert!(actions.is_empty(), "the Panel tool is disabled without a material");
     }
 
     #[test]
@@ -316,7 +328,7 @@ mod tests {
         state.set_open(ToolPanel::Scene, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -331,7 +343,7 @@ mod tests {
         state.set_open(ToolPanel::Contour, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();

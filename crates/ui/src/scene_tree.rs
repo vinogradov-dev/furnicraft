@@ -70,15 +70,12 @@ impl Selection {
     }
 }
 
-/// One action the tree asks the editor to dispatch after drawing ends.
+/// One structural action the tree asks the editor to run.
+///
+/// The tree shows and restructures nodes; it never creates one. Creation is a `ToolAction` from the
+/// toolbar strip, so there is exactly one place a new node starts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeAction {
-    CreatePanel { parent: Id },
-    CreateAssembly { parent: Id },
-    CreateObject { parent: Id },
-    CreateExtrude { parent: Id },
-    CreateCamera { parent: Id },
-    CreateLight { parent: Id },
     Duplicate { node: Id },
     Delete { node: Id },
     Group { nodes: Vec<Id> },
@@ -100,8 +97,7 @@ pub(crate) fn show(
     let mut actions = Vec::new();
     show_toolbar(ui, session, selection, type_filter, &mut actions);
     ui.separator();
-    let has_panel_material = !session.catalog().panel_materials().is_empty();
-    show_container(ui, project, project.root(), selection, &mut actions, 0, has_panel_material);
+    show_container(ui, project, project.root(), selection, &mut actions, 0);
     actions
 }
 
@@ -113,8 +109,6 @@ fn show_toolbar(
     actions: &mut Vec<TreeAction>,
 ) {
     let project = session.project();
-    let parent = add_parent(project, selection);
-    let has_panel_material = !session.catalog().panel_materials().is_empty();
     let primary = selection.primary();
     let primary_node = primary.and_then(|id| project.node(id));
     let can_ungroup = primary.is_some_and(|id| {
@@ -122,28 +116,8 @@ fn show_toolbar(
     });
     let can_convert = primary.is_some_and(|id| project.is_component(id));
     let can_group = selection.ids().len() >= 2 && project.validate_group(selection.ids()).is_ok();
-    let can_add_panel = has_panel_material && project.is_container(parent);
 
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(can_add_panel, egui::Button::new("+ Panel")).clicked() {
-            actions.push(TreeAction::CreatePanel { parent });
-        }
-        if ui.button("+ Assembly").clicked() {
-            actions.push(TreeAction::CreateAssembly { parent });
-        }
-        if ui.button("+ Cube").clicked() {
-            actions.push(TreeAction::CreateObject { parent });
-        }
-        if ui.button("+ Extrude").clicked() {
-            actions.push(TreeAction::CreateExtrude { parent });
-        }
-        if ui.button("+ Camera").clicked() {
-            actions.push(TreeAction::CreateCamera { parent });
-        }
-        if ui.button("+ Light").clicked() {
-            actions.push(TreeAction::CreateLight { parent });
-        }
-        ui.separator();
         if ui.add_enabled(can_group, egui::Button::new("Group")).clicked() {
             actions.push(TreeAction::Group { nodes: selection.ids().to_vec() });
         }
@@ -194,13 +168,6 @@ fn show_toolbar(
     });
 }
 
-fn add_parent(project: &Project, selection: &Selection) -> Id {
-    let Some(primary) = selection.primary() else {
-        return project.root().id();
-    };
-    if project.is_container(primary) { primary } else { project.parent_of(primary).unwrap_or(project.root().id()) }
-}
-
 fn container_label(project: &Project, container: &Container) -> RichText {
     let name = container.name();
     if container.id() == project.root().id() {
@@ -224,7 +191,6 @@ fn show_container(
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
     depth: u32,
-    has_panel_material: bool,
 ) {
     let id = container.id();
     let is_root = id == project.root().id();
@@ -235,14 +201,14 @@ fn show_container(
     let (_toggle, header, _) =
         state.show_header(ui, |ui| ui.selectable_label(selection.contains(id), label)).body(|ui| {
             for child in container.children() {
-                show_node(ui, project, child, selection, actions, depth.saturating_add(1), has_panel_material);
+                show_node(ui, project, child, selection, actions, depth.saturating_add(1));
             }
         });
     if header.inner.clicked() {
         select(ui, selection, id);
     }
     header.inner.context_menu(|ui| {
-        container_menu(ui, id, is_root, is_component, has_panel_material, actions);
+        container_menu(ui, id, is_root, is_component, actions);
     });
 }
 
@@ -253,11 +219,10 @@ fn show_node(
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
     depth: u32,
-    has_panel_material: bool,
 ) {
     match node {
         Node::Container(container) => {
-            show_container(ui, project, container, selection, actions, depth, has_panel_material);
+            show_container(ui, project, container, selection, actions, depth);
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, actions),
         Node::Object(object) => show_object(ui, object, selection, actions),
@@ -325,26 +290,7 @@ fn select(ui: &Ui, selection: &mut Selection, id: Id) {
     }
 }
 
-fn container_menu(
-    ui: &mut Ui,
-    id: Id,
-    is_root: bool,
-    is_component: bool,
-    can_add_panel: bool,
-    actions: &mut Vec<TreeAction>,
-) {
-    if ui.add_enabled(can_add_panel, egui::Button::new("Add panel")).clicked() {
-        actions.push(TreeAction::CreatePanel { parent: id });
-        ui.close();
-    }
-    if ui.button("Add assembly").clicked() {
-        actions.push(TreeAction::CreateAssembly { parent: id });
-        ui.close();
-    }
-    if ui.button("Add cube").clicked() {
-        actions.push(TreeAction::CreateObject { parent: id });
-        ui.close();
-    }
+fn container_menu(ui: &mut Ui, id: Id, is_root: bool, is_component: bool, actions: &mut Vec<TreeAction>) {
     if !is_root {
         ui.separator();
         if ui.button("Duplicate").clicked() {
@@ -498,6 +444,28 @@ mod tests {
         assert!(selection.contains(Id::new(3).expect("id")));
     }
 
+    /// The tree is a view and a set of structural edits only.
+    ///
+    /// Creation is not a `TreeAction`: the toolbar strip owns every tool, so the tree cannot grow a
+    /// second creation path by adding a button back.
+    #[test]
+    fn the_tree_has_no_creation_action() {
+        let kinds = [
+            TreeAction::Duplicate { node: Id::new(2).expect("id") },
+            TreeAction::Delete { node: Id::new(2).expect("id") },
+            TreeAction::Group { nodes: Vec::new() },
+            TreeAction::Ungroup { node: Id::new(2).expect("id") },
+            TreeAction::ConvertToGroup { node: Id::new(2).expect("id") },
+            TreeAction::SelectUnderType { furntype: "12".parse().expect("type") },
+            TreeAction::Undo,
+            TreeAction::Redo,
+        ];
+        for action in kinds {
+            let debug = format!("{action:?}");
+            assert!(!debug.starts_with("Create"), "the tree must not create, got {debug}");
+        }
+    }
+
     #[test]
     fn selection_keeps_authored_cameras_and_lights() {
         let mut project = sample_project();
@@ -514,24 +482,5 @@ mod tests {
             &[camera, light],
             "a camera and a light are scene nodes, so the next frame keeps them selected"
         );
-    }
-
-    #[test]
-    fn adding_uses_the_selected_container_or_the_panels_parent() {
-        let project = sample_project();
-        let mut selection = Selection::default();
-        assert_eq!(add_parent(&project, &selection), project.root().id());
-
-        let drawer = Id::new(3).expect("id");
-        selection.replace(drawer);
-        assert_eq!(add_parent(&project, &selection), drawer);
-
-        let panel = Id::new(4).expect("id");
-        selection.replace(panel);
-        assert_eq!(add_parent(&project, &selection), drawer);
-
-        let root_panel = Id::new(2).expect("id");
-        selection.replace(root_panel);
-        assert_eq!(add_parent(&project, &selection), project.root().id());
     }
 }
