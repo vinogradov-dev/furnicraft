@@ -42,7 +42,7 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Projection, SceneFrame};
-use furnicraft_ui::{DrawTool, Editor, MeshElement, ui_scale};
+use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::DrawGizmo;
@@ -308,6 +308,23 @@ impl FurniCraftApp {
         self.draw_gizmo.reset();
     }
 
+    /// Commits the live drawing on the work plane and ends the tool.
+    ///
+    /// The plane is the one the draft started on, so a commit does not depend on where the camera
+    /// has orbited since. A refused path leaves the draft live and reports why.
+    fn commit_drawing(&mut self) -> Result<(), String> {
+        let placement = self
+            .draw_gizmo
+            .plane(self.scene.camera)
+            .placement()
+            .ok_or_else(|| "the work plane has no usable placement".to_owned())?;
+        self.editor.commit_drawing(&mut self.session, placement)?;
+        self.draw_gizmo.reset();
+        self.highlighted.clear();
+        self.sync_scene()?;
+        Ok(())
+    }
+
     /// Re-uploads the scene when the drag preview moved to a new position.
     ///
     /// A finished or cancelled drag also lands here with no preview, which restores the base
@@ -468,7 +485,7 @@ impl FurniCraftApp {
 
         if drawing {
             let axis_lock = ui.input(|input| input.modifiers.shift);
-            match self.draw_gizmo.update(
+            let finished = match self.draw_gizmo.update(
                 &response,
                 rect,
                 self.scene.camera,
@@ -476,9 +493,20 @@ impl FurniCraftApp {
                 pointer_over_widget,
                 axis_lock,
             ) {
-                Ok(true) => ui.ctx().request_repaint(),
-                Ok(false) => {}
-                Err(error) => self.last_error = Some(error),
+                Ok(true) => {
+                    ui.ctx().request_repaint();
+                    // A fixed tool is done on its last point and a closed polyline on its close
+                    // click: the finished draft commits right away, as a CAD tool does.
+                    self.editor.drawing().is_some_and(DrawDraft::is_finished)
+                }
+                Ok(false) => false,
+                Err(error) => {
+                    self.last_error = Some(error);
+                    false
+                }
+            };
+            if finished && let Err(error) = self.commit_drawing() {
+                self.last_error = Some(error);
             }
         } else {
             self.draw_gizmo.reset();
@@ -805,6 +833,7 @@ impl FurniCraftApp {
             let mut start_tool = None;
             let mut toggle_grid = false;
             let mut close_drawing = false;
+            let mut finish_drawing = false;
             let mut cancel_drawing = false;
             let owns_view = viewport_owns_view(self.session.project());
             let mesh_selection = self.editor.mesh_edit().map(|edit| {
@@ -862,9 +891,11 @@ impl FurniCraftApp {
                     ui.separator();
                     close_drawing |=
                         ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
+                    finish_drawing |=
+                        ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
                     cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
                     ui.separator();
-                    ui.label("LMB add point  ·  Shift axis lock  ·  Esc cancel");
+                    ui.label("LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
                 } else {
                     ui.label("Gizmo");
                     ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
@@ -912,8 +943,15 @@ impl FurniCraftApp {
                     self.last_error = Some("A drawing is already in progress; finish or cancel it first.".to_owned());
                 }
             }
-            if close_drawing && let Err(error) = self.editor.close_drawing() {
-                self.last_error = Some(error.to_string());
+            let mut closed = false;
+            if close_drawing {
+                match self.editor.close_drawing() {
+                    Ok(()) => closed = true,
+                    Err(error) => self.last_error = Some(error.to_string()),
+                }
+            }
+            if (finish_drawing || closed) && let Err(error) = self.commit_drawing() {
+                self.last_error = Some(error);
             }
             if cancel_drawing {
                 self.cancel_drawing();
@@ -1041,8 +1079,8 @@ impl eframe::App for FurniCraftApp {
             if !ui.ctx().text_edit_focused() {
                 if escape {
                     self.cancel_drawing();
-                } else if enter {
-                    self.editor.close_drawing().ok();
+                } else if enter && let Err(error) = self.commit_drawing() {
+                    self.last_error = Some(error);
                 }
                 if ui.input(|input| input.key_pressed(egui::Key::G)) {
                     self.draw_gizmo.toggle_grid();

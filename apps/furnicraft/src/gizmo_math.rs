@@ -11,7 +11,7 @@ use std::f64::consts::FRAC_PI_2;
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
-use furnicraft_geom::{DQuat, DVec2, DVec3};
+use furnicraft_geom::{DMat4, DQuat, DVec2, DVec3};
 use furnicraft_model::{Id, Placement, Project};
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection, Ray};
 use furnicraft_units::Length;
@@ -459,6 +459,22 @@ impl WorkPlane {
         DVec2::new(world.dot(self.u), world.dot(self.v))
     }
 
+    /// A placement whose local XY is this plane at the world origin.
+    ///
+    /// Local X maps to `u`, local Y to `v` and local Z to the normal, so a path stored in plane
+    /// coordinates keeps its orientation in the document. The translation is zero because the plane
+    /// passes through the world origin; a later origin-carrying plane adds it here only.
+    pub(crate) fn placement(self) -> Option<Placement> {
+        let basis = DMat4::from_cols(
+            self.u.extend(0.0),
+            self.v.extend(0.0),
+            self.normal().extend(0.0),
+            DVec3::ZERO.extend(1.0),
+        );
+        let rotation = DQuat::from_mat4(&basis).normalize();
+        Placement::new(DVec3::ZERO, rotation).ok()
+    }
+
     /// The world point where a ray meets the plane, or `None` when it is parallel or behind.
     #[allow(dead_code, reason = "the drawing tools start from these points in U13-U14")]
     pub(crate) fn ray_point(self, ray: Ray) -> Option<DVec3> {
@@ -796,8 +812,8 @@ mod tests {
         Id::new(number).expect("id")
     }
 
-    fn assert_vector(actual: DVec3, expected: DVec3) {
-        assert!((actual - expected).length() < 1.0e-9, "actual {actual:?}, expected {expected:?}");
+    fn assert_vector(actual: DVec3, expected: DVec3, what: &str) {
+        assert!((actual - expected).length() < 1.0e-9, "{what}: actual {actual:?}, expected {expected:?}");
     }
 
     /// An orthographic camera snapped to the standard view that looks from `eye` towards the target.
@@ -1037,10 +1053,10 @@ mod tests {
         for (eye, normal, u, v, label) in cases {
             let plane = WorkPlane::from_camera(orthographic_view(eye));
             assert_eq!(plane.label(), label, "looking from {eye:?}");
-            assert_vector(plane.normal(), normal);
-            assert_vector(plane.world(DVec2::new(1.0, 0.0)), u);
-            assert_vector(plane.world(DVec2::new(0.0, 1.0)), v);
-            assert_vector(u.cross(v), normal);
+            assert_vector(plane.normal(), normal, "the plane normal");
+            assert_vector(plane.world(DVec2::new(1.0, 0.0)), u, "the u axis");
+            assert_vector(plane.world(DVec2::new(0.0, 1.0)), v, "the v axis");
+            assert_vector(u.cross(v), normal, "a right-handed basis");
         }
     }
 
@@ -1081,6 +1097,25 @@ mod tests {
         let pixel = screen_point(camera, viewport(), world).expect("the point is in front");
         let mapped = plane.pointer_point(camera, viewport(), pixel).expect("the ray meets the plane");
         assert!((mapped - DVec2::new(100.0, 50.0)).length() < 1.0e-3, "a perspective view lands on world XY");
+    }
+
+    #[test]
+    fn a_work_plane_placement_maps_local_xy_onto_the_plane() {
+        for eye in [DVec3::X, -DVec3::X, DVec3::Y, -DVec3::Y, DVec3::Z, -DVec3::Z, DVec3::new(1.0, 1.0, 1.0)] {
+            let camera = if eye == DVec3::new(1.0, 1.0, 1.0) {
+                let mut camera = Camera::default();
+                camera.look_from(eye);
+                camera
+            } else {
+                orthographic_view(eye)
+            };
+            let plane = WorkPlane::from_camera(camera);
+            let placement = plane.placement().expect("a plane has a rigid placement");
+            assert_vector(placement.transform_point(DVec3::ZERO), DVec3::ZERO, "the plane runs through the origin");
+            assert_vector(placement.transform_point(DVec3::X), plane.u, "local X is the plane u axis");
+            assert_vector(placement.transform_point(DVec3::Y), plane.v, "local Y is the plane v axis");
+            assert_vector(placement.transform_point(DVec3::Z), plane.normal(), "local Z is the plane normal");
+        }
     }
 
     #[test]

@@ -62,7 +62,7 @@ use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
-pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool};
+pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
 
 /// Default length of a newly created panel, in millimetres.
@@ -339,6 +339,27 @@ impl Editor {
     /// Returns `false` when no draft is running or it is empty and open.
     pub fn undo_drawing(&mut self) -> bool {
         self.drawing.as_mut().is_some_and(DrawDraft::undo)
+    }
+
+    /// Commits the running draft as one path object and drops it.
+    ///
+    /// The drawing lands in the selected container, beside the selected node or at the root, and is
+    /// placed on `placement`, which maps the work plane onto the object's local XY. The new node
+    /// becomes the selection, so the tool ends with what it just drew visible in the inspector.
+    /// A refused path leaves the draft and the selection untouched.
+    pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
+        let Some(draft) = self.drawing.as_ref() else {
+            return Err(DrawDraftError::NotStarted.to_string());
+        };
+        let parent = drawing_parent(session.project(), self.selection.primary());
+        let object = draft.commit(session, parent, placement)?;
+        let tool = draft.tool();
+        self.drawing = None;
+        self.selection.replace(object);
+        // A deliberate selection also counts as the first show, so the tree does not replace the
+        // freshly drawn node with the first panel on the next frame.
+        self.initialized = true;
+        Ok(DrawnPath { object, tool })
     }
 
     /// Closes the running draft back to its first point.
@@ -692,6 +713,21 @@ fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Opti
     Some(node)
 }
 
+/// The parent a drawing lands in.
+///
+/// A selected container takes the drawing as its child; a selected leaf contributes its parent, so
+/// a path drawn while a panel is selected lands beside it; with no selection the root does.
+fn drawing_parent(project: &Project, selected: Option<Id>) -> Id {
+    let root = project.root().id();
+    let Some(selected) = selected else {
+        return root;
+    };
+    if project.is_container(selected) {
+        return selected;
+    }
+    project.parent_of(selected).unwrap_or(root)
+}
+
 /// The direct child of `container` whose subtree contains `node`.
 fn child_containing(project: &Project, container: Id, node: Id) -> Option<Id> {
     if node == container {
@@ -934,6 +970,102 @@ mod tests {
 
         assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
         assert!(editor.drawing().is_none(), "a contour edit takes the pointer back");
+    }
+
+    #[test]
+    fn a_committed_drawing_is_one_path_object_and_one_undo_entry() {
+        let (project, panel) = contour_panel_project();
+        let root = project.root().id();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_drawing(DrawTool::Rectangle));
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first corner");
+        editor
+            .drawing_point([Length::from_millimetres(600).expect("x"), Length::from_millimetres(400).expect("y")])
+            .expect("opposite corner");
+
+        let revision = session.project().revision();
+        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the rectangle");
+        assert_eq!(drawn.tool, DrawTool::Rectangle);
+        assert!(editor.drawing().is_none(), "the tool ends with the commit");
+        assert_eq!(editor.selected_nodes(), [drawn.object], "the new node is selected");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+
+        let path = session.project().object_path(drawn.object).expect("a path object");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+        assert_eq!(session.project().parent_of(drawn.object), Some(root), "a selected leaf contributes its parent");
+
+        session.undo().expect("one undo removes the drawing");
+        assert!(session.project().object(drawn.object).is_none());
+        assert!(!session.can_undo(), "the drawing was the only undo entry");
+    }
+
+    #[test]
+    fn a_drawing_lands_in_a_selected_container() {
+        let (project, panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+        let params = serde_json::to_value(furnicraft_engine::AssemblyCreate {
+            parent: root,
+            name: "Frame".to_owned(),
+            placement: Placement::IDENTITY,
+        })
+        .expect("params");
+        let outcome =
+            session.dispatch(furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID, &params).expect("create the frame");
+        let frame = outcome.created_id().expect("the assembly id");
+        editor.select_node(Some(frame));
+        assert!(editor.start_drawing(DrawTool::Line));
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
+        editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
+
+        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+        assert_eq!(session.project().parent_of(drawn.object), Some(frame), "a selected container receives it");
+        assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
+    }
+
+    #[test]
+    fn a_refused_drawing_keeps_the_draft_and_the_selection() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(Id::new(1).expect("root")));
+        assert!(editor.start_drawing(DrawTool::Rectangle));
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("one corner");
+
+        let revision = session.project().revision();
+        assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err(), "one point is no path");
+        assert!(editor.drawing().is_some(), "the draft stays");
+        assert_eq!(session.project().revision(), revision);
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn committing_without_a_draft_reports_it() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err());
+    }
+
+    #[test]
+    fn an_open_polyline_commits_as_drawn() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        assert!(editor.start_drawing(DrawTool::Polyline));
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
+        editor.drawing_point([Length::from_millimetres(400).expect("x"), Length::ZERO]).expect("middle");
+        editor
+            .drawing_point([Length::from_millimetres(400).expect("x"), Length::from_millimetres(300).expect("y")])
+            .expect("end");
+        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the chain");
+        let path = session.project().object_path(drawn.object).expect("a path object");
+        assert!(!path.is_closed());
+        assert_eq!(path.entries().len(), 2);
     }
 
     #[test]
