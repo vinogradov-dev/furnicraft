@@ -171,7 +171,7 @@ impl Toolbars {
         Self::default()
     }
 
-    /// The typed edge length of a new primitive.
+    /// The typed full extent of a new primitive: the cube's edge, or a curved shape's diameter.
     pub fn primitive_size_text(&self) -> &str {
         &self.primitive_size
     }
@@ -181,18 +181,18 @@ impl Toolbars {
         &mut self.primitive_size
     }
 
-    /// Replaces the typed edge length.
+    /// Replaces the typed size.
     pub fn set_primitive_size_text(&mut self, text: impl Into<String>) {
         self.primitive_size = text.into();
         self.error = None;
     }
 
-    /// The typed edge length as a document length, or a readable reason it is not one.
+    /// The typed size as a document length, or a readable reason it is not one.
     pub fn primitive_size(&self) -> Result<Length, String> {
         let length = Length::parse_millimetres(self.primitive_size.trim())
-            .map_err(|error| format!("The cube edge is not a length: {error}"))?;
+            .map_err(|error| format!("The primitive size is not a length: {error}"))?;
         if length.micrometres() <= 0 {
-            return Err("The cube edge must be positive.".to_owned());
+            return Err("The primitive size must be positive.".to_owned());
         }
         Ok(length)
     }
@@ -332,7 +332,7 @@ fn show_panel(
             }
         }
         ToolPanel::Primitives => {
-            ui.label("Edge");
+            ui.label("Size");
             ui.add(TextEdit::singleline(state.primitive_size_mut()).desired_width(72.0).hint_text("mm"));
             ui.label("mm");
             if let Some(error) = state.error() {

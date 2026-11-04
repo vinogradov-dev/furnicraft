@@ -203,6 +203,13 @@ pub(crate) fn object_bounds_mm(geometry: &Geometry) -> Option<(DVec3, DVec3)> {
                 DVec3::new(max[0] as f64 / 1000.0, max[1] as f64 / 1000.0, height as f64 / 1000.0),
             ))
         }
+        Geometry::Primitive(primitive) => {
+            let (min, max) = primitive.bounds_micrometres();
+            let to_point = |values: [i64; 3]| {
+                DVec3::new(values[0] as f64 / 1000.0, values[1] as f64 / 1000.0, values[2] as f64 / 1000.0)
+            };
+            Some((to_point(min), to_point(max)))
+        }
         Geometry::Path(path) => {
             let (min, max) = path.bounds_micrometres();
             Some((

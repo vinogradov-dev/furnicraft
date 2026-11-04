@@ -1,15 +1,16 @@
 //! Commands that create free-form geometry objects.
 //!
-//! A primitive is a baked mesh from the start: it has no feature history, and undo is its only
-//! record ([ADR 0037]). A constructive object starts from a contour extruded by one feature; its
-//! mesh is derived, and `object.collapse` bakes it ([ADR 0037]). Every command allocates the
-//! object id, builds the payload in the object's local frame and places it under a container in
-//! one revision.
+//! A primitive stores the parameters that built it, so a sphere is edited by its radius rather than
+//! by rewriting its vertices; the mesh is derived and `object.collapse` bakes it ([ADR 0054]). A
+//! constructive object starts from a contour extruded by one feature; its mesh is derived too, and
+//! `object.collapse` bakes it ([ADR 0037]). Every command allocates the object id, builds the
+//! payload in the object's local frame and places it under a container in one revision.
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+//! [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
 
-use furnicraft_mesh::evaluate_constructive;
-use furnicraft_model::{Constructive, Contour, Geometry, Id, Mesh, Path, Placement, Project, ProjectError};
+use furnicraft_mesh::{evaluate_constructive, evaluate_primitive};
+use furnicraft_model::{Constructive, Contour, Geometry, Id, Path, Placement, Primitive, Project, ProjectError};
 use furnicraft_param::validate_extrusion_contour;
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -25,20 +26,14 @@ pub const OBJECT_PRIMITIVE_CREATE_ID: &str = "object.primitive.create";
 /// User-facing label of the primitive creation command.
 pub const OBJECT_PRIMITIVE_CREATE_LABEL: &str = "Create primitive";
 
-/// Largest accepted primitive size: ten metres, the same bound the panel rules use.
-pub const MAX_PRIMITIVE_SIZE: Length = Length::from_micrometres(10_000_000);
+/// Stable id of the primitive parameter replacement command.
+pub const OBJECT_PRIMITIVE_REPLACE_ID: &str = "object.primitive.replace";
 
-/// The primitive kinds the command can build.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrimitiveKind {
-    /// A cube centred on the object's local origin.
-    Cube,
-    /// An upright cylinder whose diameter and height equal the size.
-    Cylinder,
-    /// A sphere whose diameter equals the size.
-    Sphere,
-}
+/// User-facing label of the primitive parameter replacement command.
+pub const OBJECT_PRIMITIVE_REPLACE_LABEL: &str = "Replace primitive parameters";
+
+/// The primitive shapes the command can build, re-exported from the document payload.
+pub use furnicraft_model::{MAX_PRIMITIVE_SIZE, PrimitiveKind};
 
 /// Parameters for `object.primitive.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -50,7 +45,7 @@ pub struct ObjectPrimitiveCreate {
     pub name: String,
     /// Which primitive to build.
     pub primitive: PrimitiveKind,
-    /// Edge length of the cube, positive and at most [`MAX_PRIMITIVE_SIZE`].
+    /// Full extent of the shape: the cube's edge, or the diameter of a cylinder or sphere.
     pub size: Length,
     /// Placement relative to the parent container.
     pub placement: Placement,
@@ -64,15 +59,18 @@ pub(crate) const OBJECT_PRIMITIVE_CREATE: CommandSpec = CommandSpec::new(
     object_primitive_create_run,
 );
 
-fn valid_size(size: Length) -> bool {
-    size.micrometres() > 0 && size.micrometres() <= MAX_PRIMITIVE_SIZE.micrometres()
+/// The primitive the creation size builds, or the reason it cannot be built.
+fn creation_primitive(kind: PrimitiveKind, size: Length) -> Result<Primitive, String> {
+    Primitive::from_kind(kind, size).map_err(|error| error.to_string())
 }
 
 fn object_primitive_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<ObjectPrimitiveCreate>(params, OBJECT_PRIMITIVE_CREATE_ID) else {
         return false;
     };
-    !params.name.trim().is_empty() && valid_size(params.size) && session.project().is_container(params.parent)
+    !params.name.trim().is_empty()
+        && session.project().is_container(params.parent)
+        && creation_primitive(params.primitive, params.size).is_ok()
 }
 
 fn object_primitive_create_run(
@@ -82,20 +80,45 @@ fn object_primitive_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectPrimitiveCreate>(params, OBJECT_PRIMITIVE_CREATE_ID)?;
     validate_name(&params.name, OBJECT_PRIMITIVE_CREATE_ID)?;
-    if !valid_size(params.size) {
-        return Err(CommandError::InvalidParams {
-            command: OBJECT_PRIMITIVE_CREATE_ID,
-            message: format!("size must be positive and at most {} micrometres", MAX_PRIMITIVE_SIZE.micrometres()),
-        });
-    }
-    let mesh = match params.primitive {
-        PrimitiveKind::Cube => Mesh::cube(params.size),
-        PrimitiveKind::Cylinder => Mesh::cylinder(params.size),
-        PrimitiveKind::Sphere => Mesh::sphere(params.size),
-    }
-    .map_err(ProjectError::from)?;
-    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Mesh(mesh))?;
+    let primitive = creation_primitive(params.primitive, params.size)
+        .map_err(|message| CommandError::InvalidParams { command: OBJECT_PRIMITIVE_CREATE_ID, message })?;
+    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Primitive(primitive))?;
     Ok(CommandOutcome::created(id))
+}
+
+/// Parameters for `object.primitive.replace`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectPrimitiveReplace {
+    /// The parametric primitive whose parameters change.
+    pub object: Id,
+    /// The validated parameters to store; the shape kind is part of the payload.
+    pub primitive: Primitive,
+}
+
+/// The `object.primitive.replace` command.
+pub(crate) const OBJECT_PRIMITIVE_REPLACE: CommandSpec = CommandSpec::new(
+    OBJECT_PRIMITIVE_REPLACE_ID,
+    OBJECT_PRIMITIVE_REPLACE_LABEL,
+    object_primitive_replace_enabled,
+    object_primitive_replace_run,
+);
+
+fn object_primitive_replace_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<ObjectPrimitiveReplace>(params, OBJECT_PRIMITIVE_REPLACE_ID) else {
+        return false;
+    };
+    session.project().object_primitive(params.object).is_ok()
+}
+
+fn object_primitive_replace_run(
+    project: &mut Project,
+    _catalog: &furnicraft_model::Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<ObjectPrimitiveReplace>(params, OBJECT_PRIMITIVE_REPLACE_ID)?;
+    project.set_object_primitive(params.object, params.primitive)?;
+    Ok(CommandOutcome::changed())
 }
 
 /// Stable id of the extrusion creation command.
@@ -315,7 +338,7 @@ pub const OBJECT_COLLAPSE_LABEL: &str = "Collapse to mesh";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectCollapse {
-    /// The constructive object to bake.
+    /// The constructive or primitive object to bake.
     pub object: Id,
 }
 
@@ -323,11 +346,16 @@ pub struct ObjectCollapse {
 pub(crate) const OBJECT_COLLAPSE: CommandSpec =
     CommandSpec::new(OBJECT_COLLAPSE_ID, OBJECT_COLLAPSE_LABEL, object_collapse_enabled, object_collapse_run);
 
+/// Whether a geometry payload is derived from parameters and can be baked to a mesh.
+fn is_derived(geometry: &Geometry) -> bool {
+    matches!(geometry, Geometry::Constructive(_) | Geometry::Primitive(_))
+}
+
 fn object_collapse_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<ObjectCollapse>(params, OBJECT_COLLAPSE_ID) else {
         return false;
     };
-    session.project().object(params.object).is_some_and(|object| object.geometry().as_constructive().is_some())
+    session.project().object(params.object).is_some_and(|object| is_derived(object.geometry()))
 }
 
 fn object_collapse_run(
@@ -336,12 +364,22 @@ fn object_collapse_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectCollapse>(params, OBJECT_COLLAPSE_ID)?;
-    let constructive = project
+    let geometry = project
         .object(params.object)
-        .and_then(|object| object.geometry().as_constructive())
-        .ok_or(ProjectError::NotConstructiveObject { id: params.object })?;
-    let mesh = evaluate_constructive(constructive)
-        .map_err(|error| CommandError::Evaluation { command: OBJECT_COLLAPSE_ID, message: error.to_string() })?;
+        .map(|object| object.geometry())
+        .ok_or(ProjectError::NodeNotFound { id: params.object })?;
+    let evaluation = |message: String| CommandError::Evaluation { command: OBJECT_COLLAPSE_ID, message };
+    let mesh = match geometry {
+        Geometry::Constructive(constructive) => {
+            evaluate_constructive(constructive).map_err(|error| evaluation(error.to_string()))?
+        }
+        Geometry::Primitive(primitive) => {
+            evaluate_primitive(primitive).map_err(|error| evaluation(error.to_string()))?
+        }
+        Geometry::Mesh(_) | Geometry::Path(_) => {
+            return Err(ProjectError::NotDerivedObject { id: params.object }.into());
+        }
+    };
     project.collapse_object(params.object, mesh)?;
     Ok(CommandOutcome::changed())
 }
@@ -350,7 +388,7 @@ fn object_collapse_run(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{ContourSegment, Revision};
+    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, Revision};
     use furnicraft_testkit::{sample_catalog, sample_project};
     use furnicraft_units::Degrees;
 
@@ -370,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_creates_one_mesh_object_in_one_revision() {
+    fn dispatch_stores_the_recipe_in_one_revision() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let params = cube_params(&session, Length::from_millimetres(100).expect("length"));
 
@@ -380,10 +418,9 @@ mod tests {
         assert_eq!(session.project().revision().get(), 1);
         let object = session.project().object(id).expect("object");
         assert_eq!(object.name(), "Cube");
-        let mesh = object.geometry().as_mesh().expect("mesh payload");
-        assert_eq!(mesh.positions().len(), 8);
-        assert_eq!(mesh.faces().len(), 6);
-        assert_eq!(mesh.bounds_micrometres(), ([-50_000; 3], [50_000; 3]));
+        let primitive = object.geometry().as_primitive().expect("a parametric payload");
+        assert_eq!(primitive, &Primitive::cube(Length::from_millimetres(100).expect("length")).expect("cube"));
+        assert!(object.geometry().as_mesh().is_none(), "the mesh is derived, not stored");
         assert!(session.can_undo());
 
         session.undo().expect("undo");
@@ -392,20 +429,16 @@ mod tests {
     }
 
     #[test]
-    fn every_primitive_kind_creates_its_mesh() {
+    fn every_primitive_kind_stores_its_parameters() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let size = Length::from_millimetres(100).expect("length");
         let cases = [
             (PrimitiveKind::Cube, 8, 6),
-            (
-                PrimitiveKind::Cylinder,
-                furnicraft_model::PRIMITIVE_SEGMENTS * 2,
-                furnicraft_model::PRIMITIVE_SEGMENTS + 2,
-            ),
+            (PrimitiveKind::Cylinder, DEFAULT_SEGMENTS as usize * 2, DEFAULT_SEGMENTS as usize + 2),
             (
                 PrimitiveKind::Sphere,
-                2 + furnicraft_model::PRIMITIVE_SEGMENTS * (furnicraft_model::PRIMITIVE_SPHERE_BANDS - 1),
-                furnicraft_model::PRIMITIVE_SEGMENTS * furnicraft_model::PRIMITIVE_SPHERE_BANDS,
+                2 + DEFAULT_SEGMENTS as usize * (DEFAULT_BANDS as usize - 1),
+                DEFAULT_SEGMENTS as usize * DEFAULT_BANDS as usize,
             ),
         ];
         for (primitive, vertices, faces) in cases {
@@ -420,10 +453,10 @@ mod tests {
             let outcome = session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).expect("create the primitive");
             let id = outcome.created_id().expect("an id");
             let object = session.project().object(id).expect("object");
-            let mesh = object.geometry().as_mesh().expect("mesh payload");
-            assert_eq!(mesh.positions().len(), vertices, "{primitive:?} vertices");
-            assert_eq!(mesh.faces().len(), faces, "{primitive:?} faces");
-            assert_eq!(mesh.bounds_micrometres(), ([-50_000; 3], [50_000; 3]), "{primitive:?} bounds");
+            let stored = object.geometry().as_primitive().expect("a parametric payload");
+            assert_eq!(stored.kind(), primitive, "{primitive:?} keeps its shape");
+            assert_eq!(stored.mesh_counts(), (vertices, faces), "{primitive:?} counts");
+            assert_eq!(stored.bounds_micrometres(), ([-50_000; 3], [50_000; 3]), "{primitive:?} bounds");
         }
         assert_eq!(session.project().revision().get(), 3, "one command per primitive");
     }
@@ -431,8 +464,12 @@ mod tests {
     #[test]
     fn a_size_outside_the_limit_is_rejected_without_mutating() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        for size in [Length::ZERO, MAX_PRIMITIVE_SIZE.checked_add(Length::from_micrometres(1)).expect("sum")] {
+        let too_large = MAX_PRIMITIVE_SIZE.checked_add(Length::from_micrometres(1)).expect("sum");
+        for size in [Length::ZERO, Length::from_micrometres(1), too_large] {
             let params = cube_params(&session, size);
+            let registry = CommandRegistry::new();
+            let spec = registry.get(OBJECT_PRIMITIVE_CREATE_ID).expect("registered");
+            assert!(!spec.enabled(&session, &params), "size {size} is not creatable");
             assert!(session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).is_err(), "size {size} must be rejected");
         }
         assert_eq!(session.project().revision(), Revision::ZERO);
@@ -469,6 +506,91 @@ mod tests {
         assert_eq!(session.project().revision(), Revision::ZERO);
     }
 
+    #[test]
+    fn replacing_the_parameters_is_one_revision_and_one_undo() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &cube_params(&session, Length::from_millimetres(100).expect("size")))
+            .expect("create")
+            .created_id()
+            .expect("id");
+        let original = Primitive::cube(Length::from_millimetres(100).expect("size")).expect("cube");
+        assert_eq!(session.project().object_primitive(id), Ok(&original));
+
+        let smoother = Primitive::sphere(Length::from_millimetres(60).expect("radius"), 24, 12).expect("sphere");
+        let value = serde_json::to_value(ObjectPrimitiveReplace { object: id, primitive: smoother.clone() })
+            .expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_PRIMITIVE_REPLACE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+        let before = session.project().revision();
+        session.dispatch(OBJECT_PRIMITIVE_REPLACE_ID, &value).expect("replace the parameters");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per edit");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.name(), "Cube", "only the parameters change");
+        assert_eq!(object.geometry().as_primitive(), Some(&smoother));
+
+        session.undo().expect("one undo restores the parameters");
+        assert_eq!(session.project().object_primitive(id), Ok(&original));
+        assert!(session.can_undo(), "the creation is still one entry below");
+    }
+
+    #[test]
+    fn a_primitive_collapses_to_exactly_the_mesh_the_evaluator_produces() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let size = Length::from_millimetres(80).expect("size");
+        let value = serde_json::to_value(ObjectPrimitiveCreate {
+            parent: session.project().root().id(),
+            name: "Ball".to_owned(),
+            primitive: PrimitiveKind::Sphere,
+            size,
+            placement: Placement::IDENTITY,
+        })
+        .expect("params serialize");
+        let id = session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &value).expect("create").created_id().expect("id");
+        let primitive = session.project().object_primitive(id).expect("the parameters").clone();
+        let evaluated = furnicraft_mesh::evaluate_primitive(&primitive).expect("evaluated mesh");
+
+        let value = serde_json::to_value(ObjectCollapse { object: id }).expect("params");
+        let spec = CommandRegistry::new().get(OBJECT_COLLAPSE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+        session.dispatch(OBJECT_COLLAPSE_ID, &value).expect("collapse");
+        let baked = session.project().object(id).expect("object").geometry().as_mesh().expect("a baked mesh").clone();
+        assert_eq!(baked, evaluated, "the viewport and the collapse share one evaluator");
+        assert_eq!(session.project().object(id).expect("object").name(), "Ball", "collapse keeps every other field");
+        assert!(session.project().object_primitive(id).is_err(), "a baked mesh has no parameters to edit");
+
+        let replacement = Primitive::sphere(Length::from_millimetres(10).expect("radius"), 8, 4).expect("sphere");
+        let value =
+            serde_json::to_value(ObjectPrimitiveReplace { object: id, primitive: replacement }).expect("params");
+        let spec = CommandRegistry::new().get(OBJECT_PRIMITIVE_REPLACE_ID).expect("registered");
+        assert!(!spec.enabled(&session, &value), "a baked mesh has no parameters");
+        assert!(session.dispatch(OBJECT_PRIMITIVE_REPLACE_ID, &value).is_err());
+    }
+
+    #[test]
+    fn a_primitive_replace_on_another_payload_is_refused_without_mutating() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("id");
+        let before = session.project().revision();
+        let value = serde_json::to_value(ObjectPrimitiveReplace {
+            object: id,
+            primitive: Primitive::cube(Length::from_millimetres(20).expect("size")).expect("cube"),
+        })
+        .expect("params");
+        let spec = CommandRegistry::new().get(OBJECT_PRIMITIVE_REPLACE_ID).expect("registered");
+        assert!(!spec.enabled(&session, &value));
+        assert!(session.dispatch(OBJECT_PRIMITIVE_REPLACE_ID, &value).is_err());
+        assert_eq!(session.project().revision(), before);
+        assert!(session.project().object(id).expect("object").geometry().as_constructive().is_some());
+    }
+
     fn rectangle(width: i64, height: i64) -> Contour {
         let millimetres = |value| Length::from_millimetres(value).expect("length");
         Contour::from_polygon(vec![
@@ -479,7 +601,6 @@ mod tests {
         ])
         .expect("rectangle")
     }
-
     fn extrude_params(session: &Session, name: &str, height: Length) -> Value {
         serde_json::to_value(ObjectExtrudeCreate {
             parent: session.project().root().id(),
@@ -691,7 +812,8 @@ mod tests {
             serde_json::to_value(ObjectContourReplace { object: cube, contour: rectangle(10, 10) }).expect("params");
         assert!(session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).is_err());
         let value = serde_json::to_value(ObjectCollapse { object: cube }).expect("params");
-        assert!(session.dispatch(OBJECT_COLLAPSE_ID, &value).is_err());
+        session.dispatch(OBJECT_COLLAPSE_ID, &value).expect("a primitive collapses to its derived mesh");
+        assert!(session.dispatch(OBJECT_COLLAPSE_ID, &value).is_err(), "a baked mesh cannot collapse again");
 
         let id = session
             .dispatch(

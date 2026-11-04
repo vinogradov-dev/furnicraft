@@ -250,6 +250,7 @@ fn show_object(
     let id = object.id();
     let kind = match object.geometry() {
         furnicraft_model::Geometry::Mesh(_) => "mesh",
+        furnicraft_model::Geometry::Primitive(primitive) => primitive.shape_name(),
         furnicraft_model::Geometry::Constructive(_) => "contour",
         furnicraft_model::Geometry::Path(_) => "path",
     };

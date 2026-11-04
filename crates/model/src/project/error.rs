@@ -27,6 +27,9 @@ pub enum ProjectError {
     /// A constructive contour or feature list is invalid.
     #[error("invalid constructive geometry: {0}")]
     InvalidConstructive(#[from] ConstructiveError),
+    /// A primitive shape or its parameters are invalid.
+    #[error("invalid primitive geometry: {0}")]
+    InvalidPrimitive(#[from] PrimitiveError),
     /// An authored camera could not be built.
     #[error(transparent)]
     Camera(#[from] CameraError),
@@ -144,6 +147,18 @@ pub enum ProjectError {
     /// The node is not a constructive object, so it has no contour or feature history.
     #[error("node {id} is not a constructive object")]
     NotConstructiveObject {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The node is not a parametric primitive, so it has no primitive parameters.
+    #[error("node {id} is not a primitive object")]
+    NotAPrimitiveObject {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The node has no derived payload, so there is nothing to collapse to a mesh.
+    #[error("node {id} has no derived geometry to collapse")]
+    NotDerivedObject {
         /// The node that was asked.
         id: Id,
     },

@@ -1,9 +1,10 @@
-//! Free-form geometry objects: a baked mesh, a path or a contour with a feature history.
+//! Free-form geometry objects: a baked mesh, a parametric primitive, a path or a contour with a
+//! feature history.
 //!
 //! An object is a leaf in the container tree, placed like a panel but carrying no manufacturing
-//! rules. A constructive payload stores the features it was built from; the mesh is derived and
-//! replaces the history only when the user collapses it. A path payload is a flat drawing that has
-//! no solid yet.
+//! rules. A constructive payload stores the features it was built from; a primitive stores the
+//! parameters that build its mesh. In both cases the mesh is derived and replaces the parameters
+//! only when the user collapses it. A path payload is a flat drawing that has no solid yet.
 
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,7 @@ use thiserror::Error;
 
 use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE, Path};
 use crate::mesh::Mesh;
+use crate::primitive::Primitive;
 use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
 
 /// Largest number of features in a constructive object.
@@ -181,10 +183,12 @@ pub enum ConstructiveError {
 ///
 /// Exactly one payload is stored. A `Mesh` is edited directly; a [`Constructive`] payload is
 /// rebuilt from its features and is not editable as a mesh until the object is collapsed
-/// ([ADR 0037]). A [`Path`] is a flat chain of drawn segments: it has no solid yet, and it becomes
-/// one only when it is closed and extruded.
+/// ([ADR 0037]). A [`Primitive`] stores the parameters that build its mesh, and is likewise not
+/// editable as a mesh until it is collapsed ([ADR 0054]). A [`Path`] is a flat chain of drawn
+/// segments: it has no solid yet, and it becomes one only when it is closed and extruded.
 ///
 /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+/// [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Geometry {
@@ -192,6 +196,8 @@ pub enum Geometry {
     Mesh(Mesh),
     /// A contour and its feature history; the mesh is derived.
     Constructive(Constructive),
+    /// A primitive shape and its parameters; the mesh is derived.
+    Primitive(Primitive),
     /// A flat, open or closed chain of drawn segments.
     Path(Path),
 }
@@ -201,7 +207,7 @@ impl Geometry {
     pub const fn as_mesh(&self) -> Option<&Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
-            Self::Constructive(_) | Self::Path(_) => None,
+            Self::Constructive(_) | Self::Primitive(_) | Self::Path(_) => None,
         }
     }
 
@@ -209,7 +215,7 @@ impl Geometry {
     pub const fn as_mesh_mut(&mut self) -> Option<&mut Mesh> {
         match self {
             Self::Mesh(mesh) => Some(mesh),
-            Self::Constructive(_) | Self::Path(_) => None,
+            Self::Constructive(_) | Self::Primitive(_) | Self::Path(_) => None,
         }
     }
 
@@ -217,7 +223,7 @@ impl Geometry {
     pub const fn as_constructive(&self) -> Option<&Constructive> {
         match self {
             Self::Constructive(constructive) => Some(constructive),
-            Self::Mesh(_) | Self::Path(_) => None,
+            Self::Mesh(_) | Self::Primitive(_) | Self::Path(_) => None,
         }
     }
 
@@ -225,7 +231,23 @@ impl Geometry {
     pub const fn as_constructive_mut(&mut self) -> Option<&mut Constructive> {
         match self {
             Self::Constructive(constructive) => Some(constructive),
-            Self::Mesh(_) | Self::Path(_) => None,
+            Self::Mesh(_) | Self::Primitive(_) | Self::Path(_) => None,
+        }
+    }
+
+    /// The parametric primitive, when the payload is a primitive.
+    pub const fn as_primitive(&self) -> Option<&Primitive> {
+        match self {
+            Self::Primitive(primitive) => Some(primitive),
+            Self::Mesh(_) | Self::Constructive(_) | Self::Path(_) => None,
+        }
+    }
+
+    /// The parametric primitive for mutation, when the payload is a primitive.
+    pub const fn as_primitive_mut(&mut self) -> Option<&mut Primitive> {
+        match self {
+            Self::Primitive(primitive) => Some(primitive),
+            Self::Mesh(_) | Self::Constructive(_) | Self::Path(_) => None,
         }
     }
 
@@ -233,7 +255,7 @@ impl Geometry {
     pub const fn as_path(&self) -> Option<&Path> {
         match self {
             Self::Path(path) => Some(path),
-            Self::Mesh(_) | Self::Constructive(_) => None,
+            Self::Mesh(_) | Self::Constructive(_) | Self::Primitive(_) => None,
         }
     }
 
@@ -241,7 +263,7 @@ impl Geometry {
     pub const fn as_path_mut(&mut self) -> Option<&mut Path> {
         match self {
             Self::Path(path) => Some(path),
-            Self::Mesh(_) | Self::Constructive(_) => None,
+            Self::Mesh(_) | Self::Constructive(_) | Self::Primitive(_) => None,
         }
     }
 }
@@ -506,7 +528,7 @@ mod tests {
         let object = project.object(id).expect("object");
         assert_eq!(object.geometry().as_mesh(), Some(&mesh));
         assert!(object.geometry().as_constructive().is_none(), "collapse drops the history");
-        assert_eq!(project.collapse_object(id, mesh), Err(ProjectError::NotConstructiveObject { id }));
+        assert_eq!(project.collapse_object(id, mesh), Err(ProjectError::NotDerivedObject { id }));
     }
 
     #[test]
@@ -517,6 +539,45 @@ mod tests {
         let (min, max) = object_bounds_mm(&geometry).expect("bounds");
         assert!((min - DVec3::ZERO).length() < 1.0e-9);
         assert!((max - DVec3::new(100.0, 50.0, 18.0)).length() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_primitive_keeps_its_parameters_and_collapses_to_a_mesh() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let root = project.root().id();
+        let original = Primitive::sphere(millimetres(50), 16, 8).expect("sphere");
+        let id = project
+            .add_object(root, "Ball", Placement::IDENTITY, Geometry::Primitive(original.clone()))
+            .expect("object");
+
+        let text = serde_json::to_string(&project).expect("serialize");
+        assert!(text.contains("\"kind\":\"primitive\""), "the payload is tagged: {text}");
+        assert!(text.contains("\"shape\":\"sphere\""), "the shape is the inner tag: {text}");
+        assert_eq!(serde_json::from_str::<Project>(&text).expect("load"), project, "the parameters round-trip");
+        assert!(project.object(id).expect("object").geometry().as_mesh().is_none(), "the mesh is derived");
+
+        let (min, max) = object_bounds_mm(project.object(id).expect("object").geometry()).expect("bounds");
+        assert!((min - DVec3::new(-50.0, -50.0, -50.0)).length() < 1.0e-9);
+        assert!((max - DVec3::new(50.0, 50.0, 50.0)).length() < 1.0e-9);
+
+        let replacement = Primitive::sphere(millimetres(80), 24, 12).expect("sphere");
+        let revision = project.set_object_primitive(id, replacement.clone()).expect("replace the primitive");
+        assert_eq!(revision.get(), 2, "creation was revision one");
+        assert_eq!(project.object_primitive(id), Ok(&replacement));
+        assert_eq!(
+            project.move_mesh_vertices(id, &[(0, [millimetres(1), millimetres(1), millimetres(1)])]),
+            Err(ProjectError::NotAMeshObject { id })
+        );
+
+        let mesh = Mesh::cube(millimetres(10)).expect("mesh");
+        let revision = project.collapse_object(id, mesh.clone()).expect("collapse");
+        assert_eq!(revision.get(), 3);
+        let object = project.object(id).expect("object");
+        assert_eq!(object.name(), "Ball", "collapse keeps every other field");
+        assert_eq!(object.geometry().as_mesh(), Some(&mesh));
+        assert!(object.geometry().as_primitive().is_none(), "collapse drops the parameters");
+        assert_eq!(project.set_object_primitive(id, replacement), Err(ProjectError::NotAPrimitiveObject { id }));
     }
 
     fn sample_path() -> Path {

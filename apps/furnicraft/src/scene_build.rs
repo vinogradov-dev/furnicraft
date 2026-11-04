@@ -342,9 +342,9 @@ impl<'a> Evaluation<'a> {
 
     /// Turns a geometry object into one flat-shaded drawable or one line chain in world space.
     ///
-    /// A mesh payload is drawn as stored. A constructive payload is evaluated from its features
-    /// through the cache's one evaluator — the same function `object.collapse` bakes — so the
-    /// collapsed object keeps the shape the viewport showed.
+    /// A mesh payload is drawn as stored. A constructive or primitive payload is evaluated through
+    /// the cache's one evaluator — the same function `object.collapse` bakes — so the collapsed
+    /// object keeps the shape the viewport showed.
     fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
         let world = Placement::compose(parent, object.placement()).map_err(describe)?;
         let revision = self.session.project().revision();
@@ -753,6 +753,28 @@ mod tests {
         assert!(!drawable.mesh.positions.is_empty(), "the extrusion is tessellated from its contour");
         let center = evaluated.bounds.center().expect("the object contributes bounds");
         assert!(center.y > 0.0 && center.z > 0.0, "bounds follow the contour and the extrusion height");
+    }
+
+    #[test]
+    fn a_primitive_is_drawn_from_its_parameters_and_picks_by_id() {
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let primitive = furnicraft_model::Primitive::sphere(millimetres(40), 16, 8).expect("sphere");
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        let object =
+            project.add_object(root, "Ball", Placement::IDENTITY, Geometry::Primitive(primitive)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        assert_eq!(evaluated.frame.drawables().len(), 1, "a primitive is one drawable");
+        let drawable = &evaluated.frame.drawables()[0];
+        assert_eq!(drawable.id, object, "the drawable carries the object id");
+        assert!(!drawable.mesh.positions.is_empty(), "the mesh is derived from the parameters");
+        let center = evaluated.bounds.center().expect("the object contributes bounds");
+        assert!(center.x.abs() < 1.0e-3 && center.z.abs() < 1.0e-3, "a sphere is centred on its origin");
     }
 
     #[test]

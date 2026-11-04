@@ -5,7 +5,7 @@ Status: domain specification. This document describes the scene file: what it st
 Related documents:
 
 - [Scene file](scene-file.md) — the envelope that holds the document on disk.
-- [Geometry objects](geometry.md) — objects with a baked mesh or a feature history.
+- [Geometry objects](geometry.md) — objects with a baked mesh, a parametric primitive or a feature history.
 - [Panels and edge banding](panels.md) — panel, its dimensions, banding and commands.
 - [Materials and catalogue](materials.md) — material records and the catalogue.
 
@@ -37,7 +37,7 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 - each node's typed properties, including a furniture type;
 - each node's manipulation pivot, in its own frame;
 - the active camera, and camera and light parameters;
-- geometry payloads: a baked mesh, or the features of a constructive object;
+- geometry payloads: a baked mesh, the parameters of a primitive, or the features of a constructive object;
 - panels:
   - id;
   - name;
@@ -103,8 +103,9 @@ container defines the world frame and cannot be deleted, moved, grouped or ungro
 ### 2.2. Geometry, camera and light nodes
 
 Beside containers and panels the tree holds **geometry objects** and **camera** and **light**
-objects. A geometry object carries either a baked mesh or an ordered feature history; the two are
-never mixed, and only a mesh object accepts mesh editing ([Geometry objects](geometry.md),
+objects. A geometry object carries one payload — a baked mesh, a parametric primitive, a flat path or
+an ordered feature history; they are never mixed, and only a mesh object accepts mesh editing
+([Geometry objects](geometry.md),
 [ADR 0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 
 A camera or a light is an ordinary node with a name, a placement, properties, selection and undo; the
@@ -237,6 +238,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 15 moves a rectangle panel's corner features and bowed edges from the panel into its outline, so the outline is the one source of the panel shape. A version 14 panel keeps its features: they load from the old top-level fields and are written back inside the outline.
 - Version 16 replaces the tagged machining enum with one ordered list of records, each carrying a stable id, a face or edge anchor and tagged parameters. A version 15 cutout loads as a face-anchored cutout with the same id.
 - Version 17 adds a flat path payload: an open or closed chain of drawn line and arc segments with stable ids, stored on a geometry object. A version 16 file contains no path and loads unchanged.
+- Version 18 adds the parametric primitive payload: a shape and its parameters whose mesh is derived. A version 17 file contains only baked meshes and constructive objects, and loads unchanged; a collapsed primitive saves as a mesh.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
