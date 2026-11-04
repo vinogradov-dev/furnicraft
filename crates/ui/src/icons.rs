@@ -305,6 +305,31 @@ mod tests {
     }
 
     #[test]
+    fn every_drawn_asset_is_a_24_grid_svg() {
+        for theme in Theme::ALL {
+            for icon in theme.icons() {
+                if !icon.is_drawn() {
+                    continue;
+                }
+                let svg = std::str::from_utf8(icon.asset()).expect("an icon asset is UTF-8");
+                let name = format!("{}/{}", icon.theme().as_str(), icon.name());
+                assert!(svg.starts_with("<svg"), "{name} does not start with an SVG root");
+                assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name} is not drawn on the 24 grid");
+                assert!(svg.contains("#000"), "{name} carries no ink");
+                for forbidden in ["<text", "<image", "<style", "<defs", "<mask", "<clipPath"] {
+                    assert!(!svg.contains(forbidden), "{name} contains {forbidden}");
+                }
+                let raster = egui_extras::image::load_svg_bytes_with_size(
+                    icon.asset(),
+                    egui::load::SizeHint::Width(16),
+                    &Default::default(),
+                );
+                assert!(raster.is_ok(), "{name} does not rasterise: {:?}", raster.err());
+            }
+        }
+    }
+
+    #[test]
     fn a_tool_hint_names_the_shortcut_and_a_placeholder_shows_it() {
         assert_eq!(tool_hint("Line", Some("L")), "Line  (L)");
         assert_eq!(tool_hint("Line", None), "Line");

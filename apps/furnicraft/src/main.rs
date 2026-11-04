@@ -42,7 +42,7 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Projection, SceneFrame};
-use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, ui_scale};
+use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, icons, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::DrawGizmo;
@@ -898,16 +898,20 @@ impl FurniCraftApp {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
-                reset = ui.button("Frame all  (F)").clicked();
+                reset = icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true).clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                let (projection_label, projection_hint) = match self.scene.camera.projection() {
-                    Projection::Perspective { .. } => ("Orthographic  (O)", "Switch the view to orthographic"),
-                    Projection::Orthographic { .. } => ("Perspective  (O)", "Switch the view to perspective"),
+                let (projection_icon, projection_hint) = match self.scene.camera.projection() {
+                    Projection::Perspective { .. } => {
+                        (icons::view::ORTHOGRAPHIC, "Switch the view to orthographic  (O)")
+                    }
+                    Projection::Orthographic { .. } => {
+                        (icons::view::PERSPECTIVE, "Switch the view to perspective  (O)")
+                    }
                 };
                 let projection_response = ui
-                    .add_enabled(owns_view, egui::Button::new(projection_label))
-                    .on_hover_text(projection_hint)
+                    .add_enabled_ui(owns_view, |ui| icons::icon_button(ui, projection_icon, projection_hint))
+                    .inner
                     .on_disabled_hover_text("An authored camera owns the projection");
                 toggle_projection = projection_response.clicked();
                 toggle_projection |= owns_view && ui.input(|input| input.key_pressed(egui::Key::O));
