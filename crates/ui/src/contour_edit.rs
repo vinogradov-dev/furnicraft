@@ -14,8 +14,8 @@ use furnicraft_engine::object_cmds::OBJECT_CONTOUR_REPLACE_ID;
 use furnicraft_engine::panel_cmds::OUTLINE_SET_ID;
 use furnicraft_engine::{ObjectContourReplace, PanelOutlineSet, Session};
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegment, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS,
-    Path, PathError, Project,
+    Contour, ContourEditError, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, Path, PathError,
+    Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -132,21 +132,84 @@ impl ContourEdit {
     }
 }
 
-/// A chain of work-plane points a drawing tool is building.
+/// The tool a drawing draft is building with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DrawTool {
+    /// Two points make one open line.
+    Line,
+    /// Two or more points make an open chain, or a closed ring on request.
+    #[default]
+    Polyline,
+    /// Three points make one open arc through the middle point.
+    Arc,
+    /// Two opposite corners make one closed rectangle.
+    Rectangle,
+    /// A centre and a rim point make one closed circle.
+    Circle,
+}
+
+impl DrawTool {
+    /// How many points the tool needs to produce its path, or `None` for an open-ended polyline.
+    ///
+    /// A fixed tool stops taking points at this count; a polyline produces a path as soon as it has
+    /// two points and takes as many more as the ring cap allows.
+    pub const fn points(self) -> Option<usize> {
+        match self {
+            Self::Line | Self::Rectangle | Self::Circle => Some(2),
+            Self::Arc => Some(3),
+            Self::Polyline => None,
+        }
+    }
+
+    /// Whether the tool can close its chain into a ring; only a polyline may.
+    pub const fn closes(self) -> bool {
+        matches!(self, Self::Polyline)
+    }
+
+    /// Whether the path is closed by the tool itself, without a close action.
+    pub const fn is_closed(self) -> bool {
+        matches!(self, Self::Rectangle | Self::Circle)
+    }
+
+    /// A short user-visible name.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+            Self::Polyline => "Polyline",
+            Self::Arc => "Arc",
+            Self::Rectangle => "Rectangle",
+            Self::Circle => "Circle",
+        }
+    }
+}
+
+/// One drawing tool's chain of work-plane points.
 ///
 /// The points are whole micrometres in the work-plane frame, so a draft becomes a document
 /// [`Path`] without a float ever entering the document. A draft is view state: it runs no command
 /// and bumps no revision until the drawing is committed.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawDraft {
+    tool: DrawTool,
     points: Vec<[Length; 2]>,
     closed: bool,
 }
 
+impl Default for DrawDraft {
+    fn default() -> Self {
+        Self::new(DrawTool::Polyline)
+    }
+}
+
 impl DrawDraft {
-    /// An empty, open draft.
-    pub const fn new() -> Self {
-        Self { points: Vec::new(), closed: false }
+    /// An empty, open draft for `tool`.
+    pub const fn new(tool: DrawTool) -> Self {
+        Self { tool, points: Vec::new(), closed: false }
+    }
+
+    /// The tool this draft belongs to.
+    pub const fn tool(&self) -> DrawTool {
+        self.tool
     }
 
     /// The points in the order they were added; a closed chain stores each point once.
@@ -154,9 +217,9 @@ impl DrawDraft {
         &self.points
     }
 
-    /// Whether the chain is closed back to its first point.
-    pub const fn is_closed(&self) -> bool {
-        self.closed
+    /// Whether the chain is closed back to its first point, by the user or by the tool itself.
+    pub fn is_closed(&self) -> bool {
+        self.tool.is_closed() || self.closed
     }
 
     /// Whether the draft holds no point yet.
@@ -169,19 +232,32 @@ impl DrawDraft {
         self.points.len()
     }
 
-    /// Whether the chain has enough points to close into a ring.
-    pub fn can_close(&self) -> bool {
-        !self.closed && self.points.len() >= 3
+    /// Whether the tool has every point it needs to produce a path.
+    pub fn is_complete(&self) -> bool {
+        match self.tool.points() {
+            Some(need) => self.points.len() == need,
+            None => self.points.len() >= 2,
+        }
     }
 
-    /// Appends a point, refusing a repeat of the previous point, an out-of-range point and an
-    /// overflow of the ring cap.
+    /// Whether the chain has enough points to close into a ring.
+    pub fn can_close(&self) -> bool {
+        self.tool.closes() && !self.closed && self.points.len() >= 3
+    }
+
+    /// Appends a point, refusing a repeat of the previous point, an out-of-range point, a point
+    /// beyond a fixed tool's count and an overflow of the ring cap.
     ///
     /// A path may touch or cross itself — the ring rules run only when it becomes a contour — but
     /// two equal neighbours would make a zero-length segment the document cannot store.
     pub fn push(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
         if self.closed {
             return Err(DrawDraftError::AlreadyClosed);
+        }
+        if let Some(need) = self.tool.points()
+            && self.points.len() >= need
+        {
+            return Err(DrawDraftError::Complete { tool: self.tool });
         }
         if self.points.len() >= MAX_CONTOUR_SEGMENTS {
             return Err(DrawDraftError::Full);
@@ -209,11 +285,16 @@ impl DrawDraft {
 
     /// Closes the chain back to its first point.
     ///
-    /// Three points are the fewest a ring can have, so a shorter chain is refused. The closed
-    /// chain is validated before the state changes, so a draft that cannot become a path — for
-    /// example because its last point repeats the first — stays open and editable. Whether the ring
-    /// is simple and non-degenerate is a ring rule that runs when the path becomes a contour.
+    /// Only a polyline can close; a rectangle and a circle are closed by their constructors and a
+    /// line and an arc stay open. Three points are the fewest a ring can have, so a shorter chain is
+    /// refused. The closed chain is validated before the state changes, so a draft that cannot
+    /// become a path — for example because its last point repeats the first — stays open and
+    /// editable. Whether the ring is simple and non-degenerate is a ring rule that runs when the
+    /// path becomes a contour.
     pub fn close(&mut self) -> Result<(), DrawDraftError> {
+        if !self.tool.closes() {
+            return Err(DrawDraftError::NotClosable { tool: self.tool });
+        }
         if self.closed {
             return Err(DrawDraftError::AlreadyClosed);
         }
@@ -225,27 +306,44 @@ impl DrawDraft {
         Ok(())
     }
 
-    /// The path these points describe, open or closed.
+    /// The path these points describe, if the tool has all the points it needs.
     pub fn to_path(&self) -> Result<Path, DrawDraftError> {
-        self.path_of(self.closed)
+        let need = self.tool.points().unwrap_or(2);
+        if self.points.len() < need {
+            return Err(DrawDraftError::TooFewPoints { need, got: self.points.len() });
+        }
+        match self.tool {
+            DrawTool::Line => Path::polyline(self.points.clone(), false).map_err(DrawDraftError::from),
+            DrawTool::Polyline => Path::polyline(self.points.clone(), self.closed).map_err(DrawDraftError::from),
+            DrawTool::Arc => {
+                let (Some(&start), Some(&through), Some(&end)) =
+                    (self.points.first(), self.points.get(1), self.points.get(2))
+                else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: self.points.len() });
+                };
+                Path::arc_through(start, through, end).map_err(DrawDraftError::from)
+            }
+            DrawTool::Rectangle => {
+                let (Some(&first), Some(&second)) = (self.points.first(), self.points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
+                };
+                Path::rectangle(first, second).map_err(DrawDraftError::from)
+            }
+            DrawTool::Circle => {
+                let (Some(&center), Some(&rim)) = (self.points.first(), self.points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
+                };
+                Path::circle_through(center, rim).map_err(DrawDraftError::from)
+            }
+        }
     }
 
-    /// Builds the path with an explicit closing flag and validates it.
+    /// Builds an explicitly closed path from a polyline's points and validates it.
     fn path_of(&self, closed: bool) -> Result<Path, DrawDraftError> {
         if self.points.len() < 2 {
             return Err(DrawDraftError::TooFewPoints { need: 2, got: self.points.len() });
         }
-        let mut segments = Vec::with_capacity(self.points.len());
-        for pair in self.points.windows(2) {
-            let (Some(&start), Some(&end)) = (pair.first(), pair.get(1)) else {
-                continue;
-            };
-            segments.push(ContourSegment::line(start, end).map_err(PathError::from)?);
-        }
-        if closed && let (Some(&first), Some(&last)) = (self.points.first(), self.points.last()) {
-            segments.push(ContourSegment::line(last, first).map_err(PathError::from)?);
-        }
-        Ok(Path::new(segments, closed)?)
+        Path::polyline(self.points.clone(), closed).map_err(DrawDraftError::from)
     }
 }
 
@@ -284,6 +382,18 @@ pub enum DrawDraftError {
     /// The chain is already closed.
     #[error("the drawing is already closed")]
     AlreadyClosed,
+    /// A fixed tool already has every point it needs.
+    #[error("the {} tool is complete", tool.label())]
+    Complete {
+        /// The tool that is complete.
+        tool: DrawTool,
+    },
+    /// Only a polyline can be closed by the user.
+    #[error("the {} tool cannot be closed", tool.label())]
+    NotClosable {
+        /// The tool that refused the close.
+        tool: DrawTool,
+    },
     /// The points do not form a path.
     #[error(transparent)]
     Path(#[from] PathError),
@@ -430,7 +540,7 @@ mod tests {
 
     #[test]
     fn a_drawing_draft_builds_an_open_path_from_its_points() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         assert!(draft.is_empty());
         assert!(!draft.can_close());
         assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 0 }));
@@ -457,7 +567,7 @@ mod tests {
 
     #[test]
     fn closing_a_drawing_draft_adds_the_last_segment_once() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         for point in
             [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
         {
@@ -480,7 +590,7 @@ mod tests {
 
     #[test]
     fn a_drawing_draft_needs_three_points_to_close() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.push([millimetres(0), millimetres(0)]).expect("point");
         assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 1 }));
         assert_eq!(draft.close(), Err(DrawDraftError::TooFewPoints { need: 3, got: 1 }));
@@ -489,7 +599,7 @@ mod tests {
 
     #[test]
     fn undoing_a_drawing_draft_reopens_before_it_drops_a_point() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         for point in
             [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
         {
@@ -510,7 +620,7 @@ mod tests {
 
     #[test]
     fn a_drawing_draft_refuses_a_repeat_and_a_point_out_of_range() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.push([millimetres(0), millimetres(0)]).expect("point");
         draft.push([millimetres(600), millimetres(0)]).expect("point");
         assert_eq!(draft.push([millimetres(600), millimetres(0)]), Err(DrawDraftError::DuplicatePoint));
@@ -527,7 +637,7 @@ mod tests {
 
     #[test]
     fn a_drawing_draft_stops_at_the_ring_cap() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         for index in 0..MAX_CONTOUR_SEGMENTS {
             let x = Length::from_micrometres(i64::try_from(index).expect("index") * 1_000);
             draft.push([x, Length::ZERO]).expect("a point below the cap");
@@ -539,7 +649,7 @@ mod tests {
 
     #[test]
     fn a_drawing_draft_refuses_a_close_that_cannot_form_a_path() {
-        let mut draft = DrawDraft::new();
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
         for point in
             [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(0), millimetres(0)]]
         {
@@ -551,12 +661,114 @@ mod tests {
     }
 
     #[test]
+    fn the_line_tool_makes_one_open_segment() {
+        let mut draft = DrawDraft::new(DrawTool::Line);
+        assert_eq!(draft.tool(), DrawTool::Line);
+        assert!(!draft.is_complete());
+        draft.push([millimetres(0), millimetres(0)]).expect("first point");
+        assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 1 }));
+        draft.push([millimetres(600), millimetres(0)]).expect("second point");
+        assert!(draft.is_complete());
+        assert_eq!(
+            draft.push([millimetres(600), millimetres(400)]),
+            Err(DrawDraftError::Complete { tool: DrawTool::Line }),
+            "a fixed tool stops at its point count"
+        );
+
+        let path = draft.to_path().expect("a line");
+        assert!(!path.is_closed());
+        assert_eq!(path.entries().len(), 1);
+        assert_eq!(draft.close(), Err(DrawDraftError::NotClosable { tool: DrawTool::Line }), "a line is always open");
+    }
+
+    #[test]
+    fn the_arc_tool_makes_one_open_arc_through_its_middle_point() {
+        let mut draft = DrawDraft::new(DrawTool::Arc);
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(50), millimetres(50)], [millimetres(100), millimetres(0)]]
+        {
+            draft.push(point).expect("an arc point");
+        }
+        assert!(draft.is_complete());
+        assert_eq!(
+            draft.push([millimetres(0), millimetres(100)]),
+            Err(DrawDraftError::Complete { tool: DrawTool::Arc })
+        );
+        let path = draft.to_path().expect("an arc");
+        assert!(!path.is_closed());
+        assert_eq!(path.entries().len(), 1);
+        assert!(path.entries()[0].segment().is_arc());
+    }
+
+    #[test]
+    fn the_rectangle_tool_closes_two_corners() {
+        let mut draft = DrawDraft::new(DrawTool::Rectangle);
+        draft.push([millimetres(600), millimetres(400)]).expect("first corner");
+        draft.push([millimetres(0), millimetres(0)]).expect("opposite corner");
+        assert!(draft.is_closed(), "a rectangle is closed without a close action");
+        assert!(!draft.can_close(), "there is nothing left to close");
+        let path = draft.to_path().expect("a rectangle");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+        assert_eq!(path.bounds_micrometres(), ([0, 0], [600_000, 400_000]));
+    }
+
+    #[test]
+    fn the_circle_tool_closes_a_centre_and_a_rim_point() {
+        let mut draft = DrawDraft::new(DrawTool::Circle);
+        draft.push([millimetres(100), millimetres(50)]).expect("centre");
+        draft.push([millimetres(130), millimetres(90)]).expect("rim");
+        assert!(draft.is_complete());
+        let path = draft.to_path().expect("a circle");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+        assert!(path.entries().iter().all(|entry| entry.segment().is_arc()));
+        assert_eq!(path.bounds_micrometres(), ([50_000, 0], [150_000, 100_000]));
+    }
+
+    #[test]
+    fn the_polyline_tool_takes_points_until_it_is_closed() {
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        assert!(!draft.is_complete(), "a polyline needs two points");
+        draft.push([millimetres(0), millimetres(0)]).expect("first");
+        assert!(!draft.is_complete());
+        draft.push([millimetres(600), millimetres(0)]).expect("second");
+        assert!(draft.is_complete());
+        draft.push([millimetres(600), millimetres(400)]).expect("a polyline keeps taking points");
+        assert!(draft.can_close());
+        draft.close().expect("close the triangle");
+        let path = draft.to_path().expect("a closed polyline");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 3);
+    }
+
+    #[test]
+    fn every_tool_states_its_point_count_and_name() {
+        let cases = [
+            (DrawTool::Line, Some(2), false, false, "Line"),
+            (DrawTool::Polyline, None, true, true, "Polyline"),
+            (DrawTool::Arc, Some(3), false, false, "Arc"),
+            (DrawTool::Rectangle, Some(2), false, false, "Rectangle"),
+            (DrawTool::Circle, Some(2), false, false, "Circle"),
+        ];
+        for (tool, need, closes, open_ended, label) in cases {
+            assert_eq!(tool.points(), need, "{}", tool.label());
+            assert_eq!(tool.closes(), closes, "{}", tool.label());
+            assert_eq!(tool.points().is_none(), open_ended, "{}", tool.label());
+            assert_eq!(tool.label(), label);
+            assert!(!DrawDraft::new(tool).is_complete(), "a fresh {} draft is empty", tool.label());
+        }
+    }
+
+    #[test]
     fn a_drawing_draft_shows_its_reason_to_a_user() {
         assert_eq!(DrawDraftError::NotStarted.to_string(), "no drawing is in progress");
         assert_eq!(
             DrawDraftError::TooFewPoints { need: 3, got: 1 }.to_string(),
             "the drawing needs at least 3 points, it has 1"
         );
+        assert_eq!(DrawDraftError::Complete { tool: DrawTool::Arc }.to_string(), "the Arc tool is complete");
+        assert_eq!(DrawDraftError::NotClosable { tool: DrawTool::Line }.to_string(), "the Line tool cannot be closed");
         assert!(!DrawDraftError::Full.to_string().is_empty());
         assert!(!DrawDraftError::DuplicatePoint.to_string().is_empty());
         assert!(!DrawDraftError::PointOutOfRange.to_string().is_empty());
