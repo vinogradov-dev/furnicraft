@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
+- `[~]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
   the gate once the backlog has settled. `files: state-contract/src/validate.rs`
 
 ## Bugs
