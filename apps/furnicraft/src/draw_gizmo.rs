@@ -109,7 +109,10 @@ impl DrawGizmo {
     /// A click appends the snapped point, or closes a polyline when the point is its first one. The
     /// gizmo owns the left button while the tool is live: the transform gizmos are hidden by the
     /// caller, and `pointer_over_widget` keeps the corner orientation widget usable. Returns whether
-    /// the draft changed.
+    /// the point was accepted, which lets the caller commit a finished tool.
+    ///
+    /// Clicking a point that would close the chain is [`DrawClick::Close`] and the caller commits;
+    /// clicking a fixed tool's last point does nothing.
     pub(crate) fn update(
         &mut self,
         response: &egui::Response,
