@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
-  the tree only shows and restructures nodes.
-  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
+- `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
+  with the size field of the panel.
+  `files: crates/ui/src, apps/furnicraft/src/main.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
-  with the size field of the panel.
-  `files: crates/ui/src, apps/furnicraft/src/main.rs`
 - `[ ]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
   `PrimitiveKind` variants and the panel buttons.
   `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
@@ -62,6 +59,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U20** the scene tree only shows and restructures: every create button and `TreeAction`
+  variant is gone and the toolbar strip is the only creator — `8a099f1`
 - `[x]` **U19** fill the toolbar panels: five contour tools, four scene creators, the cube and the
   extrude, each a hinted icon button with a text fallback and shared shortcuts — `14b2c76`
 - `[x]` **U18** themed toolbars: `ToolPanel` and `Toolbars` group the tools by theme as collapsible
