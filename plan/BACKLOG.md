@@ -23,9 +23,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U3** UI scale: a 75–200 % control in the viewport strip bound to `ctx.set_zoom_factor`, so
-  icons are re-rasterised at the new pixel size instead of stretched.
-  `files: apps/furnicraft/src/main.rs, crates/ui/src`
+- `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
+  ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
+  path; tests for a single segment, an arc, an open polyline and a broken joint.
+  `files: crates/model/src/contour.rs, crates/model/src/lib.rs`
 
 ## Bugs
 
@@ -39,10 +40,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
-  ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
-  path; tests for a single segment, an arc, an open polyline and a broken joint.
-  `files: crates/model/src/contour.rs, crates/model/src/lib.rs`
 - `[ ]` **U5** `Path::to_contour`: a path becomes the ring a panel or an extrusion needs only when it
   is closed and simple, otherwise a readable error.
   `files: crates/model/src/contour.rs`
@@ -113,6 +110,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U3** UI scale: a 75–200 % slider in the viewport strip bound to `ctx.set_zoom_factor`, so
+  icons are rasterised at the new pixel size instead of stretched, and egui's keyboard zoom stays
+  visible in the slider — `152a514`
 - `[x]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature embeds
   `assets/icons/**` as one module per theme; the shell installs the SVG loader, and `icon_button`
   draws at a fixed 16 pt tinted with the theme text colour, falling back to its text label while an
