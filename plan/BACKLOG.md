@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U16** the viewport preview: the draft segments, the snap marker and a live size, with the
+- `[~]` **U16** the viewport preview: the draft segments, the snap marker and a live size, with the
   tool owning the pointer and the gizmos hidden.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/contour_gizmo.rs`
 
