@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
+- `[~]` **U10** shape constructors: a rectangle from two corners, a circle as four quarter arcs with
   exact joints, and an arc through three points; degenerate input is an error.
   `files: crates/model/src/contour.rs`
 
