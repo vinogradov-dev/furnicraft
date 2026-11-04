@@ -465,8 +465,9 @@ impl Editor {
     /// Returns whether a drawing tool started, so the shell can reset its own pointer state.
     pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
         let parent = drawing_parent(session.project(), self.selection.primary());
+        let has_panel_material = !session.catalog().panel_materials().is_empty();
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, parent, &mut actions);
+        toolbars::show(ui, &mut self.toolbars, parent, has_panel_material, &mut actions);
         let mut started_drawing = false;
         for action in actions {
             match action {
@@ -476,27 +477,124 @@ impl Editor {
                     }
                     started_drawing = true;
                 }
-                ToolAction::CreatePanel { parent } => {
-                    self.run_action(session, TreeAction::CreatePanel { parent })?;
-                }
-                ToolAction::CreateAssembly { parent } => {
-                    self.run_action(session, TreeAction::CreateAssembly { parent })?;
-                }
-                ToolAction::CreateCube { parent } => {
-                    self.run_action(session, TreeAction::CreateObject { parent })?;
-                }
-                ToolAction::CreateExtrude { parent } => {
-                    self.run_action(session, TreeAction::CreateExtrude { parent })?;
-                }
-                ToolAction::CreateCamera { parent } => {
-                    self.run_action(session, TreeAction::CreateCamera { parent })?;
-                }
-                ToolAction::CreateLight { parent } => {
-                    self.run_action(session, TreeAction::CreateLight { parent })?;
-                }
+                ToolAction::CreatePanel { parent } => self.create_panel(session, parent)?,
+                ToolAction::CreateAssembly { parent } => self.create_assembly(session, parent)?,
+                ToolAction::CreateCube { parent } => self.create_cube(session, parent)?,
+                ToolAction::CreateExtrude { parent } => self.create_extrude(session, parent)?,
+                ToolAction::CreateCamera { parent } => self.create_camera(session, parent)?,
+                ToolAction::CreateLight { parent } => self.create_light(session, parent)?,
             }
         }
         Ok(started_drawing)
+    }
+
+    /// Dispatches `panel.create` with the catalogue's first material and the default size.
+    fn create_panel(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let material = session
+            .catalog()
+            .panel_materials()
+            .first()
+            .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
+            .id();
+        let nominal_size = default_panel_size()?;
+        let params = json(&PanelCreate {
+            parent,
+            name: "Panel".to_owned(),
+            nominal_size,
+            material,
+            placement: Placement::IDENTITY,
+        })?;
+        let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Dispatches `assembly.create`.
+    fn create_assembly(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let params = json(&AssemblyCreate { parent, name: "Assembly".to_owned(), placement: Placement::IDENTITY })?;
+        let outcome = dispatch(session, ASSEMBLY_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Dispatches `object.primitive.create` for the default cube.
+    fn create_cube(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let size = Length::from_millimetres(NEW_OBJECT_SIZE_MM)
+            .ok_or_else(|| "The default cube size does not fit a length.".to_owned())?;
+        let params = json(&ObjectPrimitiveCreate {
+            parent,
+            name: "Cube".to_owned(),
+            primitive: PrimitiveKind::Cube,
+            size,
+            placement: Placement::IDENTITY,
+        })?;
+        let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Dispatches `object.extrude.create` with the default rectangle and height.
+    fn create_extrude(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let length = Length::from_millimetres(NEW_EXTRUDE_LENGTH_MM)
+            .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
+        let width = Length::from_millimetres(NEW_EXTRUDE_WIDTH_MM)
+            .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
+        let height = Length::from_millimetres(NEW_EXTRUDE_HEIGHT_MM)
+            .ok_or_else(|| "The default extrusion height does not fit a length.".to_owned())?;
+        let contour = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [length, Length::ZERO],
+            [length, width],
+            [Length::ZERO, width],
+        ])
+        .map_err(|error| format!("The default extrusion contour is invalid: {error}"))?;
+        let params = json(&ObjectExtrudeCreate {
+            parent,
+            name: "Extrude".to_owned(),
+            contour,
+            height,
+            placement: Placement::IDENTITY,
+        })?;
+        let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Dispatches `camera.create`.
+    fn create_camera(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let params = json(&CameraCreate {
+            parent,
+            name: "Camera".to_owned(),
+            placement: Placement::IDENTITY,
+            projection: CameraProjection::DEFAULT,
+        })?;
+        let outcome = dispatch(session, CAMERA_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Dispatches `light.create` with a sun light.
+    fn create_light(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let params = json(&LightCreate {
+            parent,
+            name: "Light".to_owned(),
+            placement: Placement::IDENTITY,
+            kind: LightKind::Sun,
+            color: [1.0, 0.97, 0.92],
+            intensity: 1.0,
+        })?;
+        let outcome = dispatch(session, LIGHT_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Selects the node a create command returned and marks the editor as initialised.
+    fn select_created(&mut self, id: Option<Id>) {
+        let Some(id) = id else {
+            return;
+        };
+        self.selection.replace(id);
+        self.initialized = true;
     }
 
     /// Whether the panel of the toolbar strip is open.
@@ -587,101 +685,6 @@ impl Editor {
 
     fn run_action(&mut self, session: &mut Session, action: TreeAction) -> Result<(), String> {
         match action {
-            TreeAction::CreatePanel { parent } => {
-                let material = session
-                    .catalog()
-                    .panel_materials()
-                    .first()
-                    .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
-                    .id();
-                let nominal_size = default_panel_size()?;
-                let params = json(&PanelCreate {
-                    parent,
-                    name: "Panel".to_owned(),
-                    nominal_size,
-                    material,
-                    placement: Placement::IDENTITY,
-                })?;
-                let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
-            TreeAction::CreateAssembly { parent } => {
-                let params =
-                    json(&AssemblyCreate { parent, name: "Assembly".to_owned(), placement: Placement::IDENTITY })?;
-                let outcome = dispatch(session, ASSEMBLY_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
-            TreeAction::CreateObject { parent } => {
-                let size = Length::from_millimetres(NEW_OBJECT_SIZE_MM)
-                    .ok_or_else(|| "The default cube size does not fit a length.".to_owned())?;
-                let params = json(&ObjectPrimitiveCreate {
-                    parent,
-                    name: "Cube".to_owned(),
-                    primitive: PrimitiveKind::Cube,
-                    size,
-                    placement: Placement::IDENTITY,
-                })?;
-                let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
-            TreeAction::CreateExtrude { parent } => {
-                let length = Length::from_millimetres(NEW_EXTRUDE_LENGTH_MM)
-                    .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
-                let width = Length::from_millimetres(NEW_EXTRUDE_WIDTH_MM)
-                    .ok_or_else(|| "The default extrusion size does not fit a length.".to_owned())?;
-                let height = Length::from_millimetres(NEW_EXTRUDE_HEIGHT_MM)
-                    .ok_or_else(|| "The default extrusion height does not fit a length.".to_owned())?;
-                let contour = Contour::from_polygon(vec![
-                    [Length::ZERO, Length::ZERO],
-                    [length, Length::ZERO],
-                    [length, width],
-                    [Length::ZERO, width],
-                ])
-                .map_err(|error| format!("The default extrusion contour is invalid: {error}"))?;
-                let params = json(&ObjectExtrudeCreate {
-                    parent,
-                    name: "Extrude".to_owned(),
-                    contour,
-                    height,
-                    placement: Placement::IDENTITY,
-                })?;
-                let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
-            TreeAction::CreateCamera { parent } => {
-                let params = json(&CameraCreate {
-                    parent,
-                    name: "Camera".to_owned(),
-                    placement: Placement::IDENTITY,
-                    projection: CameraProjection::DEFAULT,
-                })?;
-                let outcome = dispatch(session, CAMERA_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
-            TreeAction::CreateLight { parent } => {
-                let params = json(&LightCreate {
-                    parent,
-                    name: "Light".to_owned(),
-                    placement: Placement::IDENTITY,
-                    kind: LightKind::Sun,
-                    color: [1.0, 0.97, 0.92],
-                    intensity: 1.0,
-                })?;
-                let outcome = dispatch(session, LIGHT_CREATE_ID, &params)?;
-                if let Some(id) = outcome.created_id() {
-                    self.selection.replace(id);
-                }
-            }
             TreeAction::Duplicate { node } => {
                 let params = json(&NodeDuplicate { node })?;
                 let outcome = dispatch(session, NODE_DUPLICATE_ID, &params)?;
@@ -772,7 +775,8 @@ fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Opti
 /// The parent a drawing lands in.
 ///
 /// A selected container takes the drawing as its child; a selected leaf contributes its parent, so
-/// a path drawn while a panel is selected lands beside it; with no selection the root does.
+/// a path drawn while a panel is selected lands beside it; with no selection the root does. The
+/// toolbar uses the same rule for every created node, so a tool and a drawing agree on the parent.
 fn drawing_parent(project: &Project, selected: Option<Id>) -> Id {
     let root = project.root().id();
     let Some(selected) = selected else {
@@ -1125,18 +1129,18 @@ mod tests {
     }
 
     #[test]
-    fn a_toolbar_tool_creates_through_the_same_action_as_the_tree() {
+    fn the_toolbar_creates_the_cube_in_the_selected_container() {
         let (project, panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
-        editor.select_node(Some(Id::new(1).expect("root")));
-        // The strip only wishes; the editor runs the action, so the tree and the toolbar cannot
-        // drift into two creation paths.
-        editor.run_action(&mut session, TreeAction::CreateObject { parent: Id::new(1).expect("root") }).expect("cube");
+        let root = Id::new(1).expect("root");
+        editor.select_node(Some(root));
+        editor.create_cube(&mut session, root).expect("cube");
         let cube = editor.selected_node().expect("the new cube is selected");
         assert!(session.project().object(cube).is_some());
         assert!(session.project().panel(panel).is_some());
-        assert_eq!(session.project().parent_of(cube), Some(Id::new(1).expect("root")));
+        assert_eq!(session.project().parent_of(cube), Some(root));
+        assert!(editor.initialized, "the fresh selection survives the next frame");
     }
 
     #[test]
@@ -1391,7 +1395,7 @@ mod tests {
         let mut editor = Editor::new();
         let root = session.project().root().id();
 
-        editor.run_action(&mut session, TreeAction::CreateObject { parent: root }).expect("create cube");
+        editor.create_cube(&mut session, root).expect("create cube");
 
         let id = editor.selected_node().expect("the new object is selected");
         let object = session.project().object(id).expect("object");
@@ -1410,7 +1414,7 @@ mod tests {
         let mut editor = Editor::new();
         let root = session.project().root().id();
 
-        editor.run_action(&mut session, TreeAction::CreateExtrude { parent: root }).expect("create extrusion");
+        editor.create_extrude(&mut session, root).expect("create extrusion");
 
         let id = editor.selected_node().expect("the new object is selected");
         let object = session.project().object(id).expect("object");
@@ -1444,12 +1448,12 @@ mod tests {
         let mut editor = Editor::new();
         let root = session.project().root().id();
 
-        editor.run_action(&mut session, TreeAction::CreateCamera { parent: root }).expect("create camera");
+        editor.create_camera(&mut session, root).expect("create camera");
         let camera = editor.selected_node().expect("the camera is selected");
         assert_eq!(session.project().camera(camera).expect("camera").name(), "Camera");
         assert_eq!(session.project().revision().get(), 1);
 
-        editor.run_action(&mut session, TreeAction::CreateLight { parent: root }).expect("create light");
+        editor.create_light(&mut session, root).expect("create light");
         let light = editor.selected_node().expect("the light is selected");
         assert_eq!(session.project().light(light).expect("light").name(), "Light");
         assert_eq!(session.project().revision().get(), 2);
@@ -1465,13 +1469,13 @@ mod tests {
         let mut editor = Editor::new();
         let root = session.project().root().id();
 
-        editor.run_action(&mut session, TreeAction::CreateCamera { parent: root }).expect("create camera");
+        editor.create_camera(&mut session, root).expect("create camera");
         let camera = editor.selected_node().expect("the camera is selected");
         // The tree retains the selection at the start of every frame; a scene node must survive it.
         editor.selection.retain_existing(session.project());
         assert_eq!(editor.selected_node(), Some(camera));
 
-        editor.run_action(&mut session, TreeAction::CreateLight { parent: root }).expect("create light");
+        editor.create_light(&mut session, root).expect("create light");
         let light = editor.selected_node().expect("the light is selected");
         editor.selection.retain_existing(session.project());
         assert_eq!(editor.selected_node(), Some(light));
