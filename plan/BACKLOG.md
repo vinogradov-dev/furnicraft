@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
-  assembly, camera, light), Primitives (cube) and Bodies (extrude).
-  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
+- `[ ]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
+  the tree only shows and restructures nodes.
+  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
-  the tree only shows and restructures nodes.
-  `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
 - `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
   with the size field of the panel.
   `files: crates/ui/src, apps/furnicraft/src/main.rs`
@@ -65,6 +62,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U19** fill the toolbar panels: five contour tools, four scene creators, the cube and the
+  extrude, each a hinted icon button with a text fallback and shared shortcuts — `14b2c76`
 - `[x]` **U18** themed toolbars: `ToolPanel` and `Toolbars` group the tools by theme as collapsible
   sections, with a hinted tool button and a text fallback — `d38046b`
 - `[x]` **U17** commit a drawn path: one `object.path.create` on the work plane, the node selected
