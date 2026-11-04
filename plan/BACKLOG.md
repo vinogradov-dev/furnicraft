@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
+- `[~]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
   free mode, as pure functions with table tests.
   `files: apps/furnicraft/src/gizmo_math.rs`
 
