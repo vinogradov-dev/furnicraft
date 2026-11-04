@@ -40,8 +40,8 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 - `assets/icons/**` is embedded in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt tinted and
   falls back to its label, and the zoom slider rasterises at the new pixel size. U7–U23 draw and pick
   a `Path`, toggle the projection, take the work plane from the standard views, snap, build a chain
-  and commit it as one path object (ADRs 0048–0052). The toolbar strip is the only creator: it places
-  a primitive and extrudes a closed path, refusing an open one with a readable reason.
+  and commit it as one path object (ADRs 0048–0052). The strip is the only creator; every
+  implemented tool is drawn (U26); the actions set and the unbuilt cone, revolve and sweep stay empty.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — moved to `## Now`, its options in `plan/questions.md`.
   `cargo xtask status` prints the state line, the head commit, the note and what comes next.
