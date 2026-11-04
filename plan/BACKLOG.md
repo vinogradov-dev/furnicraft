@@ -23,6 +23,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[~]` **U25** the contour icon set: `line`, `polyline` and `arc` as flat constructions with
+  control points, `rectangle` from two opposite corners, `circle` from its centre, `close` as an
+  open chain joined by a heavy segment and `cancel` as the service X; every file reads at 16 px on
+  the 24 grid.
+  `files: assets/icons/contour`
 - `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
   ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
   path; tests for a single segment, an arc, an open polyline and a broken joint.
