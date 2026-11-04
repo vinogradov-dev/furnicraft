@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U7** draw a stored path: a line primitive in the scene frame and the renderer's line
+- `[~]` **U7** draw a stored path: a line primitive in the scene frame and the renderer's line
   pipeline, so an open chain is visible without a solid.
   `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
 
