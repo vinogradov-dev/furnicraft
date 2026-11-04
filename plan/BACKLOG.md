@@ -10,7 +10,9 @@ must exist, so name a directory for a file the task creates. The hint is a hint,
 those files and their callers, not the workspace.
 
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
-phase. Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
+phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and
+`## Next` are not part of that order.
+Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
 the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
 boundaries only, X is a defect in behaviour that already shipped, and U is the UI: toolbars, drawing

@@ -70,7 +70,7 @@ session note without `now:` turns a resume into a rewrite.
 | Area | Fails when |
 |---|---|
 | state line | no `STATE:` line, a missing `milestone`/`task`/`state`/`base`/`updated` field, more than one `STATE:` line, or an indented one |
-| state values | `state` is neither `idle` nor `doing`; `task=` names a task the backlog does not have, one that is done, or one that sits outside `## Now`; `updated=` is not a `YYYY-MM-DD` calendar date |
+| state values | `state` is neither `idle` nor `doing`; `task=` names a task the backlog does not have, one that is done, one that sits outside `## Now`, or one that is not the first unfinished task in `## Now`; `updated=` is not a `YYYY-MM-DD` calendar date |
 | state history | `updated=` is earlier than the date of the `base` commit |
 | backlog shape | no `## Now`/`## Done`; a duplicated id; `[x]` outside `## Done`; a `## Done` entry without `[x]`; a task line without a `**bold**` id |
 | files hints | an unfinished task without a `files:` hint, or a hint naming a path that does not exist |

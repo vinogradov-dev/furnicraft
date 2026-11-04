@@ -220,6 +220,25 @@ fn an_over_long_status_file_fails() {
 }
 
 #[test]
+fn a_state_naming_a_task_behind_the_first_open_one_fails() {
+    let backlog = "## Now\n\n\
+                   - `[ ]` **T1** first `files: src/lib.rs`\n\
+                   - `[ ]` **T2** later `files: src/lib.rs`\n\n\
+                   ## Next\n\n## Done\n";
+    let root = scratch("skipped");
+    fs::create_dir_all(root.join("plan")).expect("plan dir");
+    fs::create_dir_all(root.join("src")).expect("src dir");
+    fs::write(root.join("plan/STATUS.md"), "STATE: milestone=M1 task=T2 state=idle base=abc1234 updated=2026-01-01\n")
+        .expect("STATUS.md");
+    fs::write(root.join("plan/BACKLOG.md"), backlog).expect("BACKLOG.md");
+    fs::write(root.join("src/lib.rs"), "//! fixture\n").expect("src/lib.rs");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("a skipped task must fail");
+    assert!(error.iter().any(|violation| violation.contains("is not the first unfinished task")), "{error:?}");
+    assert!(error.iter().any(|violation| violation.contains("`T1` comes before it")), "{error:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_readme_without_a_status_passes_and_one_with_it_fails() {
     let summary = check_with(&fixture("readme-clean"), &FakeGit::repository()).expect("a product README is fine");
     assert_eq!(summary.state.task, "T1");

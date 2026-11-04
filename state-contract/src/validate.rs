@@ -41,6 +41,13 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
                     "`STATE: task={}` sits in `## {}`; the current task must be in `## {NOW_SECTION}`",
                     state.task, task.section
                 ));
+            } else if let Some(first) = first_unfinished(&tasks)
+                && first.id != task.id
+            {
+                violations.push(format!(
+                    "`STATE: task={}` is not the first unfinished task in `## {NOW_SECTION}`; `{}` comes before it",
+                    state.task, first.id
+                ));
             }
         }
         None => violations.push(format!("`STATE: task={}` is not a task in `plan/BACKLOG.md`", state.task)),
@@ -103,6 +110,14 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     } else {
         Err(violations)
     }
+}
+
+/// The first task in `## Now` that is not finished, in file order.
+///
+/// Order is the order of work, so this is the task the plan is actually on: `STATE: task=` may name
+/// it, not any later one. `## Bugs`, `## Next` and `## Done` are outside the work order.
+fn first_unfinished(tasks: &[Task]) -> Option<&Task> {
+    tasks.iter().find(|task| task.section == NOW_SECTION && task.status != TaskStatus::Done)
 }
 
 /// A `README.md` that carries a status line or a milestone is a second source of truth, and the
@@ -397,6 +412,52 @@ mod tests {
         let error = analyze(&HEADER.replace("task=A3", "task=A4"), split, None)
             .expect_err("a `## Next` task cannot be the current one");
         assert!(error.iter().any(|violation| violation.contains("must be in `## Now`")), "{error:?}");
+    }
+
+    #[test]
+    fn the_current_task_must_be_the_first_unfinished_one_in_now() {
+        let backlog = "## Now\n\n\
+                      - `[ ]` **A3** first `files: crates/ui`\n\
+                      - `[ ]` **A4** later `files: crates/model`\n\n\
+                      ## Done\n\n\
+                      - `[x]` **A2** ring of segments — `0833b4c`\n";
+        let error = analyze(&HEADER.replace("task=A3", "task=A4"), backlog, None)
+            .expect_err("a task behind the first open one must fail");
+        assert!(
+            error.iter().any(|violation| violation.contains("is not the first unfinished task in `## Now`")),
+            "{error:?}"
+        );
+        assert!(error.iter().any(|violation| violation.contains("`A3` comes before it")), "{error:?}");
+
+        analyze(HEADER, backlog, None).expect("the first open task is the current one");
+    }
+
+    #[test]
+    fn a_finished_task_ahead_in_now_does_not_hold_the_work_order() {
+        // A `[x]` line in `## Now` is its own error; the work order must not pile a second one on it.
+        let backlog = "## Now\n\n\
+                      - `[x]` **A2** already shipped — `0833b4c`\n\
+                      - `[ ]` **A3** first open `files: crates/ui`\n\n\
+                      ## Done\n\n\
+                      - `[x]` **A1** older — `0833b4c`\n";
+        let error = analyze(HEADER, backlog, None).expect_err("a `[x]` outside `## Done` still fails");
+        assert!(error.iter().any(|violation| violation.contains("belongs in `## Done`")), "{error:?}");
+        assert!(
+            !error.iter().any(|violation| violation.contains("is not the first unfinished task")),
+            "the stray marker is not a work-order problem: {error:?}"
+        );
+    }
+
+    #[test]
+    fn a_bug_or_a_next_task_does_not_hold_the_work_order() {
+        let backlog = "## Now\n\n\
+                      - `[ ]` **A3** first `files: crates/ui`\n\n\
+                      ## Bugs\n\n\
+                      - `[ ]` **X2** a defect `files: crates/param/src/lib.rs`\n\n\
+                      ## Next\n\n\
+                      - `[ ]` **A4** later `files: crates/model`\n\n\
+                      ## Done\n\n";
+        analyze(HEADER, backlog, None).expect("only `## Now` orders the work");
     }
 
     #[test]

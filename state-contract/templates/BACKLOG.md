@@ -9,7 +9,8 @@ must exist, so name a directory for a file the task creates. The hint is a hint,
 those files and their callers, not the workspace.
 
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
-phase.
+phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and
+`## Next` are not part of that order.
 
 ## Now
 
