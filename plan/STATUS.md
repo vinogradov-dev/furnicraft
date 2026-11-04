@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U2 state=idle base=e473342 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U3 state=idle base=2b453a0 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -17,10 +17,9 @@ contract that orders that answer when a session was interrupted or the plan is b
   boolean steps, with a tool plan per step — and `crates/param/src/constructive.rs` is the analytic
   single-extrusion backend. Panels, bands, cutout tools and constructive objects compile to it, and
   `object.collapse` keeps the exact mesh the viewport showed (ADR 0041).
-- S3, G1 and G2 are complete: `crates/param/src/profile.rs` is the one planar conversion — document
-  ring to analytic contour to exact `geom::Region` to `kernel::Profile`, with one chord tolerance;
-  `Region` keeps exact rings, and `geom::region` unions, intersects and subtracts them by tracing the
-  boundary of the set (ADR 0043).
+- S3, G1 and G2 are complete: `crates/param/src/profile.rs` is the one planar conversion —
+  document ring to exact `geom::Region` to `kernel::Profile` with one chord tolerance; `Region`
+  keeps exact rings and `geom::region` traces their boundary for union, difference and intersection.
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
   eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
 - A panel outline is the nominal rectangle or a contour ring (D1–D3): corner features and bows
@@ -39,25 +38,26 @@ contract that orders that answer when a session was interrupted or the plan is b
   `assets/README.md` with the naming and SVG rules. U24 fixes the contract on top of it: one ink on a
   24 grid, three families (geometry, view, service), the service grammar in a new `actions` theme,
   and the guide read only while an icon is drawn or edited (ADR 0047).
+- U2 embeds `assets/icons/**` in `crates/ui/src/icons.rs`; the shell installs the `egui_extras` SVG
+  loader, and `icon_button` draws at a fixed 16 pt with the theme text tint, falling back to its label
+  while an asset is empty.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
 - The plan gate is its own crate: `state-contract` (L0, zero dependencies) parses and checks
-  `STATUS`/`BACKLOG`/`SESSION`, ships templates, the agent section, the README and MIT/Apache-2.0
-  texts. `xtask` is a consumer; `AGENTS.md` §1.1 points at its section instead of repeating it.
+  `STATUS`/`BACKLOG`/`SESSION` and ships the templates, the agent section and the license texts.
 - Gate: `cargo xtask ci` — green. Branches: work on `dev`, merge to `main` with `--no-ff` after a
   green gate (AGENTS §6.2).
 
 ## Next
 
-U2 is next: `egui_extras` with the SVG feature, `crates/ui/src/icons.rs` embedding `assets/icons/**`,
-and an icon button tinted with the text colour that falls back to a text label while an SVG is empty;
-the icon contract is fixed (ADR 0047), so the loader reads only `<theme>/*.svg` and `actions/` covers
-chrome.
-U3 adds the UI scale, U4–U9 make a flat contour a document `Path` with its own commands, U10–U17 add
-the shape constructors, the work plane, the ortho toggle and the drawing tools, and U18–U20 replace
-the scene-tree creation buttons with the themed toolbars. U21–U23 follow with the primitives and the
-extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit (`plan/questions.md`).
+U3 is next: a 75–200 % UI scale control in the viewport strip, bound to `ctx.set_zoom_factor`, so an
+icon is rasterised at the new pixel size instead of stretched (U2 draws through the same loader).
+U4–U9 make a flat contour a document `Path` with its own commands, U10–U17 add the shape
+constructors, the work plane, the ortho toggle and the drawing tools, and U18–U20 replace the
+scene-tree creation buttons with the themed toolbars. U21–U23 follow with the primitives and the
+extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit
+(`plan/questions.md`).
 
 ## Index
 
