@@ -1,9 +1,11 @@
 //! Contour segments as the document stores them.
 //!
-//! A contour is a closed ring of directed lines and arcs in a local XY plane. The document keeps
-//! micrometres and millidegrees; this module is the only place where a segment becomes
-//! floating-point millimetres, and the only place where it comes back. Callers never see a
-//! `furnicraft_geom` type, so the geometry layer stays free to change.
+//! A contour is a closed ring of directed lines and arcs in a local XY plane. A [`Path`] is an
+//! ordered chain of the same segments: open or closed, not necessarily simple, and capped at the
+//! ring size it eventually has to become. The document keeps micrometres and millidegrees; this
+//! module is the only place where a segment becomes floating-point millimetres, and the only place
+//! where it comes back. Callers never see a `furnicraft_geom` type, so the geometry layer stays
+//! free to change.
 //!
 //! Validation is total: every coordinate is inside [`MAX_CONTOUR_COORDINATE`], a line has two
 //! distinct endpoints, an arc has a positive radius and a non-zero sweep no larger than a full
@@ -758,6 +760,152 @@ mod tests {
         ]);
         assert!(matches!(contour, Err(ContourError::SelfIntersecting { .. })), "got {contour:?}");
     }
+
+    #[test]
+    fn a_single_line_is_an_open_path() {
+        let segment =
+            ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)]).expect("a line");
+        let path = Path::new(vec![segment], false).expect("a one-segment path");
+        assert!(!path.is_closed());
+        assert_eq!(path.entries().len(), 1);
+        assert_eq!(path.segments().len(), 1);
+        assert_eq!(path.id_at(0), Some(segment_id(1)));
+        assert_eq!(path.index_of(segment_id(1)), Some(0));
+        assert_eq!(path.segment(segment_id(1)), Some(segment));
+        assert_eq!(path.next_segment_id().get(), 2);
+    }
+
+    #[test]
+    fn a_single_full_turn_arc_is_a_closed_path_and_round_trips() {
+        let arc = ContourSegment::arc([millimetres(100), millimetres(0)], millimetres(100), Degrees::ZERO, FULL_TURN)
+            .expect("a full turn");
+        let path = Path::new(vec![arc], true).expect("a circle is a closed one-segment path");
+        assert!(path.is_closed());
+        assert_eq!(path.segment(segment_id(1)), Some(arc), "the arc stays an arc");
+
+        let json = serde_json::to_string(&path).expect("serialize");
+        assert!(json.contains("\"closed\":true"), "the flag is written: {json}");
+        assert!(json.contains("\"id\":1"), "the segment id is written: {json}");
+        let back: Path = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, path);
+    }
+
+    #[test]
+    fn an_open_polyline_joins_its_segments_and_keeps_its_ids() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("an open path");
+        assert!(!path.is_closed());
+        let ids = path.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
+        assert_eq!(ids, vec![1, 2, 3], "ids follow the drawn order");
+        assert_eq!(path.next_segment_id().get(), 4);
+    }
+
+    #[test]
+    fn a_joint_may_miss_by_one_micrometre_and_no_more() {
+        let first =
+            ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)]).expect("line");
+        let one_micrometre = Length::from_micrometres(100_001);
+        let touching =
+            ContourSegment::line([one_micrometre, millimetres(0)], [millimetres(100), millimetres(50)]).expect("line");
+        assert!(Path::new(vec![first, touching], false).is_ok(), "a one-micrometre gap is accepted");
+
+        let two_micrometres = Length::from_micrometres(100_002);
+        let broken =
+            ContourSegment::line([two_micrometres, millimetres(0)], [millimetres(100), millimetres(50)]).expect("line");
+        assert_eq!(Path::new(vec![first, broken], false), Err(PathError::NotJoined { index: 0 }));
+    }
+
+    #[test]
+    fn a_closed_path_must_join_its_last_end_to_its_first_start() {
+        let square = || {
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(100), millimetres(50)], [millimetres(0), millimetres(50)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(0), millimetres(50)], [millimetres(0), millimetres(0)])
+                    .expect("line"),
+            ]
+        };
+        let path = Path::new(square(), true).expect("a closed square");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+
+        let mut open = square();
+        open[3] = ContourSegment::line([millimetres(0), millimetres(50)], [Length::from_micrometres(2), Length::ZERO])
+            .expect("line");
+        assert_eq!(Path::new(open, true), Err(PathError::NotClosed), "two micrometres do not close");
+    }
+
+    #[test]
+    fn a_path_rejects_bad_ids_and_a_broken_stored_chain() {
+        assert_eq!(Path::new(Vec::new(), false), Err(PathError::TooFewSegments { count: 0 }));
+
+        let contour = plate_contour();
+        let mut repeated = contour.entries().to_vec();
+        if let Some(entry) = repeated.get_mut(1) {
+            *entry = ContourSegmentEntry::new(segment_id(1), entry.segment());
+        }
+        assert_eq!(Path::from_entries(repeated, true), Err(PathError::DuplicateSegmentId { id: segment_id(1) }));
+
+        let stale_counter = r#"{"next_segment_id":4,"closed":false,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,0],"end":[100000,50000]},
+            {"id":3,"kind":"line","start":[100000,50000],"end":[0,50000]},
+            {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
+        ]}"#;
+        let error = serde_json::from_str::<Path>(stale_counter).expect_err("a counter that repeats an id is rejected");
+        assert!(error.to_string().contains("greater than the largest stored id"), "error was {error}");
+
+        let broken_joint = r#"{"next_segment_id":3,"closed":false,"segments":[
+            {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+            {"id":2,"kind":"line","start":[100000,2000],"end":[100000,50000]}
+        ]}"#;
+        let error = serde_json::from_str::<Path>(broken_joint).expect_err("a broken stored joint is rejected");
+        assert!(error.to_string().contains("does not meet"), "error was {error}");
+
+        let no_ids = r#"{"next_segment_id":2,"closed":false,"segments":[
+            {"kind":"line","start":[0,0],"end":[100000,0]}
+        ]}"#;
+        let error = serde_json::from_str::<Path>(no_ids).expect_err("a path needs ids");
+        assert!(error.to_string().contains("id for every segment"), "error was {error}");
+    }
+
+    #[test]
+    fn a_rebuilt_path_keeps_its_closed_flag_and_counter() {
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("a path");
+        let first = path.id_at(0).expect("first id");
+        let extension = ContourSegment::line([millimetres(100), millimetres(0)], [millimetres(100), millimetres(50)])
+            .expect("line");
+        let extended = path
+            .rebuild(vec![
+                ContourSegmentEntry::new(first, path.segment(first).expect("segment")),
+                ContourSegmentEntry::new(path.next_segment_id(), extension),
+            ])
+            .expect("a rebuilt path");
+        assert!(!extended.is_closed(), "the open flag is kept");
+        assert_eq!(extended.segment(first), path.segment(first), "an untouched id keeps its curve");
+        assert_eq!(extended.next_segment_id().get(), 3, "the minted id is spent");
+    }
 }
 
 /// Largest number of segments in a constructive contour.
@@ -898,7 +1046,7 @@ impl Contour {
     /// from scratch never hands out an id twice; [`Contour::rebuild`] is the variant that keeps a
     /// counter across an edit.
     pub fn from_entries(entries: Vec<ContourSegmentEntry>) -> Result<Self, ContourError> {
-        let next_segment_id = next_id_after_entries(&entries)?;
+        let next_segment_id = next_id_after_entries(&entries).ok_or(ContourError::SegmentIdExhausted)?;
         Self::assemble(entries, next_segment_id)
     }
 
@@ -908,7 +1056,7 @@ impl Contour {
     /// touch, mints a new id from [`Contour::next_segment_id`] for every segment it adds, and the
     /// returned contour hands out ids above both the old counter and the largest stored id.
     pub fn rebuild(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, ContourError> {
-        let after_entries = next_id_after_entries(&entries)?;
+        let after_entries = next_id_after_entries(&entries).ok_or(ContourError::SegmentIdExhausted)?;
         let next = self.next_segment_id.get().max(after_entries.get());
         let next_segment_id = ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)?;
         Self::assemble(entries, next_segment_id)
@@ -1241,6 +1389,262 @@ impl Contour {
     }
 }
 
+/// A path is one chain of at most this many segments, the ring size it has to fit.
+const MAX_PATH_SEGMENTS: usize = MAX_CONTOUR_SEGMENTS;
+
+/// How far two consecutive path joints may miss each other, in micrometres.
+///
+/// A drawn arc endpoint is exact only in floating point, so after rounding to whole micrometres it
+/// can differ from the next stored endpoint by one unit. This is the same joint tolerance the
+/// document ring uses when it converts to geometry.
+const PATH_JOINT_TOLERANCE_MICROMETRES: i64 = 1;
+
+/// An ordered chain of directed lines and arcs in a local XY plane.
+///
+/// Unlike [`Contour`], a path may be open and need not be simple: it is what the user draws and
+/// edits before the shape becomes a ring. It has at least one segment and at most
+/// [`MAX_CONTOUR_SEGMENTS`], because a path is what a contour ring is made from. Every segment
+/// carries a stable [`ContourSegmentId`]; consecutive segments meet within one micrometre, and a
+/// closed path also joins its last end to its first start. One path is one chain: it has no
+/// sub-paths.
+///
+/// A path is stored as drawn — direction and orientation are kept — and it is not validated for
+/// self-intersection or enclosed area. Those are ring rules, and they run when the path is turned
+/// into a contour.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PathWire", into = "PathWire")]
+pub struct Path {
+    entries: Vec<ContourSegmentEntry>,
+    next_segment_id: ContourSegmentId,
+    closed: bool,
+}
+
+impl Path {
+    /// Validates a chain of segments, gives every segment a fresh id and stores it open or closed.
+    ///
+    /// Fresh ids run `1..=n` in travel order and the next id is `n + 1`; a closed path keeps its
+    /// drawn direction. A closed chain must also close its last joint.
+    pub fn new(segments: Vec<ContourSegment>, closed: bool) -> Result<Self, PathError> {
+        let count = segments.len();
+        if count == 0 {
+            return Err(PathError::TooFewSegments { count });
+        }
+        if count > MAX_PATH_SEGMENTS {
+            return Err(PathError::TooManySegments { count, max: MAX_PATH_SEGMENTS });
+        }
+        let mut entries = Vec::with_capacity(count);
+        let mut next = 1_u32;
+        for segment in segments {
+            let id = ContourSegmentId::new(next).ok_or(PathError::SegmentIdExhausted)?;
+            next = next.checked_add(1).ok_or(PathError::SegmentIdExhausted)?;
+            entries.push(ContourSegmentEntry::new(id, segment));
+        }
+        let next_segment_id = ContourSegmentId::new(next).ok_or(PathError::SegmentIdExhausted)?;
+        Self::assemble(entries, next_segment_id, closed)
+    }
+
+    /// Validates a chain of entries with their ids and stores it open or closed.
+    ///
+    /// The ids must be unique and the counter is derived as one above the largest id, so a path
+    /// built from scratch never hands out an id twice; [`Path::rebuild`] keeps a counter across an
+    /// edit.
+    pub fn from_entries(entries: Vec<ContourSegmentEntry>, closed: bool) -> Result<Self, PathError> {
+        let next_segment_id = next_id_after_entries(&entries).ok_or(PathError::SegmentIdExhausted)?;
+        Self::assemble(entries, next_segment_id, closed)
+    }
+
+    /// The same path rebuilt from new entries, keeping this path's counter and open/closed flag.
+    ///
+    /// This is the edit path: a caller changes one segment, keeps the id of every segment it did not
+    /// touch, and mints a new id from [`Path::next_segment_id`] for every segment it adds.
+    pub fn rebuild(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, PathError> {
+        let after_entries = next_id_after_entries(&entries).ok_or(PathError::SegmentIdExhausted)?;
+        let next = self.next_segment_id.get().max(after_entries.get());
+        let next_segment_id = ContourSegmentId::new(next).ok_or(PathError::SegmentIdExhausted)?;
+        Self::assemble(entries, next_segment_id, self.closed)
+    }
+
+    /// Validates a chain of entries, its counter and its joints, then stores it.
+    fn assemble(
+        entries: Vec<ContourSegmentEntry>,
+        next_segment_id: ContourSegmentId,
+        closed: bool,
+    ) -> Result<Self, PathError> {
+        let count = entries.len();
+        if count == 0 {
+            return Err(PathError::TooFewSegments { count });
+        }
+        if count > MAX_PATH_SEGMENTS {
+            return Err(PathError::TooManySegments { count, max: MAX_PATH_SEGMENTS });
+        }
+        let mut seen = HashSet::with_capacity(count);
+        let mut max_id = 0_u32;
+        for entry in &entries {
+            if !seen.insert(entry.id()) {
+                return Err(PathError::DuplicateSegmentId { id: entry.id() });
+            }
+            max_id = max_id.max(entry.id().get());
+        }
+        if next_segment_id.get() <= max_id {
+            return Err(PathError::NextSegmentIdNotAfterMax { next: next_segment_id, max: max_id });
+        }
+        for index in 0..count {
+            let (Some(entry), Some(next)) = (entries.get(index), entries.get(index + 1)) else {
+                continue;
+            };
+            if !joints_meet(entry.segment(), next.segment())? {
+                return Err(PathError::NotJoined { index });
+            }
+        }
+        if closed {
+            let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
+                return Err(PathError::TooFewSegments { count });
+            };
+            if !joints_meet(last.segment(), first.segment())? {
+                return Err(PathError::NotClosed);
+            }
+        }
+        Ok(Self { entries, next_segment_id, closed })
+    }
+
+    /// The chain elements with their ids, in travel order.
+    pub fn entries(&self) -> &[ContourSegmentEntry] {
+        &self.entries
+    }
+
+    /// The segments in travel order.
+    ///
+    /// A segment is a copy of the stored curve; ask [`Path::entries`] when the id matters.
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = ContourSegment> + '_ {
+        self.entries.iter().map(|entry| entry.segment())
+    }
+
+    /// Whether the last segment is joined to the first one.
+    pub const fn is_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// The segment with this id.
+    pub fn segment(&self, id: ContourSegmentId) -> Option<ContourSegment> {
+        self.entries.iter().find(|entry| entry.id() == id).map(|entry| entry.segment())
+    }
+
+    /// The position of a segment id in travel order.
+    pub fn index_of(&self, id: ContourSegmentId) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.id() == id)
+    }
+
+    /// The id of the segment at this position in travel order.
+    pub fn id_at(&self, index: usize) -> Option<ContourSegmentId> {
+        self.entries.get(index).map(|entry| entry.id())
+    }
+
+    /// The next id an edit may hand out; ids are never reused.
+    pub const fn next_segment_id(&self) -> ContourSegmentId {
+        self.next_segment_id
+    }
+}
+
+/// Whether the end of `current` meets the start of `next` within the joint tolerance.
+fn joints_meet(current: ContourSegment, next: ContourSegment) -> Result<bool, PathError> {
+    Ok(within_joint_tolerance(current.end()?, next.start()?))
+}
+
+/// Whether two whole-micrometre points are at most the joint tolerance apart.
+fn within_joint_tolerance(first: [Length; 2], second: [Length; 2]) -> bool {
+    let delta = [
+        i128::from(first[0].micrometres()) - i128::from(second[0].micrometres()),
+        i128::from(first[1].micrometres()) - i128::from(second[1].micrometres()),
+    ];
+    let tolerance = i128::from(PATH_JOINT_TOLERANCE_MICROMETRES);
+    delta[0] * delta[0] + delta[1] * delta[1] <= tolerance * tolerance
+}
+
+/// Why a path is not usable.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum PathError {
+    /// A segment is not a valid line or arc.
+    #[error(transparent)]
+    Segment(#[from] ContourSegmentError),
+    /// A path has no segments.
+    #[error("a path needs at least one segment, got {count}")]
+    TooFewSegments {
+        /// The supplied segment count.
+        count: usize,
+    },
+    /// A path has more segments than one contour ring can hold.
+    #[error("a path has {count} segments, the limit is {max}")]
+    TooManySegments {
+        /// The supplied segment count.
+        count: usize,
+        /// The supported maximum.
+        max: usize,
+    },
+    /// The end of a segment does not meet the start of the next one.
+    #[error("path segment {index} does not meet the next segment")]
+    NotJoined {
+        /// Index of the segment whose end is checked.
+        index: usize,
+    },
+    /// The last segment does not meet the first one, so the path cannot be closed.
+    #[error("the last path segment does not meet the first one")]
+    NotClosed,
+    /// Two path elements carry the same id.
+    #[error("path segment id {id} appears twice in one path")]
+    DuplicateSegmentId {
+        /// The repeated id.
+        id: ContourSegmentId,
+    },
+    /// The next-segment counter would hand out an id that the path already holds.
+    #[error("the next path segment id {next} must be greater than the largest stored id {max}")]
+    NextSegmentIdNotAfterMax {
+        /// The stored counter.
+        next: ContourSegmentId,
+        /// The largest id in the path.
+        max: u32,
+    },
+    /// The id space of one path is used up.
+    #[error("the path segment id space is exhausted")]
+    SegmentIdExhausted,
+    /// A stored path carries a segment without an id.
+    #[error("a path must carry an id for every segment and a next segment id")]
+    AmbiguousSegmentIds,
+}
+
+/// Serialized form of [`Path`]; validation happens in its `TryFrom` implementation.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PathWire {
+    segments: Vec<ContourSegmentEntryWire>,
+    next_segment_id: ContourSegmentId,
+    closed: bool,
+}
+
+impl TryFrom<PathWire> for Path {
+    type Error = PathError;
+
+    fn try_from(wire: PathWire) -> Result<Self, Self::Error> {
+        let mut entries = Vec::with_capacity(wire.segments.len());
+        for segment in wire.segments {
+            let Some(id) = segment.id() else {
+                return Err(PathError::AmbiguousSegmentIds);
+            };
+            entries.push(ContourSegmentEntry::new(id, segment.segment()?));
+        }
+        Self::assemble(entries, wire.next_segment_id, wire.closed)
+    }
+}
+
+impl From<Path> for PathWire {
+    fn from(path: Path) -> Self {
+        Self {
+            segments: path.entries.iter().map(|entry| ContourSegmentEntryWire::from(*entry)).collect(),
+            next_segment_id: path.next_segment_id,
+            closed: path.closed,
+        }
+    }
+}
+
 impl TryFrom<ContourWire> for Contour {
     type Error = ContourError;
 
@@ -1303,10 +1707,10 @@ fn from_wire_segments(
 }
 
 /// The id just above the largest stored id, so a fresh ring never reuses one.
-fn next_id_after_entries(entries: &[ContourSegmentEntry]) -> Result<ContourSegmentId, ContourError> {
+fn next_id_after_entries(entries: &[ContourSegmentEntry]) -> Option<ContourSegmentId> {
     let max = entries.iter().map(|entry| entry.id().get()).max().unwrap_or(0);
-    let next = max.checked_add(1).ok_or(ContourError::SegmentIdExhausted)?;
-    ContourSegmentId::new(next).ok_or(ContourError::SegmentIdExhausted)
+    let next = max.checked_add(1)?;
+    ContourSegmentId::new(next)
 }
 
 /// Moves one contour point by a whole-micrometre offset.
