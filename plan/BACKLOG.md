@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
+- `[~]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
   with the size field of the panel.
   `files: crates/ui/src, apps/furnicraft/src/main.rs`
 
