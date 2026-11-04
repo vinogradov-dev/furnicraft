@@ -49,6 +49,35 @@ impl Project {
         Ok(id)
     }
 
+    /// The path payload of an object that carries a flat drawing.
+    ///
+    /// A missing node or an object with a mesh or constructive payload is an error the user can
+    /// read; no drawing is derived from those payloads.
+    pub fn object_path(&self, id: Id) -> Result<&Path, ProjectError> {
+        let object = self.object(id).ok_or(ProjectError::NodeNotFound { id })?;
+        object.geometry().as_path().ok_or(ProjectError::NotAPathObject { id })
+    }
+
+    /// Replaces a path object's drawing and bumps the revision once.
+    ///
+    /// A node that is not a path object is [`ProjectError::NotAPathObject`]; the id, name,
+    /// placement, pivot and properties are unchanged.
+    pub fn set_object_path(&mut self, id: Id, path: Path) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotAPathObject { id });
+        };
+        let Some(stored) = object.geometry_mut().as_path_mut() else {
+            return Err(ProjectError::NotAPathObject { id });
+        };
+        *stored = path;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Replaces the contour of a constructive object and bumps the revision once.
     ///
     /// A node that is not a constructive object is [`ProjectError::NotConstructiveObject`]; an

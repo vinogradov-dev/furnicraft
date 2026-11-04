@@ -232,6 +232,8 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 13 adds the contour panel: a panel outline may be a stored ring, and ring banding is one record per segment. A version 12 panel loads with the rectangle outline and its edge and corner banding unchanged.
 - Version 14 lets a cutout outline be a contour ring. A version 13 cutout loads as a rectangle, and every value it stored keeps its place.
 - Version 15 moves a rectangle panel's corner features and bowed edges from the panel into its outline, so the outline is the one source of the panel shape. A version 14 panel keeps its features: they load from the old top-level fields and are written back inside the outline.
+- Version 16 replaces the tagged machining enum with one ordered list of records, each carrying a stable id, a face or edge anchor and tagged parameters. A version 15 cutout loads as a face-anchored cutout with the same id.
+- Version 17 adds a flat path payload: an open or closed chain of drawn line and arc segments with stable ids, stored on a geometry object. A version 16 file contains no path and loads unchanged.
 - Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 

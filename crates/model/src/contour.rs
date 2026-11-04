@@ -776,6 +776,19 @@ mod tests {
     }
 
     #[test]
+    fn a_path_bounds_include_the_arc_extremes_it_crosses() {
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("quarter arc");
+        let path = Path::new(vec![arc], false).expect("a one-arc path");
+        assert_eq!(path.bounds_micrometres(), ([0, 0], [100_000, 100_000]));
+    }
+
+    #[test]
     fn a_single_full_turn_arc_is_a_closed_path_and_round_trips() {
         let arc = ContourSegment::arc([millimetres(100), millimetres(0)], millimetres(100), Degrees::ZERO, FULL_TURN)
             .expect("a full turn");
@@ -1352,41 +1365,7 @@ impl Contour {
     ///
     /// An arc contributes the axis extremes it crosses, not only its endpoints.
     pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
-        let mut min = [i64::MAX; 2];
-        let mut max = [i64::MIN; 2];
-        let mut include = |point: [Length; 2]| {
-            for (axis, value) in point.iter().enumerate() {
-                let value = value.micrometres();
-                min[axis] = min[axis].min(value);
-                max[axis] = max[axis].max(value);
-            }
-        };
-        for entry in &self.entries {
-            let segment = entry.segment();
-            if let (Ok(start), Ok(end)) = (segment.start(), segment.end()) {
-                include(start);
-                include(end);
-            }
-            if let ContourSegment::Arc { start_angle, sweep, .. } = segment
-                && let Ok(geometry) = segment.to_geom()
-            {
-                for turn in 0..4_i64 {
-                    let quarter = Degrees::from_millidegrees(turn.saturating_mul(90_000));
-                    if !arc_reaches(start_angle, sweep, quarter) {
-                        continue;
-                    }
-                    if let Some(point) = geometry.point_at(arc_fraction(start_angle, sweep, quarter))
-                        && let Ok(point) = point_to_document(point)
-                    {
-                        include(point);
-                    }
-                }
-            }
-        }
-        if min[0] > max[0] {
-            return ([0; 2], [0; 2]);
-        }
-        (min, max)
+        entries_bounds_micrometres(&self.entries)
     }
 
     /// Twice the signed area of the ring, in square micrometres; positive for counter-clockwise.
@@ -1498,6 +1477,48 @@ impl Contour {
         }
         Ok(None)
     }
+}
+
+/// The two axis-aligned extents of a chain of segments, in micrometres.
+///
+/// An arc contributes the axis extremes it crosses, not only its endpoints. Both a ring and an
+/// open path use the same rule, so their drawing extents never disagree.
+fn entries_bounds_micrometres(entries: &[ContourSegmentEntry]) -> ([i64; 2], [i64; 2]) {
+    let mut min = [i64::MAX; 2];
+    let mut max = [i64::MIN; 2];
+    let mut include = |point: [Length; 2]| {
+        for (axis, value) in point.iter().enumerate() {
+            let value = value.micrometres();
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    };
+    for entry in entries {
+        let segment = entry.segment();
+        if let (Ok(start), Ok(end)) = (segment.start(), segment.end()) {
+            include(start);
+            include(end);
+        }
+        if let ContourSegment::Arc { start_angle, sweep, .. } = segment
+            && let Ok(geometry) = segment.to_geom()
+        {
+            for turn in 0..4_i64 {
+                let quarter = Degrees::from_millidegrees(turn.saturating_mul(90_000));
+                if !arc_reaches(start_angle, sweep, quarter) {
+                    continue;
+                }
+                if let Some(point) = geometry.point_at(arc_fraction(start_angle, sweep, quarter))
+                    && let Ok(point) = point_to_document(point)
+                {
+                    include(point);
+                }
+            }
+        }
+    }
+    if min[0] > max[0] {
+        return ([0; 2], [0; 2]);
+    }
+    (min, max)
 }
 
 /// A path is one chain of at most this many segments, the ring size it has to fit.
@@ -1633,6 +1654,14 @@ impl Path {
     /// Whether the last segment is joined to the first one.
     pub const fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// The two axis-aligned extents of the chain, in micrometres.
+    ///
+    /// An arc contributes the axis extremes it crosses, not only its endpoints. A path encloses no
+    /// area by itself, so these are the extents of the drawing in the local XY plane.
+    pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
+        entries_bounds_micrometres(&self.entries)
     }
 
     /// The segment with this id.

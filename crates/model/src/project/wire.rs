@@ -369,6 +369,27 @@ mod tests {
     }
 
     #[test]
+    fn version_sixteen_files_without_a_path_still_load() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let constructive =
+            Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive object");
+        project
+            .add_object(root, "Countertop", Placement::IDENTITY, Geometry::Constructive(constructive))
+            .expect("a version 16 file has constructive objects");
+
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        wire["schema_version"] = serde_json::json!(16);
+        let decoded: Project = serde_json::from_value(wire).expect("load a schema 16 file");
+        assert_eq!(decoded.schema_version(), Project::CURRENT_SCHEMA_VERSION);
+        assert_eq!(decoded, project, "a file without a path loads unchanged");
+        assert!(
+            !serde_json::to_value(&decoded).expect("serialize").to_string().contains("\"kind\":\"path\""),
+            "the migrated file writes no path payload"
+        );
+    }
+
+    #[test]
     fn version_fourteen_panel_features_move_into_the_outline() {
         let mut project = sample_project();
         let panel_id = Id::new(2).expect("id");
