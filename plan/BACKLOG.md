@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
-  `PrimitiveKind` variants and the panel buttons.
-  `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
+- `[ ]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
+  field; an open path is refused with a readable message.
+  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
-  field; an open path is refused with a readable message.
-  `files: crates/ui/src, crates/engine/src/object_cmds.rs`
 - `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
   `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
   only changed nodes.
@@ -56,6 +53,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere`, their `PrimitiveKind`
+  variants and three Primitive-panel buttons — `49a8246`
 - `[x]` **U21** a primitive from its panel: an edge-length field, a Cube tool that arms a placement,
   and one `object.primitive.create` where the work plane is clicked — `b1912b4`
 - `[x]` **U20** the scene tree only shows and restructures: every create button and `TreeAction`
