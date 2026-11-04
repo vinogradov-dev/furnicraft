@@ -100,6 +100,11 @@ payload: a drawing rather than a solid, described in section 5.
   `z = 0`. It uses the same segment value and the same stable ids as a ring, so a line or an arc
   drawn once keeps its shape and its identity when it becomes a contour
   ([0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md)).
+- The drawing tools build a path from shapes: a rectangle from two opposite corners, a circle as four
+  quarter arcs whose joints sit exactly on the axes, and an arc through three points. A rectangle and
+  a circle are closed; a three-point arc is one open segment. Degenerate input — a rectangle with no
+  width or height, a non-positive radius, or three coincident or collinear points — is an error, not
+  a flat shape.
 - Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
   meeting within a micrometre, and a closed chain closing its last joint. Self-intersection and
   enclosed area are ring rules, so they run when the path becomes a ring, not while it is drawn.

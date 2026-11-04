@@ -13,6 +13,7 @@
 //! error the user can read rather than a broken ring.
 
 use std::collections::HashSet;
+use std::f64::consts::TAU;
 
 use furnicraft_geom::{Arc, DVec2, Line, Segment};
 use furnicraft_units::{Degrees, Length};
@@ -773,6 +774,134 @@ mod tests {
         assert_eq!(path.index_of(segment_id(1)), Some(0));
         assert_eq!(path.segment(segment_id(1)), Some(segment));
         assert_eq!(path.next_segment_id().get(), 2);
+    }
+
+    #[test]
+    fn a_rectangle_is_four_lines_whatever_order_its_corners_arrive_in() {
+        let path = Path::rectangle([millimetres(100), millimetres(50)], [millimetres(0), millimetres(0)])
+            .expect("a rectangle");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4, "one line per side");
+        let starts = path.segments().map(|segment| segment.start().expect("start")).collect::<Vec<_>>();
+        assert_eq!(
+            starts,
+            vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(100), millimetres(0)],
+                [millimetres(100), millimetres(50)],
+                [millimetres(0), millimetres(50)],
+            ],
+            "the path runs counter-clockwise from the minimum corner"
+        );
+        assert_eq!(path.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
+    }
+
+    #[test]
+    fn a_rectangle_without_width_or_height_is_refused() {
+        assert_eq!(
+            Path::rectangle([millimetres(10), millimetres(0)], [millimetres(10), millimetres(20)]),
+            Err(PathError::DegenerateRectangle)
+        );
+        assert_eq!(
+            Path::rectangle([millimetres(0), millimetres(5)], [millimetres(20), millimetres(5)]),
+            Err(PathError::DegenerateRectangle)
+        );
+        assert_eq!(
+            Path::rectangle([millimetres(10), millimetres(10)], [millimetres(10), millimetres(10)]),
+            Err(PathError::DegenerateRectangle)
+        );
+    }
+
+    #[test]
+    fn a_circle_is_four_quarter_arcs_with_exact_joints() {
+        let center = [millimetres(100), millimetres(50)];
+        let path = Path::circle(center, millimetres(40)).expect("a circle");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+        for entry in path.entries() {
+            let ContourSegment::Arc { radius, sweep, .. } = entry.segment() else {
+                panic!("a circle is made of arcs");
+            };
+            assert_eq!(radius, millimetres(40));
+            assert_eq!(sweep, Degrees::from_millidegrees(90_000));
+        }
+        let starts = path.segments().map(|segment| segment.start().expect("start")).collect::<Vec<_>>();
+        assert_eq!(
+            starts,
+            vec![
+                [millimetres(140), millimetres(50)],
+                [millimetres(100), millimetres(90)],
+                [millimetres(60), millimetres(50)],
+                [millimetres(100), millimetres(10)],
+            ],
+            "the joints sit on the axes, so the radius is exact"
+        );
+        assert_eq!(path.bounds_micrometres(), ([60_000, 10_000], [140_000, 90_000]));
+    }
+
+    #[test]
+    fn a_circle_needs_a_positive_radius() {
+        assert!(matches!(
+            Path::circle([Length::ZERO; 2], Length::ZERO),
+            Err(PathError::Segment(ContourSegmentError::InvalidRadius { .. }))
+        ));
+        let too_large = Length::from_micrometres(MAX_CONTOUR_COORDINATE.micrometres() + 1);
+        assert!(matches!(
+            Path::circle([Length::ZERO; 2], too_large),
+            Err(PathError::Segment(ContourSegmentError::InvalidRadius { .. }))
+        ));
+    }
+
+    #[test]
+    fn an_arc_through_three_points_passes_through_the_middle_one() {
+        let path = Path::arc_through(
+            [millimetres(0), millimetres(0)],
+            [millimetres(50), millimetres(50)],
+            [millimetres(100), millimetres(0)],
+        )
+        .expect("a half circle over the two outer points");
+        assert!(!path.is_closed());
+        let entry = *path.entries().first().expect("one arc");
+        let ContourSegment::Arc { center, radius, sweep, .. } = entry.segment() else {
+            panic!("an arc through three points is one arc");
+        };
+        assert_eq!(center, [millimetres(50), millimetres(0)]);
+        assert_eq!(radius, millimetres(50));
+        assert!(sweep.millidegrees() < 0, "the way through the middle point is clockwise");
+        assert_eq!(entry.segment().start(), Ok([millimetres(0), millimetres(0)]));
+        assert_eq!(entry.segment().end(), Ok([millimetres(100), millimetres(0)]));
+        let middle = entry.segment().to_geom().expect("geometry").point_at(0.5).expect("midpoint");
+        assert!((middle.x - 50.0).abs() < 0.01 && (middle.y - 50.0).abs() < 0.01, "got {middle:?}");
+    }
+
+    #[test]
+    fn an_arc_through_three_points_turns_the_other_way_when_the_middle_point_asks() {
+        let path = Path::arc_through(
+            [millimetres(0), millimetres(0)],
+            [millimetres(50), millimetres(-50)],
+            [millimetres(100), millimetres(0)],
+        )
+        .expect("a half circle under the two outer points");
+        let entry = *path.entries().first().expect("one arc");
+        let ContourSegment::Arc { sweep, .. } = entry.segment() else {
+            panic!("an arc");
+        };
+        assert!(sweep.millidegrees() > 0, "the way through the middle point is counter-clockwise");
+    }
+
+    #[test]
+    fn an_arc_through_three_points_rejects_degenerate_input() {
+        let a = [millimetres(0), millimetres(0)];
+        let b = [millimetres(50), millimetres(50)];
+        let c = [millimetres(100), millimetres(0)];
+        assert_eq!(Path::arc_through(a, a, c), Err(PathError::DegenerateArc), "coincident start and middle");
+        assert_eq!(Path::arc_through(a, b, b), Err(PathError::DegenerateArc), "coincident middle and end");
+        assert_eq!(Path::arc_through(a, b, a), Err(PathError::DegenerateArc), "coincident start and end");
+        assert_eq!(
+            Path::arc_through(a, b, [millimetres(100), millimetres(100)]),
+            Err(PathError::DegenerateArc),
+            "three points on one line have no circle"
+        );
     }
 
     #[test]
@@ -1596,6 +1725,81 @@ impl Path {
         Self::assemble(entries, next_segment_id, self.closed)
     }
 
+    /// A closed rectangle whose sides follow the axes, from two opposite corners.
+    ///
+    /// The corners may be given in any order; the path runs counter-clockwise from the corner with
+    /// the smaller `x` and `y`. Two corners that share an `x` or a `y` enclose no rectangle and are
+    /// refused.
+    pub fn rectangle(first: [Length; 2], second: [Length; 2]) -> Result<Self, PathError> {
+        if first[0] == second[0] || first[1] == second[1] {
+            return Err(PathError::DegenerateRectangle);
+        }
+        let x = [first[0].min(second[0]), first[0].max(second[0])];
+        let y = [first[1].min(second[1]), first[1].max(second[1])];
+        let corners = [[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]];
+        let mut segments = Vec::with_capacity(4);
+        for index in 0..4 {
+            let (Some(&start), Some(&end)) = (corners.get(index), corners.get((index + 1) % 4)) else {
+                return Err(PathError::DegenerateRectangle);
+            };
+            segments.push(ContourSegment::line(start, end)?);
+        }
+        Self::new(segments, true)
+    }
+
+    /// A closed circle as four quarter arcs.
+    ///
+    /// Every joint sits on an axis, so a stored endpoint is the centre plus or minus the radius with
+    /// no rounding to absorb. A radius that is not positive is refused by the arc constructor.
+    pub fn circle(center: [Length; 2], radius: Length) -> Result<Self, PathError> {
+        let mut segments = Vec::with_capacity(4);
+        for quarter in 0..4_i64 {
+            let start = Degrees::from_millidegrees(quarter.saturating_mul(90_000));
+            segments.push(ContourSegment::arc(center, radius, start, Degrees::from_millidegrees(90_000))?);
+        }
+        Self::new(segments, true)
+    }
+
+    /// One open arc from `start` to `end` that passes through `through`.
+    ///
+    /// The arc is the way round from `start` to `end` that contains the middle point, so its sweep
+    /// is negative when that way is clockwise. The three points must be distinct and must not lie
+    /// on one line; a stored centre, radius and angle are whole document units, so a stored endpoint
+    /// can miss its input point by a micrometre or two.
+    pub fn arc_through(start: [Length; 2], through: [Length; 2], end: [Length; 2]) -> Result<Self, PathError> {
+        if start == through || through == end || start == end {
+            return Err(PathError::DegenerateArc);
+        }
+        let a = point_to_geometry(start)?;
+        let b = point_to_geometry(through)?;
+        let c = point_to_geometry(end)?;
+        // Twice the signed area of the triangle; zero means the points share one line.
+        let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        let span = (b - a).length_squared().max((c - a).length_squared());
+        if !area.is_finite() || area.abs() <= 1.0e-9 * span {
+            return Err(PathError::DegenerateArc);
+        }
+        let u = b - a;
+        let v = c - a;
+        let denominator = 2.0 * area;
+        let u2 = u.length_squared();
+        let v2 = v.length_squared();
+        let center = a + DVec2::new((u2 * v.y - v2 * u.y) / denominator, (u.x * v2 - v.x * u2) / denominator);
+        let radius = (a - center).length();
+        let angle_to = |point: DVec2| (point.y - center.y).atan2(point.x - center.x);
+        let start_angle = angle_to(a);
+        let end_angle = angle_to(c);
+        let through_angle = angle_to(b);
+        let counter_clockwise = (end_angle - start_angle).rem_euclid(TAU);
+        let through_turn = (through_angle - start_angle).rem_euclid(TAU);
+        let sweep = if through_turn < counter_clockwise { counter_clockwise } else { counter_clockwise - TAU };
+        let center = point_to_document(center)?;
+        let radius = length_to_document(radius)?;
+        let start_angle = degrees_to_document(start_angle)?;
+        let sweep = degrees_to_document(sweep)?;
+        Self::new(vec![ContourSegment::arc(center, radius, start_angle, sweep)?], false)
+    }
+
     /// Validates a chain of entries, its counter and its joints, then stores it.
     fn assemble(
         entries: Vec<ContourSegmentEntry>,
@@ -1764,6 +1968,12 @@ pub enum PathError {
     /// A stored path carries a segment without an id.
     #[error("a path must carry an id for every segment and a next segment id")]
     AmbiguousSegmentIds,
+    /// Two rectangle corners share an axis, so the shape encloses no area.
+    #[error("a rectangle needs two corners that differ on both axes")]
+    DegenerateRectangle,
+    /// The three points of an arc coincide or lie on one line.
+    #[error("an arc through three points needs three distinct, non-collinear points")]
+    DegenerateArc,
     /// The path is open, so it does not enclose a ring.
     #[error("an open path encloses no ring; close it before it becomes a contour")]
     Open,
