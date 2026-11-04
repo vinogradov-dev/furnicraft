@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
+- `[~]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, sharing their
   `enabled` check with `run`; ADR "a flat contour is a path of segments" and the geometry document.
   `files: crates/engine/src/object_cmds.rs, docs/decisions`
 
