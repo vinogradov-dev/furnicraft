@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U27 state=idle base=a16e514 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U27 state=idle base=957a63b updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -46,7 +46,9 @@ theme; masters switch to white ink and the pixel test draws one icon in both the
 theme colour, an identical alpha silhouette and a raster of `round(pt × ppp)`. U28 then adds tonal
 fills and one axonometry (ADR 0055, `assets/icons/AUDIT.md`). X2 — a legal ring over 1024 sampled
 points cannot be extruded — follows, and it starts with the owner's answer recorded in
-`plan/questions.md`.
+`plan/questions.md`. U29 then lets the Polyline tool append a two-click arc between straight
+segments; the draft starts holding segments rather than points, because a vertex after an arc has
+to be the stored arc endpoint and not the raw click.
 
 ## Index
 

@@ -50,6 +50,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
   `files: crates/param/src/lib.rs, crates/model/src/object.rs`
 
+- `[ ]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
+  two-click arc, and a chain that mixes both still closes and extrudes. The arc leaves the last
+  vertex: the first click is the point it passes through, the second is its end, and the next
+  segment starts where the stored arc actually ended. `DrawDraft` therefore stops holding a point
+  list and holds the segments it has built, so `to_path` becomes a rebuild and every vertex after an
+  arc is the stored `end()`, not the raw pointer point. That last rule is the trap: `arc_through`
+  rounds centre, radius and angle to whole document units, `Path::assemble` tolerates a 1 µm joint
+  while `Contour::assemble` demands exact equality, so a chain built from unrounded clicks can draw
+  in the viewport and then fail `to_contour` — the only way to an extrusion. The draft also needs a
+  third state, an arc waiting for its end, which `push`, `undo` (cancel the pending arc before the
+  last segment), `is_complete`, `preview_path` and `size_label` all have to know; closing still adds
+  one straight segment from the last stored end to the first stored start, and the pointer keeps
+  snapping to the first vertex to close. A dragged bulge and a tangent continuation were rejected
+  for now: the gizmo owns clicks, not drags. No document change — no schema, no command, no undo
+  entry — and ADR 0048 gains one sentence saying a drawn vertex follows the stored arc end. Tests: a
+  path whose arc end misses the next line by one micrometre converts through `to_contour` and by two
+  is refused, a draft mixes both kinds and closes, an arc endpoint becomes the next vertex, undo
+  cancels a pending arc, and the commit is still one `object.path.create`.
+  `files: crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs, crates/model/src/contour.rs`
+
 ## Bugs
 
 ## Next
