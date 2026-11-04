@@ -438,8 +438,13 @@ impl FurniCraftApp {
         let contour_editing = self.editor.contour_edit().is_some();
         // A drawing tool owns it too: the left button places points, not selections.
         let drawing = self.editor.drawing().is_some();
-        let mesh_object =
-            if contour_editing || drawing { None } else { self.editor.mesh_edit().map(|edit| edit.object()) };
+        // An armed primitive owns the next click: it places a cube, it does not select.
+        let placing = self.editor.pending_primitive().is_some();
+        let mesh_object = if contour_editing || drawing || placing {
+            None
+        } else {
+            self.editor.mesh_edit().map(|edit| edit.object())
+        };
         // Face mode moves the union of the selected faces, so both sub-object modes feed the same
         // vertex gizmo and dispatch the same vertex command.
         let mesh_vertices = mesh_object.map(|object| self.mesh_selection_vertices(object)).unwrap_or_default();
@@ -512,19 +517,44 @@ impl FurniCraftApp {
             self.draw_gizmo.reset();
         }
 
+        if placing {
+            // The armed cube lands where the user clicks: the plane point is its origin and the
+            // plane's own rotation keeps its local axes on the plane.
+            if response.clicked_by(egui::PointerButton::Primary)
+                && !pointer_over_widget
+                && let Some(pointer) = response.interact_pointer_pos()
+            {
+                let plane = WorkPlane::from_camera(self.scene.camera);
+                let placement =
+                    plane.pointer_point(self.scene.camera, rect, pointer).and_then(|local| plane.placement_at(local));
+                match placement.map(|placement| self.editor.place_primitive(&mut self.session, placement)) {
+                    Some(Ok(_)) => {
+                        if let Err(error) = self.sync_scene() {
+                            self.last_error = Some(error);
+                        }
+                    }
+                    Some(Err(error)) => self.last_error = Some(error),
+                    None => self.last_error = Some("The work plane has no point under the cursor.".to_owned()),
+                }
+            }
+        }
+
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        let update: Result<Option<PlacementCommit>, String> = if contour_editing || drawing || mesh_object.is_some() {
-            Ok(None)
-        } else {
-            match self.mode {
-                TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
-                TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
-            }
-        };
+        let update: Result<Option<PlacementCommit>, String> =
+            if contour_editing || drawing || placing || mesh_object.is_some() {
+                Ok(None)
+            } else {
+                match self.mode {
+                    TransformMode::Move => {
+                        self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget)
+                    }
+                    TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+                }
+            };
         match update {
             Ok(Some(commit)) => {
                 if let Err(error) = self.apply_gizmo_commit(commit) {
@@ -547,7 +577,7 @@ impl FurniCraftApp {
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing || drawing {
+        let consumed_click = if contour_editing || drawing || placing {
             true
         } else if mesh_object.is_some() {
             self.vertex_gizmo.consumed_click()
@@ -592,6 +622,8 @@ impl FurniCraftApp {
             ui.ctx().set_cursor_icon(self.contour_gizmo.cursor());
         } else if drawing {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
+        } else if placing {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
         } else if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else {
@@ -610,6 +642,7 @@ impl FurniCraftApp {
         };
         if !contour_editing
             && !drawing
+            && !placing
             && clicked
             && !pointer_over_gizmo
             && !consumed_click
@@ -854,6 +887,7 @@ impl FurniCraftApp {
                 .contour_edit()
                 .map(|edit| (edit.draft().segments().len(), edit.is_dirty()));
             let drawing = self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
+            let placing = self.editor.pending_primitive();
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
@@ -902,6 +936,11 @@ impl FurniCraftApp {
                     cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
                     ui.separator();
                     ui.label("LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
+                } else if let Some((parent, size)) = placing {
+                    ui.label(format!("Primitive · Cube {size}"));
+                    ui.separator();
+                    ui.label("LMB place on the work plane  ·  Esc cancel");
+                    let _ = parent;
                 } else {
                     ui.label("Gizmo");
                     ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
@@ -1091,6 +1130,10 @@ impl eframe::App for FurniCraftApp {
                 if ui.input(|input| input.key_pressed(egui::Key::G)) {
                     self.draw_gizmo.toggle_grid();
                 }
+            }
+        } else if self.editor.pending_primitive().is_some() {
+            if escape && !ui.ctx().text_edit_focused() {
+                self.editor.cancel_primitive();
             }
         } else if escape
             && !self.translate_gizmo.is_dragging()

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U21 state=idle base=8a099f1 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U22 state=idle base=b1912b4 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -44,8 +44,8 @@ contract that orders that answer when a session was interrupted or the plan is b
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
 - U7–U17 draw and pick a stored `Path`, toggle the projection, take the work plane from the standard
   views, snap, build a chain with the five tools, preview it and commit it as one path object
-  (ADRs 0048–0052). U18–U20 add the themed toolbar strip, fill its four panels and make it the one
-  place a node is created; the scene tree now only shows and restructures nodes.
+  (ADRs 0048–0052). U18–U21 add the themed toolbar strip, fill its four panels, make it the one
+  place a node is created, and place a cube at a work-plane click.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -56,8 +56,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U21 is next: a primitive from its panel — the cube is created at the click point on the work plane,
-with the panel's size field. U22–U23, S4 and P1–P3 follow; X2 waits.
+U22 is next: cylinder and sphere — `Mesh::cylinder`, `Mesh::sphere`, their `PrimitiveKind` variants
+and the panel buttons. U23, S4 and P1–P3 follow; X2 waits.
 
 ## Index
 

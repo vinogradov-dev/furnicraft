@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U21** a primitive from its panel: the cube is created at the click point on the work plane,
-  with the size field of the panel.
-  `files: crates/ui/src, apps/furnicraft/src/main.rs`
+- `[ ]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
+  `PrimitiveKind` variants and the panel buttons.
+  `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U22** cylinder and sphere: `Mesh::cylinder` and `Mesh::sphere` in the model, the matching
-  `PrimitiveKind` variants and the panel buttons.
-  `files: crates/model/src/mesh.rs, crates/engine/src/object_cmds.rs`
 - `[ ]` **U23** extrude a selected closed path into a body with `object.extrude.create` and a height
   field; an open path is refused with a readable message.
   `files: crates/ui/src, crates/engine/src/object_cmds.rs`
@@ -59,6 +56,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U21** a primitive from its panel: an edge-length field, a Cube tool that arms a placement,
+  and one `object.primitive.create` where the work plane is clicked — `b1912b4`
 - `[x]` **U20** the scene tree only shows and restructures: every create button and `TreeAction`
   variant is gone and the toolbar strip is the only creator — `8a099f1`
 - `[x]` **U19** fill the toolbar panels: five contour tools, four scene creators, the cube and the

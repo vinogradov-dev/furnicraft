@@ -6,11 +6,15 @@
 //! the panels, and the buttons here are the shape every tool will use, including the text fallback
 //! an undrawn icon needs.
 
-use egui::Ui;
+use egui::{TextEdit, Ui};
 use furnicraft_model::Id;
+use furnicraft_units::Length;
 
 use crate::contour_edit::DrawTool;
 use crate::icons::{self, Icon, Theme};
+
+/// Edge length of a new cube, in millimetres; also the value the field starts with.
+pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
 /// One action a toolbar panel asks the editor to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +35,8 @@ pub enum ToolAction {
     CreateCube {
         /// The receiving container.
         parent: Id,
+        /// Edge length of the cube.
+        size: Length,
     },
     /// Creates the default extrusion.
     CreateExtrude {
@@ -131,24 +137,64 @@ impl ToolPanel {
     }
 }
 
-/// Whether each panel of the strip is open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether each panel of the strip is open, plus the size field the Primitives panel keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Toolbars {
     open: [bool; 4],
+    primitive_size: String,
+    error: Option<String>,
 }
 
 impl Default for Toolbars {
     fn default() -> Self {
-        Self { open: [true; 4] }
+        Self { open: [true; 4], primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(), error: None }
     }
 }
 
 impl Toolbars {
-    /// Every panel open, the state a fresh editor starts in.
-    pub const fn new() -> Self {
-        Self { open: [true; 4] }
+    /// Every panel open and the primitive size at its default, the state a fresh editor starts in.
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    /// The typed edge length of a new primitive.
+    pub fn primitive_size_text(&self) -> &str {
+        &self.primitive_size
+    }
+
+    /// The size field, so the panel can edit the text in place.
+    pub fn primitive_size_mut(&mut self) -> &mut String {
+        &mut self.primitive_size
+    }
+
+    /// Replaces the typed edge length.
+    pub fn set_primitive_size_text(&mut self, text: impl Into<String>) {
+        self.primitive_size = text.into();
+        self.error = None;
+    }
+
+    /// The typed edge length as a document length, or a readable reason it is not one.
+    pub fn primitive_size(&self) -> Result<Length, String> {
+        let length = Length::parse_millimetres(self.primitive_size.trim())
+            .map_err(|error| format!("The cube edge is not a length: {error}"))?;
+        if length.micrometres() <= 0 {
+            return Err("The cube edge must be positive.".to_owned());
+        }
+        Ok(length)
+    }
+
+    /// The last reason the size field was refused.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Records a refused size so the panel can show it under the field.
+    pub fn set_error(&mut self, error: impl Into<String>) {
+        self.error = Some(error.into());
+    }
+}
+
+impl Toolbars {
     /// Whether the panel is open.
     pub fn is_open(&self, panel: ToolPanel) -> bool {
         panel_slot(panel).is_some_and(|slot| self.open.get(slot).copied().unwrap_or(false))
@@ -186,7 +232,7 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, has_panel_material: b
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, parent, has_panel_material, actions);
+            show_panel(ui, panel, parent, has_panel_material, state, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -195,7 +241,14 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, has_panel_material: b
 }
 
 /// The body of one open panel.
-fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, has_panel_material: bool, actions: &mut Vec<ToolAction>) {
+fn show_panel(
+    ui: &mut Ui,
+    panel: ToolPanel,
+    parent: Id,
+    has_panel_material: bool,
+    state: &mut Toolbars,
+    actions: &mut Vec<ToolAction>,
+) {
     ui.horizontal_wrapped(|ui| match panel {
         ToolPanel::Contour => {
             for tool in CONTOUR_TOOLS {
@@ -219,8 +272,18 @@ fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, has_panel_material: boo
             }
         }
         ToolPanel::Primitives => {
-            if icons::tool_button(ui, icons::primitives::CUBE, "Cube", None, true).clicked() {
-                actions.push(ToolAction::CreateCube { parent });
+            ui.label("Edge");
+            ui.add(TextEdit::singleline(state.primitive_size_mut()).desired_width(72.0).hint_text("mm"));
+            ui.label("mm");
+            if let Some(error) = state.error() {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+            let size = state.primitive_size();
+            let enabled = size.is_ok();
+            if icons::tool_button(ui, icons::primitives::CUBE, "Cube: click the work plane", None, enabled).clicked()
+                && let Ok(size) = size
+            {
+                actions.push(ToolAction::CreateCube { parent, size });
             }
         }
         ToolPanel::Bodies => {
@@ -293,7 +356,10 @@ mod tests {
             texts.iter().any(|text| text == "Panel  (N)"),
             "an empty icon falls back to the labelled shortcut: {texts:?}"
         );
-        assert!(texts.iter().any(|text| text == "Cube"), "the primitives panel is filled: {texts:?}");
+        assert!(
+            texts.iter().any(|text| text == "Cube: click the work plane"),
+            "the primitives panel is filled: {texts:?}"
+        );
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
 
