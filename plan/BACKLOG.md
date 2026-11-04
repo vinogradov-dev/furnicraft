@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
+- `[~]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
   the tree only shows and restructures nodes.
   `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
 
