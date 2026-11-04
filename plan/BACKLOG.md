@@ -23,8 +23,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U18** themed toolbars: a left strip whose panels group the tools by theme, an icon button
-  with a tooltip and a shortcut, and a text label while an icon is empty; the state lives in `Editor`.
+- `[ ]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
+  assembly, camera, light), Primitives (cube) and Bodies (extrude).
   `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 
 ## Bugs
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
-  assembly, camera, light), Primitives (cube) and Bodies (extrude).
-  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 - `[ ]` **U20** remove every creation button and menu entry from the scene tree and `TreeAction`, so
   the tree only shows and restructures nodes.
   `files: crates/ui/src/scene_tree.rs, crates/ui/src/lib.rs`
@@ -68,6 +65,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U18** themed toolbars: `ToolPanel` and `Toolbars` group the tools by theme as collapsible
+  sections, with a hinted tool button and a text fallback — `d38046b`
 - `[x]` **U17** commit a drawn path: one `object.path.create` on the work plane, the node selected
   and the tool reset, in one undo entry (ADR 0052) — `a8e75b6`
 - `[x]` **U16** the viewport preview: `DrawGizmo` draws the draft, the snap marker and a live size

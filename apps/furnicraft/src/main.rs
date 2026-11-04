@@ -806,9 +806,11 @@ impl FurniCraftApp {
 
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("scene_tree").resizable(true).default_size(240.0).min_size(180.0).show(ui, |ui| {
-            ui.heading("Scene");
-            ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
+                self.editor.show_toolbars(ui);
+                ui.separator();
+                ui.heading("Scene");
+                ui.separator();
                 self.editor.show_scene_tree(ui, &mut self.session);
             });
         });

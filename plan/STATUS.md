@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U18 state=idle base=a8e75b6 updated=2026-11-04
+STATE: milestone=M7 phase=U task=U19 state=idle base=d38046b updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -44,7 +44,7 @@ contract that orders that answer when a session was interrupted or the plan is b
   sets `ctx.set_zoom_factor` so icons rasterise at the new pixel size; the Contour icons are drawn (U25).
 - U7–U17 draw and pick a stored `Path`, toggle the projection, take the work plane from the standard
   views, snap, build a chain with the five tools, preview it and commit it as one path object
-  (ADRs 0048–0052).
+  (ADRs 0048–0052). U18 adds the themed toolbar strip and its hinted tool button.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -55,9 +55,9 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U18 is next: themed toolbars — a left strip whose panels group the tools by theme, an icon button
-with a tooltip and a shortcut, and a text fallback while an icon is empty. U19–U20 fill the panels
-and drop the scene-tree create buttons. U21–U23, S4 and P1–P3 follow; X2 waits.
+U19 is next: fill the panels — Contour (line, polyline, arc, rectangle, circle), Scene (panel,
+assembly, camera, light), Primitives (cube) and Bodies (extrude). U20 drops the scene-tree create
+buttons. U21–U23, S4 and P1–P3 follow; X2 waits.
 
 ## Index
 
