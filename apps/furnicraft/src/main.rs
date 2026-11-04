@@ -807,7 +807,11 @@ impl FurniCraftApp {
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("scene_tree").resizable(true).default_size(240.0).min_size(180.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                self.editor.show_toolbars(ui);
+                match self.editor.show_toolbars(ui, &mut self.session) {
+                    Ok(true) => self.draw_gizmo.reset(),
+                    Ok(false) => {}
+                    Err(error) => self.last_error = Some(error),
+                }
                 ui.separator();
                 ui.heading("Scene");
                 ui.separator();
@@ -1103,6 +1107,22 @@ impl eframe::App for FurniCraftApp {
                     && let Err(error) = self.upload_scene()
                 {
                     self.last_error = Some(error);
+                }
+            }
+        }
+        // A drawing shortcut starts its tool from anywhere outside a text field. The table is the
+        // one the toolbar hints show, so the key and the tooltip cannot drift apart.
+        if self.editor.contour_edit().is_none() && self.editor.drawing().is_none() && !ui.ctx().text_edit_focused() {
+            for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
+                let Some(key) = furnicraft_ui::toolbars::shortcut(tool) else {
+                    continue;
+                };
+                if ui.input(|input| input.key_pressed(key)) {
+                    if !self.editor.start_drawing(tool) {
+                        self.last_error = Some("A drawing is already in progress.".to_owned());
+                    }
+                    self.draw_gizmo.reset();
+                    break;
                 }
             }
         }

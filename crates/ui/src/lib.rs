@@ -62,6 +62,7 @@ use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
+use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
@@ -459,9 +460,43 @@ impl Editor {
     /// Draws the themed toolbar strip: one collapsible panel per tool theme.
     ///
     /// The open panels are view state owned by the editor, so they survive a selection change and a
-    /// document command and never reach the scene file.
-    pub fn show_toolbars(&mut self, ui: &mut Ui) {
-        toolbars::show(ui, &mut self.toolbars);
+    /// document command and never reach the scene file. The strip runs against the container a new
+    /// node would land in, which is the selected container or the parent of the selected leaf.
+    /// Returns whether a drawing tool started, so the shell can reset its own pointer state.
+    pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
+        let parent = drawing_parent(session.project(), self.selection.primary());
+        let mut actions = Vec::new();
+        toolbars::show(ui, &mut self.toolbars, parent, &mut actions);
+        let mut started_drawing = false;
+        for action in actions {
+            match action {
+                ToolAction::Draw(tool) => {
+                    if !self.start_drawing(tool) {
+                        return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
+                    }
+                    started_drawing = true;
+                }
+                ToolAction::CreatePanel { parent } => {
+                    self.run_action(session, TreeAction::CreatePanel { parent })?;
+                }
+                ToolAction::CreateAssembly { parent } => {
+                    self.run_action(session, TreeAction::CreateAssembly { parent })?;
+                }
+                ToolAction::CreateCube { parent } => {
+                    self.run_action(session, TreeAction::CreateObject { parent })?;
+                }
+                ToolAction::CreateExtrude { parent } => {
+                    self.run_action(session, TreeAction::CreateExtrude { parent })?;
+                }
+                ToolAction::CreateCamera { parent } => {
+                    self.run_action(session, TreeAction::CreateCamera { parent })?;
+                }
+                ToolAction::CreateLight { parent } => {
+                    self.run_action(session, TreeAction::CreateLight { parent })?;
+                }
+            }
+        }
+        Ok(started_drawing)
     }
 
     /// Whether the panel of the toolbar strip is open.
@@ -1087,6 +1122,40 @@ mod tests {
         let path = session.project().object_path(drawn.object).expect("a path object");
         assert!(!path.is_closed());
         assert_eq!(path.entries().len(), 2);
+    }
+
+    #[test]
+    fn a_toolbar_tool_creates_through_the_same_action_as_the_tree() {
+        let (project, panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(Id::new(1).expect("root")));
+        // The strip only wishes; the editor runs the action, so the tree and the toolbar cannot
+        // drift into two creation paths.
+        editor.run_action(&mut session, TreeAction::CreateObject { parent: Id::new(1).expect("root") }).expect("cube");
+        let cube = editor.selected_node().expect("the new cube is selected");
+        assert!(session.project().object(cube).is_some());
+        assert!(session.project().panel(panel).is_some());
+        assert_eq!(session.project().parent_of(cube), Some(Id::new(1).expect("root")));
+    }
+
+    #[test]
+    fn the_drawing_shortcuts_name_their_tool() {
+        let cases = [
+            (egui::Key::L, DrawTool::Line),
+            (egui::Key::P, DrawTool::Polyline),
+            (egui::Key::A, DrawTool::Arc),
+            (egui::Key::R, DrawTool::Rectangle),
+            (egui::Key::C, DrawTool::Circle),
+        ];
+        let mut editor = Editor::new();
+        for (key, tool) in cases {
+            assert_eq!(crate::toolbars::shortcut(tool), Some(key), "{} starts {}", key.name(), tool.label());
+            assert!(editor.start_drawing(tool));
+            assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
+            editor.cancel_drawing();
+        }
+        assert!(editor.drawing().is_none());
     }
 
     #[test]
