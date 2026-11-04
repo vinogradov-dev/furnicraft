@@ -39,6 +39,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U26** the toolbar icon rollout: cube, cylinder and sphere (`97ee5ce`), then panel,
+  assembly, camera, light and extrude; the viewport strip draws frame-all and the projection toggle
+  from `view/*`, and one test rasterises every drawn asset as a 24 grid SVG — `3fd6ed1`
+
 - `[x]` **P3** `STATE: task=` must name the first unfinished task in `## Now`: `first_unfinished`
   takes the first not-`[x]` line there, a later task is a violation that names the skipped one,
   `## Bugs`/`## Next` stay outside the order, and a stray `[x]` in `## Now` keeps its own error —

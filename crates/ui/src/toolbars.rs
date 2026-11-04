@@ -445,8 +445,8 @@ mod tests {
             assert!(texts.iter().any(|text| text == panel.label()), "{} heading is missing", panel.label());
         }
         assert!(
-            texts.iter().any(|text| text == "Panel  (N)"),
-            "an empty icon falls back to the labelled shortcut: {texts:?}"
+            texts.iter().any(|text| text.contains("Panel  (N)")),
+            "a drawn icon keeps the labelled shortcut as its alt text: {texts:?}"
         );
         assert!(
             texts.iter().any(|text| text.contains("Cube: click the work plane")),
@@ -465,7 +465,7 @@ mod tests {
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text == "Select a closed path first"));
+        assert!(texts.iter().any(|text| text.contains("Select a closed path first")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
     }
 
@@ -491,7 +491,7 @@ mod tests {
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
         assert!(
-            texts.iter().any(|text| text == "The selected path is open; close it first"),
+            texts.iter().any(|text| text.contains("The selected path is open; close it first")),
             "the panel says why an open path cannot be extruded: {texts:?}"
         );
         assert!(actions.is_empty(), "a disabled button asks for no action");
@@ -509,7 +509,7 @@ mod tests {
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text == "Extrude the selected path"));
+        assert!(texts.iter().any(|text| text.contains("Extrude the selected path")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(24).expect("height")));
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
