@@ -45,7 +45,7 @@ use furnicraft_ui::{Editor, MeshElement, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
-use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey};
+use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
 use crate::translate_gizmo::TranslateGizmo;
@@ -794,6 +794,10 @@ impl FurniCraftApp {
                 toggle_projection = projection_response.clicked();
                 toggle_projection |= owns_view && ui.input(|input| input.key_pressed(egui::Key::O));
                 ui.separator();
+                if owns_view {
+                    ui.label(format!("Work plane · {}", WorkPlane::from_camera(self.view_camera).label()));
+                    ui.separator();
+                }
                 ui_scale::show(ui);
                 ui.separator();
                 if let Some((segments, dirty)) = contour_edit {

@@ -54,6 +54,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0047](0047-icons-are-one-ink-on-a-24-grid.md) | Icons are one ink on a 24 grid, in three families | Accepted |
 | [0048](0048-a-flat-drawing-is-a-path-of-segments.md) | A flat drawing is a path of segments | Accepted |
 | [0049](0049-the-viewport-toggles-its-own-projection.md) | The viewport toggles its own projection | Accepted |
+| [0050](0050-the-work-plane-follows-the-view.md) | The work plane follows the view | Accepted |
 
 ## Format
 
