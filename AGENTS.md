@@ -213,7 +213,8 @@ in `## Now` and a `plan/SESSION.md` carrying `task:`, `goal:`, `now:` and `run:`
 `[~]` task or a leftover session note; a duplicated task id; a `[x]` task outside `## Done`, or a
 `## Done` entry that is not `[x]`; a finished task without a commit hash that exists; a task line
 without a `**bold**` id; a task without a `files:` hint, or a hint naming a path that does not exist;
-a `base` that is not an ancestor of `HEAD`; a `STATUS.md` or `SESSION.md` over its line budget.
+a `base` that is not an ancestor of `HEAD`; an `updated=` that is not a `YYYY-MM-DD` calendar date or
+is earlier than the `base` commit's date; a `STATUS.md` or `SESSION.md` over its line budget.
 `HEAD` is a legal `base` while the plan edit itself is still uncommitted.
 
 Then check by hand:

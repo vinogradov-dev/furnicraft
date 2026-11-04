@@ -206,6 +206,11 @@ fn workspace_violations(root: &Path, summary: &Summary, git: &dyn Git) -> Vec<St
     let ancestor = head.is_some_and(|head| git.is_ancestor(base, head));
     if let Some(violation) = validate::base_violation(base, head, exists, ancestor) {
         violations.push(violation);
+    } else if let Some(violation) =
+        validate::updated_base_violation(&summary.state.updated, base, git.commit_date(base).as_deref())
+    {
+        // Only a base that resolves can have a date; an unknown base already has its own error.
+        violations.push(violation);
     }
 
     violations

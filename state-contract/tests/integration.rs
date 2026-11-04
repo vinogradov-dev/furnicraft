@@ -17,6 +17,8 @@ struct FakeGit {
     head: Option<&'static str>,
     commits: Vec<&'static str>,
     ancestors: Vec<(&'static str, &'static str)>,
+    /// The author date `commit_date` answers with, when the fixture needs a specific one.
+    base_date: Option<&'static str>,
 }
 
 impl FakeGit {
@@ -25,6 +27,7 @@ impl FakeGit {
             head: Some(HEAD),
             commits: vec!["abc1234", "def5678"],
             ancestors: vec![("abc1234", HEAD), ("HEAD", HEAD)],
+            base_date: Some("2025-12-01"),
         }
     }
 }
@@ -41,6 +44,13 @@ impl Git for FakeGit {
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
         self.ancestors.iter().any(|(a, d)| *a == ancestor && *d == descendant)
     }
+
+    fn commit_date(&self, hash: &str) -> Option<String> {
+        // `abc1234` and `HEAD` were made before the fixtures' `updated=2026-01-01`.
+        (self.commits.contains(&hash) || hash == "HEAD")
+            .then_some(self.base_date.unwrap_or("2025-12-01"))
+            .map(str::to_owned)
+    }
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -56,23 +66,32 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 /// A one-commit repository with a plan that names `src/lib.rs`; `None` when `git` cannot do it.
+///
+/// The commit carries a fixed author date so the plan's `updated=` stays comparable in any year.
 fn scratch_repository(name: &str, status: &str, backlog: &str) -> Option<PathBuf> {
     let root = scratch(name);
     let git = |args: &[&str]| {
         Command::new("git").args(args).current_dir(&root).output().ok().filter(|output| output.status.success())
     };
     git(&["init", "-q"])?;
-    git(&[
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "init",
-    ])?;
+    Command::new("git")
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ])
+        .env("GIT_AUTHOR_DATE", "2025-12-01T00:00:00 +0000")
+        .env("GIT_COMMITTER_DATE", "2025-12-01T00:00:00 +0000")
+        .current_dir(&root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
     fs::create_dir_all(root.join("plan")).ok()?;
     fs::create_dir_all(root.join("src")).ok()?;
     fs::write(root.join("plan/STATUS.md"), status).ok()?;
@@ -118,6 +137,32 @@ fn a_thin_session_note_fails() {
             "the error must name `{key}:`: {error:?}"
         );
     }
+}
+
+#[test]
+fn an_updated_date_earlier_than_the_base_commit_fails() {
+    let mut git = FakeGit::repository();
+    git.base_date = Some("2026-02-01");
+    let error = check_with(&fixture("good"), &git).expect_err("a plan older than its base must fail");
+    assert!(error.iter().any(|violation| violation.contains("earlier than")), "{error:?}");
+    assert!(error.iter().any(|violation| violation.contains("2026-02-01")), "{error:?}");
+
+    let summary = check_with(&fixture("good"), &FakeGit::repository()).expect("a later date is fine");
+    assert_eq!(summary.state.updated, "2026-01-01");
+}
+
+#[test]
+fn an_updated_value_that_is_not_a_date_fails() {
+    let root = scratch("bad-date");
+    fs::create_dir_all(root.join("plan")).expect("plan dir");
+    fs::create_dir_all(root.join("src")).expect("src dir");
+    fs::write(root.join("plan/STATUS.md"), "STATE: milestone=M1 task=T1 state=idle base=abc1234 updated=2026-1-1\n")
+        .expect("STATUS.md");
+    fs::write(root.join("plan/BACKLOG.md"), PLAN_BACKLOG).expect("BACKLOG.md");
+    fs::write(root.join("src/lib.rs"), "//! fixture\n").expect("src/lib.rs");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("a malformed date must fail");
+    assert!(error.iter().any(|violation| violation.contains("`YYYY-MM-DD`")), "{error:?}");
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]

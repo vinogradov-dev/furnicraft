@@ -26,6 +26,10 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     violations.extend(budget_violations(status, session));
     violations.extend(unparsed_task_lines(backlog));
 
+    if let Some(violation) = updated_format_violation(&state.updated) {
+        violations.push(violation);
+    }
+
     let current = tasks.iter().find(|task| task.id == state.task);
     match current {
         Some(task) if task.status == TaskStatus::Done => {
@@ -165,6 +169,77 @@ pub(crate) fn base_violation(base: &str, head: Option<&str>, exists: bool, is_an
             "`STATE: base={base}` is not an ancestor of `HEAD` ({head}); point `base` at a commit the plan describes"
         )
     })
+}
+
+/// The `updated=` violation for a value that is not a calendar date in `YYYY-MM-DD` form.
+///
+/// The date is a promise the plan makes to its reader: it says when the state was written, so a
+/// typo or a free-form word hides how stale the plan is. The calendar is checked too — `2026-02-30`
+/// parses as three numbers but is not a day.
+pub(crate) fn updated_format_violation(updated: &str) -> Option<String> {
+    if calendar_date(updated).is_some() {
+        return None;
+    }
+    Some(format!("`STATE: updated={updated}` is not a date; write it as `YYYY-MM-DD`, for example `2026-11-04`"))
+}
+
+/// The `updated=` violation for a date that is earlier than the `base` commit was made.
+///
+/// The plan describes the tree at `base`, so its own date cannot run behind that commit: an
+/// `updated` from before the code landed would claim a state older than the code it describes.
+pub(crate) fn updated_base_violation(updated: &str, base: &str, committed: Option<&str>) -> Option<String> {
+    let updated_date = calendar_date(updated)?;
+    let committed_date = calendar_date(committed?)?;
+    (updated_date < committed_date).then(|| {
+        format!(
+            "`STATE: updated={updated}` is earlier than `base={base}`, committed on {committed_date}; the \
+             plan cannot describe a tree from before its own base"
+        )
+    })
+}
+
+/// The text of a `YYYY-MM-DD` calendar date, or `None` when it is not one.
+///
+/// The input slice is returned as it was read: an ISO date sorts as text, so two dates compare
+/// without any date arithmetic. The calendar is checked as well — `2026-02-30` has the right shape
+/// but is not a day.
+pub(crate) fn calendar_date(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 {
+        return None;
+    }
+    let shaped = bytes
+        .iter()
+        .enumerate()
+        .all(|(index, byte)| if index == 4 || index == 7 { *byte == b'-' } else { byte.is_ascii_digit() });
+    if !shaped {
+        return None;
+    }
+    let year = number(text.get(..4)?)?;
+    let month = number(text.get(5..7)?)?;
+    let day = number(text.get(8..)?)?;
+    if year == 0 || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    Some(text)
+}
+
+/// A decimal field of a date, or `None` when it holds anything but digits.
+fn number(field: &str) -> Option<u32> {
+    if field.is_empty() || !field.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    field.parse().ok()
+}
+
+/// How many days the month has, February following the Gregorian leap-year rule.
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) => 29,
+        _ => 28,
+    }
 }
 
 /// Duplicates, sections and an id that is not a plain label.
@@ -340,6 +415,65 @@ mod tests {
         let hintless = backlog().replace(" `files: crates/model/src/lib.rs`", "");
         let error = analyze(HEADER, &hintless, None).expect_err("a task without a hint must fail");
         assert!(error.iter().any(|violation| violation.contains("has no `files:` hint")), "{error:?}");
+    }
+
+    #[test]
+    fn an_updated_value_must_be_a_calendar_date() {
+        for good in ["2026-11-04", "2024-02-29", "2000-02-29", "2026-12-31"] {
+            assert_eq!(calendar_date(good), Some(good), "`{good}` is a date");
+            assert!(
+                updated_format_violation(good).is_none(),
+                "`{good}` must pass: {:?}",
+                updated_format_violation(good)
+            );
+        }
+
+        for bad in [
+            "",
+            "2026-1-4",
+            "26-11-04",
+            "2026-11-04T00:00",
+            "2026/11/04",
+            "tomorrow",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-02-30",
+            "2100-02-29",
+            "0000-01-01",
+            "2026-11-0x",
+        ] {
+            assert_eq!(calendar_date(bad), None, "`{bad}` is not a date");
+            let violation = updated_format_violation(bad).expect("a non-date must be reported");
+            assert!(violation.contains("`YYYY-MM-DD`"), "the message names the form: {violation}");
+        }
+    }
+
+    #[test]
+    fn an_updated_date_cannot_run_behind_the_base_commit() {
+        let old = "`STATE: updated=2026-10-01` is earlier";
+        let violation =
+            updated_base_violation("2026-10-01", "abc1234", Some("2026-10-30")).expect("an older date fails");
+        assert!(violation.starts_with(old), "{violation}");
+        assert!(violation.contains("2026-10-30"), "the message names the commit date: {violation}");
+
+        assert!(updated_base_violation("2026-10-30", "abc1234", Some("2026-10-30")).is_none(), "the same day is fine");
+        assert!(updated_base_violation("2026-11-04", "abc1234", Some("2026-10-30")).is_none(), "a later day is fine");
+    }
+
+    #[test]
+    fn an_unreadable_base_date_is_left_to_the_base_rule() {
+        assert!(updated_base_violation("2026-10-01", "abc1234", None).is_none(), "no date means no comparison");
+        assert!(
+            updated_base_violation("2026-10-01", "abc1234", Some("not a date")).is_none(),
+            "the commit's own date is not the plan's business"
+        );
+    }
+
+    #[test]
+    fn the_plan_checks_updated_when_it_reads_the_state_line() {
+        let error = analyze(&HEADER.replace("updated=2026-10-30", "updated=last week"), backlog(), None)
+            .expect_err("a word is not a date");
+        assert!(error.iter().any(|violation| violation.contains("is not a date")), "{error:?}");
     }
 
     #[test]

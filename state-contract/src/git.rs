@@ -13,6 +13,8 @@ pub trait Git {
     fn commit_exists(&self, hash: &str) -> bool;
     /// Whether `ancestor` is reachable from `descendant`.
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool;
+    /// The author date of a commit as `YYYY-MM-DD`, when it resolves to one.
+    fn commit_date(&self, hash: &str) -> Option<String>;
 }
 
 /// [`Git`] implemented by running the `git` binary in a directory.
@@ -63,6 +65,11 @@ impl Git for ProcessGit {
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
         self.success(&["merge-base", "--is-ancestor", ancestor, descendant])
+    }
+
+    fn commit_date(&self, hash: &str) -> Option<String> {
+        // `%cs` is the author date in `YYYY-MM-DD`, the same form the plan writes.
+        self.output(&["show", "-s", "--format=%cs", hash]).filter(|date| !date.is_empty())
     }
 }
 

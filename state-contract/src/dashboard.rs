@@ -439,6 +439,11 @@ mod tests {
         fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
             ancestor == "abc1234" && Some(ancestor) != Some(descendant) && self.head == Some(descendant)
         }
+
+        fn commit_date(&self, hash: &str) -> Option<String> {
+            // The fixtures are written on a date after their base, so the `updated` rule holds.
+            (hash == "abc1234").then(|| "2025-12-01".to_owned())
+        }
     }
 
     const IDLE_STATUS: &str = "STATE: milestone=M7 phase=D task=A5 state=idle base=abc1234 updated=2026-10-30\n";
