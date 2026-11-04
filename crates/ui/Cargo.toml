@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 egui = { workspace = true }
+egui_extras = { workspace = true }
 furnicraft-engine = { workspace = true }
 furnicraft-model = { workspace = true }
 furnicraft-units = { workspace = true }

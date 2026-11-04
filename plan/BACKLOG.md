@@ -23,11 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
-  MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
-  `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,
-  falling back to a text label while an SVG is empty; tests for the rasterised size and the fallback.
-  `files: crates/ui/src, Cargo.toml, apps/furnicraft/src`
+- `[ ]` **U3** UI scale: a 75–200 % control in the viewport strip bound to `ctx.set_zoom_factor`, so
+  icons are re-rasterised at the new pixel size instead of stretched.
+  `files: apps/furnicraft/src/main.rs, crates/ui/src`
 
 ## Bugs
 
@@ -41,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U3** UI scale: a 75–200 % control in the viewport strip bound to `ctx.set_zoom_factor`, so
-  icons are re-rasterised at the new pixel size instead of stretched.
-  `files: apps/furnicraft/src/main.rs, crates/ui/src`
 - `[ ]` **U4** a flat contour value: `Path` is an ordered chain of line and arc segments with stable
   ids, open or closed, at least one segment, joints meeting within a micrometre and one chain per
   path; tests for a single segment, an arc, an open polyline and a broken joint.
@@ -118,6 +113,13 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature embeds
+  `assets/icons/**` as one module per theme; the shell installs the SVG loader, and `icon_button`
+  draws at a fixed 16 pt tinted with the theme text colour, falling back to its text label while an
+  asset is empty — `2b453a0`
+- `[x]` **U24** the icon contract: one ink on a 24 grid, three families (geometry, view, service), the
+  service grammar and its `actions` theme, ADR 0047, and `AGENTS.md` §4.12 plus the `draw-icon` skill
+  so the guide is read only while an icon is drawn or edited — `e473342`
 - `[x]` **U1** the icon resource tree: `assets/icons/` with one directory per toolbar theme and one
   zero-byte SVG per icon (contour, primitives, bodies, scene, view — 21 placeholders), plus
   `assets/README.md` with the naming, the 24 × 24 grid, the geometry-only format and the empty-file

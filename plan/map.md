@@ -34,4 +34,4 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Machining pipeline | `crates/param/src/machining.rs` (`CompileMachining`, `OpEffect`, `PanelPlan`) | whole file |
 | Scene file envelope | `crates/project/src/lib.rs` (`SceneFile`, `read`, `write`) | — |
 | Panel card UI | `crates/ui/src/panel_card.rs` (`PanelCard`), `crates/ui/src/machining/` (`MachiningSection`) | — |
-| UI icon resources | `assets/icons/`, `assets/README.md` | one theme directory per toolbar; naming and SVG format rules live in the README |
+| UI icon resources | `assets/icons/`, `assets/README.md` (`Theme`, `Icon`, `icon_button`) | meaning in `assets/icons/STYLE_GUIDE.md`, format and naming in `assets/README.md`; the loader and button live in `crates/ui/src/icons.rs` |

@@ -1,0 +1,812 @@
+# STYLE_GUIDE.md — Icon Visual Language for Furniture CAD
+
+Status: normative for **meaning and composition**. The file format — viewBox, allowed elements,
+naming, theme table — is normative in `README.md` in this directory. When the two disagree, this
+guide wins on meaning and the README wins on format; fix the losing file in the same change.
+
+Read this guide only when adding, editing or reviewing an icon. It does not constrain code that
+merely displays an icon.
+
+---
+
+## 1. General Interface Character
+
+Application style:
+
+> **Technical, calm, dense, precise, with an energetic action accent.**
+
+Mood reference — Blender:
+
+- dark graphite interface;
+- compact panels;
+- many working tools without visual noise;
+- the accent appears only where there is action, selection or result;
+- minimal decorativeness.
+
+But this is not a Blender copy. Our style should be closer to:
+
+> **CAD for cabinet furniture: panel, frame, module, hardware, drawing, cutting layout.**
+
+Icons should look not like "cute pictograms" but as **working engineering signs**.
+
+### 1.1. Three families
+
+Every icon belongs to exactly one family, and the family decides its grammar:
+
+| Family | Examples | Language | Weight |
+|---|---|---|---|
+| `geometry` | line, extrude, panel, hole, array | flat for 2D, volumetric for 3D (§8) | main 1.8, result 2.4 |
+| `view` | orbit, pan, frame all, ortho/perspective | flat, monochrome, navigation metaphor | heavy, 2.0–2.4 |
+| `service` | confirm, cancel, undo, save, warning | flat, monochrome chrome (§19) | heavy, 2.0–2.4 or solid |
+
+A geometry command that happens to sit in a toolbar stays a geometry icon. A service action that
+appears next to tools stays a service icon. Do not blend the grammars.
+
+---
+
+## 2. Main Icon Formula
+
+A geometry icon is built by the formula:
+
+```text
+OBJECT + ACTION METHOD + RESULT
+```
+
+Before drawing, the agent must understand:
+
+1. **What does the tool act upon?**
+   Panel, frame, room, module, profile, curve, hole, hardware, drawing, report.
+
+2. **What is the initial state?**
+   Contour, old part, guide, axis, plane, dimension.
+
+3. **What is the new result?**
+   New geometry, changed edge, hole, offset contour, array of parts, connection.
+
+4. **What visual feature explains the action?**
+   Construction points, axis, arrow, cutout, emphasised face, dashed guide, repeated elements.
+
+5. **What elements can be removed without losing meaning?**
+   If an element does not explain the action, it is unnecessary.
+
+Service icons do not follow this formula: they explain one interface verb and follow §19.
+
+---
+
+## 3. Main Rule of Meaning
+
+Every line, point, face and gap must have meaning.
+
+The agent must be able to label each element:
+
+- this is the source contour;
+- this is the result;
+- this is the rotation axis;
+- this is a construction point;
+- this is a guide;
+- this is removable volume;
+- this is an emphasised edge;
+- this is a connection;
+- this is a dimension;
+- this is hidden geometry.
+
+If an element cannot be explained, it cannot be drawn.
+
+---
+
+## 4. Visual Roles of Elements
+
+An icon consists not of random parts but of semantic roles.
+
+| Role | Meaning | Drawn as |
+|---|---|---|
+| `BASE` | source object | calm contour, main weight |
+| `INK` | main contour | clear line |
+| `GUIDE` | auxiliary geometry | thin line, dashed only when it survives 16 px |
+| `CONTROL` | construction point / handle | small circle |
+| `ACTIVE` | action result | heaviest line in the icon |
+| `REMOVE` | deletion / cutout | empty area, or a removal mark only when the action destroys data |
+| `MEASURE` | dimension / parameter | thin line with ticks |
+| `CONNECTION` | connection / assembly | joint markers, short connector sign |
+| `PREVIEW` | preview of a future result | outline only, lighter than `ACTIVE` |
+
+The roles are **structural, not coloured**. An element is emphasised by weight, size, solidity and a
+real gap — never by a hue that exists only in the author's head. See §5.
+
+---
+
+## 5. Emphasis Without Colour
+
+### 5.1. One ink
+
+Every icon is drawn in one ink colour. The file carries no colour of its own; the button or the
+theme tints the rasterised image, and the same master serves every theme.
+
+The emphasis ladder, strongest first:
+
+```text
+solid shape  >  heavy line (2.2–2.6)  >  main line (1.6–1.8)  >  thin guide (1.5)
+```
+
+A result can also be separated from its source by a real gap, by size, or by being the only solid
+form. Two elements that differ only in colour do not differ at all.
+
+### 5.2. What colour belongs to
+
+- The **interface theme** owns colour: background, text, selection, the active tool accent.
+- The **icon** owns form. Orange, red, green and purple are not icon roles; they are theme choices
+  applied later, if a theme ever needs them.
+- If a status colour is applied by the theme, the shape must already carry the meaning alone. Colour
+  is always redundant, never the only signal.
+
+Bad:
+
+```text
+two identical contours, one simply drawn in the accent colour
+```
+
+Good:
+
+```text
+source contour is thinner; result is heavier; a real gap and an arrow show the change
+```
+
+### 5.3. The accent rule
+
+The action result gets the single strongest treatment in the icon. Everything else steps back.
+"One operation, one emphasis" (§13.2) is the practical form of this rule.
+
+---
+
+## 6. Theme Management
+
+Main rule:
+
+> **One SVG master per theme — the theme tints it. Do not create dark and light versions.**
+
+Consequences:
+
+- no `#hex` colours, `class`, `style`, CSS variables or `{{tokens}}` inside the file;
+- no separate file for hover, pressed, disabled or toggled: those are theme states;
+- no separate file per size: the loader rasterises the master at the size it draws;
+- the file is self-contained: no references to sibling files, fonts or the network.
+
+The loader and the naming contract are in `README.md`.
+
+---
+
+## 7. Geometry and Size
+
+### 7.1. Grid
+
+All icons are drawn in:
+
+```svg
+viewBox="0 0 24 24"
+```
+
+Working area: `2..22` on both axes. The icon must have breathing room; do not fill the canvas.
+
+The numbers that the loader needs (viewBox, width, height, allowed elements) are the README's. This
+section describes how to compose inside that grid.
+
+### 7.2. Centre and alignment
+
+The compositional centre is `(12, 12)`. Optical shift is allowed when an arrow, a label or an
+asymmetric form demands it.
+
+Put coordinates on half-unit steps where possible, so a stroke lands cleanly at 16, 24 and 32 px.
+Never rely on a detail smaller than one unit.
+
+### 7.3. Weights
+
+| Role | Weight on the 24 grid |
+|---|---|
+| auxiliary line / dashed guide | `1.5` |
+| main object contour | `1.6–1.8` |
+| action result | `2.2–2.6` |
+| view or service icon | `2.0–2.4`, or a solid silhouette |
+
+All lines use round caps and round joins. Moderate rounding: not sharp as a razor, not a soft toy.
+Nothing thinner than `1.5` units, because the loader may draw the icon at 16 px.
+
+A thin plate reads as a line if its thickness is under `1.5` units; give every panel a visible edge.
+
+---
+
+## 8. 2D and 3D Language
+
+### 8.1. Flat operations
+
+If the tool works with 2D geometry:
+
+- line;
+- arc;
+- circle;
+- contour;
+- dimension;
+- drawing;
+- cutting layout;
+
+the icon must be flat.
+
+2D signs:
+
+- no volumetric faces;
+- no isometric panel;
+- analytical geometry;
+- points, lines, arcs, dimensions.
+
+### 8.2. Volumetric operations
+
+If the tool works with 3D:
+
+- panel;
+- cabinet;
+- hardware;
+- hole in a part;
+- extrusion;
+- revolution;
+- boolean operation;
+- assembly;
+
+the icon must be volumetric.
+
+3D signs:
+
+- axonometry;
+- visible faces;
+- different weights for passive faces (never different hues);
+- correct overlaps;
+- no perspective.
+
+### 8.3. Mixed operations
+
+If the operation translates 2D to 3D, for example a profile becomes a volume, the icon shows the
+transition:
+
+```text
+flat source profile → volumetric result
+```
+
+Source profile calm; result emphasised.
+
+### 8.4. Service actions
+
+Service icons are neither 2D nor 3D. They are flat chrome and follow §19; §8.1–§8.3 do not apply.
+
+---
+
+## 9. Canonical Axonometry
+
+For 3D icons, one technical axonometry is used. It is isometric:
+
+- the vertical axis stays vertical;
+- the two horizontal axes recede at 30° above the horizontal, left and right;
+- parallel edges stay parallel, equal lengths stay equal;
+- no perspective convergence, no vanishing points;
+- a circle on a face is a correct ellipse: minor/major ratio `0.577`, major axis horizontal on the
+  top face and at 60° on the side faces;
+- holes are drawn in the plane of their face, never as circles pasted on top of the object.
+
+For furniture CAD the base form is not a cube but a **panel / plate**.
+
+Therefore the visual language is built around:
+
+- thin rectangular plate;
+- frame parallelepiped;
+- cabinet module;
+- section / shelf / upright;
+- fastener connection.
+
+---
+
+## 10. Universal Rules for Building Meaning
+
+### 10.1. If the tool is built by points
+
+Show:
+
+- the final geometry;
+- the control points;
+- a small air gap between a point and the line.
+
+General rule:
+
+```text
+points explain the construction method,
+line explains the result.
+```
+
+It does not matter whether it is an arc, a spline, a circle or a polyline; the principle is the
+same.
+
+### 10.2. If the tool is built from a centre, axis or plane
+
+Show:
+
+- the centre / axis / plane as auxiliary geometry;
+- the result as main geometry;
+- the link between them through a dashed line, a radius, a guide or a projection.
+
+General rule:
+
+```text
+support geometry is thin,
+created geometry is expressive.
+```
+
+### 10.3. If the tool modifies an existing object
+
+Show:
+
+- the source object neutrally;
+- the changed area with the emphasis;
+- if necessary, a short arrow for the direction of change.
+
+General rule:
+
+```text
+the user must see which part of the object will change.
+```
+
+This applies to:
+
+- edge;
+- chamfer;
+- fillet;
+- offset;
+- thickening;
+- cutout;
+- extension;
+- splitting;
+- parametric change.
+
+### 10.4. If the tool creates a new object from an old one
+
+Show two entities:
+
+```text
+source → result
+```
+
+Source:
+
+- neutral;
+- thinner;
+- less contrast.
+
+Result:
+
+- emphasised;
+- slightly heavier visually;
+- first in attention.
+
+This is how to think about:
+
+- copying;
+- array;
+- mirror;
+- offset;
+- extrusion;
+- sweep;
+- profile revolution.
+
+### 10.5. If the tool removes material
+
+Show not just a symbol but **the absence of material**:
+
+- cutout;
+- empty area;
+- open inner face;
+- removed sector;
+- hole;
+- slot.
+
+For furniture CAD a hole is a normal production operation, not a danger. Therefore:
+
+- manual deletion of an object — `REMOVE`, with a clear absence or a trash metaphor;
+- technical hole or drilling — usually `ACTIVE` or `BASE + ACTIVE`.
+
+Do not paint a production hole red just because it removes material.
+
+### 10.6. If the tool connects objects
+
+Show:
+
+- two distinguishable parts;
+- the connection point;
+- a short connection marker / fastener / alignment axis.
+
+Do not draw many small hardware pieces. Show the fact of connection.
+
+General rule:
+
+```text
+two parts + a clear connection point
+```
+
+### 10.7. If the tool is parametric
+
+Show:
+
+- the object;
+- the changed parameter;
+- a dimension line / handle / direction of change.
+
+Do not use text or numbers inside the icon.
+
+Bad:
+
+```text
+W=600
+```
+
+Good:
+
+```text
+panel + dimension line along the width + an emphasised change handle
+```
+
+### 10.8. If the tool relates to room or module layout
+
+Show:
+
+- a simplified room contour;
+- the furniture module as a volumetric block;
+- the active module or installation location with the emphasis.
+
+Do not draw household details such as handles, legs or decor unless they are the command's meaning.
+
+### 10.9. If the tool relates to drawings, reports or cutting layout
+
+Use flat language:
+
+- sheet;
+- projection;
+- dimension;
+- table;
+- cutting rectangles;
+- cut lines.
+
+Do not add a 3D panel when the command works only with the document.
+
+---
+
+## 11. Air and Gaps
+
+Air is part of the meaning.
+
+A gap shows that elements are different:
+
+- a construction point is not part of the line;
+- a guide is not the object;
+- the emphasised element is separated from the base;
+- hardware is not merged with the panel;
+- a new result is separated from its source.
+
+Minimum gap: `1.5–2` units on the 24 grid.
+
+Air must be real:
+
+- break the path;
+- or change the geometry so the gap exists.
+
+Do not cover a line with a background-coloured patch, and do not rely on `mask` or `clipPath`: the
+theme may change the background, and the loader does not allow those elements anyway (§15).
+
+---
+
+## 12. Attention Hierarchy
+
+An icon must have one main focus.
+
+Attention order:
+
+1. action result;
+2. object being acted upon;
+3. auxiliary construction;
+4. decorative detail — prohibited.
+
+If the user sees the guide first and not the result, the hierarchy is wrong.
+
+---
+
+## 13. Visual Perception Rules
+
+### 13.1. Form is more important than colour
+
+An icon must be understandable in one ink. That is the normal case, not a fallback.
+
+If two elements are told apart only by colour, the icon is wrong.
+
+### 13.2. One operation, one emphasis
+
+If an icon has three competing active elements, the user does not know what is main.
+
+Allowed:
+
+```text
+one changed face
+one arrow
+one group of holes as a single result
+one new contour
+```
+
+Not allowed:
+
+```text
+arrow + dimensions + points + an entire object highlighted in different ways
+```
+
+### 13.3. Similar actions look related
+
+Commands from the same family share a visual pattern:
+
+- different ways to build an arc share the main arc but differ in control elements;
+- different array types share repeated elements but differ in guides;
+- different edge operations share the panel and the emphasised end.
+
+The difference shows the command difference, not the author's mood.
+
+### 13.4. Opposite actions are visually connected
+
+Paired operations use the same grammar:
+
+- add / remove;
+- connect / disconnect;
+- expand / shrink;
+- enable / disable;
+- show / hide.
+
+Deletion still shows a clear sign of absence, not merely a different treatment.
+
+---
+
+## 14. Furniture Specifics
+
+The main object of the system is not an abstract cube but a furniture construction.
+
+Visual dictionary:
+
+| Entity | How to depict |
+|---|---|
+| furniture dimension | thin frame parallelepiped |
+| panel | thin plate / rectangular part |
+| upright | vertical panel |
+| shelf | horizontal panel |
+| facade | front flat panel |
+| drawer | elongated volume / box |
+| hardware | compact technical element |
+| hole | void in a part face |
+| edge | emphasised end |
+| fastener | connector between parts |
+| room | flat or volumetric room contour |
+| module | simplified cabinet / block |
+| drawing | sheet + projection |
+| cutting layout | sheet / plate + nested rectangles |
+| report | sheet + table structure |
+
+Do not use wood texture in ordinary icons. Wood, material and texture appear only when the command is
+specifically about material.
+
+---
+
+## 15. Technical SVG Rules
+
+The agent creates the SVG by hand. There are no generator scripts and no Python; if automation is
+ever needed it is a Rust `xtask` subcommand, never a second toolchain.
+
+Allowed elements:
+
+- `path`;
+- `rect` (with `rx` when a rounded corner is intended);
+- `circle`;
+- `ellipse`;
+- `line`;
+- `polyline`;
+- `polygon`;
+- `g` and its `transform`.
+
+Forbidden:
+
+- `defs`, `clipPath`, `mask`, `style`, `class`;
+- filters, shadows, blur, gradients, patterns;
+- embedded raster images, fonts, text;
+- external references, editor metadata, `<title>`/`<desc>`.
+
+Drawing rules:
+
+- `fill="none"`, `stroke="#000"`, one ink; a solid silhouette may use `fill="#000"` with no stroke;
+- round caps and round joins;
+- no `scale` transform to fake another size: the loader rasterises at the size it draws;
+- at most two decimal places;
+- one drawing per file, one file per id.
+
+The naming, the folder layout and the exact attribute list are in `README.md`.
+
+---
+
+## 16. What the Agent Must Do Before Drawing
+
+Before creating the SVG, formulate:
+
+```text
+1. Object:
+   What is depicted?
+
+2. Action:
+   What changes or is created?
+
+3. Method:
+   What input elements explain the method?
+
+4. Result:
+   Which part carries the emphasis?
+
+5. Unnecessary:
+   What details can be removed?
+```
+
+For a service icon add:
+
+```text
+6. Convention:
+   Which standard glyph does the user already know for this verb,
+   and which enclosure (circle, triangle) marks its status?
+```
+
+Example, as a thought process rather than a rigid form:
+
+```text
+Object: curve.
+Action: construction by control points.
+Method: points must be visible.
+Result: the curve itself.
+Unnecessary: axes, dimensions, decorative markers.
+```
+
+---
+
+## 17. Quality Check
+
+An icon is ready only if:
+
+- the action is understandable without text;
+- the result matters more than the source;
+- auxiliary elements do not compete with the result;
+- the icon uses one ink and survives having no colour at all;
+- it reads at 16 px on the panel background and does not turn into mush;
+- no decorative lines;
+- no random colours;
+- no background-coloured patch instead of a real gap;
+- the geometric metaphor matches the real operation;
+- a service icon is the same glyph on every surface that shows the action, and a destructive action
+  keeps its label or confirmation;
+- status and action are told apart by shape (enclosure), not by hue.
+
+---
+
+## 18. Most Important Rule for the Agent
+
+Do not draw a command icon as an abstract symbol.
+
+Draw:
+
+```text
+a visual explanation of the action
+```
+
+The user must see:
+
+- what was;
+- what will change;
+- by what method it is built;
+- which part is the result.
+
+If an icon is beautiful but the action is unclear, it is bad.
+
+If an icon is simple but a professional understands the command immediately, it is good.
+
+---
+
+Final style formulation:
+
+> **Graphite technical interface, one ink, emphasis carried by weight and real gaps. Neutral furniture
+> volumes, thin guides, clear control points, the strongest treatment only on the result. Flat for
+> sketches and documents, volumetric for parts and form operations; service chrome is flat, heavy and
+> shaped. Each icon explains the action through geometry, not through decorativeness.**
+
+---
+
+## 19. Service and Interface Actions
+
+These icons do not explain a CAD operation. They explain an interface verb: confirm, cancel, undo,
+delete, save, warning. They are chrome and follow their own grammar; §8–§10 do not apply.
+
+### 19.1. Scope
+
+Confirm/apply, dismiss/close surface, cancel pending input, undo/redo, add/remove, delete, duplicate,
+rename, copy/paste, file new/open/save/export/import, print, settings, search, visibility, lock,
+expand/collapse, warning/error/info/help.
+
+A geometry command that happens to sit in a toolbar is not a service icon. A service icon that
+appears in a toolbar does not become a geometry icon.
+
+### 19.2. Grammar
+
+- Flat, monochrome, no axonometry, no panel, no guide, no control point, no dashed line, no
+  dimension.
+- One glyph = one action, identical in menu, toolbar, dialog and shortcut reference. Never two
+  metaphors for one verb.
+- Readable at 16 px: a solid silhouette or a stroke of at least 2 units on the 24 grid; no detail
+  below 1 unit. Remove detail instead of shrinking it.
+- Right/down means forward, apply, export, open; left/up means back, import, undo. Never rotate an
+  icon to reuse it.
+- Paired actions share weight, anchor and grammar; only the distinguishing element mirrors
+  (undo/redo, add/remove, lock/unlock, show/hide).
+- At most one modifier mark per glyph (plus, minus, exclamation), 7–8 units, always in the same
+  corner, separated by a real 1.5-unit gap.
+- Bare glyph = action; enclosed glyph (circle or triangle) = status. A bare check means confirm; a
+  check inside a circle means success. This keeps action and status apart without colour.
+- Hover, pressed, disabled and toggled are theme states. Never a second SVG and never an extra shape
+  for a state.
+
+### 19.3. Metaphors
+
+| Action | Glyph | Rule |
+|---|---|---|
+| confirm / apply | bare check | commits the pending change |
+| dismiss / close surface | X | closes a panel or dialog; not a document operation |
+| cancel pending input | X or a back arrow | discards what was typed; never a trash |
+| undo / redo | open arc with an arrowhead, mirrored | a closed loop is refresh, not undo |
+| delete | trash can | never an X; irreversible delete keeps its label |
+| add / remove | plus / minus | remove-from-list is a minus, not a trash |
+| duplicate | two offset sheets | |
+| rename | sheet + pencil | |
+| copy / paste | two sheets / clipboard | |
+| file new | sheet with a folded corner | |
+| file open | folder | |
+| file save | sheet + down arrow into a tray | |
+| file export / import | sheet + arrow out right / in left | |
+| print | sheet above a printer bar | |
+| settings | gear, 6–8 teeth | |
+| search | magnifier, handle at 45° | |
+| visible / hidden | eye / eye with a slash | |
+| lock / unlock | padlock, shackle closed / open | |
+| expand / collapse | chevron down / right | one direction convention |
+| warning | triangle with exclamation | risk of data loss or invalid geometry |
+| error | circle with exclamation | a failure that already happened |
+| info | circle with i | |
+| help | circle with question mark | |
+
+A rare action does not earn a glyph. Save-as, replace, go-to and similar stay text-only until a
+second surface needs them; then they get one glyph, not a decorated variant.
+
+### 19.4. Emphasis and colour
+
+Service icons are ink only. The theme may apply a status colour, but the shape must carry the
+meaning alone. The action accent belongs to the interface theme, never to chrome: a save icon is not
+orange because saving is useful.
+
+### 19.5. Size
+
+Service icons share the 24 grid and are drawn heavier and simpler than geometry icons (2.0–2.4
+units, solid shapes). They are not shrunken toolbar drawings.
+
+### 19.6. Files
+
+`assets/icons/actions/<name>.svg`, kebab-case: `confirm`, `dismiss`, `cancel`, `undo`, `redo`,
+`delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`,
+`file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `visible`, `hidden`,
+`lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help`.
+
+A theme owns its icons: `contour/close` closes a ring, `actions/dismiss` dismisses a surface. They are
+different actions with different glyphs; never rename a geometry action to free a name.
+
+### 19.7. Additions to the quality check
+
+- reads at 16 px without colour;
+- one glyph used by every surface that shows the action;
+- destructive actions keep a label or a confirmation;
+- status and action are told apart by enclosure, not by hue.
