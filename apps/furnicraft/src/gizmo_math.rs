@@ -475,6 +475,16 @@ impl WorkPlane {
         Placement::new(DVec3::ZERO, rotation).ok()
     }
 
+    /// A placement whose local origin sits at plane coordinates `local`.
+    ///
+    /// The rotation is the plane's own, so the object's local XY lies on the work plane while its
+    /// origin is the clicked point.
+    #[allow(dead_code, reason = "the primitive placement consumes it in the shell in U21")]
+    pub(crate) fn placement_at(self, local: DVec2) -> Option<Placement> {
+        let rotation = self.placement()?.rotation();
+        Placement::new(self.world(local), rotation).ok()
+    }
+
     /// The world point where a ray meets the plane, or `None` when it is parallel or behind.
     #[allow(dead_code, reason = "the drawing tools start from these points in U13-U14")]
     pub(crate) fn ray_point(self, ray: Ray) -> Option<DVec3> {
@@ -1116,6 +1126,17 @@ mod tests {
             assert_vector(placement.transform_point(DVec3::Y), plane.v, "local Y is the plane v axis");
             assert_vector(placement.transform_point(DVec3::Z), plane.normal(), "local Z is the plane normal");
         }
+    }
+
+    #[test]
+    fn a_work_plane_placement_at_a_point_moves_the_origin_only() {
+        let camera = orthographic_view(DVec3::Z);
+        let plane = WorkPlane::from_camera(camera);
+        let local = DVec2::new(120.0, -45.0);
+        let placement = plane.placement_at(local).expect("a plane point has a placement");
+        assert_vector(placement.transform_point(DVec3::ZERO), DVec3::new(120.0, -45.0, 0.0), "the origin is the click");
+        assert_vector(placement.transform_point(DVec3::X), DVec3::new(121.0, -45.0, 0.0), "local X is the plane u");
+        assert_vector(placement.transform_point(DVec3::Y), DVec3::new(120.0, -44.0, 0.0), "local Y is the plane v");
     }
 
     #[test]
