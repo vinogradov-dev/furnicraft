@@ -28,6 +28,7 @@ mod placement_card;
 mod properties_card;
 mod scene_tree;
 mod section;
+pub mod ui_scale;
 
 use std::collections::HashSet;
 
