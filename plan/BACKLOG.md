@@ -23,10 +23,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U24** the icon contract: one ink on a 24 grid, three icon families, a service-action grammar
-  in a new `actions` theme, one ADR, and a read trigger that fires only while an icon is drawn or
-  edited.
-  `files: assets/icons/STYLE_GUIDE.md, assets/README.md, AGENTS.md`
 - `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
   MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
   `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,
@@ -122,6 +118,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U24** the icon contract: one ink on a 24 grid, three families (geometry, view, service), the
+  service grammar and its `actions` theme, ADR 0047, and `AGENTS.md` §4.12 plus the `draw-icon` skill
+  so the guide is read only while an icon is drawn or edited — `e473342`
 - `[x]` **U1** the icon resource tree: `assets/icons/` with one directory per toolbar theme and one
   zero-byte SVG per icon (contour, primitives, bodies, scene, view — 21 placeholders), plus
   `assets/README.md` with the naming, the 24 × 24 grid, the geometry-only format and the empty-file
