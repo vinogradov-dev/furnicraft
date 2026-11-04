@@ -40,7 +40,7 @@ use furnicraft_mesh::object_mesh;
 use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
-use furnicraft_scene::{Camera, SceneFrame};
+use furnicraft_scene::{Camera, Projection, SceneFrame};
 use furnicraft_ui::{Editor, MeshElement, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
@@ -500,7 +500,7 @@ impl FurniCraftApp {
 
         // Looking through an authored camera pins the view: navigation would move a camera the
         // document owns, and a command is the only way to edit document data.
-        let navigable = self.session.project().active_camera().is_none();
+        let navigable = viewport_owns_view(self.session.project());
         if navigable && response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
             if scroll != 0.0 {
@@ -762,8 +762,10 @@ impl FurniCraftApp {
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
             let mut reset = false;
+            let mut toggle_projection = false;
             let mut apply_contour = false;
             let mut cancel_contour = false;
+            let owns_view = viewport_owns_view(self.session.project());
             let mesh_selection = self.editor.mesh_edit().map(|edit| {
                 let count = match edit.element() {
                     MeshElement::Vertex => edit.vertices().len(),
@@ -780,6 +782,17 @@ impl FurniCraftApp {
                 ui.separator();
                 reset = ui.button("Frame all  (F)").clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
+                ui.separator();
+                let (projection_label, projection_hint) = match self.scene.camera.projection() {
+                    Projection::Perspective { .. } => ("Orthographic  (O)", "Switch the view to orthographic"),
+                    Projection::Orthographic { .. } => ("Perspective  (O)", "Switch the view to perspective"),
+                };
+                let projection_response = ui
+                    .add_enabled(owns_view, egui::Button::new(projection_label))
+                    .on_hover_text(projection_hint)
+                    .on_disabled_hover_text("An authored camera owns the projection");
+                toggle_projection = projection_response.clicked();
+                toggle_projection |= owns_view && ui.input(|input| input.key_pressed(egui::Key::O));
                 ui.separator();
                 ui_scale::show(ui);
                 ui.separator();
@@ -832,10 +845,21 @@ impl FurniCraftApp {
             if reset {
                 self.reset_view();
             }
+            if toggle_projection && owns_view {
+                self.view_camera.toggle_projection();
+            }
             ui.separator();
             self.viewport(ui);
         });
     }
+}
+
+/// Whether the viewport owns its view.
+///
+/// An authored camera stores its placement and projection in the document, so looking through one
+/// pins both navigation and the projection toggle; a command is the only way to change either.
+fn viewport_owns_view(project: &Project) -> bool {
+    project.active_camera().is_none()
 }
 
 /// World placements a drag previews for cameras and lights.
@@ -1026,6 +1050,16 @@ mod tests {
             )
             .expect("light");
         Fixture { project, rig, camera, light }
+    }
+
+    #[test]
+    fn an_authored_camera_takes_the_view_out_of_the_viewport() {
+        let mut fixture = fixture();
+        assert!(viewport_owns_view(&fixture.project), "the built-in camera is view state");
+        fixture.project.set_active_camera(Some(fixture.camera)).expect("activate the camera");
+        assert!(!viewport_owns_view(&fixture.project), "an authored camera owns navigation and projection");
+        fixture.project.set_active_camera(None).expect("clear the camera");
+        assert!(viewport_owns_view(&fixture.project));
     }
 
     #[test]

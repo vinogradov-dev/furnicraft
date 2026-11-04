@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U11** orthographic ↔ perspective as view state, with a strip button and a key, the ortho
-  height taken from the current frame; an authored camera is untouched.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/gizmo.rs`
+- `[ ]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
+  and perspective, and the screen-to-plane mapping; tests for the six standard views.
+  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/main.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
-  and perspective, and the screen-to-plane mapping; tests for the six standard views.
-  `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
   free mode, as pure functions with table tests.
   `files: apps/furnicraft/src/gizmo_math.rs`
@@ -89,6 +86,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U11** orthographic ↔ perspective as view state: `Camera::toggle_projection` keeps the
+  visible height, the strip has a button and `O`, and an authored camera is untouched — `c195d45`
 - `[x]` **U10** shape constructors: `Path::rectangle` from two corners, `Path::circle` as four
   quarter arcs and `Path::arc_through`, with degenerate input refused — `13c90b3`
 - `[x]` **U9** `object.path.create` and `object.path.replace`, one undo entry each, with ADR 0048 and
