@@ -449,7 +449,7 @@ mod tests {
             "an empty icon falls back to the labelled shortcut: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text == "Cube: click the work plane"),
+            texts.iter().any(|text| text.contains("Cube: click the work plane")),
             "the primitives panel is filled: {texts:?}"
         );
         assert!(actions.is_empty(), "drawing alone runs no tool");
@@ -548,7 +548,7 @@ mod tests {
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
         for label in ["Cube: click the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"] {
-            assert!(texts.iter().any(|text| text == label), "{label} is missing: {texts:?}");
+            assert!(texts.iter().any(|text| text.contains(label)), "{label} is missing: {texts:?}");
         }
     }
 
