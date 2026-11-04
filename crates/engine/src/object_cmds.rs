@@ -33,6 +33,10 @@ pub const MAX_PRIMITIVE_SIZE: Length = Length::from_micrometres(10_000_000);
 pub enum PrimitiveKind {
     /// A cube centred on the object's local origin.
     Cube,
+    /// An upright cylinder whose diameter and height equal the size.
+    Cylinder,
+    /// A sphere whose diameter equals the size.
+    Sphere,
 }
 
 /// Parameters for `object.primitive.create`.
@@ -84,8 +88,11 @@ fn object_primitive_create_run(
         });
     }
     let mesh = match params.primitive {
-        PrimitiveKind::Cube => Mesh::cube(params.size).map_err(ProjectError::from)?,
-    };
+        PrimitiveKind::Cube => Mesh::cube(params.size),
+        PrimitiveKind::Cylinder => Mesh::cylinder(params.size),
+        PrimitiveKind::Sphere => Mesh::sphere(params.size),
+    }
+    .map_err(ProjectError::from)?;
     let id = project.add_object(params.parent, params.name, params.placement, Geometry::Mesh(mesh))?;
     Ok(CommandOutcome::created(id))
 }
@@ -381,6 +388,43 @@ mod tests {
         session.undo().expect("undo");
         assert_eq!(session.project().revision().get(), 2, "undo advances the revision to invalidate caches");
         assert!(session.project().object(id).is_none());
+    }
+
+    #[test]
+    fn every_primitive_kind_creates_its_mesh() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let size = Length::from_millimetres(100).expect("length");
+        let cases = [
+            (PrimitiveKind::Cube, 8, 6),
+            (
+                PrimitiveKind::Cylinder,
+                furnicraft_model::PRIMITIVE_SEGMENTS * 2,
+                furnicraft_model::PRIMITIVE_SEGMENTS + 2,
+            ),
+            (
+                PrimitiveKind::Sphere,
+                2 + furnicraft_model::PRIMITIVE_SEGMENTS * (furnicraft_model::PRIMITIVE_SPHERE_BANDS - 1),
+                furnicraft_model::PRIMITIVE_SEGMENTS * furnicraft_model::PRIMITIVE_SPHERE_BANDS,
+            ),
+        ];
+        for (primitive, vertices, faces) in cases {
+            let params = serde_json::to_value(ObjectPrimitiveCreate {
+                parent: session.project().root().id(),
+                name: "Primitive".to_owned(),
+                primitive,
+                size,
+                placement: Placement::IDENTITY,
+            })
+            .expect("params serialize");
+            let outcome = session.dispatch(OBJECT_PRIMITIVE_CREATE_ID, &params).expect("create the primitive");
+            let id = outcome.created_id().expect("an id");
+            let object = session.project().object(id).expect("object");
+            let mesh = object.geometry().as_mesh().expect("mesh payload");
+            assert_eq!(mesh.positions().len(), vertices, "{primitive:?} vertices");
+            assert_eq!(mesh.faces().len(), faces, "{primitive:?} faces");
+            assert_eq!(mesh.bounds_micrometres(), ([-50_000; 3], [50_000; 3]), "{primitive:?} bounds");
+        }
+        assert_eq!(session.project().revision().get(), 3, "one command per primitive");
     }
 
     #[test]
