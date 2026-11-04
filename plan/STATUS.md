@@ -1,10 +1,10 @@
 # Status
 
-STATE: milestone=M7 phase=U task=P3 state=doing base=HEAD updated=2026-11-04
+STATE: milestone=M7 phase=U task=X2 state=idle base=HEAD updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
-only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and the backlog's
-`Now` section — `cargo xtask status` prints both; `AGENTS.md` §1.1 orders a broken or interrupted plan.
+only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
+`cargo xtask status` prints both; `AGENTS.md` §1.1 orders a broken or interrupted plan.
 
 ## Where we are
 
@@ -29,35 +29,35 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   every outline — rectangle or stored ring — resolves to one `geom::Region`; machining is one ordered
   list of anchored records whose static kind table drives both the staged effects in `crates/param`
   and the card sections in `crates/ui/src/machining/` (ADRs 0044–0046, schema 16).
-- The UI plan is approved (2026-11-03, U1–U23): themed toolbars — Scene, Contour, Primitives, Bodies —
-  with SVG icons rasterised at render size, no creation buttons in the scene tree, a flat contour
-  stored as a document `Path` (schema 17), a work plane from the current ortho view and an
-  ortho/perspective toggle. U24 fixes the icon contract: one ink on a 24 grid, three families and the
-  service grammar in an `actions` theme (ADR 0047).
+- The UI plan is approved (2026-11-03, U1–U23) and shipped: themed toolbars — Scene, Contour,
+  Primitives, Bodies — with SVG icons rasterised at render size, no creation buttons in the scene
+  tree, a flat contour stored as a document `Path` (schema 17), a work plane from the current ortho
+  view and an ortho/perspective toggle. U24: one ink on a 24 grid, three families (ADR 0047).
 - S4 is complete: `crates/mesh` owns `EvaluationCache`, one entry per node keyed by the derivation
   inputs the mesh was built from, so a rebuild reuses every node an edit did not touch; a pass that
   visits fewer nodes prunes theirs. The viewport and `object.collapse` share
   `evaluate_constructive`, so a collapsed object keeps the shape the user saw (ADR 0053).
-- U2–U3 build the icon resources: `assets/icons/**` is embedded in `crates/ui/src/icons.rs`,
-  `icon_button` draws at 16 pt tinted and falls back to its label, and the zoom slider rasterises at
-  the new pixel size. U7–U23 draw and pick a `Path`, toggle the projection, take the work plane from
-  the standard views, snap, build a chain and commit it as one path object (ADRs 0048–0052). The
-  toolbar strip is the only creator: it places a primitive and extrudes a closed path, refusing an
-  open one with a readable reason.
-- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
-  a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
-- `cargo xtask status` opens a session with the state line, the head commit and the note's
-  `task`/`now`/`blocked`/`run` while a task runs, before the task and the next three.
+- `assets/icons/**` is embedded in `crates/ui/src/icons.rs`; `icon_button` draws at 16 pt tinted and
+  falls back to its label, and the zoom slider rasterises at the new pixel size. U7–U23 draw and pick
+  a `Path`, toggle the projection, take the work plane from the standard views, snap, build a chain
+  and commit it as one path object (ADRs 0048–0052). The toolbar strip is the only creator: it places
+  a primitive and extrudes a closed path, refusing an open one with a readable reason.
+- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
+  1024 sampled points cannot be extruded — moved to `## Now`, its options in `plan/questions.md`.
+  `cargo xtask status` prints the state line, the head commit, the note and what comes next.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. The plan gate is its own
   crate: `state-contract` (L0, no dependencies) parses and checks the three files, and ships the
-  templates, the agent section and the license texts; `updated=` must be a date no older than the
-  `base` commit's own (P2). Gate: `cargo xtask ci` — green. Branches: `dev`, merged to `main` with
-  `--no-ff` after a green gate (AGENTS §6.2).
+  templates, the agent section and the license texts; `updated=` must be a real date no older than
+  the `base` commit, and `task=` must name the first unfinished task in `## Now` (P2–P3). Gate:
+  `cargo xtask ci` — green. Branches: `dev`, merged to `main` with `--no-ff` (AGENTS §6.2).
 
 ## Next
 
-P3 is next: the current task must be the first unfinished one in `## Now`, promoted into the gate
-once the backlog has settled. X2 waits.
+X2 is next: a legal ring must extrude whatever its sample count. The ring samples at 50 µm, one
+extrusion cap is one document face and `MAX_FACE_VERTICES` bounds it at 1024, while a legal ring may
+hold 256 segments — so a smooth ring of a few turns is refused. The three ways out — raise the cap,
+split a cap into several faces, or sample large rings coarser — are an owner decision, so X2 starts
+with the answer, then a regression test that failed before the fix.
 
 ## Index
 

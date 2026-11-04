@@ -25,11 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
-  the gate once the backlog has settled. `files: state-contract/src/validate.rs`
-
-## Bugs
-
 - `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
   Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
   A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
@@ -38,9 +33,16 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
   `files: crates/param/src/lib.rs, crates/model/src/object.rs`
 
+## Bugs
+
 ## Next
 
 ## Done
+
+- `[x]` **P3** `STATE: task=` must name the first unfinished task in `## Now`: `first_unfinished`
+  takes the first not-`[x]` line there, a later task is a violation that names the skipped one,
+  `## Bugs`/`## Next` stay outside the order, and a stray `[x]` in `## Now` keeps its own error —
+  `0190f91`
 
 - `[x]` **P2** `updated=` is a `YYYY-MM-DD` calendar date and never earlier than the `base` commit's
   date: `calendar_date` checks the shape and the month, `Git::commit_date` reads `%cs`, and the
