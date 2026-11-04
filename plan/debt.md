@@ -6,7 +6,7 @@ is not part of a session start. An entry leaves this file when the fix lands.
 Tags: `[view-state]` session versus document, `[render]` lighting and drawing, `[mesh]` geometry
 editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]` tree and files,
 `[gizmo]` manipulation, `[types]` properties and furniture types, `[engine]` commands and history,
-`[perf]` frame and picking cost, `[assistant]`, `[vendor]`.
+`[perf]` frame and picking cost, `[assistant]`, `[ui]` panels, toolbars and icon artwork, `[vendor]`.
 
 - `[view-state]` Selection and open containers still live in `ui::Editor` and the view camera in the
   shell, although ADR 0029 places them in the session. Cameras and lights are document nodes with
@@ -98,3 +98,8 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   machining, then a bend applied to the finished body; the operation pipeline needs a post/deform
   stage and the panel card a bend section. No geometry is stored until that stage exists.
 - `[vendor]` `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.
+- `[ui]` 33 of the 51 declared icons are zero-byte placeholders: the whole `actions` theme (30,
+  including undo, redo, delete, save, warning) plus `primitives/cone`, `bodies/revolve` and
+  `bodies/sweep`. The empty-file fallback keeps every surface usable with its text label, but no
+  service action has a glyph yet and no icon set has been drawn past the first 18. See
+  `assets/icons/AUDIT.md` §5 and ADR 0055.

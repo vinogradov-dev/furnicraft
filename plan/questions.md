@@ -32,3 +32,8 @@ this file only when a task touches the question.
   the limit: raise `MAX_FACE_VERTICES`, split a cap into several faces, or sample large rings coarser.
 - Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
+- Icons (ADR 0055): whether one semantic accent token joins the one-ink rule for the "result"
+  fill/stroke and toggled-on view buttons, and if so whether it covers every result or only
+  creation/edit results; whether 20 pt tool buttons fit the current 16 pt row height or the set keeps
+  16 pt everywhere and relies on tone alone; and whether `assets/README.md`'s "a shared drawing is two
+  files" rule survives the icon alias table.

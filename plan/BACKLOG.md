@@ -25,6 +25,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
+  instead of handing it to `Image::tint`, whose `vertex_colour × texture` product makes a `#000`
+  master black in every theme. Rasterise with `egui_extras::image::load_svg_bytes_with_size` at
+  `pt × pixels_per_point`, cache a `TextureHandle` per `(uri, px)`, paint through `Painter::image` in
+  `visuals.widgets.inactive.fg_stroke.color` (hover/press from the widget state, disabled an alpha
+  multiply). Masters switch to `#fff`; toolbar sizes split into 20 pt tools and 16 pt inline. A pixel
+  test draws one icon in both themes and asserts the theme colour in the uploaded pixels, an
+  identical alpha silhouette and a raster of `round(pt × ppp)` — it fails on today's code. ADR 0055,
+  `assets/README.md` format, `files: crates/ui/src/icons.rs, assets/README.md`
+
+- `[ ]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
+  gradient or CSS) so a passive face fills at 12–18 % and the result or changed geometry at 45–60 %
+  with the heavy outline, then redraw the 18 drawn icons at a fixed footprint (ink `3..21`, coverage
+  20–45 %) on the one axonometry the guide publishes. One change updates `STYLE_GUIDE.md` §5, §7.3 and
+  §9, the draw-icon skill and a coverage test read off the rasterised alpha. ADR 0055;
+  `files: assets/icons/STYLE_GUIDE.md, crates/ui/src/icons.rs`
+
 - `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
   Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
   A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.

@@ -48,6 +48,7 @@ display: at a 16–24 px button a 2.4-unit stroke becomes 0.6–0.9 px and disap
 ## Related
 
 - [`assets/icons/STYLE_GUIDE.md`](../../assets/icons/STYLE_GUIDE.md) — meaning, composition, §19 service grammar.
+- [`assets/icons/AUDIT.md`](../../assets/icons/AUDIT.md) — the measured state of the set and the rejected alternatives; ADR 0055 refines the rasterisation and emphasis rules.
 - [`assets/README.md`](../../assets/README.md) — file format, naming, theme table.
 - [`AGENTS.md`](../../AGENTS.md) §4.12 — when the guide is read.
 - [`.opencode/skills/draw-icon/SKILL.md`](../../.opencode/skills/draw-icon/SKILL.md) — the working checklist.

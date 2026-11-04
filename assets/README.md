@@ -7,7 +7,8 @@ asks for, so this layout is part of the code's contract.
 This file is normative for the **file format** — viewBox, allowed elements, naming, the theme table.
 `STYLE_GUIDE.md` is normative for **meaning and composition**. When the two disagree, the guide wins
 on meaning and this file wins on format; fix the losing file in the same change. Read both only when
-adding, editing or reviewing an icon.
+adding, editing or reviewing an icon. `AUDIT.md` in this directory holds the measured state of the
+set and the pipeline, not the rules.
 
 ## Layout
 

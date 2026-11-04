@@ -171,7 +171,9 @@ runtime.
 
 - Read `assets/icons/STYLE_GUIDE.md` (what an icon must mean) and `assets/README.md` (what the file
   must contain) **only when adding, editing or reviewing an icon**. They are not session reading and
-  do not constrain code that merely displays an icon.
+  do not constrain code that merely displays an icon. `assets/icons/AUDIT.md` holds the measured
+  state of the set and the options that were rejected; read it when reconsidering the pipeline, not
+  when drawing.
 - The guide wins on meaning, the README wins on file format; when they disagree, fix the losing file
   in the same change.
 - A new icon ships with its file, its row in the README theme table, the button that draws it and a
@@ -302,7 +304,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `BRIEF.md` — the owner's original brief; do not edit it to match the code.
 - `ATTRIBUTION.md` — vendored and bundled third-party components, their licenses and modifications.
 - `assets/icons/STYLE_GUIDE.md` — icon visual language; read only when drawing or editing an icon
-  (`assets/README.md` holds the file format).
+  (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
