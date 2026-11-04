@@ -23,8 +23,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
-  `files: state-contract/src/validate.rs`
+- `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
+  the gate once the backlog has settled. `files: state-contract/src/validate.rs`
 
 ## Bugs
 
@@ -38,10 +38,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
-  the gate once the backlog has settled. `files: state-contract/src/validate.rs`
-
 ## Done
+
+- `[x]` **P2** `updated=` is a `YYYY-MM-DD` calendar date and never earlier than the `base` commit's
+  date: `calendar_date` checks the shape and the month, `Git::commit_date` reads `%cs`, and the
+  comparison runs only when the base resolves — `38057a2`
 
 - `[x]` **P1** `cargo xtask status` prints `head <short hash>` and, while `state=doing`, the note's
   `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command: `Summary`

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=P2 state=idle base=HEAD updated=2026-11-04
+STATE: milestone=M7 phase=U task=P3 state=idle base=HEAD updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and the backlog's
@@ -35,10 +35,9 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   ortho/perspective toggle. U24 fixes the icon contract: one ink on a 24 grid, three families and the
   service grammar in an `actions` theme (ADR 0047).
 - S4 is complete: `crates/mesh` owns `EvaluationCache`, one entry per node keyed by the derivation
-  inputs the mesh was built from, and a rebuild reuses every node an edit did not touch. An entry
-  keeps the revision that built it as an observable stamp; a pass that visits fewer nodes prunes
-  theirs. The viewport and `object.collapse` share `evaluate_constructive`, so a collapsed object
-  keeps the shape the user saw (ADR 0053).
+  inputs the mesh was built from, so a rebuild reuses every node an edit did not touch; a pass that
+  visits fewer nodes prunes theirs. The viewport and `object.collapse` share
+  `evaluate_constructive`, so a collapsed object keeps the shape the user saw (ADR 0053).
 - U2–U3 build the icon resources: `assets/icons/**` is embedded in `crates/ui/src/icons.rs`,
   `icon_button` draws at 16 pt tinted and falls back to its label, and the zoom slider rasterises at
   the new pixel size. U7–U23 draw and pick a `Path`, toggle the projection, take the work plane from
@@ -51,13 +50,14 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   `task`/`now`/`blocked`/`run` while a task runs, before the task and the next three.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. The plan gate is its own
   crate: `state-contract` (L0, no dependencies) parses and checks the three files, and ships the
-  templates, the agent section and the license texts. Gate: `cargo xtask ci` — green.
-- Branches: work on `dev`, merge to `main` with `--no-ff` after a green gate (AGENTS §6.2).
+  templates, the agent section and the license texts; `updated=` must be a date no older than the
+  `base` commit's own (P2). Gate: `cargo xtask ci` — green. Branches: `dev`, merged to `main` with
+  `--no-ff` after a green gate (AGENTS §6.2).
 
 ## Next
 
-P2 is next: `updated=` must be `YYYY-MM-DD` and no earlier than the `base` commit's date, so the
-plan cannot claim a state older than the code it describes. P3 follows; X2 waits.
+P3 is next: the current task must be the first unfinished one in `## Now`, promoted into the gate
+once the backlog has settled. X2 waits.
 
 ## Index
 
