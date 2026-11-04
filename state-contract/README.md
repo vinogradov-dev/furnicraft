@@ -16,9 +16,10 @@ The contract is three files under `plan/`:
 
 `state_contract::check(root)` parses them, cross-checks them and returns a `Summary`, or every
 violation as a readable sentence. `state_contract::status(root)` returns the block a task runner
-prints at the start of a session: the state line, the current task and the next three. The check also
-reads `README.md`, when the project has one, and rejects a status line or a milestone there: a README
-describes the product, the state lives in `plan/STATUS.md`.
+prints at the start of a session: the state line, the head commit, the session note's
+`task`/`now`/`blocked`/`run` while a task runs, and the current task with the next three. The check
+also reads `README.md`, when the project has one, and rejects a status line or a milestone there: a
+README describes the product, the state lives in `plan/STATUS.md`.
 
 ## Usage
 

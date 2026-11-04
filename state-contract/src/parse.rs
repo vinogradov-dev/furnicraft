@@ -275,9 +275,32 @@ pub(crate) fn session_field(session: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     session.lines().find_map(|line| {
         let value = line.trim().strip_prefix(prefix.as_str())?;
-        let value = value.trim().trim_matches('`').trim();
+        let value = unwrap_field(value.trim());
         (!value.is_empty()).then(|| value.to_owned())
     })
+}
+
+/// Strips one pair of backticks that wraps the whole value (`` `A3` `` reads as `A3`).
+///
+/// A value that merely *ends* in inline code — ``now: the arm in `src/lib.rs` `` — keeps its code
+/// span: cutting every trailing backtick would leave the sentence broken.
+fn unwrap_field(value: &str) -> &str {
+    match value.strip_prefix('`').and_then(|inner| inner.strip_suffix('`')) {
+        Some(inner) if !inner.contains('`') => inner,
+        _ => value,
+    }
+}
+
+/// Parses the fields a session resumes from; the note's free prose and step list stay unread.
+pub(crate) fn parse_session(session: &str) -> crate::Session {
+    crate::Session {
+        task: session_field(session, "task"),
+        goal: session_field(session, "goal"),
+        now: session_field(session, "now"),
+        blocked: session_field(session, "blocked"),
+        run: session_field(session, "run"),
+        resume: session_field(session, "resume"),
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +352,31 @@ mod tests {
         assert_eq!(session_field(note, "now").as_deref(), Some("the arc arm"));
         assert_eq!(session_field(note, "goal"), None, "an empty field is not a value");
         assert_eq!(session_field(note, "resume"), None);
+    }
+
+    #[test]
+    fn a_backticked_field_loses_only_its_wrapping_pair() {
+        let note = "task: `A3`\nnow: the arm in `src/lib.rs`\n";
+        assert_eq!(session_field(note, "task").as_deref(), Some("A3"), "a wrapped value unwraps");
+        assert_eq!(
+            session_field(note, "now").as_deref(),
+            Some("the arm in `src/lib.rs`"),
+            "an inner code span keeps its closing backtick"
+        );
+    }
+
+    #[test]
+    fn a_session_note_parses_into_the_fields_a_reader_resumes_from() {
+        let note = "task: A3\ngoal: arcs\n\nsteps:\n  [ ] the arm\n\nnow: the arm\nblocked: nothing\n\
+                    run: cargo test\nresume: finish the arm\n";
+        let session = parse_session(note);
+        assert_eq!(session.task.as_deref(), Some("A3"));
+        assert_eq!(session.goal.as_deref(), Some("arcs"));
+        assert_eq!(session.now.as_deref(), Some("the arm"));
+        assert_eq!(session.blocked.as_deref(), Some("nothing"));
+        assert_eq!(session.run.as_deref(), Some("cargo test"));
+        assert_eq!(session.resume.as_deref(), Some("finish the arm"));
+        assert_eq!(parse_session("# empty\n"), crate::Session::default(), "a note without fields parses empty");
     }
 
     #[test]
