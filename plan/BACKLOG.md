@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U8** pick a path: the nearest ray-to-segment hit returns a document `Id`, never an index.
+- `[~]` **U8** pick a path: the nearest ray-to-segment hit returns a document `Id`, never an index.
   `files: crates/scene/src/lib.rs, apps/furnicraft/src/mesh_pick.rs`
 
 ## Bugs
