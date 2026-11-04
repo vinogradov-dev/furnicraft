@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U13** snapping on the work plane: a 10 mm grid, the ends of the draft, an axis lock and a
-  free mode, as pure functions with table tests.
-  `files: apps/furnicraft/src/gizmo_math.rs`
+- `[ ]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
+  closing, with the document untouched until commit.
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U14** a drawing draft in the UI: a chain of segments, undo of the last point, Escape and
-  closing, with the document untouched until commit.
-  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
 - `[ ]` **U15** the drawing tools: line and polyline, an arc through three points, a rectangle and a
   circle, each producing a `Path`; tests per tool.
   `files: crates/ui/src, crates/model/src/contour.rs`
@@ -83,6 +80,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U13** snapping on the work plane: a draft end, an axis lock and the 10 mm grid as pure
+  functions, with deterministic ties and table tests — `6d64dc7`
 - `[x]` **U12** the work plane: `WorkPlane` maps the pointer onto XY, XZ or YZ from the six standard
   ortho views, world XY otherwise, with a strip label — `6c61962`
 - `[x]` **U11** orthographic ↔ perspective as view state: `Camera::toggle_projection` keeps the
