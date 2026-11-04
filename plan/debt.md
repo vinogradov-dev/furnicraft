@@ -47,8 +47,9 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   triangle vertices.
 - `[perf]` The selection highlight re-uploads every mesh when the selection changes; an incremental
   colour update or a GPU id pass can replace it.
-- `[perf]` `crates/mesh` still tessellates on every rebuild; the revision-keyed cache is not
-  implemented.
+- `[perf]` A rebuild reuses unchanged meshes, but `ViewportRenderer::upload` still recreates every GPU
+  buffer in the frame, even for drawables whose mesh handle did not change. A buffer cache keyed by
+  the mesh handle would make a one-panel edit upload one panel.
 - `[engine]` Command specs expose only an id and a label; there is no parameter schema for a model, a
   CLI or generated documentation.
 - `[engine]` History records one entry per command. A drag of a whole selection is one command, but a

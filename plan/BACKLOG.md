@@ -23,10 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
-  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
-  only changed nodes.
-  `files: crates/mesh/src/lib.rs, apps/furnicraft/src/scene_build.rs, crates/engine/src/session.rs`
+- `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
+  `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
+  `files: state-contract/src/status.rs, xtask/src/main.rs`
 
 ## Bugs
 
@@ -40,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
-  `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
-  `files: state-contract/src/status.rs, xtask/src/main.rs`
 - `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
   `files: state-contract/src/validate.rs`
 - `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
@@ -50,6 +46,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
+  `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
+  only changed nodes. The key is the node id plus the derivation inputs, because the revision is
+  document-wide and would miss on every edit; `finish` prunes unvisited nodes — `42fc9a6`
 - `[x]` **U23** extrude a selected closed path: a height field and one Extrude button in the Bodies
   panel, `Path::to_contour` under `object.extrude.create`, the body a sibling at the path's
   placement, and an open path refused with a readable reason — `098b4a3`

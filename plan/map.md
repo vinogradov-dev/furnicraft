@@ -10,7 +10,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 |---|---|---|
 | Contour ring, segment ids | `crates/model/src/contour.rs` (`Contour`, `ContourSegmentId`, `assemble`) | whole file |
 | Flat path value | `crates/model/src/contour.rs` (`Path`, `PathError`, `polyline`, `to_contour`) | open or closed chain; `to_contour` applies the ring rules and keeps the ids |
-| Path line primitive | `crates/scene/src/lib.rs` (`Polyline`, `SceneFrame::push_polyline`, `SceneFrame::pick`), `crates/render/src/lib.rs` (`polyline_vertices`), `apps/furnicraft/src/scene_build.rs` (`path_points`) | unlit chain; the renderer's line pipeline; a pick hits a segment within `LINE_PICK_RADIUS_POINTS` |
+| Path line primitive | `crates/scene/src/lib.rs` (`Polyline`, `SceneFrame::push_polyline`, `SceneFrame::pick`), `crates/render/src/lib.rs` (`polyline_vertices`), `crates/mesh/src/lib.rs` (`path_points`) | unlit chain; the renderer's line pipeline; a pick hits a segment within `LINE_PICK_RADIUS_POINTS` |
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`) | whole file |
 | Contour edit mode | `crates/ui/src/contour_edit.rs` (`ContourEdit`), `crates/ui/src/lib.rs` (`Editor`), `apps/furnicraft/src/contour_gizmo.rs` (`ContourGizmo`), `apps/furnicraft/src/main.rs` | whole files |
 | Drawing draft | `crates/ui/src/contour_edit.rs` (`DrawDraft`, `DrawTool`, `DrawDraftError`, `DrawDraft::commit`), `crates/ui/src/lib.rs` (`Editor::start_drawing`, `drawing_point`, `commit_drawing`) | view state until the one `object.path.create`; `DrawnPath` is the result |
@@ -35,6 +35,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Project queries and errors | `crates/model/src/project/query.rs`, `crates/model/src/project/error.rs` | whole files |
 | Object commands | `crates/engine/src/object_cmds.rs` (`object.*`) | small |
 | Solid plan and evaluation | `crates/param/src/solid.rs` (`SolidPlan`, `PlanBuilder`, `evaluate`), `crates/param/src/constructive.rs` (`build_constructive_mesh`) | whole files |
+| Evaluation cache | `crates/mesh/src/lib.rs` (`EvaluationCache`, `NodeGeometry`, `evaluate_constructive`), `apps/furnicraft/src/scene_build.rs` (`evaluate`, `Evaluation`), `crates/engine/src/object_cmds.rs` (`OBJECT_COLLAPSE`) | one entry per node; a hit compares the derivation inputs, `finish` prunes unvisited nodes; ADR 0053 |
 | Contour to profile conversion | `crates/param/src/profile.rs` (`region_of_contour`, `profile_of_region`, `profile_of_document_contour`) | whole file |
 | Panel evaluation | `crates/param/src/lib.rs` (`build_panel`, `build_cutout_tool`, `build_panel_parts_with`, `validate_extrusion_contour`) | small |
 | Machining pipeline | `crates/param/src/machining.rs` (`CompileMachining`, `OpEffect`, `PanelPlan`) | whole file |
