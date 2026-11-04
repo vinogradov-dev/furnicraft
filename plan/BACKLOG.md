@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
+- `[~]` **U12** the work plane: `WorkPlane` from an axis-aligned ortho view, world XY for axonometric
   and perspective, and the screen-to-plane mapping; tests for the six standard views.
   `files: apps/furnicraft/src/gizmo_math.rs, apps/furnicraft/src/main.rs`
 
