@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U27 state=idle base=1485e80 updated=2026-11-05
+STATE: milestone=M7 phase=U task=X3 state=idle base=5714085 updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -24,6 +24,10 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 - The UI plan (U1–U26) is shipped: themed toolbars — Scene, Contour, Primitives, Bodies — with SVG
   icons rasterised at render size, no creation buttons in the scene tree, a work plane from the
   current ortho view, a projection toggle, and draw/pick/snap for a `Path` (ADRs 0047–0052).
+- The owner reviewed the editor and queued seven defects and two changes ahead of the icon work
+  (X3–X6, U30–U37): the projection icon, the creation parent, tool highlight, the pole views, a
+  centre pivot for new drawings, a visible selection outline for line chains, and editing every kind
+  of contour. X4 and U31 move creation to the root and add an explicit *Add child* entry (ADR 0056).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -40,15 +44,15 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U27 is next: the theme must reach the icon. The UI rasterises an embedded master instead of handing
-it to `Image::tint`, whose `vertex_colour × texture` product made a `#000` master black in every
-theme; masters switch to white ink and the pixel test draws one icon in both themes, asserting the
-theme colour, an identical alpha silhouette and a raster of `round(pt × ppp)`. U28 then adds tonal
-fills and one axonometry (ADR 0055, `assets/icons/AUDIT.md`). X2 — a legal ring over 1024 sampled
-points cannot be extruded — follows, and it starts with the owner's answer recorded in
-`plan/questions.md`. U29 then lets the Polyline tool append a two-click arc between straight
-segments; the draft starts holding segments rather than points, because a vertex after an arc has
-to be the stored arc endpoint and not the raw click.
+X3 is next: the projection button draws the mode it is already in, not the one a click would reach,
+and the hint names the action. X4 then makes the scene root the only default parent for every tool,
+with U30 marking the armed tool on the strip and U31 adding the explicit *Add child* entry that
+creates inside a chosen container (ADR 0056). X6 makes the top and bottom views truly perpendicular
+(ADR 0057), U32 pivots a new drawing at its bounding-box centre or at its first stored point
+(ADR 0058), and X5 gives a selected line chain a colour of its own plus a screen-space outline
+(ADR 0059). U33–U37 then open the edit mode to every contour kind: path math (ADR 0060), the path
+draft, the open-chain gizmo, the rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28,
+X2 and U29 follow.
 
 ## Index
 

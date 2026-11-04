@@ -9,8 +9,6 @@ this file only when a task touches the question.
 - Where the workshop profile lives: project, application settings or the resource system.
 - Whether reference retrieval (catalogues, norms, past jobs) is needed, and in what form.
 - Voice input and output: which platform or service, if any.
-- Top and bottom views stop five degrees short of the pole to keep the up vector defined. Confirm
-  that a near-plan view is enough until an orthographic projection mode exists.
 - The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
   shortcuts before the list grows.
 - The inspector shows the parent name, local X/Y/Z and intrinsic XYZ Euler angles; world coordinates

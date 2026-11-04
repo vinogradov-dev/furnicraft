@@ -25,6 +25,165 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **X3** the projection toggle draws the mode it is in, not the one it switches to. At
+  `apps/furnicraft/src/main.rs:904-911` the `match` on `Projection` returns `ORTHOGRAPHIC` for a
+  perspective camera and `PERSPECTIVE` for an orthographic one, so the icon reads as the future state
+  and the strip looks like it already switched. Expected: the icon shows the current projection and
+  the hint names the action. Move the pair into one pure
+  `projection_button(Projection) -> (Icon, &'static str)` beside `workspace`, table-test both modes,
+  and keep the disabled state under an authored camera (`viewport_owns_view`, `main.rs:1044`). No ADR.
+  `files: apps/furnicraft/src/main.rs`
+
+- `[ ]` **X4** every creation tool lands at the scene root, never in the selected container. Today
+  `crates/ui/src/lib.rs:815-824` `drawing_parent` returns the selected container, or the parent of the
+  selected leaf, and both `commit_drawing` (`:361`) and `show_toolbars` (`:470`) feed it into
+  `ToolAction::Create*`. A path, a panel, an assembly, a primitive, a camera and a light therefore land
+  in whatever group is selected, which the owner does not want. Expected: the root is the only default
+  parent; a child is created by an explicit entry (U31). Drop `parent` from `ToolAction`
+  (`crates/ui/src/toolbars.rs:26-64`), from `show`/`show_panel` and from `drawing_parent`; one function
+  `creation_root(project) -> Id` stays. `extrude_path` (`lib.rs:585-596`) keeps making a sibling of its
+  path: it is a derived operation, not a tool. Tests: a selected nested assembly receives none of the
+  six creations; `crates/ui/src/lib.rs:1090-1130` becomes the regression that asserts the root. ADR
+  0056 replaces the parent rule of ADR 0052, whose status becomes
+  `Accepted; parent rule superseded by 0056`.
+  `files: crates/ui/src/lib.rs, crates/ui/src/toolbars.rs`
+
+- `[ ]` **U30** the armed tool is highlighted: choosing Line, Arc, Polyline, Rectangle, Circle or a
+  primitive leaves its button looking idle, so the strip shows the armed tool only in its text
+  (`main.rs:925-959`). `icons::tool_button` (`crates/ui/src/icons.rs:225-233`) gains `on: bool` and
+  draws `Button::selected(on)`, which egui paints with `visuals.selection.bg_fill`; the text fallback
+  takes the same flag. `toolbars::show`/`show_panel` (`crates/ui/src/toolbars.rs:278-374`) take
+  `active: Option<ToolActivity>` (`Draw(DrawTool) | Primitive(PrimitiveKind)`), and the editor passes
+  `drawing().map(DrawDraft::tool)` or `pending_primitive().map(kind)`. Delete the duplicate "Draw"
+  button row at `main.rs:975-981`: U20 made the toolbar the only creator, so it is a second source of
+  truth. Toggled-on is a theme state, not a second SVG (`assets/icons/STYLE_GUIDE.md`, ADR 0055).
+  Tests: the selector is a pure function with a table; one egui run marks exactly one button, and an
+  idle editor marks none.
+  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs`
+
+- `[ ]` **X6** the top and bottom views look at an angle to their plane: `MIN_PITCH`/`MAX_PITCH` are
+  ±85° (`crates/scene/src/lib.rs:26-31`) and `look_from` clamps to them (`:438-449`), so a click on the
+  Z ball leaves the camera five degrees off vertical and the grid, the work plane and the drawing all
+  skew. Expected: the camera axis is perpendicular to the plane of the view (owner's answer, was an
+  open question). Set the limits to `±FRAC_PI_2`; make `right()` (`:240-245`) analytic,
+  `(-sin yaw, cos yaw, 0)`, which is the exact limit of today's `forward × Z` and stays unit at the
+  pole; `up()` (`:248-253`) is then `right × forward` with no fallback; `view_matrix` (`:256-279`) uses
+  `self.up()` instead of recomputing `right.cross(forward)`, which also stops an authored camera's
+  pinned up from being overwritten. Tests: `look_from(Z)` gives `pitch == π/2` and `forward == -Z` with
+  a unit finite `up`; `ray_ndc(0, 0)` is `-Z`; the target projects to the viewport centre;
+  `WorkPlane::from_camera` (`apps/furnicraft/src/gizmo_math.rs:419-444`) selects XY from both poles;
+  `gizmo::snap_direction` still flips at the pole (`apps/furnicraft/src/gizmo.rs:115-121`); an orbit
+  off the pole moves. Manual check: grid, gizmo and picking in both pole views. ADR 0057 replaces the
+  five-degree clamp of ADR 0019 (`Accepted; pole clamp superseded by 0057`).
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/gizmo_math.rs`
+
+- `[ ]` **U31** a child is created by an explicit entry, not by the selection: pick a group or an
+  assembly in the tree or in the viewport, choose *Add child*, and the next created node lands inside
+  it. `Editor` gains `creation_parent: Option<Id>` — view state, never the document
+  (`plan/debt.md` `[view-state]`). Entry points: `TreeAction::AddChild { parent }` in the container
+  menu (`crates/ui/src/scene_tree.rs:294`), a button in `crates/ui/src/container_card.rs`, and the
+  strip chip "Adding to: Frame ✕". `creation_root` from X4 becomes
+  `creation_target(project, armed)`, which falls back to the root when the armed id vanished. The arm
+  is sticky until ✕, Escape or the container being deleted, so filling an assembly is one arm and
+  several tools; clearing it on a selection change was rejected because the selection moves to the new
+  node after every create. `after_node_removed` (`crates/ui/src/lib.rs:776`) already drops a dead
+  selection and must drop this too. The root cannot be armed. Tests: arm an assembly, create a path, a
+  panel and a primitive — all three are children; ✕ restores the root; deleting the container clears
+  the arm. ADR 0056 covers this rule together with X4.
+  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
+
+- `[ ]` **U32** a new flat figure pivots at its centre or at its first point: every path and body is
+  created with `Pivot::ZERO` (`crates/model/src/object.rs:288-292`, `add_object`,
+  `crates/model/src/project/object_cmds.rs:31-50`), so the gizmos grab a drawing at the world origin
+  instead of at the shape. Expected: a closed contour pivots at the centre of its local bounding box;
+  an open chain pivots at the start of its first stored segment. Owner's answer: bounding-box centre,
+  the same centre `node.pivot.center` writes, and the extruded body follows the same rule. Add
+  `Path::creation_pivot()` and `Contour::creation_pivot()` (`crates/model/src/contour.rs`; integer
+  micrometres, `bounds_micrometres` plus an `i128` midpoint, open → first segment `start()`),
+  `Project::add_object_with_pivot` (the old `add_object` delegates with `ZERO`), and use it in
+  `object.path.create` and `object.extrude.create`
+  (`crates/engine/src/object_cmds.rs:168-188, 279-288`) — one command, one revision, one undo entry,
+  no new parameter to lie about. A primitive keeps `ZERO`: its bounds are already centred.
+  `object.path.replace` and `object.contour.replace` must not move the pivot (ADR 0026), and an older
+  file keeps the zero it stored. An arc's first point is the stored `segment.start()`, never the raw
+  click. Tests: rectangle and circle centre; open polyline and open arc start; a replacement leaves the
+  pivot alone; a loaded file without the field is zero. ADR 0058.
+  `files: crates/model/src/contour.rs, crates/engine/src/object_cmds.rs`
+
+- `[ ]` **X5** a selected line, contour or circle is invisible: the highlight exists
+  (`SceneFrame::with_selection_highlight`, `crates/scene/src/lib.rs:741-757`) but `SELECTION_TINT`
+  mixed at 35 % into `PATH_COLOR = [0.95, 0.72, 0.20]`
+  (`apps/furnicraft/src/scene_build.rs:35`) moves green by 0.06, which the eye cannot see, and the
+  renderer draws a chain as a one-pixel `LineList` (`crates/render/src/lib.rs:261-295`) that cannot be
+  widened in wgpu. Expected: a selected drawing reads at a glance and stays readable on a brown panel
+  and on a light one. Two changes: polylines get one explicit `SELECTION_LINE_COLOR` instead of a tint,
+  and the shell paints the selected chains as a screen-space overlay over the viewport image (2–2.5 pt
+  with a dark 3.5 pt underlay), the way camera glyphs and the mesh selection are already painted
+  (`apps/furnicraft/src/main.rs:726-734`). `upload_scene` keeps the selected chains of the frame it
+  uploads, after the drag preview, so the outline follows a move without lagging; the renderer keeps its
+  one-pixel pipeline. Tests: the scene colour test; a pure `selection_outline` that projects the stored
+  points without a GPU. Manual check on both panel colours. ADR 0059 records the UI-overlay boundary.
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/main.rs`
+
+- `[ ]` **U33** path edit math in the model: the edit functions only know a ring. `move_corner`,
+  `trim_segment` and `split_segment` (`crates/model/src/contour_edit.rs:73-171`) address a corner by the
+  segment that starts at it, and `position` (`:174-177`) walks a modulo ring, so an open chain has no
+  handle on its last point and would weld the last segment to the first. Add
+  `PathCorner { Start(ContourSegmentId), End(ContourSegmentId) }` and the same operations on `Path`:
+  `move_corner_at`, `split_segment_at`, `remove_segment` (open chains join the neighbours) and `close`,
+  sharing `with_corner`, `join_corner` and `split_document` (`:185-273`) with the ring code. The
+  invariants do not move: ids are never reused, an arc keeps its centre and radius, a joint is exact to
+  one micrometre, and every result is rebuilt through `Path::rebuild`, which keeps the counter and the
+  closed flag. Tests: an open polyline moves its first and its last corner, an arc moves along its
+  circle, removing a segment joins its neighbours, closing is refused when the chain would
+  self-intersect, and a corner off the support is refused. ADR 0060.
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs`
+
+- `[ ]` **U34** the path edit mode in the editor: `ContourTarget` only accepts a panel ring and a
+  constructive contour (`crates/ui/src/contour_edit.rs:26-49`), so an open line or a circle drawn by the
+  drawing tools has no editor. Add `ContourTarget::Path(Id)` and let `ContourEdit` hold either a
+  `Contour` or a `Path` draft; `apply` (`:121-132`) dispatches `object.path.replace`
+  (`crates/engine/src/object_cmds.rs:290-329`, already exists) and keeps one revision and one undo
+  entry. `start`, `is_editable`, `is_dirty`, `reset` and `retain_contour_edit`
+  (`crates/ui/src/lib.rs:242-300`) keep their meaning for both drafts. Tests: editing an open path is
+  one revision and one undo; cancel restores the stored chain; the closed flag survives an edit; a
+  stale target ends the mode.
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
+
+- `[ ]` **U35** the path gizmo: `contour_gizmo` paints a closed ring (`Shape::closed_line`,
+  `apps/furnicraft/src/contour_gizmo.rs:178-200`) and puts a handle on every segment start
+  (`:203-224`), which loses the last point of an open chain. Paint an open chain as `Shape::line`, add
+  the end handle, and address handles with the `PathCorner` of U33 so a drag on the last point edits the
+  last segment. The object card's `contour_edit_section` (`crates/ui/src/object_card.rs:507-535`)
+  currently shows only for a constructive object — show it for a path too. Manual check: line,
+  polyline, arc, rectangle and circle all move a corner and split a side; Enter applies, Escape cancels.
+  `files: apps/furnicraft/src/contour_gizmo.rs, crates/ui/src/object_card.rs`
+
+- `[ ]` **U36** a rectangle panel outline becomes a ring once: `PanelOutline::Rect` stores corners and
+  bows (`crates/model/src/panel/mod.rs:49-107`) and has no ring to edit, so *Edit contour* is offered
+  only for a panel that is already a ring (`:194-207`). Add `panel.outline.to_contour`
+  (`crates/engine/src/panel_cmds.rs`) that bakes the current outline through `Panel::nominal_contour`
+  (`crates/model/src/panel/contour.rs:165`) in one revision and one undo entry, then opens the ordinary
+  edit mode. The hard part is banding: a ring panel cannot keep `EdgeBanding` or `CornerBanding` (the
+  loader refuses `ContourWithBanding`, `crates/model/src/panel/mod.rs:899-903`), so the command
+  translates each edge band and each corner band into the ring segments `contour_with_sources_for` says
+  it produced, and refuses with a readable reason when a corner band has no unique ring source. The card
+  warns that the corner and bow parameters are gone; undo brings them back. Tests: the ring keeps the
+  outline bounds; the converted banding names the same segments; undo restores the rectangle with its
+  features; a second conversion is refused. ADR 0061.
+  `files: crates/engine/src/panel_cmds.rs, crates/model/src/panel/contour.rs`
+
+- `[ ]` **U37** a cutout ring is edited in the viewport: a `CutoutShape::Contour`
+  (`crates/model/src/panel/machining.rs:390-414`) shows only a one-line summary
+  (`crates/ui/src/machining/cutout.rs:64-73`) and nothing can reshape it. Add
+  `ContourTarget::Cutout { panel, machining }`: `contour` reads the ring from `panel.machining_by_id`
+  (`crates/model/src/panel/mod.rs:358`) and `apply` rebuilds the record with `panel.machining.update`
+  (`crates/engine/src/panel_cmds.rs:348-385`), keeping the anchor and the `CutoutDepth`. The card gets an
+  *Edit contour* button beside the ring summary. Tests: an edit is one revision and one undo entry; the
+  anchor and the depth are unchanged; a ring that no longer fits the core is reported on the operation,
+  not silently stored.
+  `files: crates/ui/src/machining/cutout.rs, crates/ui/src/contour_edit.rs`
+
 - `[ ]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
   instead of handing it to `Image::tint`, whose `vertex_colour × texture` product makes a `#000`
   master black in every theme. Rasterise with `egui_extras::image::load_svg_bytes_with_size` at

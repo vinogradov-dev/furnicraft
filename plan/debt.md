@@ -98,6 +98,9 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   machining, then a bend applied to the finished body; the operation pipeline needs a post/deform
   stage and the panel card a bend section. No geometry is stored until that stage exists.
 - `[vendor]` `vendor/truck-shapeops` is updated by hand when `truck` moves; see `vendor/AGENTS.md`.
+- `[ui]` A creation tool lands at the scene root since X4; a node inside a container needs the
+  explicit *Add child* arm of U31. Until then the only way is to create at the root and move the row
+  in the tree.
 - `[ui]` 33 of the 51 declared icons are zero-byte placeholders: the whole `actions` theme (30,
   including undo, redo, delete, save, warning) plus `primitives/cone`, `bodies/revolve` and
   `bodies/sweep`. The empty-file fallback keeps every surface usable with its text label, but no
