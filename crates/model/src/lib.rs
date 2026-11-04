@@ -44,7 +44,7 @@ pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelM
 pub use container::Container;
 pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
-    MAX_CONTOUR_SEGMENTS,
+    MAX_CONTOUR_SEGMENTS, Path, PathError,
 };
 pub use contour_edit::ContourEditError;
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
