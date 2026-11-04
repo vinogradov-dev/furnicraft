@@ -196,6 +196,28 @@ impl Camera {
         self
     }
 
+    /// Switches between a perspective and an orthographic view.
+    ///
+    /// The visible height at the target is preserved: a perspective view becomes orthographic with
+    /// the height it shows at the target plane, and an orthographic view becomes perspective with
+    /// the default field of view and the distance that shows the same height. An authored camera is
+    /// pinned to its document projection and is left unchanged.
+    pub fn toggle_projection(&mut self) {
+        if self.fixed.is_some() {
+            return;
+        }
+        self.projection = match self.projection {
+            Projection::Perspective { fov_y } => {
+                Projection::Orthographic { height: 2.0 * self.distance * (fov_y * 0.5).tan() }
+            }
+            Projection::Orthographic { height } => {
+                let fov_y = DEFAULT_FOV_Y;
+                self.distance = (height / (2.0 * (fov_y * 0.5).tan())).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
+                Projection::Perspective { fov_y }
+            }
+        };
+    }
+
     /// The camera position in world space.
     pub fn eye(self) -> DVec3 {
         if let Some(fixed) = self.fixed {
@@ -429,12 +451,20 @@ impl Camera {
     /// Scales the orbit distance by `factor`.
     ///
     /// A factor below one moves closer; values outside the supported range are clamped and invalid
-    /// factors are ignored.
+    /// factors are ignored. An orthographic view scales its visible height with the distance, so
+    /// zooming works there too and a later toggle back shows the same frame.
     pub fn zoom(&mut self, factor: f64) {
         if self.fixed.is_some() || !factor.is_finite() || factor <= 0.0 {
             return;
         }
-        self.distance = (self.distance * factor).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
+        let previous = self.distance;
+        self.distance = (previous * factor).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
+        if let Projection::Orthographic { height } = self.projection {
+            let scaled = height * (self.distance / previous);
+            if scaled.is_finite() && scaled > 0.0 {
+                self.projection = Projection::Orthographic { height: scaled };
+            }
+        }
     }
 }
 
@@ -1039,6 +1069,61 @@ mod tests {
         let far = projection * DVec4::new(0.0, 0.0, -camera.far, 1.0);
         assert!((near.z / near.w - 0.0).abs() < 1.0e-9);
         assert!((far.z / far.w - 1.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn toggling_the_projection_keeps_the_visible_height() {
+        let mut camera = Camera::default();
+        let perspective = camera;
+        camera.toggle_projection();
+        let Projection::Orthographic { height } = camera.projection() else {
+            panic!("a perspective view becomes orthographic");
+        };
+        let expected = 2.0 * perspective.distance() * (DEFAULT_FOV_Y * 0.5).tan();
+        assert!((height - expected).abs() < 1.0e-9, "the orthographic height is the frame at the target");
+        assert_eq!(camera.target(), perspective.target());
+        assert_eq!(camera.yaw(), perspective.yaw());
+        assert_eq!(camera.pitch(), perspective.pitch());
+        assert_eq!(camera.distance(), perspective.distance());
+
+        camera.toggle_projection();
+        assert!(matches!(camera.projection(), Projection::Perspective { .. }));
+        assert!((camera.distance() - perspective.distance()).abs() < 1.0e-9, "the frame comes back");
+        assert_eq!(camera.target(), perspective.target());
+        assert_eq!(camera.yaw(), perspective.yaw());
+        assert_eq!(camera.pitch(), perspective.pitch());
+    }
+
+    #[test]
+    fn zooming_an_orthographic_view_scales_the_visible_height() {
+        let mut camera = Camera::default();
+        camera.toggle_projection();
+        let Projection::Orthographic { height } = camera.projection() else {
+            panic!("the view is orthographic");
+        };
+        camera.zoom(0.5);
+        let Projection::Orthographic { height: zoomed } = camera.projection() else {
+            panic!("zooming keeps the projection");
+        };
+        assert!((zoomed - height * 0.5).abs() < 1.0e-9, "zooming in halves the visible height");
+
+        camera.toggle_projection();
+        camera.toggle_projection();
+        let Projection::Orthographic { height: returned } = camera.projection() else {
+            panic!("the round trip returns an orthographic view");
+        };
+        assert!((returned - zoomed).abs() < 1.0e-9, "a toggle pair keeps the zoomed frame");
+    }
+
+    #[test]
+    fn an_authored_camera_keeps_its_projection() {
+        let authored = Camera::default()
+            .looked_from(DVec3::new(0.0, 0.0, 100.0), DVec3::X, DVec3::Y, -DVec3::Z)
+            .with_projection(Projection::Orthographic { height: 500.0 });
+        let mut camera = authored;
+        camera.toggle_projection();
+        camera.zoom(4.0);
+        assert_eq!(camera, authored, "a pinned camera is not view state the viewport may change");
     }
 
     #[test]

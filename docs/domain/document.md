@@ -122,8 +122,10 @@ position, colour and power, at most eight in tree order; its intensity is radian
 the renderer applies inverse-square falloff with no hard range cutoff
 ([ADR 0039](../decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md)). A scene
 without a sun keeps the built-in key light, and point lights add to that key. While an active camera
-is set the viewport draws through it and navigation is disabled, because orbiting would move a camera
-the document owns. Clearing the active camera returns the viewport to the built-in, navigable camera.
+is set the viewport draws through it, and navigation and the projection toggle are disabled, because
+both would change a camera the document owns. Clearing the active camera returns the viewport to the
+built-in, navigable camera, whose projection the viewport toggles between perspective and
+orthographic ([ADR 0049](../decisions/0049-the-viewport-toggles-its-own-projection.md)).
 
 ## 3. What the scene file does not store
 
