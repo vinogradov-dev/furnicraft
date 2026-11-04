@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U1 state=doing base=19565ff updated=2026-11-03
+STATE: milestone=M7 phase=U task=U2 state=idle base=19fbb49 updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files named by the current task in `plan/BACKLOG.md`, and answer the next step from `STATE`
@@ -35,7 +35,8 @@ contract that orders that answer when a session was interrupted or the plan is b
 - The UI plan is approved (2026-11-03, tasks U1–U23): themed toolbars — Scene, Contour, Primitives,
   Bodies — with SVG icons rasterised at render size, no creation buttons in the scene tree, a flat
   contour stored as a document `Path` (open or closed, schema 17), a work plane taken from the current
-  ortho view, and an ortho/perspective toggle.
+  ortho view, and an ortho/perspective toggle. U1 lays `assets/icons/` — one placeholder per icon and
+  `assets/README.md` with the naming and SVG rules.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented.
@@ -47,12 +48,12 @@ contract that orders that answer when a session was interrupted or the plan is b
 
 ## Next
 
-U1 is next: the `assets/` tree with an empty SVG per icon, grouped by toolbar theme. U2 adds the
-runtime SVG loader and the icon button, U4–U9 make a flat contour a document `Path` with its own
-commands, U10–U17 add the shape constructors, the work plane, the ortho toggle and the drawing tools,
-and U18–U20 replace the scene-tree creation buttons with the themed toolbars. U21–U23 follow with the
-primitives and the extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit
-(`plan/questions.md`).
+U2 is next: `egui_extras` with the SVG feature, `crates/ui/src/icons.rs` embedding `assets/icons/**`,
+and an icon button tinted with the text colour that falls back to a text label while an SVG is empty.
+U3 adds the UI scale, U4–U9 make a flat contour a document `Path` with its own commands, U10–U17 add
+the shape constructors, the work plane, the ortho toggle and the drawing tools, and U18–U20 replace
+the scene-tree creation buttons with the themed toolbars. U21–U23 follow with the primitives and the
+extrude operation, then S4 and P1–P3. X2 waits for a decision on the cap limit (`plan/questions.md`).
 
 ## Index
 

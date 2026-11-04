@@ -23,12 +23,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U1** the resource tree: `assets/icons/` with one subdirectory per toolbar theme —
-  `contour` (`line`, `polyline`, `arc`, `rectangle`, `circle`, `close`, `cancel`), `primitives`
-  (`cube`, `cylinder`, `sphere`, `cone`), `bodies` (`extrude`, `revolve`, `sweep`), `scene` (`panel`,
-  `assembly`, `camera`, `light`) and `view` (`orthographic`, `perspective`, `frame-all`) — as empty
-  `.svg` files, plus `assets/README.md` with the naming and format rules; no code changes.
-  `files: crates/ui/src`
+- `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
+  MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
+  `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,
+  falling back to a text label while an SVG is empty; tests for the rasterised size and the fallback.
+  `files: crates/ui/src, Cargo.toml, apps/furnicraft/src`
 
 ## Bugs
 
@@ -42,11 +41,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U2** icon resources and icon buttons: `egui_extras` with the `svg` feature (`resvg`,
-  MPL-2.0, pure Rust), the shell installs the loaders, and `crates/ui/src/icons.rs` embeds
-  `assets/icons/**` and draws a button at a fixed point size, tinted with the theme text colour,
-  falling back to a text label while an SVG is empty; tests for the rasterised size and the fallback.
-  `files: crates/ui/src, Cargo.toml, apps/furnicraft/src`
 - `[ ]` **U3** UI scale: a 75–200 % control in the viewport strip bound to `ctx.set_zoom_factor`, so
   icons are re-rasterised at the new pixel size instead of stretched.
   `files: apps/furnicraft/src/main.rs, crates/ui/src`
@@ -124,6 +118,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U1** the icon resource tree: `assets/icons/` with one directory per toolbar theme and one
+  zero-byte SVG per icon (contour, primitives, bodies, scene, view — 21 placeholders), plus
+  `assets/README.md` with the naming, the 24 × 24 grid, the geometry-only format and the empty-file
+  fallback — `19fbb49`
 - `[x]` **D7** the panel card lists and edits machining from the descriptor table: common operation
   chrome (fold, kind and anchor, reorder, remove) with a section module per kind, an add menu built
   from `MACHINING_DESCRIPTORS` and grouped by category, diagnostics naming a `MachiningId` shown with
