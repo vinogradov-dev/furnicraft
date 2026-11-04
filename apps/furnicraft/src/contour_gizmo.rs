@@ -16,7 +16,7 @@ use furnicraft_scene::Camera;
 use furnicraft_ui::{ContourEdit, ContourTarget, Editor};
 use furnicraft_units::Length;
 
-use crate::gizmo_math::{ACTIVE_COLOR, distance_to_segment, ray_plane, ray_to, screen_point};
+use crate::gizmo_math::{ACTIVE_COLOR, distance_to_segment, length_from_millimetres, ray_plane, ray_to, screen_point};
 
 /// Radius of an unselected corner handle, in points.
 const CORNER_RADIUS: f32 = 4.5;
@@ -352,15 +352,6 @@ fn split_point(segment: ContourSegment, local: DVec2) -> Option<[Length; 2]> {
         }
     };
     Some([length_from_millimetres(point.x)?, length_from_millimetres(point.y)?])
-}
-
-/// Rounds a millimetre coordinate to a whole micrometre, or `None` when it is not representable.
-fn length_from_millimetres(value: f64) -> Option<Length> {
-    let micrometres = value * 1_000.0;
-    if !micrometres.is_finite() || micrometres < i64::MIN as f64 || micrometres > i64::MAX as f64 {
-        return None;
-    }
-    Some(Length::from_micrometres(micrometres.round() as i64))
 }
 
 /// A contour point in the node's local frame.

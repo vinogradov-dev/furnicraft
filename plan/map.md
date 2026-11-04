@@ -14,6 +14,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`) | whole file |
 | Contour edit mode | `crates/ui/src/contour_edit.rs` (`ContourEdit`), `crates/ui/src/lib.rs` (`Editor`), `apps/furnicraft/src/contour_gizmo.rs` (`ContourGizmo`), `apps/furnicraft/src/main.rs` | whole files |
 | Drawing draft | `crates/ui/src/contour_edit.rs` (`DrawDraft`, `DrawTool`, `DrawDraftError`), `crates/ui/src/lib.rs` (`Editor::start_drawing`, `drawing_point`, `undo_drawing`, `close_drawing`) | view state only; U17 commits it |
+| Drawing tool preview | `apps/furnicraft/src/draw_gizmo.rs` (`DrawGizmo`, `snap_cursor`, `click_action`, `size_label`), `apps/furnicraft/src/main.rs` (`viewport`, strip) | owns the pointer while a draft runs; no document change |
 | Contour edit commands | `crates/engine/src/panel_cmds.rs` (`PanelOutlineSet`), `crates/engine/src/object_cmds.rs` (`ObjectContourReplace`) | small |
 | Contour panel card UI | `crates/ui/src/panel_card.rs` (`PanelAction::StartContour`) | small |
 | Contour object card UI | `crates/ui/src/object_card.rs` (`ObjectAction::StartContour`) | small |
