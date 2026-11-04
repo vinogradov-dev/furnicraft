@@ -23,7 +23,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
+- `[~]` **U19** fill the panels: Contour (line, polyline, arc, rectangle, circle), Scene (panel,
   assembly, camera, light), Primitives (cube) and Bodies (extrude).
   `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
 
