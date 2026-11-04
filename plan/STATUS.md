@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=P1 state=idle base=HEAD updated=2026-11-04
+STATE: milestone=M7 phase=U task=P2 state=idle base=HEAD updated=2026-11-04
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and the backlog's
@@ -43,21 +43,21 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   `icon_button` draws at 16 pt tinted and falls back to its label, and the zoom slider rasterises at
   the new pixel size. U7–U23 draw and pick a `Path`, toggle the projection, take the work plane from
   the standard views, snap, build a chain and commit it as one path object (ADRs 0048–0052). The
-  toolbar strip is the only creator: it places a primitive at a work-plane click and extrudes a
-  closed path into a body, refusing an open path with a readable reason.
+  toolbar strip is the only creator: it places a primitive and extrudes a closed path, refusing an
+  open one with a readable reason.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed, and X2 records that
   a legal ring over 1024 sampled points cannot be extruded, waiting in `plan/questions.md`.
+- `cargo xtask status` opens a session with the state line, the head commit and the note's
+  `task`/`now`/`blocked`/`run` while a task runs, before the task and the next three.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. The plan gate is its own
-  crate: `state-contract` (L0, no dependencies) parses and checks `STATUS`/`BACKLOG`/`SESSION` and
-  ships the templates, the agent section and the license texts.
-- Gate: `cargo xtask ci` — green. Branches: work on `dev`, merge to `main` with `--no-ff` after a
-  green gate (AGENTS §6.2).
+  crate: `state-contract` (L0, no dependencies) parses and checks the three files, and ships the
+  templates, the agent section and the license texts. Gate: `cargo xtask ci` — green.
+- Branches: work on `dev`, merge to `main` with `--no-ff` after a green gate (AGENTS §6.2).
 
 ## Next
 
-P1 is next: `cargo xtask status` prints the head commit and, while a session runs, its note's
-`task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command. P2–P3 follow;
-X2 waits.
+P2 is next: `updated=` must be `YYYY-MM-DD` and no earlier than the `base` commit's date, so the
+plan cannot claim a state older than the code it describes. P3 follows; X2 waits.
 
 ## Index
 

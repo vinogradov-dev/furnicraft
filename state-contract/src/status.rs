@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::{Session, Summary};
+use crate::{Session, Summary, TaskStatus};
 
 /// The session-start block: the state line, the head commit, the session note while one runs, and
 /// the current task with the next three.
@@ -28,7 +28,8 @@ pub fn render(summary: &Summary) -> String {
     }
     let current = summary.tasks.iter().position(|task| task.id == state.task);
     let from = current.unwrap_or(0);
-    for (offset, task) in summary.tasks.iter().skip(from).take(4).enumerate() {
+    let upcoming = summary.tasks.iter().skip(from).filter(|task| task.status != TaskStatus::Done);
+    for (offset, task) in upcoming.take(4).enumerate() {
         let arrow = if offset == 0 { "->" } else { "  " };
         let _ = write!(text, "{arrow} {} {} · {}", task.status.marker(), task.id, task.text);
         if let Some(files) = &task.files {
@@ -99,6 +100,21 @@ mod tests {
             run: Some("cargo test -p furnicraft-ui".to_owned()),
             resume: Some("finish the arc arm".to_owned()),
         }
+    }
+
+    #[test]
+    fn the_block_skips_finished_tasks() {
+        let mut list = summary("idle", Some("fedcba9"), None);
+        list.tasks.push(Task {
+            id: "A5".to_owned(),
+            status: TaskStatus::Done,
+            section: "Now".to_owned(),
+            text: "already shipped".to_owned(),
+            files: None,
+        });
+        let text = render(&list);
+        assert!(!text.contains("A5"), "a `[x]` task is not part of what comes next: {text}");
+        assert!(text.contains("-> [ ] A3"), "the current task stays first: {text}");
     }
 
     #[test]

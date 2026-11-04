@@ -23,9 +23,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **P1** `cargo xtask status` prints `head <hash>` and, while `state=doing`, the note's
-  `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command.
-  `files: state-contract/src/status.rs, xtask/src/main.rs`
+- `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
+  `files: state-contract/src/validate.rs`
 
 ## Bugs
 
@@ -39,12 +38,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **P2** `updated=` must be `YYYY-MM-DD` and no earlier than the date of the `base` commit.
-  `files: state-contract/src/validate.rs`
 - `[ ]` **P3** the current task must be the first unfinished one in `## Now`; promote the rule into
   the gate once the backlog has settled. `files: state-contract/src/validate.rs`
 
 ## Done
+
+- `[x]` **P1** `cargo xtask status` prints `head <short hash>` and, while `state=doing`, the note's
+  `task`/`now`/`blocked`/`run` block, so an interrupted session resumes in one command: `Summary`
+  carries the parsed note and the head commit, and only a backtick pair wrapping a whole note value
+  is unwrapped — `b03e88b`
 
 - `[x]` **S4** revision-keyed evaluation cache: `(Revision, Id)` to evaluated body and mesh in
   `furnicraft-mesh`; `scene_build` and `object.collapse` share one evaluator and a rebuild touches
