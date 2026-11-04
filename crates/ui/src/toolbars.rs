@@ -17,6 +17,9 @@ use crate::icons::{self, Icon, Theme};
 /// Edge length of a new cube, in millimetres; also the value the field starts with.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
+/// Height of a new extrusion, in millimetres; also the value the field starts with.
+pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 18;
+
 /// One action a toolbar panel asks the editor to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolAction {
@@ -41,10 +44,12 @@ pub enum ToolAction {
         /// Full extent of the primitive.
         size: Length,
     },
-    /// Creates the default extrusion.
-    CreateExtrude {
-        /// The receiving container.
-        parent: Id,
+    /// Extrudes the selected closed path into a body.
+    ExtrudePath {
+        /// The path object to extrude.
+        object: Id,
+        /// Height along the path's local Z.
+        height: Length,
     },
     /// Creates a camera.
     CreateCamera {
@@ -140,17 +145,23 @@ impl ToolPanel {
     }
 }
 
-/// Whether each panel of the strip is open, plus the size field the Primitives panel keeps.
+/// Whether each panel of the strip is open, plus the numeric fields the panels keep.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Toolbars {
     open: [bool; 4],
     primitive_size: String,
+    extrude_height: String,
     error: Option<String>,
 }
 
 impl Default for Toolbars {
     fn default() -> Self {
-        Self { open: [true; 4], primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(), error: None }
+        Self {
+            open: [true; 4],
+            primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(),
+            extrude_height: DEFAULT_EXTRUDE_HEIGHT_MM.to_string(),
+            error: None,
+        }
     }
 }
 
@@ -195,6 +206,41 @@ impl Toolbars {
     pub fn set_error(&mut self, error: impl Into<String>) {
         self.error = Some(error.into());
     }
+
+    /// The typed extrusion height.
+    pub fn extrude_height_text(&self) -> &str {
+        &self.extrude_height
+    }
+
+    /// The height field, so the panel can edit the text in place.
+    pub fn extrude_height_mut(&mut self) -> &mut String {
+        &mut self.extrude_height
+    }
+
+    /// The typed extrusion height as a positive document length.
+    ///
+    /// The upper bound is the document's contour limit, the same one `object.extrude.create`
+    /// applies, so a field the panel accepts is a field the command takes.
+    pub fn extrude_height(&self) -> Result<Length, String> {
+        let height = Length::parse_millimetres(self.extrude_height.trim())
+            .map_err(|error| format!("The extrusion height is not a length: {error}"))?;
+        if !height.is_positive() {
+            return Err("The extrusion height must be positive.".to_owned());
+        }
+        if height.micrometres() > furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() {
+            return Err(format!(
+                "The extrusion height must be at most {} mm.",
+                furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() / 1_000
+            ));
+        }
+        Ok(height)
+    }
+
+    /// Replaces the typed extrusion height.
+    pub fn set_extrude_height_text(&mut self, text: impl Into<String>) {
+        self.extrude_height = text.into();
+        self.error = None;
+    }
 }
 
 impl Toolbars {
@@ -229,13 +275,21 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
 ///
 /// The headings are collapsible sections. A section that is open draws its tools; every button is
 /// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label.
-pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, has_panel_material: bool, actions: &mut Vec<ToolAction>) {
+pub fn show(
+    ui: &mut Ui,
+    state: &mut Toolbars,
+    parent: Id,
+    has_panel_material: bool,
+    selected: Option<Id>,
+    selected_path: Option<bool>,
+    actions: &mut Vec<ToolAction>,
+) {
     ui.heading("Tools");
     ui.separator();
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, parent, has_panel_material, state, actions);
+            show_panel(ui, panel, parent, has_panel_material, selected, selected_path, state, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -244,11 +298,14 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, has_panel_material: b
 }
 
 /// The body of one open panel.
+#[allow(clippy::too_many_arguments)]
 fn show_panel(
     ui: &mut Ui,
     panel: ToolPanel,
     parent: Id,
     has_panel_material: bool,
+    selected: Option<Id>,
+    selected_path: Option<bool>,
     state: &mut Toolbars,
     actions: &mut Vec<ToolAction>,
 ) {
@@ -296,11 +353,37 @@ fn show_panel(
             }
         }
         ToolPanel::Bodies => {
-            if icons::tool_button(ui, icons::bodies::EXTRUDE, "Extrude", None, true).clicked() {
-                actions.push(ToolAction::CreateExtrude { parent });
+            ui.label("Height");
+            ui.add(TextEdit::singleline(state.extrude_height_mut()).desired_width(72.0).hint_text("mm"));
+            ui.label("mm");
+            let height = state.extrude_height();
+            if let Err(error) = &height {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+            // Only a closed path encloses a ring, so the button is off for anything else and the
+            // hint names what is missing: a selection, a path, a closed chain, or a usable height.
+            let hint = extrude_hint(selected, selected_path);
+            let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && height.is_ok();
+            if icons::tool_button(ui, icons::bodies::EXTRUDE, hint, None, enabled).clicked()
+                && let (Some(object), Ok(height)) = (selected, height)
+            {
+                actions.push(ToolAction::ExtrudePath { object, height });
             }
         }
     });
+}
+
+/// The hint of the extrude button: what the tool does, or why it is off.
+///
+/// `selected_path` is `None` when the selection is not a path object, so a path that is merely
+/// open gets its own message instead of being called "not a path".
+fn extrude_hint(selected: Option<Id>, selected_path: Option<bool>) -> &'static str {
+    match (selected, selected_path) {
+        (None, _) => "Select a closed path first",
+        (Some(_), Some(true)) => "Extrude the selected path",
+        (Some(_), Some(false)) => "The selected path is open; close it first",
+        (Some(_), None) => "The selected object is not a path",
+    }
 }
 
 #[cfg(test)]
@@ -354,7 +437,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -373,12 +456,94 @@ mod tests {
     }
 
     #[test]
+    fn the_bodies_panel_only_offers_extrude_for_a_closed_path() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text == "Select a closed path first"));
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+    }
+
+    #[test]
+    fn the_extrude_hint_names_what_is_missing() {
+        let node = Id::new(7).expect("id");
+        assert_eq!(extrude_hint(None, None), "Select a closed path first");
+        assert_eq!(extrude_hint(None, Some(true)), "Select a closed path first");
+        assert_eq!(extrude_hint(Some(node), None), "The selected object is not a path");
+        assert_eq!(extrude_hint(Some(node), Some(false)), "The selected path is open; close it first");
+        assert_eq!(extrude_hint(Some(node), Some(true)), "Extrude the selected path");
+    }
+
+    #[test]
+    fn an_open_path_leaves_the_extrude_button_off() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let node = Id::new(7).expect("id");
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, Id::new(1).expect("root"), true, Some(node), Some(false), &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(
+            texts.iter().any(|text| text == "The selected path is open; close it first"),
+            "the panel says why an open path cannot be extruded: {texts:?}"
+        );
+        assert!(actions.is_empty(), "a disabled button asks for no action");
+    }
+
+    #[test]
+    fn a_closed_path_asks_for_one_extrusion_at_the_typed_height() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        state.set_extrude_height_text("24");
+        let mut actions = Vec::new();
+        let node = Id::new(7).expect("id");
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, Id::new(1).expect("root"), true, Some(node), Some(true), &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text == "Extrude the selected path"));
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(24).expect("height")));
+        assert!(actions.is_empty(), "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn a_blank_extrusion_height_is_refused_in_the_panel() {
+        let mut state = Toolbars::new();
+        state.set_extrude_height_text("   ");
+        assert!(state.extrude_height().is_err());
+        state.set_extrude_height_text("0");
+        assert!(state.extrude_height().is_err());
+        state.set_extrude_height_text("12");
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(12).expect("height")));
+    }
+
+    #[test]
+    fn the_height_field_stops_where_the_command_does() {
+        let mut state = Toolbars::new();
+        // The document's contour limit is 10 m; the field must not accept a height the command
+        // would refuse, or the panel would offer a tool that always fails.
+        let max = furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() / 1_000;
+        state.set_extrude_height_text(max.to_string());
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(max).expect("height")));
+        state.set_extrude_height_text((max + 1).to_string());
+        assert!(state.extrude_height().is_err(), "one millimetre past the limit is refused");
+    }
+
+    #[test]
     fn the_three_primitive_buttons_are_filled() {
         let ctx = egui::Context::default();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -393,7 +558,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), false, &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), false, None, None, &mut actions);
         });
         output.drop_without_applying_deltas();
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
@@ -418,7 +583,7 @@ mod tests {
         state.set_open(ToolPanel::Scene, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -433,7 +598,7 @@ mod tests {
         state.set_open(ToolPanel::Contour, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, &mut actions);
+            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
