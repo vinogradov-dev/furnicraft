@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use furnicraft_model::{Geometry, Id, NodeQuery, Project, StructuralKind};
 use furnicraft_project::{MAX_SCENE_BYTES, SceneFile, SceneFileError};
+use furnicraft_units::Length;
 
 const V7: &str = include_str!("golden/scene-v7.fcs");
 const V8: &str = include_str!("golden/scene-v8.fcs");
@@ -20,6 +21,7 @@ const V10: &str = include_str!("golden/scene-v10.fcs");
 const V11: &str = include_str!("golden/scene-v11.fcs");
 const V12: &str = include_str!("golden/scene-v12.fcs");
 const V14: &str = include_str!("golden/scene-v14.fcs");
+const V18: &str = include_str!("golden/scene-v18.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -59,6 +61,7 @@ fn every_golden_file_loads_and_round_trips() {
         ("version 11", V11),
         ("version 12", V12),
         ("version 14", V14),
+        ("version 18", V18),
     ] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
@@ -182,6 +185,40 @@ fn a_version_twelve_file_loads_segment_ids_and_their_counter() {
     assert!(rewritten.contains("\"next_segment_id\": 6"), "the counter survives a save");
     let again = SceneFile::parse(&rewritten).expect("the rewritten version 12 file loads");
     assert_eq!(again.document(), scene.document());
+}
+
+#[test]
+fn a_version_eighteen_file_loads_parametric_primitives() {
+    let scene = SceneFile::parse(V18).expect("version 18");
+    let document = scene.document();
+
+    let ball = document.object(Id::new(2).expect("id")).expect("the sphere must load");
+    let sphere = ball.geometry().as_primitive().expect("a parametric payload");
+    assert_eq!(
+        sphere,
+        &furnicraft_model::Primitive::sphere(Length::from_millimetres(50).expect("radius"), 32, 16).expect("sphere")
+    );
+    assert!(ball.geometry().as_mesh().is_none(), "a primitive stores parameters, not a mesh");
+
+    let block = document.object(Id::new(3).expect("id")).expect("the cube must load");
+    let cube = block.geometry().as_primitive().expect("a parametric payload");
+    assert_eq!(cube.kind(), furnicraft_model::PrimitiveKind::Cube);
+    assert_eq!(cube.bounds_micrometres(), ([-50_000; 3], [50_000; 3]));
+
+    let rewritten = scene.to_json().expect("serialize");
+    assert!(rewritten.contains("\"kind\": \"primitive\""), "the geometry tag is written");
+    assert!(rewritten.contains("\"shape\": \"sphere\""), "the shape is written as the inner tag");
+    let again = SceneFile::parse(&rewritten).expect("the rewritten version 18 file loads");
+    assert_eq!(again.document(), scene.document());
+}
+
+#[test]
+fn a_version_seventeen_file_still_loads_without_primitives() {
+    let text = V18.replacen("\"schema_version\": 18,", "\"schema_version\": 17,", 1);
+    assert_ne!(text, V18, "the fixture must carry the schema line");
+    let scene = SceneFile::parse(&text).expect("a version 17 file loads");
+    assert_eq!(scene.document().schema_version(), Project::CURRENT_SCHEMA_VERSION, "it migrates forward");
+    assert!(scene.document().object(Id::new(2).expect("id")).is_some(), "the payload still loads");
 }
 
 #[test]

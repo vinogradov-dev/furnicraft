@@ -34,6 +34,7 @@ mod object;
 mod panel;
 mod panel_features;
 mod placement;
+mod primitive;
 mod project;
 mod properties;
 mod query;
@@ -50,9 +51,7 @@ pub use contour_edit::ContourEditError;
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
-pub use mesh::{
-    MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError, PRIMITIVE_SEGMENTS, PRIMITIVE_SPHERE_BANDS,
-};
+pub use mesh::{MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError};
 pub use node::Node;
 pub use object::{Constructive, ConstructiveError, Extrude, Feature, Geometry, MAX_OBJECT_FEATURES, Object};
 pub use panel::{
@@ -64,6 +63,10 @@ pub use panel::{
 };
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 pub use placement::{EulerAngles, Pivot, Placement, PlacementError};
+pub use primitive::{
+    Cube, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
+    MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
+};
 pub use project::{Project, ProjectError};
 pub use properties::{
     Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE, SYSTEM_PROTOTYPE_ID,

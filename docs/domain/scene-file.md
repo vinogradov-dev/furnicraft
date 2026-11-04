@@ -8,7 +8,7 @@ documents.
 Related documents:
 
 - [Scene document](document.md) — the document this file carries, its schema and migrations.
-- [Geometry objects](geometry.md) — objects with a baked mesh or a feature history.
+- [Geometry objects](geometry.md) — objects with a baked mesh, a parametric primitive or a feature history.
 - [Materials and catalogue](materials.md) — the external catalogue the file does not store.
 
 Related decisions: [0005](../decisions/0005-material-catalogue.md),
@@ -67,8 +67,9 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 - each node's placement, stored pivot and typed properties, including its furniture type;
 - panels: nominal size, material reference with `last_known_thickness`, banding with its fallbacks,
   machining;
-- geometry objects: a baked mesh, or the ordered features of a constructive object
-  ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md));
+- geometry objects: a baked mesh, the parameters of a primitive or the ordered features of a
+  constructive object ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
+  [0054](../decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md));
 - camera and light parameters, and the active camera;
 - scene settings: world ambient and, later, render settings;
 - the document schema, revision and id allocator;

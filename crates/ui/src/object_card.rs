@@ -1,18 +1,21 @@
 //! The selected geometry object card.
 //!
 //! An object is a leaf with one geometry payload. A mesh object is edited directly and has no
-//! feature history. A constructive object shows its contour instead: the contour and the feature
-//! height are the source of truth, the mesh is derived, and `object.collapse` bakes it into an
-//! editable mesh ([ADR 0037]). A path object shows its flat drawing: it has no mesh and no feature
-//! height until it becomes a contour or is extruded.
+//! feature history. A primitive object shows its parameters — an edge, a radius, a height, the
+//! number of sides and bands — because they are the source of truth and the mesh is derived
+//! ([ADR 0054]). A constructive object shows its contour instead: the contour and the feature
+//! height are the source of truth, and `object.collapse` bakes it into an editable mesh
+//! ([ADR 0037]). A path object shows its flat drawing: it has no mesh and no feature height until
+//! it becomes a contour or is extruded.
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+//! [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
-use furnicraft_engine::object_cmds::{OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID};
-use furnicraft_engine::{NodeRename, ObjectCollapse, ObjectContourReplace, Session};
-use furnicraft_model::{Contour, Geometry, Id, Path, Project};
+use furnicraft_engine::object_cmds::{OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID, OBJECT_PRIMITIVE_REPLACE_ID};
+use furnicraft_engine::{NodeRename, ObjectCollapse, ObjectContourReplace, ObjectPrimitiveReplace, Session};
+use furnicraft_model::{Contour, Geometry, Id, Path, Primitive, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
@@ -40,6 +43,7 @@ const MAX_LISTED_VERTICES: usize = 12;
 pub(crate) struct ObjectCard {
     draft: Option<Draft>,
     contour_draft: Option<ContourDraft>,
+    primitive_draft: Option<PrimitiveDraft>,
     confirm_collapse: bool,
     error: Option<String>,
 }
@@ -67,6 +71,83 @@ impl ContourDraft {
     }
 }
 
+/// The editable text of one primitive parameter and the primitive it was read from.
+///
+/// `base` plays the same role as in [`ContourDraft`]: an edit made elsewhere — by undo, or by a
+/// gizmo — re-reads the document instead of leaving stale text in the field.
+#[derive(Clone, Debug)]
+struct PrimitiveDraft {
+    object: Id,
+    base: Primitive,
+    fields: PrimitiveFields,
+    error: Option<String>,
+}
+
+/// The parameter fields as typed text, one per editable dimension.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct PrimitiveFields {
+    edge: String,
+    radius: String,
+    height: String,
+    segments: String,
+    bands: String,
+}
+
+impl PrimitiveFields {
+    fn read(primitive: &Primitive) -> Self {
+        let mut fields = Self::default();
+        match primitive {
+            Primitive::Cube(cube) => fields.edge = cube.edge().to_string(),
+            Primitive::Cylinder(cylinder) => {
+                fields.radius = cylinder.radius().to_string();
+                fields.height = cylinder.height().to_string();
+                fields.segments = cylinder.segments().to_string();
+            }
+            Primitive::Sphere(sphere) => {
+                fields.radius = sphere.radius().to_string();
+                fields.segments = sphere.segments().to_string();
+                fields.bands = sphere.bands().to_string();
+            }
+        }
+        fields
+    }
+}
+
+impl PrimitiveDraft {
+    fn new(object: Id, primitive: &Primitive) -> Self {
+        Self { object, base: primitive.clone(), fields: PrimitiveFields::read(primitive), error: None }
+    }
+
+    /// The primitive the fields describe, or a readable reason they do not.
+    ///
+    /// The shape comes from `base`, so a field that belongs to another shape is never invented: a
+    /// cube has only an edge and a sphere has no height.
+    fn parse(&self) -> Result<Primitive, String> {
+        let segments = || parse_count(&self.fields.segments, "sides").map_err(|error| format!("{error}."));
+        let bands = || parse_count(&self.fields.bands, "bands").map_err(|error| format!("{error}."));
+        let primitive = match &self.base {
+            Primitive::Cube(_) => Primitive::cube(parse_length(&self.fields.edge, "edge")?),
+            Primitive::Cylinder(_) => Primitive::cylinder(
+                parse_length(&self.fields.radius, "radius")?,
+                parse_length(&self.fields.height, "height")?,
+                segments()?,
+            ),
+            Primitive::Sphere(_) => {
+                Primitive::sphere(parse_length(&self.fields.radius, "radius")?, segments()?, bands()?)
+            }
+        };
+        primitive.map_err(|error| format!("{error}."))
+    }
+}
+
+fn parse_length(text: &str, field: &str) -> Result<Length, String> {
+    Length::parse_millimetres(text.trim()).map_err(|error| format!("The {field}: {error}."))
+}
+
+fn parse_count(text: &str, field: &str) -> Result<u32, String> {
+    text.trim().parse::<u32>().map_err(|_| format!("The {field} must be a whole number"))
+}
+
 /// What the card reports about one object, owned so no document borrow outlives the frame.
 #[derive(Clone, Debug, PartialEq)]
 struct ObjectSummary {
@@ -78,6 +159,7 @@ struct ObjectSummary {
     contour: Option<Contour>,
     path: Option<Path>,
     height: Option<Length>,
+    primitive: Option<Primitive>,
 }
 
 fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
@@ -92,6 +174,18 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             contour: None,
             path: None,
             height: None,
+            primitive: None,
+        }),
+        Geometry::Primitive(primitive) => Some(ObjectSummary {
+            name: object.name().to_owned(),
+            kind: "Primitive",
+            is_mesh: false,
+            vertices: primitive.vertex_count(),
+            faces: primitive.face_count(),
+            contour: None,
+            path: None,
+            height: None,
+            primitive: Some(primitive.clone()),
         }),
         Geometry::Constructive(constructive) => Some(ObjectSummary {
             name: object.name().to_owned(),
@@ -102,6 +196,7 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             contour: constructive.contour().cloned(),
             path: None,
             height: constructive.height(),
+            primitive: None,
         }),
         Geometry::Path(path) => Some(ObjectSummary {
             name: object.name().to_owned(),
@@ -112,6 +207,7 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             contour: None,
             path: Some(path.clone()),
             height: None,
+            primitive: None,
         }),
     }
 }
@@ -143,6 +239,7 @@ impl ObjectCard {
             self.error = None;
             self.confirm_collapse = false;
             self.contour_draft = None;
+            self.primitive_draft = None;
             self.draft = Some(Draft { object: object_id, name: summary.name.clone() });
         }
         let is_constructive = summary.contour.is_some();
@@ -155,6 +252,13 @@ impl ObjectCard {
         {
             self.contour_draft = Some(ContourDraft::new(object_id, summary.contour.as_ref()));
         }
+        if let Some(primitive) = &summary.primitive {
+            if self.primitive_draft.as_ref().is_none_or(|draft| draft.object != object_id || draft.base != *primitive) {
+                self.primitive_draft = Some(PrimitiveDraft::new(object_id, primitive));
+            }
+        } else {
+            self.primitive_draft = None;
+        }
 
         let (rename, name_error) = self.name_section(ui, &summary);
         self.geometry_section(ui, &summary);
@@ -164,8 +268,9 @@ impl ObjectCard {
         }
         // The viewport owns the working copy while the mode is live; a text replacement or a
         // collapse would silently make that copy stale.
+        let primitive_result = self.primitive_section(ui, &summary);
         let contour_result = if contour_editing { None } else { self.contour_section(ui, &summary) };
-        let (collapse, cancel) = if !is_constructive || contour_editing {
+        let (collapse, cancel) = if (!is_constructive && summary.primitive.is_none()) || contour_editing {
             (false, false)
         } else {
             self.collapse_section(ui, single_selection)
@@ -179,6 +284,17 @@ impl ObjectCard {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
+            ui.ctx().request_repaint();
+            return action;
+        }
+        if let Some(result) = primitive_result {
+            match result.and_then(|primitive| replace_primitive(session, object_id, primitive)) {
+                Ok(()) => {
+                    self.error = None;
+                    self.primitive_draft = None;
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -205,6 +321,7 @@ impl ObjectCard {
                     self.error = None;
                     self.confirm_collapse = false;
                     self.contour_draft = None;
+                    self.primitive_draft = None;
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -246,7 +363,12 @@ impl ObjectCard {
         ui.separator();
         section(ui, "object.geometry", "Geometry", true, |ui| {
             ui.label(RichText::new(summary.kind).strong());
-            if let Some(contour) = &summary.contour {
+            if let Some(primitive) = &summary.primitive {
+                ui.label(primitive.kind().label());
+                ui.label(format!("Vertices  {}", summary.vertices));
+                ui.label(format!("Faces  {}", summary.faces));
+                ui.label("The parameters are the source of truth; the mesh is derived.");
+            } else if let Some(contour) = &summary.contour {
                 let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
                 ui.label(format!("Contour segments  {}", contour.segments().len()));
                 if arcs > 0 {
@@ -272,6 +394,49 @@ impl ObjectCard {
         });
     }
 
+    /// Draws the primitive parameters; returns the parsed primitive when Apply was pressed.
+    ///
+    /// Only the fields the shape has are shown: a cube has one edge, a cylinder a radius, a height
+    /// and its sides, a sphere a radius, its sides and its bands. Units come from
+    /// `furnicraft-units`, so the text is millimetres with the suffix the user typed.
+    fn primitive_section(&mut self, ui: &mut Ui, summary: &ObjectSummary) -> Option<Result<Primitive, String>> {
+        let primitive = summary.primitive.as_ref()?;
+        let draft = self.primitive_draft.as_mut()?;
+        let mut apply = false;
+        ui.separator();
+        section(ui, "object.primitive", "Parameters", true, |ui| {
+            ui.label(format!("{} — edit the parameters and apply.", primitive.kind().label()));
+            match primitive {
+                Primitive::Cube(_) => {
+                    length_field(ui, "Edge", &mut draft.fields.edge);
+                }
+                Primitive::Cylinder(_) => {
+                    length_field(ui, "Radius", &mut draft.fields.radius);
+                    length_field(ui, "Height", &mut draft.fields.height);
+                    count_field(ui, "Sides", &mut draft.fields.segments);
+                }
+                Primitive::Sphere(_) => {
+                    length_field(ui, "Radius", &mut draft.fields.radius);
+                    count_field(ui, "Sides", &mut draft.fields.segments);
+                    count_field(ui, "Bands", &mut draft.fields.bands);
+                }
+            }
+            if let Some(error) = &draft.error {
+                ui.colored_label(Color32::LIGHT_RED, error);
+            }
+            apply = ui.button("Apply").clicked();
+        });
+        if !apply {
+            return None;
+        }
+        let parsed = draft.parse();
+        if let Err(error) = &parsed {
+            draft.error = Some(error.clone());
+            return None;
+        }
+        Some(parsed)
+    }
+
     fn mesh_section(
         &self,
         ui: &mut Ui,
@@ -284,7 +449,7 @@ impl ObjectCard {
         ui.separator();
         let mut action = ObjectAction::None;
         section(ui, "object.mesh_edit", "Mesh editing", true, |ui| {
-            if summary.contour.is_some() {
+            if summary.contour.is_some() || summary.primitive.is_some() {
                 ui.label("Collapse the object to a mesh before editing its elements.");
             } else if !summary.is_mesh {
                 ui.label("A path object has no mesh; its drawing is the source of truth.");
@@ -413,7 +578,7 @@ impl ObjectCard {
             if self.confirm_collapse {
                 ui.colored_label(
                     Color32::from_rgb(230, 180, 80),
-                    "Baking the contour and features into a mesh deletes the history. Undo is the only way back.",
+                    "Baking the parameters into a mesh deletes them as parameters. Undo is the only way back.",
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Collapse to mesh").clicked() {
@@ -429,6 +594,23 @@ impl ObjectCard {
         });
         (collapse, cancel)
     }
+}
+
+/// A labelled millimetre text field.
+fn length_field(ui: &mut Ui, label: &str, text: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(TextEdit::singleline(text).desired_width(100.0));
+        ui.label("mm");
+    });
+}
+
+/// A labelled whole-number text field.
+fn count_field(ui: &mut Ui, label: &str, text: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(TextEdit::singleline(text).desired_width(100.0));
+    });
 }
 
 /// The selected vertices that still exist, with their local positions.
@@ -502,6 +684,11 @@ fn replace_contour(session: &mut Session, object: Id, contour: Contour) -> Resul
     dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
 }
 
+fn replace_primitive(session: &mut Session, object: Id, primitive: Primitive) -> Result<(), String> {
+    let params = json(&ObjectPrimitiveReplace { object, primitive })?;
+    dispatch(session, OBJECT_PRIMITIVE_REPLACE_ID, &params).map(|_| ())
+}
+
 fn collapse_object(session: &mut Session, object: Id) -> Result<(), String> {
     let params = json(&ObjectCollapse { object })?;
     dispatch(session, OBJECT_COLLAPSE_ID, &params).map(|_| ())
@@ -571,6 +758,101 @@ mod tests {
         assert_eq!(summary.contour, Some(rectangle(100, 50)));
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
         assert!(summary.contour.as_ref().is_some_and(|contour| contour.segments().len() == 4));
+    }
+
+    #[test]
+    fn summary_reports_a_primitive_object_with_its_parameters() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let primitive = Primitive::sphere(Length::from_millimetres(40).expect("radius"), 24, 12).expect("sphere");
+        let id = project
+            .add_object(root, "Ball", Placement::IDENTITY, Geometry::Primitive(primitive.clone()))
+            .expect("add object");
+
+        let summary = object_summary(&project, id).expect("summary");
+        assert_eq!(summary.kind, "Primitive");
+        assert!(!summary.is_mesh, "the mesh is derived, not stored");
+        assert_eq!(summary.primitive, Some(primitive));
+        assert_eq!(summary.contour, None);
+        assert_eq!(summary.path, None);
+        assert_eq!(summary.faces, 24 * 12);
+        assert_eq!(summary.vertices, 2 + 24 * 11);
+    }
+
+    fn primitive_session(primitive: Primitive) -> (Session, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let id = project.add_object(root, "Shape", Placement::IDENTITY, Geometry::Primitive(primitive)).expect("add");
+        let session = Session::with_catalog(project, sample_catalog());
+        (session, id)
+    }
+
+    #[test]
+    fn the_primitive_fields_read_and_parse_the_stored_parameters() {
+        let cases = [
+            Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube"),
+            Primitive::cylinder(
+                Length::from_millimetres(25).expect("radius"),
+                Length::from_millimetres(80).expect("height"),
+                20,
+            )
+            .expect("cylinder"),
+            Primitive::sphere(Length::from_millimetres(40).expect("radius"), 24, 12).expect("sphere"),
+        ];
+        for primitive in cases {
+            let draft = PrimitiveDraft::new(Id::new(1).expect("id"), &primitive);
+            assert_eq!(draft.fields, PrimitiveFields::read(&primitive), "{primitive:?} reads back");
+            assert_eq!(draft.parse().as_ref(), Ok(&primitive), "{primitive:?} parses from its own text");
+        }
+    }
+
+    #[test]
+    fn the_primitive_fields_refuse_bad_text_and_out_of_range_values() {
+        let cube = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
+        let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &cube);
+        draft.fields.edge = "wide".to_owned();
+        assert!(draft.parse().is_err(), "text must parse as a length");
+        draft.fields.edge = "0".to_owned();
+        assert!(draft.parse().is_err(), "a zero edge is not a solid");
+
+        let sphere = Primitive::sphere(Length::from_millimetres(40).expect("radius"), 24, 12).expect("sphere");
+        let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &sphere);
+        draft.fields.segments = "two".to_owned();
+        assert!(draft.parse().is_err(), "the sides must be a whole number");
+        draft.fields.segments = "2".to_owned();
+        assert!(draft.parse().is_err(), "two sides are not a ring");
+        draft.fields.segments = "24".to_owned();
+        draft.fields.bands = "1".to_owned();
+        assert!(draft.parse().is_err(), "one band has no surface");
+    }
+
+    #[test]
+    fn applying_new_parameters_is_one_command_and_keeps_the_id() {
+        let original = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
+        let (mut session, id) = primitive_session(original.clone());
+        let before = session.project().revision();
+        let wider = Primitive::cube(Length::from_millimetres(160).expect("edge")).expect("cube");
+        replace_primitive(&mut session, id, wider.clone()).expect("replace the parameters");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per apply");
+        assert_eq!(session.project().object_primitive(id), Ok(&wider));
+        assert_eq!(session.project().object(id).expect("object").name(), "Shape", "only the parameters change");
+
+        session.undo().expect("undo");
+        assert_eq!(session.project().object_primitive(id), Ok(&original));
+    }
+
+    #[test]
+    fn collapsing_a_primitive_is_undoable() {
+        let primitive = Primitive::sphere(Length::from_millimetres(40).expect("radius"), 16, 8).expect("sphere");
+        let (mut session, id) = primitive_session(primitive);
+        collapse_object(&mut session, id).expect("collapse");
+        let object = session.project().object(id).expect("object");
+        assert!(object.geometry().as_mesh().is_some(), "collapse bakes the derived mesh");
+        assert!(object.geometry().as_primitive().is_none(), "the parameters are dropped");
+        assert!(collapse_object(&mut session, id).is_err(), "a baked mesh cannot collapse again");
+
+        session.undo().expect("undo");
+        assert!(session.project().object(id).expect("object").geometry().as_primitive().is_some());
     }
 
     #[test]

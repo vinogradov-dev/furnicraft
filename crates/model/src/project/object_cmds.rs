@@ -98,23 +98,54 @@ impl Project {
         Ok(next_revision)
     }
 
-    /// Replaces a constructive payload with a baked mesh and bumps the revision once.
+    /// The parameters of a parametric primitive object.
     ///
-    /// The caller evaluates the feature history and passes the resulting mesh; the id, name,
-    /// placement, pivot and properties are unchanged and the features are dropped
-    /// ([ADR 0037]). A node that is not a constructive object is refused.
+    /// A missing node or an object with another payload is an error the user can read; no shape is
+    /// invented from a mesh or a contour.
+    pub fn object_primitive(&self, id: Id) -> Result<&Primitive, ProjectError> {
+        let object = self.object(id).ok_or(ProjectError::NodeNotFound { id })?;
+        object.geometry().as_primitive().ok_or(ProjectError::NotAPrimitiveObject { id })
+    }
+
+    /// Replaces a primitive's parameters and bumps the revision once.
+    ///
+    /// The id, name, placement, pivot and properties are unchanged. A node that is not a parametric
+    /// primitive is [`ProjectError::NotAPrimitiveObject`]; invalid parameters are refused by the
+    /// payload constructors before the document changes.
+    pub fn set_object_primitive(&mut self, id: Id, primitive: Primitive) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotAPrimitiveObject { id });
+        };
+        let Some(stored) = object.geometry_mut().as_primitive_mut() else {
+            return Err(ProjectError::NotAPrimitiveObject { id });
+        };
+        *stored = primitive;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces a derived payload with a baked mesh and bumps the revision once.
+    ///
+    /// The caller evaluates the payload and passes the resulting mesh; the id, name, placement,
+    /// pivot and properties are unchanged and the parameters are dropped ([ADR 0037], [ADR 0054]).
+    /// A node that is neither constructive nor a primitive is refused.
     ///
     /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+    /// [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
     pub fn collapse_object(&mut self, id: Id, mesh: Mesh) -> Result<Revision, ProjectError> {
         let next_revision = self.next_revision()?;
         let Some(node) = find_node_mut(&mut self.root, id) else {
             return Err(ProjectError::NodeNotFound { id });
         };
         let Some(object) = node.as_object_mut() else {
-            return Err(ProjectError::NotConstructiveObject { id });
+            return Err(ProjectError::NotDerivedObject { id });
         };
-        if object.geometry().as_constructive().is_none() {
-            return Err(ProjectError::NotConstructiveObject { id });
+        if !matches!(object.geometry(), Geometry::Constructive(_) | Geometry::Primitive(_)) {
+            return Err(ProjectError::NotDerivedObject { id });
         }
         *object.geometry_mut() = Geometry::Mesh(mesh);
         self.revision = next_revision;
@@ -125,8 +156,8 @@ impl Project {
     ///
     /// The batch is validated before anything changes: an empty batch, a repeated index or an
     /// index outside the mesh rejects the whole call, so a partial move can never reach the
-    /// document. A constructive object has no editable mesh and is refused; it becomes a mesh
-    /// object only through `object.collapse`.
+    /// document. A constructive or primitive object has no editable mesh and is refused; it
+    /// becomes a mesh object only through `object.collapse`.
     pub fn move_mesh_vertices(&mut self, id: Id, moves: &[(u32, [Length; 3])]) -> Result<Revision, ProjectError> {
         if moves.is_empty() {
             return Err(ProjectError::NoVertexMoves);

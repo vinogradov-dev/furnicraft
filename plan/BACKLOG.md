@@ -15,8 +15,8 @@ phase. The first unfinished task in `## Now` is the one `STATE: task=` must name
 Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
 variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
 the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
-boundaries only, X is a defect in behaviour that already shipped, and U is the UI: toolbars, drawing
-tools, view controls and icon resources.
+boundaries only, V is primitive parameters, X is a defect in behaviour that already shipped, and U
+is the UI: toolbars, drawing tools, view controls and icon resources.
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -38,6 +38,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **V1** a primitive keeps the parameters that built it: `Geometry::Primitive(Primitive)`
+  stores the shape and its parameters, `crates/model/src/primitive.rs` validates them on construction
+  and on load, `crates/mesh/src/primitive.rs` derives the mesh, `object.primitive.create` stores the
+  recipe and `object.primitive.replace` edits it in one revision and one undo entry;
+  `object.collapse` bakes either a constructive or a primitive payload. Schema 18, the
+  `scene-v18.fcs` golden and ADR 0054; a cube keeps six faces and only the curved shapes carry a
+  face count — `56b876c`
 
 - `[x]` **U26** the toolbar icon rollout: cube, cylinder and sphere (`97ee5ce`), then panel,
   assembly, camera, light and extrude; the viewport strip draws frame-all and the projection toggle

@@ -4,10 +4,12 @@
 //! is exposed, whether a click selects a vertex or a face, and what is selected. The document only
 //! changes when a command moves vertices, so leaving the mode needs no undo entry.
 //!
-//! A constructive object has no editable mesh until `object.collapse` bakes it ([ADR 0037]), so the
-//! mode can only start on an object that carries a [`Geometry::Mesh`] payload.
+//! A derived payload — a constructive object or a primitive — has no editable mesh until
+//! `object.collapse` bakes it ([ADR 0037], [ADR 0054]), so the mode can only start on an object that
+//! carries a [`Geometry::Mesh`] payload.
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+//! [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
 
 use std::collections::HashSet;
 

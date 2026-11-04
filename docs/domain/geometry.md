@@ -16,14 +16,15 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 [0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
 [0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
 [0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md),
-[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) and
-[0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md).
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md),
+[0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md) and
+[0054](../decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md).
 
 ## 1. Two authoring paths
 
 | | Mesh object | Constructive object |
 |---|---|---|
-| Created from | a primitive (box first) | a closed flat contour plus features |
+| Created from | a primitive, or a collapsed payload | a closed flat contour plus features |
 | Source of truth | the mesh itself | the contour and the feature parameters |
 | Edited by | moving vertices and faces | editing the contour or a feature |
 | Mesh editing | yes | no, until `object.collapse` |
@@ -31,9 +32,10 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 | Mesh in the file | yes | no, it is derived |
 
 The two paths are deliberately separate ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
-A mesh has no shape history, so a primitive cannot be re-parameterised; a constructive object has no
-direct mesh editing, so its contour stays the only way to change it. A path object is a third
-payload: a drawing rather than a solid, described in section 5.
+A mesh has no shape history; a primitive keeps its parameters and a constructive object keeps its
+contour, so both have a source of truth that survives an edit. A constructive object has no direct
+mesh editing, so its contour stays the only way to change it. A path object is a further payload: a
+drawing rather than a solid, described in section 6; a primitive is described in section 5.
 
 ## 2. The object node
 
@@ -41,8 +43,8 @@ payload: a drawing rather than a solid, described in section 5.
   properties, exactly like a container.
 - It is a **leaf** in v1: it has no children. Several parts are grouped by wrapping them in a
   container, which already exists.
-- The node carries one **geometry payload**: `Mesh`, `Constructive` or `Path`. There is no separate
-  node kind per payload and no separate "solid" node.
+- The node carries one **geometry payload**: `Mesh`, `Constructive`, `Primitive` or `Path`. There is
+  no separate node kind per payload and no separate "solid" node.
 - A **panel is not an object**. A panel stores nominal size, material, banding and machining and
   obeys the panel rules; a geometry object is free-form. A board drawn as an object does not become a
   cutting-list part. The duplication is accepted because furniture rules are not generic mesh rules.
@@ -94,7 +96,32 @@ payload: a drawing rather than a solid, described in section 5.
 - The height is positive and capped by the document's size limit. An empty or negative feature list
   is invalid.
 
-## 5. Path payload
+## 5. Primitive payload
+
+- `Primitive` is a shape and the parameters that build it, stored as
+  `Geometry::Primitive(Primitive)` (schema 18). It is never a mesh: the mesh is derived on read
+  ([0054](../decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md)).
+- The inner tag is `shape`, because the outer payload already carries `kind`. The variants are
+  `cube { edge }`, `cylinder { radius, height, segments }` and `sphere { radius, segments, bands }`.
+- The parameter set is the shape's own. A cube has one edge and always six faces; only the curved
+  shapes have a face count, and only a sphere has latitude bands. There is no generic tessellation
+  field shared by shapes that do not need it.
+- Every dimension is validated on construction and on load: at least 2 µm and at most 10 m. A curved
+  shape takes 3 to 256 sides; a sphere takes 2 to 128 latitude bands. A rejected parameter set is a
+  readable error, never an empty shape.
+- `object.primitive.create` takes the full extent — the cube's edge or the diameter of a cylinder or
+  sphere — and builds the default tessellation: 32 sides and 16 bands. A cylinder's height equals the
+  extent, so one number is one shape.
+- The counts and the bounds are analytic (`vertex_count`, `face_count`, `bounds_micrometres`), so the
+  scene tree, the pivot and the camera frame never evaluate a mesh. The bound of a sphere is the
+  sphere, not its tessellated polygon.
+- `object.primitive.replace` stores a new validated parameter set in one revision and one undo entry,
+  keeping the id, name, placement, pivot and properties. The card shows the fields the shape has,
+  in millimetres and whole numbers.
+- Collapsing a primitive bakes the derived mesh and drops the parameters, exactly as a constructive
+  object drops its feature list. A baked mesh and a path cannot be collapsed.
+
+## 6. Path payload
 
 - A path is an open or closed chain of directed **segments** in the object's local XY plane at
   `z = 0`. It uses the same segment value and the same stable ids as a ring, so a line or an arc
@@ -118,7 +145,7 @@ payload: a drawing rather than a solid, described in section 5.
 - An object payload is `Geometry::Path(Path)` (schema 17). It cannot be collapsed: there is no solid
   to bake.
 
-## 6. Contour editing
+## 7. Contour editing
 
 A constructive contour and a contour panel outline are reshaped in one viewport mode. Its state is
 view state, not document data ([0029](../decisions/0029-view-state-belongs-to-the-session.md)).
@@ -154,7 +181,7 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - A selection change, a deleted target or a target that no longer stores a ring ends the mode.
 - The whole mode is a client of the commands: the draft never reaches the document by another path.
 
-## 7. Evaluation
+## 8. Evaluation
 
 - `furnicraft-param` compiles a constructive object into a domain-free `SolidPlan`: a base
   extrusion followed by boolean steps. The plan is derived, never written to the file, and rebuilt
@@ -168,27 +195,32 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
   reuses the mesh and only changes the world transform. The derived mesh is never written to the file.
 - A derivation input is anything the geometry depends on: a panel's outline, nominal size, machining,
   banding and band order, its resolved thickness and the catalogue-resolved band profiles; an
-  object's whole geometry payload. A catalogue material change reaches the cache through the resolved
-  thickness and profile, so a material swap rebuilds the panels that use it.
-- Editing the contour or a feature parameter bumps the revision once; the next frame re-evaluates only
-  the nodes it touched. A pass that visits fewer nodes drops the entries of nodes that no longer
-  exist.
+  object's whole geometry payload, which for a primitive is its shape and parameter set. A catalogue
+  material change reaches the cache through the resolved thickness and profile, so a material swap
+  rebuilds the panels that use it.
+- A primitive is evaluated analytically in `furnicraft-mesh` (`evaluate_primitive`): the parameters
+  are document data, the ring trigonometry runs at the geometry boundary and the result is rounded
+  back to lengths. The viewport and `object.collapse` call that one function.
+- Editing the contour, a feature parameter or a primitive parameter bumps the revision once; the next
+  frame re-evaluates only the nodes it touched. A pass that visits fewer nodes drops the entries of
+  nodes that no longer exist.
 - An evaluation failure — no kernel, a contour the kernel rejects, a boolean that yields no solid —
   keeps the object and its data and reports a diagnostic on the node. It is not a load error and it
   does not delete anything.
 - `object.collapse` refuses to run while the current evaluation fails.
 
-## 8. Collapse
+## 9. Collapse
 
-- `object.collapse` replaces `Constructive` with the evaluated `Mesh` in one command and one undo
-  entry.
-- The id, name, placement, pivot and properties are unchanged; the feature list is deleted.
+- `object.collapse` replaces a derived payload — `Constructive` or `Primitive` — with the evaluated
+  `Mesh` in one command and one undo entry.
+- The id, name, placement, pivot and properties are unchanged; the feature list or the parameters
+  are deleted.
 - Afterwards the object is a mesh object: mesh commands apply, and the contour is gone. Undo is the
   only way back, which is why the UI asks for confirmation.
 - Collapse is never automatic: a rebuild happens on every edit, and a failing evaluation is a
   diagnostic to fix, not a reason to bake.
 
-## 9. References and topology
+## 10. References and topology
 
 - The document stores the mesh; the session stores the selection.
 - Vertex editing is editor view state: it names the object and the selected vertex indices, so
@@ -207,11 +239,12 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - `mesh.vertices.move` validates every index and rejects the whole command if one is out of bounds; it
   never skips a bad entry silently.
 
-## 10. Commands
+## 11. Commands
 
 | Command | Parameters | Effect |
 |---|---|---|
-| `object.primitive.create` | parent, name, primitive kind, size, placement | creates a mesh object, returns its id |
+| `object.primitive.create` | parent, name, primitive kind, size, placement | creates a parametric primitive with the default tessellation, returns its id |
+| `object.primitive.replace` | object, primitive | replaces the parameters in one revision and keeps the node |
 | `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude` |
 | `object.contour.replace` | object, contour | replaces the contour and rebuilds |
 | `object.path.create` | parent, name, path, placement | creates a path object, returns its id |
@@ -222,11 +255,16 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 A face move is a `mesh.vertices.move` over the face's vertices; it does not need its own command.
 Every command bumps the revision once and becomes one undo entry.
 
-## 11. Tests
+## 12. Tests
 
 At minimum:
 
 - a box primitive has eight vertices and six faces, and its triangulation has twelve triangles;
+- a primitive stores its parameters and no mesh, round-trips through the file, and its counts and
+  bounds follow the parameters; a rejected dimension or tessellation is a readable error;
+- replacing the parameters is one revision and one undo entry and keeps the id, name and placement;
+- a collapsed primitive bakes exactly the mesh the evaluator produces and drops the parameters;
+- a primitive is reused by the cache until its parameters change;
 - validation rejects an out-of-bounds face index, a degenerate face, a non-finite coordinate and a
   file above the vertex cap;
 - an extruded contour has the volume of its area times its height;
@@ -238,11 +276,12 @@ At minimum:
   drawing in one revision;
 - a blank name, an unknown parent or a replace on an object that stores no path is refused without
   mutating the document;
-- collapse produces the same mesh as the evaluation, clears the features and is one undo entry;
-- `mesh.vertices.move` on a constructive object is refused;
+- collapse produces the same mesh as the evaluation, clears the features or the parameters and is one
+  undo entry;
+- `mesh.vertices.move` on a constructive or primitive object is refused;
 - one out-of-bounds vertex index rejects the whole move;
 - a failing evaluation keeps the object, its data and its placement and reports a diagnostic;
-- a constructive object's mesh never appears in a saved file;
+- a constructive object's mesh never appears in a saved file, and neither does a primitive's;
 - contour editing starts only on a single node that stores a ring, and mesh editing and contour
   editing exclude each other;
 - moving a corner and splitting a side change only the draft, and applying is one command and one
@@ -253,7 +292,7 @@ At minimum:
 - a draft that would open or cross the ring leaves the last valid shape in place, and cancelling the
   mode changes nothing.
 
-## 12. Open questions
+## 13. Open questions
 
 - Arcs in a profile: the kernel profile is a polyline, so an arc is sampled; the document keeps the arc.
 - Holes in a profile.

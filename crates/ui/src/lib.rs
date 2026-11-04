@@ -856,7 +856,10 @@ mod tests {
     use furnicraft_engine::NodePropertySet;
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
     use furnicraft_model::Contour;
-    use furnicraft_model::{Container, FurnType, Geometry, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE};
+    use furnicraft_model::{
+        Container, DEFAULT_BANDS, DEFAULT_SEGMENTS, FurnType, Geometry, Mesh, Panel, Placement, PropertyValue,
+        SYSTEM_FURNTYPE,
+    };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
     fn cube_project() -> (Project, Id) {
@@ -1222,14 +1225,11 @@ mod tests {
 
     #[test]
     fn placing_a_cylinder_and_a_sphere_names_and_shapes_them() {
-        for (kind, name, vertices) in [
-            (PrimitiveKind::Cylinder, "Cylinder", furnicraft_model::PRIMITIVE_SEGMENTS * 2),
-            (
-                PrimitiveKind::Sphere,
-                "Sphere",
-                2 + furnicraft_model::PRIMITIVE_SEGMENTS * (furnicraft_model::PRIMITIVE_SPHERE_BANDS - 1),
-            ),
-        ] {
+        let cases = [
+            (PrimitiveKind::Cylinder, "Cylinder", DEFAULT_SEGMENTS * 2),
+            (PrimitiveKind::Sphere, "Sphere", 2 + DEFAULT_SEGMENTS * (DEFAULT_BANDS - 1)),
+        ];
+        for (kind, name, vertices) in cases {
             let (project, _panel) = contour_panel_project();
             let mut session = Session::with_catalog(project, sample_catalog());
             let mut editor = Editor::new();
@@ -1238,7 +1238,10 @@ mod tests {
             let id = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place");
             let object = session.project().object(id).expect("object");
             assert_eq!(object.name(), name);
-            assert_eq!(object.geometry().as_mesh().expect("mesh").positions().len(), vertices);
+            let stored = object.geometry().as_primitive().expect("the parameters are stored");
+            assert_eq!(stored.kind(), kind);
+            assert_eq!(stored.vertex_count() as u32, vertices, "the counts follow the parameters");
+            assert!(object.geometry().as_mesh().is_none(), "the mesh is derived");
         }
     }
 
@@ -1630,7 +1633,8 @@ mod tests {
         let id = editor.selected_node().expect("the new object is selected");
         let object = session.project().object(id).expect("object");
         assert_eq!(object.name(), "Cube");
-        assert_eq!(object.geometry().as_mesh().expect("mesh").faces().len(), 6);
+        let primitive = object.geometry().as_primitive().expect("the parameters are stored");
+        assert_eq!(primitive.mesh_counts(), (8, 6), "a cube keeps six faces");
         assert_eq!(session.project().revision().get(), 1, "one command is one revision");
 
         editor.run_action(&mut session, TreeAction::Undo).expect("undo");

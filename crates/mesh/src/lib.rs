@@ -24,10 +24,14 @@ use furnicraft_geom::{DVec3, MeshData, triangulate_face};
 use furnicraft_kernel::{BodyId, KernelError, SolidKernel, TessOptions};
 use furnicraft_model::{
     BandingSpec, Constructive, CornerBanding, EdgeBanding, Id, Machining, Mesh, Object, Panel, PanelGeometry,
-    PanelNominalSize, PanelOutline, Path, Revision, RingBanding, SegmentSource,
+    PanelNominalSize, PanelOutline, Path, Primitive, Revision, RingBanding, SegmentSource,
 };
 use furnicraft_param::{EdgeBandProfile, ParamError, build_constructive_mesh, build_panel_parts_with};
 use thiserror::Error;
+
+mod primitive;
+
+use primitive::build_primitive_mesh;
 
 /// The viewport's chord tolerance when a stored path becomes a line chain, in millimetres.
 ///
@@ -50,6 +54,9 @@ pub enum MeshError {
     /// The parametric evaluation of a body failed.
     #[error(transparent)]
     Param(#[from] ParamError),
+    /// The document rejected the derived polygon mesh.
+    #[error("invalid primitive mesh: {0}")]
+    Model(#[from] furnicraft_model::MeshError),
     /// The adapter returned a mesh that is not safe to render.
     #[error("invalid panel mesh: {0}")]
     Invalid(String),
@@ -77,6 +84,23 @@ pub fn evaluate_constructive(constructive: &Constructive) -> Result<Mesh, MeshEr
 /// Evaluates a constructive object into flat-shaded render triangles.
 pub fn constructive_mesh(constructive: &Constructive) -> Result<MeshData, MeshError> {
     object_mesh(&evaluate_constructive(constructive)?)
+}
+
+/// Evaluates a parametric primitive into its document mesh.
+///
+/// This is the one definition of the mesh a primitive's parameters produce: the viewport draws it
+/// and `object.collapse` bakes it, so a collapsed primitive keeps exactly the shape the user saw
+/// ([ADR 0054]). The parameters are document data, so the trigonometry happens here, at the
+/// geometry boundary.
+///
+/// [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
+pub fn evaluate_primitive(primitive: &Primitive) -> Result<Mesh, MeshError> {
+    build_primitive_mesh(primitive)
+}
+
+/// Evaluates a parametric primitive into flat-shaded render triangles.
+pub fn primitive_mesh(primitive: &Primitive) -> Result<MeshData, MeshError> {
+    object_mesh(&evaluate_primitive(primitive)?)
 }
 
 /// Triangulates a document mesh into flat-shaded renderable triangles.
@@ -245,6 +269,7 @@ enum Payload {
     Panel(PanelInputs),
     Mesh(Mesh),
     Constructive(Constructive),
+    Primitive(Primitive),
     Path(Path),
 }
 
@@ -368,7 +393,9 @@ impl EvaluationCache {
     /// Evaluates one geometry object, reusing the cached mesh when its payload is unchanged.
     ///
     /// A baked mesh is triangulated, a constructive payload is evaluated through the same function
-    /// `object.collapse` bakes, and a path becomes a line chain. No kernel body is involved.
+    /// `object.collapse` bakes, a primitive is built from its parameters by the same function the
+    /// viewport draws and the collapse bakes, and a path becomes a line chain. No kernel body is
+    /// involved.
     pub fn object(&mut self, revision: Revision, object: &Object) -> Result<NodeGeometry, MeshError> {
         let id = object.id();
         let pass = self.pass;
@@ -376,6 +403,7 @@ impl EvaluationCache {
             let unchanged = match (&entry.payload, object.geometry()) {
                 (Payload::Mesh(cached), furnicraft_model::Geometry::Mesh(current)) => cached == current,
                 (Payload::Constructive(cached), furnicraft_model::Geometry::Constructive(current)) => cached == current,
+                (Payload::Primitive(cached), furnicraft_model::Geometry::Primitive(current)) => cached == current,
                 (Payload::Path(cached), furnicraft_model::Geometry::Path(current)) => cached == current,
                 _ => false,
             };
@@ -394,6 +422,13 @@ impl EvaluationCache {
                 let data = constructive_mesh(constructive)?;
                 (
                     Payload::Constructive(constructive.clone()),
+                    NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() },
+                )
+            }
+            furnicraft_model::Geometry::Primitive(primitive) => {
+                let data = primitive_mesh(primitive)?;
+                (
+                    Payload::Primitive(primitive.clone()),
                     NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() },
                 )
             }
@@ -860,6 +895,39 @@ mod tests {
         let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("cube mesh");
         cache.finish();
         assert!(!Arc::ptr_eq(first.body().expect("body"), third.body().expect("body")));
+    }
+
+    #[test]
+    fn a_primitive_is_drawn_from_its_parameters_and_rebuilt_when_they_change() {
+        let primitive = Primitive::sphere(millimetres(50), 16, 8).expect("sphere");
+        let object = Object::new(
+            Id::new(5).expect("id"),
+            "Ball",
+            Placement::IDENTITY,
+            furnicraft_model::Geometry::Primitive(primitive.clone()),
+        );
+        let mut cache = EvaluationCache::new();
+        cache.start();
+        let first = cache.object(Revision::ZERO, &object).expect("sphere mesh");
+        cache.finish();
+        let body = first.body().expect("a solid");
+        assert_eq!(body.triangle_count(), 2 * 16 + 16 * 6 * 2, "two pole rings and two triangles per band quad");
+
+        cache.start();
+        let second = cache.object(Revision::ZERO.checked_next().expect("revision"), &object).expect("sphere mesh");
+        cache.finish();
+        assert!(
+            Arc::ptr_eq(first.body().expect("body"), second.body().expect("body")),
+            "an unchanged primitive is reused"
+        );
+
+        let smoother = Primitive::sphere(millimetres(50), 32, 16).expect("sphere");
+        let changed =
+            Object::new(object.id(), "Ball", Placement::IDENTITY, furnicraft_model::Geometry::Primitive(smoother));
+        cache.start();
+        let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("sphere mesh");
+        cache.finish();
+        assert!(!Arc::ptr_eq(first.body().expect("body"), third.body().expect("body")), "more sides rebuild the mesh");
     }
 
     #[test]
