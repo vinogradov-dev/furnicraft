@@ -7,8 +7,81 @@
 //! an undrawn icon needs.
 
 use egui::Ui;
+use furnicraft_model::Id;
 
-use crate::icons::{self, Theme};
+use crate::contour_edit::DrawTool;
+use crate::icons::{self, Icon, Theme};
+
+/// One action a toolbar panel asks the editor to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolAction {
+    /// Starts a drawing tool.
+    Draw(DrawTool),
+    /// Creates a panel under the container.
+    CreatePanel {
+        /// The receiving container.
+        parent: Id,
+    },
+    /// Creates an assembly under the container.
+    CreateAssembly {
+        /// The receiving container.
+        parent: Id,
+    },
+    /// Creates the default cube.
+    CreateCube {
+        /// The receiving container.
+        parent: Id,
+    },
+    /// Creates the default extrusion.
+    CreateExtrude {
+        /// The receiving container.
+        parent: Id,
+    },
+    /// Creates a camera.
+    CreateCamera {
+        /// The receiving container.
+        parent: Id,
+    },
+    /// Creates a sun light.
+    CreateLight {
+        /// The receiving container.
+        parent: Id,
+    },
+}
+
+/// The drawing tools of the Contour panel, in button order.
+pub const CONTOUR_TOOLS: [DrawTool; 5] =
+    [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::Rectangle, DrawTool::Circle];
+
+/// The shortcut that starts a drawing tool.
+///
+/// The letters are free in the viewport (`F` frames, `O` toggles the projection, `G` the grid), so
+/// the tooltip and the key handler can share one table.
+pub const fn shortcut(tool: DrawTool) -> Option<egui::Key> {
+    match tool {
+        DrawTool::Line => Some(egui::Key::L),
+        DrawTool::Polyline => Some(egui::Key::P),
+        DrawTool::Arc => Some(egui::Key::A),
+        DrawTool::Rectangle => Some(egui::Key::R),
+        DrawTool::Circle => Some(egui::Key::C),
+    }
+}
+
+/// The label of a tool's shortcut, for the button hint.
+pub fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
+    shortcut(tool).map(egui::Key::name)
+}
+
+/// The icon of a drawing tool.
+const fn tool_icon(tool: DrawTool) -> Icon {
+    match tool {
+        DrawTool::Line => icons::contour::LINE,
+        DrawTool::Polyline => icons::contour::POLYLINE,
+        DrawTool::Arc => icons::contour::ARC,
+        DrawTool::Rectangle => icons::contour::RECTANGLE,
+        DrawTool::Circle => icons::contour::CIRCLE,
+    }
+}
 
 /// One themed panel of the toolbar strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,15 +178,15 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
 
 /// Draws the whole strip.
 ///
-/// The headings are collapsible sections. A section that is open draws its tools; the panels are
-/// empty until U19, so each one says so instead of pretending to offer a control.
-pub fn show(ui: &mut Ui, state: &mut Toolbars) {
+/// The headings are collapsible sections. A section that is open draws its tools; every button is
+/// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label.
+pub fn show(ui: &mut Ui, state: &mut Toolbars, parent: Id, actions: &mut Vec<ToolAction>) {
     ui.heading("Tools");
     ui.separator();
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel);
+            show_panel(ui, panel, parent, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -122,20 +195,38 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars) {
 }
 
 /// The body of one open panel.
-fn show_panel(ui: &mut Ui, panel: ToolPanel) {
-    ui.horizontal_wrapped(|ui| {
-        let icons = panel.theme().icons();
-        if icons.is_empty() {
-            ui.label(format!("The {} panel is empty.", panel.label()));
-            return;
+fn show_panel(ui: &mut Ui, panel: ToolPanel, parent: Id, actions: &mut Vec<ToolAction>) {
+    ui.horizontal_wrapped(|ui| match panel {
+        ToolPanel::Contour => {
+            for tool in CONTOUR_TOOLS {
+                if icons::tool_button(ui, tool_icon(tool), tool.label(), shortcut_label(tool), true).clicked() {
+                    actions.push(ToolAction::Draw(tool));
+                }
+            }
         }
-        // The theme's first icon is the panel's own glyph; drawing it here keeps the strip readable
-        // while the tool buttons themselves arrive in U19.
-        let icon = icons.first().copied().filter(|icon| icon.is_drawn());
-        if let Some(icon) = icon {
-            icons::icon_button(ui, icon, panel.label());
-        } else {
-            ui.label(format!("{} tools", panel.label()));
+        ToolPanel::Scene => {
+            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), true).clicked() {
+                actions.push(ToolAction::CreatePanel { parent });
+            }
+            if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true).clicked() {
+                actions.push(ToolAction::CreateAssembly { parent });
+            }
+            if icons::tool_button(ui, icons::scene::CAMERA, "Camera", None, true).clicked() {
+                actions.push(ToolAction::CreateCamera { parent });
+            }
+            if icons::tool_button(ui, icons::scene::LIGHT, "Light", None, true).clicked() {
+                actions.push(ToolAction::CreateLight { parent });
+            }
+        }
+        ToolPanel::Primitives => {
+            if icons::tool_button(ui, icons::primitives::CUBE, "Cube", None, true).clicked() {
+                actions.push(ToolAction::CreateCube { parent });
+            }
+        }
+        ToolPanel::Bodies => {
+            if icons::tool_button(ui, icons::bodies::EXTRUDE, "Extrude", None, true).clicked() {
+                actions.push(ToolAction::CreateExtrude { parent });
+            }
         }
     });
 }
@@ -189,8 +280,9 @@ mod tests {
     fn the_strip_draws_every_heading_and_a_readable_body() {
         let ctx = egui::Context::default();
         let mut state = Toolbars::new();
+        let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state);
+            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -198,10 +290,23 @@ mod tests {
             assert!(texts.iter().any(|text| text == panel.label()), "{} heading is missing", panel.label());
         }
         assert!(
-            texts.iter().any(|text| text == "Scene tools"),
-            "an empty icon theme leaves a readable body: {texts:?}"
+            texts.iter().any(|text| text == "Panel  (N)"),
+            "an empty icon falls back to the labelled shortcut: {texts:?}"
         );
-        assert!(texts.iter().any(|text| text == "Bodies tools"), "every undrawn theme says so: {texts:?}");
+        assert!(texts.iter().any(|text| text == "Cube"), "the primitives panel is filled: {texts:?}");
+        assert!(actions.is_empty(), "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn every_tool_has_a_distinct_shortcut() {
+        let mut seen = std::collections::HashSet::new();
+        for tool in CONTOUR_TOOLS {
+            let key = shortcut(tool).expect("every drawing tool has a key");
+            assert!(seen.insert(key.name()), "{} reuses a shortcut", key.name());
+            assert_eq!(shortcut_label(tool), Some(key.name()));
+        }
+        assert_eq!(shortcut(DrawTool::Line).map(egui::Key::name), Some("L"));
+        assert_eq!(shortcut(DrawTool::Rectangle).map(egui::Key::name), Some("R"));
     }
 
     #[test]
@@ -209,13 +314,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = Toolbars::new();
         state.set_open(ToolPanel::Scene, false);
+        let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state);
+            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
         assert!(texts.iter().any(|text| text == "Scene"), "a closed panel keeps its heading");
-        assert!(!texts.iter().any(|text| text == "Scene tools"), "a closed panel draws no body: {texts:?}");
+        assert!(!texts.iter().any(|text| text == "Panel"), "a closed panel draws no body: {texts:?}");
     }
 
     #[test]
@@ -223,13 +329,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = Toolbars::new();
         state.set_open(ToolPanel::Contour, false);
+        let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state);
+            show(ui, &mut state, Id::new(1).expect("root"), &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
         assert!(texts.iter().any(|text| text.contains("Contour")), "a closed panel keeps its heading: {texts:?}");
-        assert!(!texts.iter().any(|text| text == "Contour tools"), "the body is not drawn: {texts:?}");
+        assert!(!texts.iter().any(|text| text == "Line  (L)"), "the body is not drawn: {texts:?}");
     }
 
     /// Collects the text of every text shape, including nested ones.
