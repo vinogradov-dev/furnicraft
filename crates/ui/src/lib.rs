@@ -62,7 +62,7 @@ use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 
-pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError};
+pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool};
 pub use mesh_edit::{MeshEdit, MeshElement};
 
 /// Default length of a newly created panel, in millimetres.
@@ -315,17 +315,17 @@ impl Editor {
         self.drawing.as_ref()
     }
 
-    /// Starts an empty drawing draft and leaves the other pointer modes.
+    /// Starts an empty drawing draft with `tool` and leaves the other pointer modes.
     ///
     /// A running draft is never replaced silently; the caller ends or commits it first. Returns
     /// whether the draft started.
-    pub fn start_drawing(&mut self) -> bool {
+    pub fn start_drawing(&mut self, tool: DrawTool) -> bool {
         if self.drawing.is_some() {
             return false;
         }
         self.mesh_edit = None;
         self.contour_edit = None;
-        self.drawing = Some(DrawDraft::new());
+        self.drawing = Some(DrawDraft::new(tool));
         true
     }
 
@@ -905,8 +905,8 @@ mod tests {
         );
 
         let revision = session.project().revision();
-        assert!(editor.start_drawing());
-        assert!(!editor.start_drawing(), "a running draft is not replaced");
+        assert!(editor.start_drawing(DrawTool::Polyline));
+        assert!(!editor.start_drawing(DrawTool::Polyline), "a running draft is not replaced");
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first point");
         editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("second point");
         assert_eq!(editor.drawing().map(DrawDraft::len), Some(2));
@@ -929,7 +929,7 @@ mod tests {
         let mut editor = Editor::new();
         editor.select_node(Some(panel));
         assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
-        assert!(editor.start_drawing());
+        assert!(editor.start_drawing(DrawTool::Polyline));
         assert!(editor.contour_edit().is_none(), "a drawing owns the pointer");
 
         assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));

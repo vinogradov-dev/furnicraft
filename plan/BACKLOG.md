@@ -23,9 +23,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U15** the drawing tools: line and polyline, an arc through three points, a rectangle and a
-  circle, each producing a `Path`; tests per tool.
-  `files: crates/ui/src, crates/model/src/contour.rs`
+- `[ ]` **U16** the viewport preview: the draft segments, the snap marker and a live size, with the
+  tool owning the pointer and the gizmos hidden.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/contour_gizmo.rs`
 
 ## Bugs
 
@@ -39,9 +39,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
-- `[ ]` **U16** the viewport preview: the draft segments, the snap marker and a live size, with the
-  tool owning the pointer and the gizmos hidden.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/contour_gizmo.rs`
 - `[ ]` **U17** commit a drawn path: `object.path.create` with a placement whose local XY is the work
   plane, the new node selected and the tool reset; exactly one undo entry.
   `files: crates/ui/src, crates/engine/src/object_cmds.rs`
@@ -77,6 +74,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U15** the drawing tools: line and polyline, an arc, a rectangle and a circle each build a
+  `Path` through `Path::polyline`, `arc_through`, `rectangle` and `circle_through` — `5c487dd`
 - `[x]` **U14** a drawing draft in the UI: `DrawDraft` collects plane points, undoes the last
   action, closes into a ring and converts to a `Path`, with the document untouched — `307d745`
 - `[x]` **U13** snapping on the work plane: a draft end, an axis lock and the 10 mm grid as pure

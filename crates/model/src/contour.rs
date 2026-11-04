@@ -933,6 +933,76 @@ mod tests {
     }
 
     #[test]
+    fn a_polyline_builds_one_line_per_pair_and_closes_on_request() {
+        let points = vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+        ];
+        let open = Path::polyline(points.clone(), false).expect("an open chain");
+        assert!(!open.is_closed());
+        assert_eq!(open.entries().len(), 2, "three points make two segments");
+        assert_eq!(open.entries().last().and_then(|entry| entry.segment().end().ok()), Some(points[2]));
+
+        let closed = Path::polyline(points.clone(), true).expect("a closed triangle");
+        assert!(closed.is_closed());
+        assert_eq!(closed.entries().len(), 3, "closing adds one line");
+        assert_eq!(closed.entries().last().and_then(|entry| entry.segment().end().ok()), Some(points[0]));
+    }
+
+    #[test]
+    fn a_polyline_needs_two_points_and_distinct_neighbours() {
+        assert_eq!(Path::polyline(Vec::new(), false), Err(PathError::TooFewSegments { count: 0 }));
+        assert_eq!(
+            Path::polyline(vec![[millimetres(10), millimetres(10)]], false),
+            Err(PathError::TooFewSegments { count: 0 })
+        );
+        assert_eq!(
+            Path::polyline(vec![[millimetres(10), millimetres(10)]], true),
+            Err(PathError::TooFewSegments { count: 0 }),
+            "one point cannot even make a line"
+        );
+        let repeated = vec![[millimetres(10), millimetres(10)], [millimetres(10), millimetres(10)]];
+        assert!(matches!(Path::polyline(repeated, false), Err(PathError::Segment(ContourSegmentError::ZeroLength))));
+    }
+
+    #[test]
+    fn a_circle_through_a_rim_point_uses_its_distance_as_the_radius() {
+        let path = Path::circle_through([millimetres(100), millimetres(50)], [millimetres(130), millimetres(90)])
+            .expect("a 3-4-5 rim point");
+        assert!(path.is_closed());
+        let ContourSegment::Arc { radius, .. } = path.entries()[0].segment() else {
+            panic!("a circle is made of arcs");
+        };
+        assert_eq!(radius, millimetres(50), "30 and 40 make a radius of 50");
+        assert_eq!(path.bounds_micrometres(), ([50_000, 0], [150_000, 100_000]));
+    }
+
+    #[test]
+    fn a_circle_through_a_point_rounds_the_radius_to_whole_micrometres() {
+        let rim = [Length::from_micrometres(3), Length::from_micrometres(4)];
+        let path = Path::circle_through([Length::ZERO; 2], rim).expect("a 3-4-5 circle");
+        let ContourSegment::Arc { radius, .. } = path.entries()[0].segment() else {
+            panic!("a circle is made of arcs");
+        };
+        assert_eq!(radius, Length::from_micrometres(5));
+    }
+
+    #[test]
+    fn a_circle_through_its_own_centre_or_a_huge_rim_is_refused() {
+        let center = [millimetres(100), millimetres(50)];
+        assert!(matches!(
+            Path::circle_through(center, center),
+            Err(PathError::Segment(ContourSegmentError::InvalidRadius { .. }))
+        ));
+        let far = [Length::from_micrometres(MAX_CONTOUR_COORDINATE.micrometres()), Length::ZERO];
+        assert!(matches!(
+            Path::circle_through([Length::from_micrometres(-MAX_CONTOUR_COORDINATE.micrometres()), Length::ZERO], far),
+            Err(PathError::Segment(ContourSegmentError::InvalidRadius { .. }))
+        ));
+    }
+
+    #[test]
     fn an_open_polyline_joins_its_segments_and_keeps_its_ids() {
         let path = Path::new(
             vec![
@@ -1758,6 +1828,49 @@ impl Path {
             segments.push(ContourSegment::arc(center, radius, start, Degrees::from_millidegrees(90_000))?);
         }
         Self::new(segments, true)
+    }
+
+    /// A closed circle through a point away from its centre.
+    ///
+    /// A pointer gives a point rather than a radius, so the distance from `center` to `rim` is
+    /// rounded to whole micrometres before the four quarter arcs are built. A rim point on the
+    /// centre or a radius beyond the document range is refused.
+    pub fn circle_through(center: [Length; 2], rim: [Length; 2]) -> Result<Self, PathError> {
+        check_point(center)?;
+        check_point(rim)?;
+        let dx = (i128::from(rim[0].micrometres()) - i128::from(center[0].micrometres())) as f64;
+        let dy = (i128::from(rim[1].micrometres()) - i128::from(center[1].micrometres())) as f64;
+        let radius = dx.hypot(dy);
+        if !radius.is_finite() || radius > i64::MAX as f64 {
+            return Err(PathError::Segment(ContourSegmentError::NonFinite));
+        }
+        let radius = Length::from_micrometres(radius.round() as i64);
+        Self::circle(center, radius)
+    }
+    /// One open or closed chain through `points`, one line per pair.
+    ///
+    /// Adjacent equal points are refused because they would make a zero-length segment, and a
+    /// closed chain gets one more line from the last point back to the first. The chain is not
+    /// checked for self-intersection or enclosed area: those are ring rules.
+    pub fn polyline(points: Vec<[Length; 2]>, closed: bool) -> Result<Self, PathError> {
+        if points.len() < 2 {
+            return Err(PathError::TooFewSegments { count: 0 });
+        }
+        let segment_count = if closed { points.len() } else { points.len() - 1 };
+        if segment_count > MAX_PATH_SEGMENTS {
+            return Err(PathError::TooManySegments { count: segment_count, max: MAX_PATH_SEGMENTS });
+        }
+        let mut segments = Vec::with_capacity(segment_count);
+        for pair in points.windows(2) {
+            let (Some(&start), Some(&end)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            segments.push(ContourSegment::line(start, end)?);
+        }
+        if closed && let (Some(&first), Some(&last)) = (points.first(), points.last()) {
+            segments.push(ContourSegment::line(last, first)?);
+        }
+        Self::new(segments, closed)
     }
 
     /// One open arc from `start` to `end` that passes through `through`.
