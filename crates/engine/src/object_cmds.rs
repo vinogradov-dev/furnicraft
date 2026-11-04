@@ -8,7 +8,7 @@
 //!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 
-use furnicraft_model::{Constructive, Contour, Geometry, Id, Mesh, Placement, Project, ProjectError};
+use furnicraft_model::{Constructive, Contour, Geometry, Id, Mesh, Path, Placement, Project, ProjectError};
 use furnicraft_param::{build_constructive_mesh, validate_extrusion_contour};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -207,6 +207,93 @@ fn object_contour_replace_run(
     // leave a constructive object that evaluates to an error and renders nothing.
     evaluate_contour(OBJECT_CONTOUR_REPLACE_ID, &params.contour)?;
     project.set_object_contour(params.object, params.contour)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the path creation command.
+pub const OBJECT_PATH_CREATE_ID: &str = "object.path.create";
+
+/// User-facing label of the path creation command.
+pub const OBJECT_PATH_CREATE_LABEL: &str = "Create path";
+
+/// Parameters for `object.path.create`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectPathCreate {
+    /// Id of the container that receives the new object.
+    pub parent: Id,
+    /// User-visible name; it must contain a non-whitespace character.
+    pub name: String,
+    /// Open or closed chain of line and arc segments, in the object's local XY plane.
+    pub path: Path,
+    /// Placement relative to the parent container.
+    pub placement: Placement,
+}
+
+/// The `object.path.create` command.
+pub(crate) const OBJECT_PATH_CREATE: CommandSpec = CommandSpec::new(
+    OBJECT_PATH_CREATE_ID,
+    OBJECT_PATH_CREATE_LABEL,
+    object_path_create_enabled,
+    object_path_create_run,
+);
+
+fn object_path_create_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<ObjectPathCreate>(params, OBJECT_PATH_CREATE_ID) else {
+        return false;
+    };
+    !params.name.trim().is_empty() && session.project().is_container(params.parent)
+}
+
+fn object_path_create_run(
+    project: &mut Project,
+    _catalog: &furnicraft_model::Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<ObjectPathCreate>(params, OBJECT_PATH_CREATE_ID)?;
+    validate_name(&params.name, OBJECT_PATH_CREATE_ID)?;
+    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Path(params.path))?;
+    Ok(CommandOutcome::created(id))
+}
+
+/// Stable id of the path replacement command.
+pub const OBJECT_PATH_REPLACE_ID: &str = "object.path.replace";
+
+/// User-facing label of the path replacement command.
+pub const OBJECT_PATH_REPLACE_LABEL: &str = "Replace path";
+
+/// Parameters for `object.path.replace`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectPathReplace {
+    /// The path object whose drawing changes.
+    pub object: Id,
+    /// The new open or closed chain.
+    pub path: Path,
+}
+
+/// The `object.path.replace` command.
+pub(crate) const OBJECT_PATH_REPLACE: CommandSpec = CommandSpec::new(
+    OBJECT_PATH_REPLACE_ID,
+    OBJECT_PATH_REPLACE_LABEL,
+    object_path_replace_enabled,
+    object_path_replace_run,
+);
+
+fn object_path_replace_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<ObjectPathReplace>(params, OBJECT_PATH_REPLACE_ID) else {
+        return false;
+    };
+    session.project().object_path(params.object).is_ok()
+}
+
+fn object_path_replace_run(
+    project: &mut Project,
+    _catalog: &furnicraft_model::Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<ObjectPathReplace>(params, OBJECT_PATH_REPLACE_ID)?;
+    project.set_object_path(params.object, params.path)?;
     Ok(CommandOutcome::changed())
 }
 
@@ -553,5 +640,123 @@ mod tests {
             session.dispatch(crate::MESH_VERTICES_MOVE_ID, &value).is_err(),
             "a constructive object has no editable mesh before collapse"
         );
+    }
+
+    /// An open two-segment drawing, so replacing it is visible in the stored value.
+    fn open_path(end: i64) -> Path {
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(end), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(end), millimetres(0)], [millimetres(end), millimetres(40)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("open path")
+    }
+
+    fn path_create_params(session: &Session, name: &str, path: Path) -> Value {
+        serde_json::to_value(ObjectPathCreate {
+            parent: session.project().root().id(),
+            name: name.to_owned(),
+            path,
+            placement: Placement::IDENTITY,
+        })
+        .expect("params serialize")
+    }
+
+    #[test]
+    fn a_path_is_created_in_one_revision_and_undone_in_one_step() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let path = open_path(100);
+        let value = path_create_params(&session, "Sketch", path.clone());
+        let spec = CommandRegistry::new().get(OBJECT_PATH_CREATE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &value)
+            .expect("create the drawing")
+            .created_id()
+            .expect("a new object id");
+        assert_eq!(session.project().revision().get(), 1);
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.name(), "Sketch");
+        assert_eq!(session.project().object_path(id), Ok(&path));
+        assert!(object.geometry().as_mesh().is_none(), "a path is not a solid");
+
+        session.undo().expect("undo the creation");
+        assert!(session.project().object(id).is_none());
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn a_path_replacement_is_one_revision_and_one_undo() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let original = open_path(100);
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Sketch", original.clone()))
+            .expect("create the drawing")
+            .created_id()
+            .expect("id");
+
+        let replacement = open_path(120);
+        let value = serde_json::to_value(ObjectPathReplace { object: id, path: replacement.clone() })
+            .expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_PATH_REPLACE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+
+        let before = session.project().revision();
+        session.dispatch(OBJECT_PATH_REPLACE_ID, &value).expect("replace the drawing");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(session.project().object_path(id), Ok(&replacement));
+        assert_eq!(session.project().object(id).expect("object").name(), "Sketch", "only the drawing changes");
+
+        session.undo().expect("one undo restores the first drawing");
+        assert_eq!(session.project().object_path(id), Ok(&original));
+        assert!(session.can_undo(), "the creation is still one entry below the replacement");
+    }
+
+    #[test]
+    fn a_blank_name_or_an_unknown_parent_is_refused_without_mutating() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let registry = CommandRegistry::new();
+        let spec = registry.get(OBJECT_PATH_CREATE_ID).expect("registered");
+
+        let blank = path_create_params(&session, "  ", open_path(100));
+        assert!(!spec.enabled(&session, &blank));
+        assert!(session.dispatch(OBJECT_PATH_CREATE_ID, &blank).is_err());
+
+        let unknown = serde_json::to_value(ObjectPathCreate {
+            parent: Id::new(99).expect("id"),
+            name: "Sketch".to_owned(),
+            path: open_path(100),
+            placement: Placement::IDENTITY,
+        })
+        .expect("params");
+        assert!(!spec.enabled(&session, &unknown));
+        assert!(session.dispatch(OBJECT_PATH_CREATE_ID, &unknown).is_err());
+
+        assert_eq!(session.project().revision(), Revision::ZERO);
+        assert!(!session.can_undo(), "a refused create leaves no undo entry");
+    }
+
+    #[test]
+    fn a_path_replace_on_a_mesh_object_is_refused_without_mutating() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let cube = session
+            .dispatch(OBJECT_PRIMITIVE_CREATE_ID, &cube_params(&session, Length::from_millimetres(10).expect("size")))
+            .expect("a cube")
+            .created_id()
+            .expect("id");
+        let value =
+            serde_json::to_value(ObjectPathReplace { object: cube, path: open_path(100) }).expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_PATH_REPLACE_ID).expect("registered");
+        assert!(!spec.enabled(&session, &value));
+        assert!(session.dispatch(OBJECT_PATH_REPLACE_ID, &value).is_err());
+
+        assert_eq!(session.project().revision().get(), 1, "the cube's own revision is the only one");
+        assert!(session.project().object_path(cube).is_err(), "a mesh object stores no drawing");
     }
 }

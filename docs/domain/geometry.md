@@ -15,8 +15,9 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
 [0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
-[0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md) and
-[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md).
+[0041](../decisions/0041-every-solid-compiles-to-one-solid-plan.md),
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) and
+[0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md).
 
 ## 1. Two authoring paths
 
@@ -31,7 +32,8 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 
 The two paths are deliberately separate ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 A mesh has no shape history, so a primitive cannot be re-parameterised; a constructive object has no
-direct mesh editing, so its contour stays the only way to change it.
+direct mesh editing, so its contour stays the only way to change it. A path object is a third
+payload: a drawing rather than a solid, described in section 5.
 
 ## 2. The object node
 
@@ -39,8 +41,8 @@ direct mesh editing, so its contour stays the only way to change it.
   properties, exactly like a container.
 - It is a **leaf** in v1: it has no children. Several parts are grouped by wrapping them in a
   container, which already exists.
-- The node carries one **geometry payload**: `Mesh` or `Constructive`. There is no separate node
-  kind per payload and no separate "solid" node.
+- The node carries one **geometry payload**: `Mesh`, `Constructive` or `Path`. There is no separate
+  node kind per payload and no separate "solid" node.
 - A **panel is not an object**. A panel stores nominal size, material, banding and machining and
   obeys the panel rules; a geometry object is free-form. A board drawn as an object does not become a
   cutting-list part. The duplication is accepted because furniture rules are not generic mesh rules.
@@ -92,7 +94,26 @@ direct mesh editing, so its contour stays the only way to change it.
 - The height is positive and capped by the document's size limit. An empty or negative feature list
   is invalid.
 
-## 5. Contour editing
+## 5. Path payload
+
+- A path is an open or closed chain of directed **segments** in the object's local XY plane at
+  `z = 0`. It uses the same segment value and the same stable ids as a ring, so a line or an arc
+  drawn once keeps its shape and its identity when it becomes a contour
+  ([0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md)).
+- Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
+  meeting within a micrometre, and a closed chain closing its last joint. Self-intersection and
+  enclosed area are ring rules, so they run when the path becomes a ring, not while it is drawn.
+- `Path::to_contour` is the only transition. It refuses an open chain, applies the ring rules and
+  keeps every id, so the ring is cut from exactly what the user drew.
+- A path is a drawing, not a solid: it has no mesh, no feature list and no evaluation. The viewport
+  draws it as an unlit line chain and picks it within a few screen points
+  ([0018](../decisions/0018-picking-ray-casts-the-scene.md)).
+- The document stores the drawing as drawn: direction and orientation are kept, and a clockwise
+  closed path becomes a counter-clockwise ring only in `to_contour`.
+- An object payload is `Geometry::Path(Path)` (schema 17). It cannot be collapsed: there is no solid
+  to bake.
+
+## 6. Contour editing
 
 A constructive contour and a contour panel outline are reshaped in one viewport mode. Its state is
 view state, not document data ([0029](../decisions/0029-view-state-belongs-to-the-session.md)).
@@ -128,7 +149,7 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - A selection change, a deleted target or a target that no longer stores a ring ends the mode.
 - The whole mode is a client of the commands: the draft never reaches the document by another path.
 
-## 6. Evaluation
+## 7. Evaluation
 
 - `furnicraft-param` compiles a constructive object into a domain-free `SolidPlan`: a base
   extrusion followed by boolean steps. The plan is derived, never written to the file, and rebuilt
@@ -145,7 +166,7 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
   does not delete anything.
 - `object.collapse` refuses to run while the current evaluation fails.
 
-## 7. Collapse
+## 8. Collapse
 
 - `object.collapse` replaces `Constructive` with the evaluated `Mesh` in one command and one undo
   entry.
@@ -155,7 +176,7 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - Collapse is never automatic: a rebuild happens on every edit, and a failing evaluation is a
   diagnostic to fix, not a reason to bake.
 
-## 8. References and topology
+## 9. References and topology
 
 - The document stores the mesh; the session stores the selection.
 - Vertex editing is editor view state: it names the object and the selected vertex indices, so
@@ -174,20 +195,22 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - `mesh.vertices.move` validates every index and rejects the whole command if one is out of bounds; it
   never skips a bad entry silently.
 
-## 9. Commands
+## 10. Commands
 
 | Command | Parameters | Effect |
 |---|---|---|
 | `object.primitive.create` | parent, name, primitive kind, size, placement | creates a mesh object, returns its id |
 | `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude` |
 | `object.contour.replace` | object, contour | replaces the contour and rebuilds |
+| `object.path.create` | parent, name, path, placement | creates a path object, returns its id |
+| `object.path.replace` | object, path | replaces the drawing and keeps the node |
 | `object.collapse` | object | replaces the payload with the evaluated mesh |
 | `mesh.vertices.move` | object, list of (index, local position) | moves vertices as one change |
 
 A face move is a `mesh.vertices.move` over the face's vertices; it does not need its own command.
 Every command bumps the revision once and becomes one undo entry.
 
-## 10. Tests
+## 11. Tests
 
 At minimum:
 
@@ -199,6 +222,10 @@ At minimum:
 - an open ring, a ring that does not meet its neighbour and a ring that crosses itself are rejected
   on construction and on load;
 - replacing the contour changes the mesh and keeps the id, name and placement;
+- a path is created open or closed and keeps its segments and ids, and replacing it changes only the
+  drawing in one revision;
+- a blank name, an unknown parent or a replace on an object that stores no path is refused without
+  mutating the document;
 - collapse produces the same mesh as the evaluation, clears the features and is one undo entry;
 - `mesh.vertices.move` on a constructive object is refused;
 - one out-of-bounds vertex index rejects the whole move;
@@ -214,7 +241,7 @@ At minimum:
 - a draft that would open or cross the ring leaves the last valid shape in place, and cancelling the
   mode changes nothing.
 
-## 11. Open questions
+## 12. Open questions
 
 - Arcs in a profile: the kernel profile is a polyline, so an arc is sampled; the document keeps the arc.
 - Holes in a profile.
