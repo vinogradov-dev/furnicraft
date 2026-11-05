@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X4** every creation tool lands at the scene root, never in the selected container. Today
-  `crates/ui/src/lib.rs:815-824` `drawing_parent` returns the selected container, or the parent of the
-  selected leaf, and both `commit_drawing` (`:361`) and `show_toolbars` (`:470`) feed it into
-  `ToolAction::Create*`. A path, a panel, an assembly, a primitive, a camera and a light therefore land
-  in whatever group is selected, which the owner does not want. Expected: the root is the only default
-  parent; a child is created by an explicit entry (U31). Drop `parent` from `ToolAction`
-  (`crates/ui/src/toolbars.rs:26-64`), from `show`/`show_panel` and from `drawing_parent`; one function
-  `creation_root(project) -> Id` stays. `extrude_path` (`lib.rs:585-596`) keeps making a sibling of its
-  path: it is a derived operation, not a tool. Tests: a selected nested assembly receives none of the
-  six creations; `crates/ui/src/lib.rs:1090-1130` becomes the regression that asserts the root. ADR
-  0056 replaces the parent rule of ADR 0052, whose status becomes
-  `Accepted; parent rule superseded by 0056`.
-  `files: crates/ui/src/lib.rs, crates/ui/src/toolbars.rs`
-
 - `[ ]` **U30** the armed tool is highlighted: choosing Line, Arc, Polyline, Rectangle, Circle or a
   primitive leaves its button looking idle, so the strip shows the armed tool only in its text
   (`main.rs:925-959`). `icons::tool_button` (`crates/ui/src/icons.rs:225-233`) gains `on: bool` and
@@ -225,6 +211,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **X4** every creation tool lands at the scene root: `creation_root(project)` is the only
+  default parent, `ToolAction` carries no parent and `drawing_parent` is gone, so a selected nested
+  assembly receives none of the six creations; `extrude_path` stays a sibling of its path. ADR 0056
+  supersedes the parent rule of ADR 0052 — `c135511`
 
 - `[x]` **X3** the projection toggle draws the mode it is in, not the one it switches to: the icon
   and the hint come from one pure `projection_button(Projection)`, so a perspective view shows the
