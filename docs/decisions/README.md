@@ -64,6 +64,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0057](0057-the-camera-reaches-the-poles.md) | The camera reaches the poles | Accepted |
 | [0058](0058-a-new-drawing-pivots-on-its-own-shape.md) | A new drawing pivots on its own shape | Accepted |
 | [0059](0059-a-selected-line-is-a-screen-space-overlay.md) | A selected line is a screen-space overlay | Accepted |
+| [0060](0060-an-open-path-is-edited-by-its-corners.md) | An open path is edited by its corners | Accepted |
 
 ## Format
 

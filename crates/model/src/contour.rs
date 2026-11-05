@@ -1851,10 +1851,19 @@ impl Path {
     /// This is the edit path: a caller changes one segment, keeps the id of every segment it did not
     /// touch, and mints a new id from [`Path::next_segment_id`] for every segment it adds.
     pub fn rebuild(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, PathError> {
+        self.rebuild_as(entries, self.closed)
+    }
+
+    /// The same path rebuilt from new entries with a new open or closed flag.
+    ///
+    /// [`Path::rebuild`] keeps the flag; closing a chain is the one edit that flips it, and it still
+    /// has to keep the counter that [`Path::rebuild`] keeps. A closed chain must join its last end
+    /// to its first start, so the caller supplies entries that already do.
+    pub(crate) fn rebuild_as(&self, entries: Vec<ContourSegmentEntry>, closed: bool) -> Result<Self, PathError> {
         let after_entries = next_id_after_entries(&entries).ok_or(PathError::SegmentIdExhausted)?;
         let next = self.next_segment_id.get().max(after_entries.get());
         let next_segment_id = ContourSegmentId::new(next).ok_or(PathError::SegmentIdExhausted)?;
-        Self::assemble(entries, next_segment_id, self.closed)
+        Self::assemble(entries, next_segment_id, closed)
     }
 
     /// A closed rectangle whose sides follow the axes, from two opposite corners.
