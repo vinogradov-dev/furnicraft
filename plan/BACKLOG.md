@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U32** a new flat figure pivots at its centre or at its first point: every path and body is
-  created with `Pivot::ZERO` (`crates/model/src/object.rs:288-292`, `add_object`,
-  `crates/model/src/project/object_cmds.rs:31-50`), so the gizmos grab a drawing at the world origin
-  instead of at the shape. Expected: a closed contour pivots at the centre of its local bounding box;
-  an open chain pivots at the start of its first stored segment. Owner's answer: bounding-box centre,
-  the same centre `node.pivot.center` writes, and the extruded body follows the same rule. Add
-  `Path::creation_pivot()` and `Contour::creation_pivot()` (`crates/model/src/contour.rs`; integer
-  micrometres, `bounds_micrometres` plus an `i128` midpoint, open → first segment `start()`),
-  `Project::add_object_with_pivot` (the old `add_object` delegates with `ZERO`), and use it in
-  `object.path.create` and `object.extrude.create`
-  (`crates/engine/src/object_cmds.rs:168-188, 279-288`) — one command, one revision, one undo entry,
-  no new parameter to lie about. A primitive keeps `ZERO`: its bounds are already centred.
-  `object.path.replace` and `object.contour.replace` must not move the pivot (ADR 0026), and an older
-  file keeps the zero it stored. An arc's first point is the stored `segment.start()`, never the raw
-  click. Tests: rectangle and circle centre; open polyline and open arc start; a replacement leaves the
-  pivot alone; a loaded file without the field is zero. ADR 0058.
-  `files: crates/model/src/contour.rs, crates/engine/src/object_cmds.rs`
-
 - `[ ]` **X5** a selected line, contour or circle is invisible: the highlight exists
   (`SceneFrame::with_selection_highlight`, `crates/scene/src/lib.rs:741-757`) but `SELECTION_TINT`
   mixed at 35 % into `PATH_COLOR = [0.95, 0.72, 0.20]`
@@ -167,6 +149,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U32** a new flat figure pivots at its centre or at its first point: `Path::creation_pivot`
+  and `Contour::creation_pivot` return the local bounds centre for a closed figure and the start of
+  an open chain's first stored segment; the midpoint is summed in `i128`, so two extremes near the
+  coordinate limits cannot overflow, and a flat figure's pivot lies on `z = 0`.
+  `Project::add_object_with_pivot` is the only creation path that takes a pivot, `add_object`
+  delegates with `Pivot::ZERO`, the path and extrusion commands use it, a replacement leaves it
+  alone, and an older file that stores no pivot loads with zero. ADR 0058 — `bef8527`
 
 - `[x]` **U31** a child is created through an explicit arm: `Editor` holds `creation_parent`,
   `creation_target(project, armed)` falls back to the root when the armed id vanished, the container
