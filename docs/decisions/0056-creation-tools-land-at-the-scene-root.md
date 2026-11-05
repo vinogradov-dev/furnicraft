@@ -16,8 +16,9 @@ create, which makes a selection-derived rule feed on itself.
 
 - Every creation tool — a drawing (path), a panel, an assembly, a primitive, a camera and a light —
   lands at the scene root. The selection never chooses a parent.
-- The editor has one function, `creation_root(project) -> Id`; every creation action passes its
-  result. `ToolAction` carries no parent, so the toolbar strip cannot name a container.
+- The editor has one function, `creation_target(project, armed) -> Id`; every creation action passes
+  its result. It returns the armed container while that node still exists and the scene root
+  otherwise. `ToolAction` carries no parent, so the toolbar strip cannot name a container.
 - A child is created through an explicit entry: the user arms a container, and the armed node
   receives the next creations until the arm is cleared. The armed target is view state in the
   editor, never document data, and the root cannot be armed (U31).
@@ -29,5 +30,6 @@ create, which makes a selection-derived rule feed on itself.
 - Selecting a group no longer changes where a new node goes, and a toolbar action cannot smuggle a
   parent.
 - The default is the top of the tree; a nested node costs one explicit arm, a top-level node costs
-  nothing, and one arm can host several tools.
+  nothing, and one arm can host several tools. The strip names the armed container and clears it
+  with ✕; Escape and the container's removal clear it too.
 - 0052's parent rule is superseded; its single-command drafting and work-plane placement stand.

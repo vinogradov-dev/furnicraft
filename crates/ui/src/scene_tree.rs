@@ -73,9 +73,11 @@ impl Selection {
 /// One structural action the tree asks the editor to run.
 ///
 /// The tree shows and restructures nodes; it never creates one. Creation is a `ToolAction` from the
-/// toolbar strip, so there is exactly one place a new node starts.
+/// toolbar strip, so there is exactly one place a new node starts. `AddChild` only arms a container
+/// for the next creation, which is a view-state decision, not a second creation path (ADR 0056).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeAction {
+    AddChild { parent: Id },
     Duplicate { node: Id },
     Delete { node: Id },
     Group { nodes: Vec<Id> },
@@ -293,6 +295,10 @@ fn select(ui: &Ui, selection: &mut Selection, id: Id) {
 
 fn container_menu(ui: &mut Ui, id: Id, is_root: bool, is_component: bool, actions: &mut Vec<TreeAction>) {
     if !is_root {
+        if ui.button("Add child").on_hover_text("Create the next node inside this container").clicked() {
+            actions.push(TreeAction::AddChild { parent: id });
+            ui.close();
+        }
         ui.separator();
         if ui.button("Duplicate").clicked() {
             actions.push(TreeAction::Duplicate { node: id });
@@ -448,10 +454,12 @@ mod tests {
     /// The tree is a view and a set of structural edits only.
     ///
     /// Creation is not a `TreeAction`: the toolbar strip owns every tool, so the tree cannot grow a
-    /// second creation path by adding a button back.
+    /// second creation path by adding a button back. Arming a container creates nothing, so
+    /// `AddChild` is allowed and is checked here alongside the rest.
     #[test]
     fn the_tree_has_no_creation_action() {
         let kinds = [
+            TreeAction::AddChild { parent: Id::new(3).expect("id") },
             TreeAction::Duplicate { node: Id::new(2).expect("id") },
             TreeAction::Delete { node: Id::new(2).expect("id") },
             TreeAction::Group { nodes: Vec::new() },
