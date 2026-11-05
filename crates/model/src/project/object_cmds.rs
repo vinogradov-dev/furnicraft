@@ -27,7 +27,9 @@ impl Project {
     /// Adds a geometry object to an existing container and bumps the revision once.
     ///
     /// The object id is allocated from the document; callers must not invent one. The parent may
-    /// be the root or any nested container.
+    /// be the root or any nested container. The pivot starts at the node's local origin; a drawing
+    /// or a body passes the pivot its own shape gives it through
+    /// [`Project::add_object_with_pivot`].
     pub fn add_object(
         &mut self,
         parent: Id,
@@ -35,12 +37,29 @@ impl Project {
         placement: Placement,
         geometry: Geometry,
     ) -> Result<Id, ProjectError> {
+        self.add_object_with_pivot(parent, name, placement, geometry, Pivot::ZERO)
+    }
+
+    /// Adds a geometry object with a stored pivot and bumps the revision once.
+    ///
+    /// Creation is the only time the pivot is chosen from the shape: a drawing is grabbed at its
+    /// centre or at its first point, a body at the centre of the ring it was extruded from. Every
+    /// later geometry edit leaves the stored pivot alone (ADR 0026).
+    pub fn add_object_with_pivot(
+        &mut self,
+        parent: Id,
+        name: impl Into<String>,
+        placement: Placement,
+        geometry: Geometry,
+        pivot: Pivot,
+    ) -> Result<Id, ProjectError> {
         if !self.is_container(parent) {
             return Err(ProjectError::ContainerNotFound { id: parent });
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let object = Object::new(id, name, placement, geometry);
+        let mut object = Object::new(id, name, placement, geometry);
+        object.set_pivot(pivot);
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };

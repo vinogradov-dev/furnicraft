@@ -9,7 +9,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Feature | Where | Notes |
 |---|---|---|
 | Contour ring, segment ids | `crates/model/src/contour.rs` (`Contour`, `ContourSegmentId`, `assemble`) | whole file |
-| Flat path value | `crates/model/src/contour.rs` (`Path`, `PathError`, `polyline`, `to_contour`) | open or closed chain; `to_contour` applies the ring rules and keeps the ids |
+| Flat path value | `crates/model/src/contour.rs` (`Path`, `PathError`, `polyline`, `to_contour`, `creation_pivot`), `crates/model/src/project/object_cmds.rs` (`add_object_with_pivot`) | open or closed chain; `to_contour` applies the ring rules and keeps the ids; a new figure pivots at its bounds centre or its first point (ADR 0058) |
 | Path line primitive | `crates/scene/src/lib.rs` (`Polyline`, `SceneFrame::push_polyline`, `SceneFrame::pick`), `crates/render/src/lib.rs` (`polyline_vertices`), `crates/mesh/src/lib.rs` (`path_points`) | unlit chain; the renderer's line pipeline; a pick hits a segment within `LINE_PICK_RADIUS_POINTS` |
 | Contour edit math | `crates/model/src/contour_edit.rs` (`move_corner`, `trim_segment`, `split_segment`, `PathCorner`, the `Path` family) | whole file; a ring addresses a corner by the segment that starts on it, an open chain by `PathCorner` (ADR 0060) |
 | Contour edit mode | `crates/ui/src/contour_edit.rs` (`ContourEdit`, `ContourTarget`), `crates/ui/src/lib.rs` (`Editor`), `apps/furnicraft/src/contour_gizmo.rs` (`ContourGizmo`), `apps/furnicraft/src/main.rs` | whole files; the target is a panel ring, a constructive contour, a `Path` or a cutout ring |
