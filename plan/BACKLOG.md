@@ -25,17 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U34** the path edit mode in the editor: `ContourTarget` only accepts a panel ring and a
-  constructive contour (`crates/ui/src/contour_edit.rs:26-49`), so an open line or a circle drawn by the
-  drawing tools has no editor. Add `ContourTarget::Path(Id)` and let `ContourEdit` hold either a
-  `Contour` or a `Path` draft; `apply` (`:121-132`) dispatches `object.path.replace`
-  (`crates/engine/src/object_cmds.rs:290-329`, already exists) and keeps one revision and one undo
-  entry. `start`, `is_editable`, `is_dirty`, `reset` and `retain_contour_edit`
-  (`crates/ui/src/lib.rs:242-300`) keep their meaning for both drafts. Tests: editing an open path is
-  one revision and one undo; cancel restores the stored chain; the closed flag survives an edit; a
-  stale target ends the mode.
-  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
-
 - `[ ]` **U35** the path gizmo: `contour_gizmo` paints a closed ring (`Shape::closed_line`,
   `apps/furnicraft/src/contour_gizmo.rs:178-200`) and puts a handle on every segment start
   (`:203-224`), which loses the last point of an open chain. Paint an open chain as `Shape::line`, add
@@ -120,6 +109,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U34** the path edit mode in the editor: `ContourTarget` gains `Path(Id)` and `ContourEdit`
+  holds a `ContourDraft` that is either a ring or a chain, so an open line or a circle drawn by the
+  tools has an editor. Moving, splitting and resetting a chain go through the model's `PathCorner`
+  helpers, `apply` dispatches one `object.path.replace`, and `start`, `is_editable`, `is_dirty`,
+  `reset` and `retain_contour_edit` keep their meaning for both drafts. The open chain is painted
+  and dragged by the path gizmo of U35; the ring gizmo ignores a chain draft — `3970c0b`
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
 
 - `[x]` **U33** path edit math in the model: a ring names a corner by the segment that starts on it,
   which wraps, so an open chain's last point had no name. `PathCorner::Start` and `End` name a corner
