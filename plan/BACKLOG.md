@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X4** every creation tool lands at the scene root, never in the selected container. Today
+- `[~]` **X4** every creation tool lands at the scene root, never in the selected container. Today
   `crates/ui/src/lib.rs:815-824` `drawing_parent` returns the selected container, or the parent of the
   selected leaf, and both `commit_drawing` (`:361`) and `show_toolbars` (`:470`) feed it into
   `ToolAction::Create*`. A path, a panel, an assembly, a primitive, a camera and a light therefore land

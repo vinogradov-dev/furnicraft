@@ -350,15 +350,15 @@ impl Editor {
 
     /// Commits the running draft as one path object and drops it.
     ///
-    /// The drawing lands in the selected container, beside the selected node or at the root, and is
-    /// placed on `placement`, which maps the work plane onto the object's local XY. The new node
-    /// becomes the selection, so the tool ends with what it just drew visible in the inspector.
-    /// A refused path leaves the draft and the selection untouched.
+    /// The drawing lands at the scene root, like every other creation tool, and is placed on
+    /// `placement`, which maps the work plane onto the object's local XY. The new node becomes the
+    /// selection, so the tool ends with what it just drew visible in the inspector. A refused path
+    /// leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
         };
-        let parent = drawing_parent(session.project(), self.selection.primary());
+        let parent = creation_root(session.project());
         let object = draft.commit(session, parent, placement)?;
         let tool = draft.tool();
         self.drawing = None;
@@ -463,16 +463,16 @@ impl Editor {
     /// Draws the themed toolbar strip: one collapsible panel per tool theme.
     ///
     /// The open panels are view state owned by the editor, so they survive a selection change and a
-    /// document command and never reach the scene file. The strip runs against the container a new
-    /// node would land in, which is the selected container or the parent of the selected leaf.
-    /// Returns whether a drawing tool started, so the shell can reset its own pointer state.
+    /// document command and never reach the scene file. Every creation tool lands at the scene
+    /// root; a child is created only through an explicit entry (ADR 0056). Returns whether a
+    /// drawing tool started, so the shell can reset its own pointer state.
     pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
-        let parent = drawing_parent(session.project(), self.selection.primary());
+        let parent = creation_root(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
         let selected = self.selection.primary();
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, parent, has_panel_material, selected, selected_path, &mut actions);
+        toolbars::show(ui, &mut self.toolbars, has_panel_material, selected, selected_path, &mut actions);
         let mut started_drawing = false;
         for action in actions {
             match action {
@@ -482,11 +482,11 @@ impl Editor {
                     }
                     started_drawing = true;
                 }
-                ToolAction::CreatePanel { parent } => self.create_panel(session, parent)?,
-                ToolAction::CreateAssembly { parent } => self.create_assembly(session, parent)?,
-                ToolAction::CreatePrimitive { parent, kind, size } => self.arm_primitive(parent, kind, size)?,
-                ToolAction::CreateCamera { parent } => self.create_camera(session, parent)?,
-                ToolAction::CreateLight { parent } => self.create_light(session, parent)?,
+                ToolAction::CreatePanel => self.create_panel(session, parent)?,
+                ToolAction::CreateAssembly => self.create_assembly(session, parent)?,
+                ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(parent, kind, size)?,
+                ToolAction::CreateCamera => self.create_camera(session, parent)?,
+                ToolAction::CreateLight => self.create_light(session, parent)?,
                 ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
             }
         }
@@ -807,20 +807,14 @@ fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Opti
     Some(node)
 }
 
-/// The parent a drawing lands in.
+/// The container every creation tool lands in.
 ///
-/// A selected container takes the drawing as its child; a selected leaf contributes its parent, so
-/// a path drawn while a panel is selected lands beside it; with no selection the root does. The
-/// toolbar uses the same rule for every created node, so a tool and a drawing agree on the parent.
-fn drawing_parent(project: &Project, selected: Option<Id>) -> Id {
-    let root = project.root().id();
-    let Some(selected) = selected else {
-        return root;
-    };
-    if project.is_container(selected) {
-        return selected;
-    }
-    project.parent_of(selected).unwrap_or(root)
+/// The scene root is the only default parent, whatever the selection is: choosing a node must not
+/// silently change where a new path, panel, assembly, primitive, camera or light goes (ADR 0056).
+/// A child is created through an explicit entry instead. Extruding a path is not a creation tool,
+/// so it stays a sibling of its path.
+fn creation_root(project: &Project) -> Id {
+    project.root().id()
 }
 
 /// The direct child of `container` whose subtree contains `node`.
@@ -1094,35 +1088,75 @@ mod tests {
         let path = session.project().object_path(drawn.object).expect("a path object");
         assert!(path.is_closed());
         assert_eq!(path.entries().len(), 4);
-        assert_eq!(session.project().parent_of(drawn.object), Some(root), "a selected leaf contributes its parent");
+        assert_eq!(session.project().parent_of(drawn.object), Some(root), "the selection never decides the parent");
 
         session.undo().expect("one undo removes the drawing");
         assert!(session.project().object(drawn.object).is_none());
         assert!(!session.can_undo(), "the drawing was the only undo entry");
     }
 
-    #[test]
-    fn a_drawing_lands_in_a_selected_container() {
-        let (project, panel) = contour_panel_project();
-        let mut session = Session::with_catalog(project, sample_catalog());
-        let mut editor = Editor::new();
-        let root = session.project().root().id();
+    /// Creates an assembly under `parent` and returns its id.
+    fn create_assembly_under(session: &mut Session, parent: Id, name: &str) -> Id {
         let params = serde_json::to_value(furnicraft_engine::AssemblyCreate {
-            parent: root,
-            name: "Frame".to_owned(),
+            parent,
+            name: name.to_owned(),
             placement: Placement::IDENTITY,
         })
         .expect("params");
-        let outcome =
-            session.dispatch(furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID, &params).expect("create the frame");
-        let frame = outcome.created_id().expect("the assembly id");
-        editor.select_node(Some(frame));
+        session
+            .dispatch(furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID, &params)
+            .expect("create the assembly")
+            .created_id()
+            .expect("the assembly id")
+    }
+
+    #[test]
+    fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
+        let (project, panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let outer = create_assembly_under(&mut session, root, "Outer");
+        let inner = create_assembly_under(&mut session, outer, "Inner");
+        let mut editor = Editor::new();
+
+        editor.select_node(Some(inner));
+        assert_eq!(creation_root(session.project()), root, "the scene root is the only default parent");
         assert!(editor.start_drawing(DrawTool::Line));
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
         editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
-
         let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
-        assert_eq!(session.project().parent_of(drawn.object), Some(frame), "a selected container receives it");
+        assert_eq!(session.project().parent_of(drawn.object), Some(root), "a drawing lands at the root");
+
+        editor.select_node(Some(inner));
+        editor.create_panel(&mut session, root).expect("create the panel");
+        let created_panel = editor.selected_node().expect("the new panel");
+        assert_eq!(session.project().parent_of(created_panel), Some(root), "a panel lands at the root");
+
+        editor.select_node(Some(inner));
+        editor.create_assembly(&mut session, root).expect("create the assembly");
+        let created_assembly = editor.selected_node().expect("the new assembly");
+        assert_eq!(session.project().parent_of(created_assembly), Some(root), "an assembly lands at the root");
+
+        editor.select_node(Some(inner));
+        editor
+            .arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(100).expect("size"))
+            .expect("arm the cube");
+        let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cube");
+        assert_eq!(session.project().parent_of(created_primitive), Some(root), "a primitive lands at the root");
+
+        editor.select_node(Some(inner));
+        editor.create_camera(&mut session, root).expect("create the camera");
+        let created_camera = editor.selected_node().expect("the new camera");
+        assert_eq!(session.project().parent_of(created_camera), Some(root), "a camera lands at the root");
+
+        editor.select_node(Some(inner));
+        editor.create_light(&mut session, root).expect("create the light");
+        let created_light = editor.selected_node().expect("the new light");
+        assert_eq!(session.project().parent_of(created_light), Some(root), "a light lands at the root");
+
+        for created in [created_panel, created_assembly, created_primitive, created_camera, created_light] {
+            assert_ne!(session.project().parent_of(created), Some(inner), "the selected container receives nothing");
+        }
         assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
     }
 

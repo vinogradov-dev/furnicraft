@@ -25,20 +25,12 @@ pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 18;
 pub enum ToolAction {
     /// Starts a drawing tool.
     Draw(DrawTool),
-    /// Creates a panel under the container.
-    CreatePanel {
-        /// The receiving container.
-        parent: Id,
-    },
-    /// Creates an assembly under the container.
-    CreateAssembly {
-        /// The receiving container.
-        parent: Id,
-    },
-    /// Creates a primitive once the work plane is clicked.
+    /// Creates a panel at the scene root.
+    CreatePanel,
+    /// Creates an assembly at the scene root.
+    CreateAssembly,
+    /// Creates a primitive at the scene root once the work plane is clicked.
     CreatePrimitive {
-        /// The receiving container.
-        parent: Id,
         /// Which primitive to build.
         kind: PrimitiveKind,
         /// Full extent of the primitive.
@@ -51,16 +43,10 @@ pub enum ToolAction {
         /// Height along the path's local Z.
         height: Length,
     },
-    /// Creates a camera.
-    CreateCamera {
-        /// The receiving container.
-        parent: Id,
-    },
-    /// Creates a sun light.
-    CreateLight {
-        /// The receiving container.
-        parent: Id,
-    },
+    /// Creates a camera at the scene root.
+    CreateCamera,
+    /// Creates a sun light at the scene root.
+    CreateLight,
 }
 
 /// The drawing tools of the Contour panel, in button order.
@@ -274,11 +260,11 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
 /// Draws the whole strip.
 ///
 /// The headings are collapsible sections. A section that is open draws its tools; every button is
-/// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label.
+/// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label. The
+/// strip creates at the scene root, so it carries no parent.
 pub fn show(
     ui: &mut Ui,
     state: &mut Toolbars,
-    parent: Id,
     has_panel_material: bool,
     selected: Option<Id>,
     selected_path: Option<bool>,
@@ -289,7 +275,7 @@ pub fn show(
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, parent, has_panel_material, selected, selected_path, state, actions);
+            show_panel(ui, panel, has_panel_material, selected, selected_path, state, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -298,11 +284,9 @@ pub fn show(
 }
 
 /// The body of one open panel.
-#[allow(clippy::too_many_arguments)]
 fn show_panel(
     ui: &mut Ui,
     panel: ToolPanel,
-    parent: Id,
     has_panel_material: bool,
     selected: Option<Id>,
     selected_path: Option<bool>,
@@ -319,16 +303,16 @@ fn show_panel(
         }
         ToolPanel::Scene => {
             if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), has_panel_material).clicked() {
-                actions.push(ToolAction::CreatePanel { parent });
+                actions.push(ToolAction::CreatePanel);
             }
             if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true).clicked() {
-                actions.push(ToolAction::CreateAssembly { parent });
+                actions.push(ToolAction::CreateAssembly);
             }
             if icons::tool_button(ui, icons::scene::CAMERA, "Camera", None, true).clicked() {
-                actions.push(ToolAction::CreateCamera { parent });
+                actions.push(ToolAction::CreateCamera);
             }
             if icons::tool_button(ui, icons::scene::LIGHT, "Light", None, true).clicked() {
-                actions.push(ToolAction::CreateLight { parent });
+                actions.push(ToolAction::CreateLight);
             }
         }
         ToolPanel::Primitives => {
@@ -348,7 +332,7 @@ fn show_panel(
                 if icons::tool_button(ui, icon, &format!("{label}: click the work plane"), None, enabled).clicked()
                     && let Ok(size) = size
                 {
-                    actions.push(ToolAction::CreatePrimitive { parent, kind, size });
+                    actions.push(ToolAction::CreatePrimitive { kind, size });
                 }
             }
         }
@@ -437,7 +421,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -461,7 +445,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -486,7 +470,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, Some(node), Some(false), &mut actions);
+            show(ui, &mut state, true, Some(node), Some(false), &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -505,7 +489,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, Some(node), Some(true), &mut actions);
+            show(ui, &mut state, true, Some(node), Some(true), &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -543,7 +527,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -558,7 +542,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), false, None, None, &mut actions);
+            show(ui, &mut state, false, None, None, &mut actions);
         });
         output.drop_without_applying_deltas();
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
@@ -583,7 +567,7 @@ mod tests {
         state.set_open(ToolPanel::Scene, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -598,7 +582,7 @@ mod tests {
         state.set_open(ToolPanel::Contour, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, Id::new(1).expect("root"), true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
