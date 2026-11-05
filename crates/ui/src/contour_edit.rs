@@ -1,21 +1,21 @@
-//! Contour and drawing state: a working copy of a panel outline or an object contour, and the
-//! chain a drawing tool is building.
+//! Contour and drawing state: a working copy of a panel outline, an object contour or a path
+//! chain, and the chain a drawing tool is building.
 //!
-//! Both are view state. Entering a contour edit reads the stored ring into a draft; moving a corner
-//! or splitting a side only changes the draft, so the document, its revision and the undo history
-//! stay untouched until the user applies. Applying dispatches exactly one command
-//! (`panel.outline.set` or `object.contour.replace`), so the whole edit is one undo entry. Leaving
-//! without applying drops the draft and changes nothing.
+//! Both are view state. Entering a contour edit reads the stored ring or chain into a draft; moving
+//! a corner or splitting a side only changes the draft, so the document, its revision and the undo
+//! history stay untouched until the user applies. Applying dispatches exactly one command
+//! (`panel.outline.set`, `object.contour.replace` or `object.path.replace`), so the whole edit is
+//! one undo entry. Leaving without applying drops the draft and changes nothing.
 //!
 //! A [`DrawDraft`] is the same pattern without a base ring: the tool appends plane points, undoes
 //! the last one, closes the chain or cancels it, and no command runs until the drawing is committed.
 
-use furnicraft_engine::object_cmds::{OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_CREATE_ID};
+use furnicraft_engine::object_cmds::{OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_CREATE_ID, OBJECT_PATH_REPLACE_ID};
 use furnicraft_engine::panel_cmds::OUTLINE_SET_ID;
-use furnicraft_engine::{ObjectContourReplace, ObjectPathCreate, PanelOutlineSet, Session};
+use furnicraft_engine::{ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelOutlineSet, Session};
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, Path, PathError,
-    Placement, Project,
+    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE,
+    MAX_CONTOUR_SEGMENTS, Path, PathCorner, PathError, Placement, Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -29,46 +29,134 @@ pub enum ContourTarget {
     Panel(Id),
     /// The contour of a constructive object.
     Object(Id),
+    /// The open or closed chain of a path object.
+    Path(Id),
 }
 
 impl ContourTarget {
     /// The node that owns the edited contour.
     pub const fn id(self) -> Id {
         match self {
-            Self::Panel(id) | Self::Object(id) => id,
+            Self::Panel(id) | Self::Object(id) | Self::Path(id) => id,
         }
     }
 
-    /// The contour this target stores, or `None` when the node is gone or has none.
-    pub fn contour(self, project: &Project) -> Option<&Contour> {
+    /// The draft this target stores, or `None` when the node is gone or has none.
+    pub fn draft(self, project: &Project) -> Option<ContourDraft> {
         match self {
-            Self::Panel(id) => project.panel(id)?.outline_contour(),
-            Self::Object(id) => project.object_contour(id).ok(),
+            Self::Panel(id) => project.panel(id)?.outline_contour().cloned().map(ContourDraft::Ring),
+            Self::Object(id) => project.object_contour(id).ok().cloned().map(ContourDraft::Ring),
+            Self::Path(id) => project.object_path(id).ok().cloned().map(ContourDraft::Chain),
+        }
+    }
+
+    /// Whether the target still stores a draft this mode can edit.
+    pub fn is_editable(self, project: &Project) -> bool {
+        match self {
+            Self::Panel(id) => project.panel(id).and_then(|panel| panel.outline_contour()).is_some(),
+            Self::Object(id) => project.object_contour(id).is_ok(),
+            Self::Path(id) => project.object_path(id).is_ok(),
         }
     }
 }
 
-/// One live contour edit: the target, the ring it started from and the working copy.
+/// The working copy of a contour edit: a closed ring or a path chain.
 ///
-/// The base ring lets the viewport show what changed and lets [`ContourEdit::reset`] throw the
-/// draft away without leaving the mode. A corner or a split only ever edits the draft.
+/// A panel outline and a constructive contour are rings; a path is a chain that may be open. Both
+/// store [`ContourSegmentEntry`] values under the same stable ids, so an edit addresses a segment
+/// either way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContourDraft {
+    /// A closed ring: a panel outline or a constructive contour.
+    Ring(Contour),
+    /// An open or closed chain: a path object.
+    Chain(Path),
+}
+
+impl ContourDraft {
+    /// The chain elements with their ids, in travel order.
+    pub fn entries(&self) -> &[ContourSegmentEntry] {
+        match self {
+            Self::Ring(contour) => contour.entries(),
+            Self::Chain(path) => path.entries(),
+        }
+    }
+
+    /// The segment with this id.
+    pub fn segment(&self, id: ContourSegmentId) -> Option<ContourSegment> {
+        match self {
+            Self::Ring(contour) => contour.segment(id),
+            Self::Chain(path) => path.segment(id),
+        }
+    }
+
+    /// The position of a segment id in travel order.
+    pub fn index_of(&self, id: ContourSegmentId) -> Option<usize> {
+        match self {
+            Self::Ring(contour) => contour.index_of(id),
+            Self::Chain(path) => path.index_of(id),
+        }
+    }
+
+    /// The id of the segment at this position in travel order.
+    pub fn id_at(&self, index: usize) -> Option<ContourSegmentId> {
+        match self {
+            Self::Ring(contour) => contour.id_at(index),
+            Self::Chain(path) => path.id_at(index),
+        }
+    }
+
+    /// The number of segments in the draft.
+    pub fn segment_count(&self) -> usize {
+        self.entries().len()
+    }
+
+    /// Whether the draft is a closed chain.
+    pub const fn is_closed(&self) -> bool {
+        match self {
+            Self::Ring(_) => true,
+            Self::Chain(path) => path.is_closed(),
+        }
+    }
+
+    /// The ring, when the draft is one.
+    pub const fn as_ring(&self) -> Option<&Contour> {
+        match self {
+            Self::Ring(contour) => Some(contour),
+            Self::Chain(_) => None,
+        }
+    }
+
+    /// The chain, when the draft is one.
+    pub const fn as_chain(&self) -> Option<&Path> {
+        match self {
+            Self::Ring(_) => None,
+            Self::Chain(path) => Some(path),
+        }
+    }
+}
+
+/// One live contour edit: the target, the draft it started from and the working copy.
+///
+/// The base draft lets the viewport show what changed and lets [`ContourEdit::reset`] throw the
+/// working copy away without leaving the mode. A corner or a split only ever edits the working copy.
 #[derive(Clone, Debug)]
 pub struct ContourEdit {
     target: ContourTarget,
-    base: Contour,
-    draft: Contour,
+    base: ContourDraft,
+    draft: ContourDraft,
 }
 
 impl ContourEdit {
-    /// Starts editing `target`, or returns `None` when it has no contour.
+    /// Starts editing `target`, or returns `None` when it has no ring or chain.
     pub fn start(project: &Project, target: ContourTarget) -> Option<Self> {
-        let base = target.contour(project)?.clone();
+        let base = target.draft(project)?;
         Some(Self { target, base: base.clone(), draft: base })
     }
 
-    /// Whether the target still has a contour to edit.
+    /// Whether the target still has a ring or chain to edit.
     pub fn is_editable(project: &Project, target: ContourTarget) -> bool {
-        target.contour(project).is_some()
+        target.is_editable(project)
     }
 
     /// The node being edited.
@@ -76,30 +164,47 @@ impl ContourEdit {
         self.target
     }
 
-    /// The ring the edit started from.
-    pub const fn base(&self) -> &Contour {
+    /// The draft the edit started from.
+    pub const fn base(&self) -> &ContourDraft {
         &self.base
     }
 
     /// The working copy the viewport shows.
-    pub const fn draft(&self) -> &Contour {
+    pub const fn draft(&self) -> &ContourDraft {
         &self.draft
     }
 
-    /// Whether the draft differs from the stored ring.
+    /// Whether the working copy differs from the stored draft.
     pub fn is_dirty(&self) -> bool {
         self.draft != self.base
     }
 
-    /// Throws the draft away and starts again from the stored ring.
+    /// Throws the working copy away and starts again from the stored draft.
     pub fn reset(&mut self) {
         self.draft = self.base.clone();
     }
 
     /// Moves the corner at the start of `segment` to `point` in the target's local plane.
     pub fn move_corner(&mut self, segment: ContourSegmentId, point: [Length; 2]) -> Result<(), ContourEditError> {
-        let moved = self.draft.move_corner(segment, point)?;
-        self.draft = moved;
+        self.move_corner_at(PathCorner::Start(segment), point)
+    }
+
+    /// Moves the corner named by `corner` to `point` in the target's local plane.
+    ///
+    /// A ring addresses a corner by the segment that starts on it, so an end names the next
+    /// segment's start; a chain uses the corner the path edit names.
+    pub fn move_corner_at(&mut self, corner: PathCorner, point: [Length; 2]) -> Result<(), ContourEditError> {
+        match &mut self.draft {
+            ContourDraft::Ring(contour) => {
+                let segment = ring_corner_segment(contour, corner)?;
+                let moved = contour.move_corner(segment, point)?;
+                *contour = moved;
+            }
+            ContourDraft::Chain(path) => {
+                let moved = path.move_corner_at(corner, point)?;
+                *path = moved;
+            }
+        }
         Ok(())
     }
 
@@ -109,27 +214,55 @@ impl ContourEdit {
         segment: ContourSegmentId,
         point: [Length; 2],
     ) -> Result<ContourSegmentId, ContourEditError> {
-        let (split, inserted) = self.draft.split_segment(segment, point)?;
-        self.draft = split;
-        Ok(inserted)
+        match &mut self.draft {
+            ContourDraft::Ring(contour) => {
+                let (split, inserted) = contour.split_segment(segment, point)?;
+                *contour = split;
+                Ok(inserted)
+            }
+            ContourDraft::Chain(path) => {
+                let (split, inserted) = path.split_segment_at(segment, point)?;
+                *path = split;
+                Ok(inserted)
+            }
+        }
     }
 
-    /// Applies the draft as one command.
+    /// Applies the working copy as one command.
     ///
     /// The caller owns the mode and drops it only on success; a rejected edit leaves the draft in
     /// place so the user can fix it or cancel.
     pub fn apply(&self, session: &mut Session) -> Result<(), String> {
-        match self.target {
-            ContourTarget::Panel(panel) => {
-                let params = json(&PanelOutlineSet { panel, contour: self.draft.clone() })?;
+        match (self.target, &self.draft) {
+            (ContourTarget::Panel(panel), ContourDraft::Ring(contour)) => {
+                let params = json(&PanelOutlineSet { panel, contour: contour.clone() })?;
                 dispatch(session, OUTLINE_SET_ID, &params).map(|_| ())
             }
-            ContourTarget::Object(object) => {
-                let params = json(&ObjectContourReplace { object, contour: self.draft.clone() })?;
+            (ContourTarget::Object(object), ContourDraft::Ring(contour)) => {
+                let params = json(&ObjectContourReplace { object, contour: contour.clone() })?;
                 dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
             }
+            (ContourTarget::Path(object), ContourDraft::Chain(path)) => {
+                let params = json(&ObjectPathReplace { object, path: path.clone() })?;
+                dispatch(session, OBJECT_PATH_REPLACE_ID, &params).map(|_| ())
+            }
+            _ => Err("the contour draft does not match its target".to_owned()),
         }
     }
+}
+
+/// The segment whose start names the same corner as `corner` on a closed ring.
+fn ring_corner_segment(contour: &Contour, corner: PathCorner) -> Result<ContourSegmentId, ContourEditError> {
+    let segment = corner.segment();
+    if !corner.is_end() {
+        return Ok(segment);
+    }
+    let index = contour.index_of(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
+    let count = contour.entries().len();
+    if count == 0 {
+        return Err(ContourEditError::UnknownSegment { segment });
+    }
+    contour.id_at((index + 1) % count).ok_or(ContourEditError::UnknownSegment { segment })
 }
 
 /// The tool a drawing draft is building with.
@@ -510,6 +643,26 @@ mod tests {
         (project, id)
     }
 
+    /// A project whose root holds one path object.
+    fn path_project(path: Path) -> (Project, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let id = project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("path object");
+        (project, id)
+    }
+
+    fn open_path() -> Path {
+        Path::polyline(
+            vec![
+                [millimetres(0), millimetres(0)],
+                [millimetres(600), millimetres(0)],
+                [millimetres(600), millimetres(400)],
+            ],
+            false,
+        )
+        .expect("open path")
+    }
+
     fn session(project: Project) -> Session {
         Session::with_catalog(project, sample_catalog())
     }
@@ -526,19 +679,19 @@ mod tests {
         let segment = edit.draft().id_at(1).expect("right edge");
         edit.move_corner(segment, [millimetres(800), millimetres(0)]).expect("move the corner");
         assert!(edit.is_dirty());
-        assert_eq!(edit.draft().bounds_micrometres().1[0], millimetres(800).micrometres());
+        assert_eq!(edit.draft().as_ring().expect("ring").bounds_micrometres().1[0], millimetres(800).micrometres());
         assert_eq!(
             session.project().panel(panel).expect("panel").outline_contour(),
-            Some(edit.base()),
+            edit.base().as_ring(),
             "the document still has the stored ring"
         );
 
         let revision = session.project().revision();
         edit.apply(&mut session).expect("apply the outline");
-        assert_eq!(session.project().panel(panel).expect("panel").outline_contour(), Some(edit.draft()));
+        assert_eq!(session.project().panel(panel).expect("panel").outline_contour(), edit.draft().as_ring());
         assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
         session.undo().expect("one undo restores the ring");
-        assert_eq!(session.project().panel(panel).expect("panel").outline_contour(), Some(edit.base()));
+        assert_eq!(session.project().panel(panel).expect("panel").outline_contour(), edit.base().as_ring());
     }
 
     #[test]
@@ -547,14 +700,14 @@ mod tests {
         let mut edit = ContourEdit::start(&project, ContourTarget::Panel(panel)).expect("editable");
         let segment = edit.draft().id_at(0).expect("bottom edge");
         let inserted = edit.split_segment(segment, [millimetres(350), millimetres(0)]).expect("split");
-        assert_eq!(edit.draft().segments().len(), 5);
+        assert_eq!(edit.draft().segment_count(), 5);
         assert!(edit.draft().index_of(inserted).is_some());
         assert!(edit.is_dirty());
 
         edit.reset();
         assert!(!edit.is_dirty());
         assert_eq!(edit.draft(), edit.base());
-        assert_eq!(edit.draft().segments().len(), 4);
+        assert_eq!(edit.draft().segment_count(), 4);
     }
 
     #[test]
@@ -567,7 +720,7 @@ mod tests {
         edit.apply(&mut session).expect("apply the contour");
         assert_eq!(
             session.project().object_contour(object).expect("contour"),
-            edit.draft(),
+            edit.draft().as_ring().expect("ring"),
             "an object contour is stored exactly as edited"
         );
     }
@@ -579,6 +732,85 @@ mod tests {
         assert!(ContourEdit::start(&project, ContourTarget::Panel(rectangle_panel)).is_none());
         assert!(!ContourEdit::is_editable(&project, ContourTarget::Panel(rectangle_panel)));
         assert!(ContourEdit::start(&project, ContourTarget::Object(Id::new(99).expect("id"))).is_none());
+    }
+
+    #[test]
+    fn an_open_path_edit_is_one_revision_and_one_undo() {
+        let path = open_path();
+        let (project, object) = path_project(path.clone());
+        let mut session = session(project);
+        let target = ContourTarget::Path(object);
+        assert_eq!(target.id(), object);
+        assert!(ContourEdit::is_editable(session.project(), target));
+        let mut edit = ContourEdit::start(session.project(), target).expect("a path is editable");
+        assert_eq!(edit.base(), &ContourDraft::Chain(path.clone()));
+        assert!(!edit.is_dirty());
+
+        let last = edit.draft().entries().last().map(|entry| entry.id()).expect("last segment");
+        edit.move_corner_at(PathCorner::End(last), [millimetres(700), millimetres(500)]).expect("move the free end");
+        assert!(edit.is_dirty());
+        assert_eq!(
+            session.project().object_path(object).expect("path"),
+            &path,
+            "the document still has the stored chain"
+        );
+
+        let revision = session.project().revision();
+        edit.apply(&mut session).expect("apply the path");
+        let stored = session.project().object_path(object).expect("path");
+        assert_eq!(Some(stored), edit.draft().as_chain(), "a path is stored exactly as edited");
+        assert!(!stored.is_closed());
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        session.undo().expect("one undo restores the chain");
+        assert_eq!(session.project().object_path(object).expect("path"), &path);
+        assert!(!session.can_undo(), "the edit was the only undo entry");
+    }
+
+    #[test]
+    fn a_closed_path_stays_closed_through_an_edit() {
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(700), millimetres(500)]).expect("rectangle");
+        let (project, object) = path_project(path);
+        let mut session = session(project);
+        let mut edit = ContourEdit::start(session.project(), ContourTarget::Path(object)).expect("editable");
+        assert!(edit.draft().is_closed());
+
+        let first = edit.draft().id_at(0).expect("first segment");
+        edit.move_corner(first, [millimetres(-50), millimetres(-20)]).expect("move a corner");
+        edit.apply(&mut session).expect("apply the path");
+
+        let stored = session.project().object_path(object).expect("path");
+        assert!(stored.is_closed(), "a replacement keeps the closed flag");
+        assert_eq!(Some(stored), edit.draft().as_chain());
+    }
+
+    #[test]
+    fn splitting_a_path_side_keeps_it_open_and_one_undo() {
+        let path = open_path();
+        let (project, object) = path_project(path);
+        let mut session = session(project);
+        let mut edit = ContourEdit::start(session.project(), ContourTarget::Path(object)).expect("editable");
+        let first = edit.draft().id_at(0).expect("first segment");
+
+        let inserted = edit.split_segment(first, [millimetres(300), millimetres(0)]).expect("split the bottom");
+        assert_eq!(edit.draft().segment_count(), 3);
+        let revision = session.project().revision();
+        edit.apply(&mut session).expect("apply the split");
+
+        let stored = session.project().object_path(object).expect("path");
+        assert!(!stored.is_closed());
+        assert_eq!(stored.entries().len(), 3);
+        assert!(stored.index_of(inserted).is_some());
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        session.undo().expect("one undo restores two segments");
+        assert_eq!(session.project().object_path(object).expect("path").entries().len(), 2);
+    }
+
+    #[test]
+    fn a_constructive_target_does_not_edit_a_path() {
+        let (project, object) = path_project(open_path());
+        assert!(ContourEdit::start(&project, ContourTarget::Object(object)).is_none());
+        assert!(!ContourEdit::is_editable(&project, ContourTarget::Object(object)));
     }
 
     #[test]

@@ -41,6 +41,14 @@ const NDC_LIMIT: f64 = 16.0;
 /// near the line select the path without making a whole viewport region its target.
 pub const LINE_PICK_RADIUS_POINTS: f64 = 6.0;
 
+/// Gamma-space colour of a selected line chain.
+///
+/// A tint mixed into the path colour moves too little to be seen, and the line pipeline cannot
+/// widen a chain, so the selected chain takes this explicit colour and the shell repeats it as a
+/// thick screen-space outline. Cyan stays visible over a brown panel, a light one and the yellow
+/// unselected path.
+pub const SELECTION_LINE_COLOR: [f32; 4] = [0.15, 0.85, 1.0, 1.0];
+
 /// Closest camera distance from its target, in millimetres.
 pub const MIN_DISTANCE_MM: f64 = 10.0;
 
@@ -737,11 +745,13 @@ impl SceneFrame {
         nearest.map(|(_, id)| id)
     }
 
-    /// A copy of the frame with every selected drawable and line chain tinted for picking feedback.
+    /// A copy of the frame with every selected drawable and line chain highlighted for picking
+    /// feedback.
     ///
     /// The base frame keeps its material colours, so clearing the selection restores them without
     /// rebuilding meshes. Passing the panels below a selected container highlights the container as
-    /// one object.
+    /// one object. A line chain takes [`SELECTION_LINE_COLOR`] explicitly: a tint is invisible on a
+    /// one-pixel line, and the shell widens it as an overlay.
     pub fn with_selection_highlight(&self, selected: &[Id]) -> Self {
         let mut frame = self.clone();
         if selected.is_empty() {
@@ -754,7 +764,7 @@ impl SceneFrame {
         }
         for polyline in &mut frame.polylines {
             if selected.contains(&polyline.id) {
-                tint_selected(&mut polyline.color);
+                polyline.color = SELECTION_LINE_COLOR;
             }
         }
         frame
@@ -1278,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_highlight_tints_every_selected_polyline() {
+    fn selection_highlight_gives_every_selected_polyline_the_explicit_colour() {
         let selected = Id::new(2).expect("id");
         let other = Id::new(3).expect("id");
         let mut frame = SceneFrame::default();
@@ -1286,7 +1296,8 @@ mod tests {
         frame.push_polyline(line_chain(other));
 
         let highlighted = frame.with_selection_highlight(&[selected]);
-        assert_ne!(highlighted.polylines()[0].color, frame.polylines()[0].color);
+        assert_eq!(highlighted.polylines()[0].color, SELECTION_LINE_COLOR);
+        assert_ne!(SELECTION_LINE_COLOR, frame.polylines()[0].color, "picking the colour must be visible");
         assert_eq!(highlighted.polylines()[1].color, frame.polylines()[1].color);
         assert_eq!(frame.polylines()[0].color, [0.5, 0.5, 0.5, 1.0], "the base frame keeps its colour");
     }

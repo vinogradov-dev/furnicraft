@@ -41,7 +41,7 @@ use furnicraft_mesh::{EvaluationCache, object_mesh};
 use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
-use furnicraft_scene::{Camera, Projection, SceneFrame};
+use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
 use furnicraft_ui::{DrawDraft, Editor, MeshElement, icons, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
@@ -65,6 +65,24 @@ const MESH_VERTEX_RADIUS: f32 = 4.0;
 
 /// Translucent fill of a selected face.
 const MESH_FACE_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 41, 11, 70);
+
+/// Width of the bright stroke that repeats a selected line chain over the viewport image.
+const SELECTION_OUTLINE_WIDTH: f32 = 2.25;
+
+/// Width of the dark underlay below [`SELECTION_OUTLINE_WIDTH`], which keeps the stroke readable
+/// over a light panel.
+const SELECTION_UNDERLAY_WIDTH: f32 = 3.5;
+
+/// The selected-chain stroke, converted from the scene's explicit line colour so the overlay and
+/// the uploaded chain agree.
+const SELECTION_OUTLINE: egui::Color32 = egui::Color32::from_rgb(
+    (SELECTION_LINE_COLOR[0] * 255.0 + 0.5) as u8,
+    (SELECTION_LINE_COLOR[1] * 255.0 + 0.5) as u8,
+    (SELECTION_LINE_COLOR[2] * 255.0 + 0.5) as u8,
+);
+
+/// Dark underlay of the selected-chain stroke, premultiplied so the panel still shows through.
+const SELECTION_UNDERLAY: egui::Color32 = egui::Color32::from_rgba_premultiplied(10, 16, 19, 220);
 
 /// Which transform gizmo the viewport shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +116,9 @@ struct FurniCraftApp {
     draw_gizmo: DrawGizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
+    /// The selected line chains of the frame last uploaded, already carrying any drag preview, so
+    /// the screen-space outline follows a moved path without a frame of lag.
+    selected_chains: Vec<Polyline>,
     uploaded_preview: Option<PreviewKey>,
     files: FileMenu,
     /// Top-level sections of the loaded file that this build does not understand; written back on
@@ -146,6 +167,7 @@ impl FurniCraftApp {
             draw_gizmo: DrawGizmo::new(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
+            selected_chains: Vec::new(),
             uploaded_preview: None,
             files: FileMenu::new(),
             extra: PreservedSections::new(),
@@ -181,6 +203,7 @@ impl FurniCraftApp {
         self.contour_gizmo = ContourGizmo::default();
         self.draw_gizmo = DrawGizmo::new();
         self.highlighted.clear();
+        self.selected_chains.clear();
         self.uploaded_preview = None;
         self.extra = extra;
         self.last_error = None;
@@ -261,6 +284,9 @@ impl FurniCraftApp {
             Some(preview) => preview_vertex_mesh(frame, self.session.project(), preview)?,
             None => frame,
         };
+        // Keep the chains of the frame that is about to be uploaded, after every preview, so the
+        // screen-space outline is drawn where the renderer draws the path.
+        self.selected_chains = frame.polylines().iter().filter(|chain| geometry.contains(&chain.id)).cloned().collect();
         self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
         self.highlighted.clear();
         self.highlighted.extend_from_slice(selection);
@@ -732,6 +758,7 @@ impl FurniCraftApp {
             &previewed,
         );
         self.paint_mesh_selection(ui, rect);
+        self.paint_selection_outline(ui, rect);
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
@@ -844,6 +871,25 @@ impl FurniCraftApp {
         }
     }
 
+    /// Paints the selected line chains over the viewport image as a screen-space outline.
+    ///
+    /// The renderer draws a chain as a one-pixel `LineList`, which wgpu cannot widen, so a selected
+    /// chain is repeated here: a dark underlay first, then the bright stroke. The chains come from
+    /// the frame last uploaded, so a drag preview and its outline agree.
+    fn paint_selection_outline(&self, ui: &mut egui::Ui, rect: egui::Rect) {
+        if self.selected_chains.is_empty() {
+            return;
+        }
+        let painter = ui.painter().with_clip_rect(rect);
+        for points in selection_outline(self.scene.camera, rect, &self.selected_chains) {
+            painter.add(egui::Shape::line(
+                points.clone(),
+                egui::Stroke::new(SELECTION_UNDERLAY_WIDTH, SELECTION_UNDERLAY),
+            ));
+            painter.add(egui::Shape::line(points, egui::Stroke::new(SELECTION_OUTLINE_WIDTH, SELECTION_OUTLINE)));
+        }
+    }
+
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
         egui::Panel::left("scene_tree").resizable(true).default_size(240.0).min_size(180.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -891,7 +937,7 @@ impl FurniCraftApp {
             let contour_edit = self
                 .editor
                 .contour_edit()
-                .map(|edit| (edit.draft().segments().len(), edit.is_dirty()));
+                .map(|edit| (edit.draft().segment_count(), edit.is_dirty()));
             let drawing = self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
             let placing = self.editor.pending_primitive();
             ui.horizontal_wrapped(|ui| {
@@ -1079,6 +1125,35 @@ fn is_under_any(project: &Project, mut node: Id, ancestors: &[Id]) -> bool {
     }
 }
 
+/// Projects the selected line chains into viewport-space polylines.
+///
+/// A chain is cut where a point falls behind the camera, so the overlay never draws a segment
+/// through the viewer; a chain with fewer than two projected points contributes nothing. The
+/// function reads only the stored points and world transforms, so a test can call it without a GPU.
+fn selection_outline(camera: Camera, viewport: egui::Rect, chains: &[Polyline]) -> Vec<Vec<egui::Pos2>> {
+    let mut outlines = Vec::new();
+    for chain in chains {
+        let mut current = Vec::with_capacity(chain.points.len());
+        for point in chain.points.iter() {
+            let world = chain.world_transform.transform_point3(*point);
+            match gizmo_math::screen_point(camera, viewport, world) {
+                Some(position) => current.push(position),
+                None => {
+                    if current.len() >= 2 {
+                        outlines.push(std::mem::take(&mut current));
+                    } else {
+                        current.clear();
+                    }
+                }
+            }
+        }
+        if current.len() >= 2 {
+            outlines.push(current);
+        }
+    }
+    outlines
+}
+
 /// A copy of the frame with one object's dragged vertices at their previewed positions.
 ///
 /// The mesh is cloned, the selected vertices are offset and the clone is tessellated for this frame
@@ -1215,7 +1290,7 @@ fn main() -> eframe::Result {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_geom::{DQuat, DVec3};
+    use furnicraft_geom::{DMat4, DQuat, DVec3};
     use furnicraft_model::{CameraProjection, LightKind};
     use furnicraft_testkit::sample_project;
     use furnicraft_units::Length;
@@ -1392,5 +1467,46 @@ mod tests {
             "an authored orthographic camera draws its own mode, not the viewport's"
         );
         assert!(!viewport_owns_view(&fixture.project), "and the toggle stays disabled");
+    }
+
+    fn outline_viewport() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::new(800.0, 600.0))
+    }
+
+    fn selection_chain(points: Vec<DVec3>) -> Polyline {
+        Polyline::new(Id::new(7).expect("id"), Arc::from(points), DMat4::IDENTITY, SELECTION_LINE_COLOR)
+    }
+
+    #[test]
+    fn selection_outline_projects_every_stored_point_at_the_stored_transform() {
+        let camera = Camera::default();
+        let viewport = outline_viewport();
+        let points = vec![DVec3::new(-100.0, 0.0, 0.0), DVec3::ZERO, DVec3::new(100.0, 0.0, 0.0)];
+        let outlines = selection_outline(camera, viewport, &[selection_chain(points.clone())]);
+        assert_eq!(outlines.len(), 1, "an open chain is one outline");
+        assert_eq!(outlines[0].len(), 3, "every stored point is projected, including the last");
+        assert!(outlines[0].iter().all(|point| viewport.contains(*point)));
+
+        let mut moved = selection_chain(points);
+        moved.world_transform = DMat4::from_translation(DVec3::new(0.0, 0.0, 200.0));
+        let moved_outlines = selection_outline(camera, viewport, &[moved]);
+        assert_ne!(moved_outlines[0], outlines[0], "the outline reads the chain's world transform");
+    }
+
+    #[test]
+    fn selection_outline_cuts_a_chain_where_it_falls_behind_the_camera() {
+        let camera = Camera::default();
+        let behind = camera.eye() - camera.forward() * 100.0;
+        let points = vec![
+            DVec3::new(-100.0, 0.0, 0.0),
+            DVec3::ZERO,
+            behind,
+            DVec3::new(0.0, 100.0, 0.0),
+            DVec3::new(100.0, 100.0, 0.0),
+        ];
+        let outlines = selection_outline(camera, outline_viewport(), &[selection_chain(points)]);
+        assert_eq!(outlines.len(), 2, "the segment through the viewer is dropped");
+        assert_eq!(outlines[0].len(), 2);
+        assert_eq!(outlines[1].len(), 2);
     }
 }
