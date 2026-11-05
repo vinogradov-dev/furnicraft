@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X3** the projection toggle draws the mode it is in, not the one it switches to. At
+- `[~]` **X3** the projection toggle draws the mode it is in, not the one it switches to. At
   `apps/furnicraft/src/main.rs:904-911` the `match` on `Projection` returns `ORTHOGRAPHIC` for a
   perspective camera and `PERSPECTIVE` for an orthographic one, so the icon reads as the future state
   and the strip looks like it already switched. Expected: the icon shows the current projection and

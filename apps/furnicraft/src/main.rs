@@ -901,14 +901,7 @@ impl FurniCraftApp {
                 reset = icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true).clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
-                let (projection_icon, projection_hint) = match self.scene.camera.projection() {
-                    Projection::Perspective { .. } => {
-                        (icons::view::ORTHOGRAPHIC, "Switch the view to orthographic  (O)")
-                    }
-                    Projection::Orthographic { .. } => {
-                        (icons::view::PERSPECTIVE, "Switch the view to perspective  (O)")
-                    }
-                };
+                let (projection_icon, projection_hint) = projection_button(self.scene.camera.projection());
                 let projection_response = ui
                     .add_enabled_ui(owns_view, |ui| icons::icon_button(ui, projection_icon, projection_hint))
                     .inner
@@ -1043,6 +1036,18 @@ impl FurniCraftApp {
 /// pins both navigation and the projection toggle; a command is the only way to change either.
 fn viewport_owns_view(project: &Project) -> bool {
     project.active_camera().is_none()
+}
+
+/// The icon and the hint of the projection toggle.
+///
+/// The icon draws the mode the view is *in*, and the hint names the switch, so the strip never
+/// claims a state the camera has not reached. The two travel together, because taking one without
+/// the other is what made the button read as the future state.
+fn projection_button(projection: Projection) -> (icons::Icon, &'static str) {
+    match projection {
+        Projection::Perspective { .. } => (icons::view::PERSPECTIVE, "Perspective view; switch to orthographic  (O)"),
+        Projection::Orthographic { .. } => (icons::view::ORTHOGRAPHIC, "Orthographic view; switch to perspective  (O)"),
+    }
 }
 
 /// World placements a drag previews for cameras and lights.
@@ -1353,5 +1358,49 @@ mod tests {
         assert!(is_under_any(&fixture.project, Id::new(4).expect("id"), &[Id::new(3).expect("id")]));
         assert!(!is_under_any(&fixture.project, Id::new(2).expect("id"), &[Id::new(3).expect("id")]));
         assert!(!is_under_any(&fixture.project, fixture.camera, &[fixture.light]));
+    }
+
+    #[test]
+    fn the_projection_button_draws_the_mode_the_view_is_in() {
+        let cases = [
+            (Projection::Perspective { fov_y: 0.9 }, icons::view::PERSPECTIVE, "orthographic"),
+            (Projection::Orthographic { height: 600.0 }, icons::view::ORTHOGRAPHIC, "perspective"),
+        ];
+        for (projection, expected_icon, action) in cases {
+            let (icon, hint) = projection_button(projection);
+            assert_eq!(icon, expected_icon, "{projection:?} draws itself, not the mode a click would reach");
+            assert!(hint.contains(action), "the hint names the switch to `{action}`: {hint}");
+            assert!(hint.contains("(O)"), "the hint keeps the shortcut: {hint}");
+        }
+    }
+
+    #[test]
+    fn the_projection_button_follows_the_camera_the_viewport_draws_with() {
+        // The strip reads `self.scene.camera`, which is the authored camera when one is active and
+        // the viewport's own camera otherwise. Both paths must lead to the icon of the mode that is
+        // actually drawn, which is what ADR 0049 promises an authored camera.
+        let mut fixture = fixture();
+        let view = Camera::default();
+        assert_eq!(
+            projection_button(scene_build::scene_camera(&fixture.project, view)).0,
+            icons::view::PERSPECTIVE,
+            "with no authored camera the viewport draws its own perspective view"
+        );
+
+        fixture.project.set_active_camera(Some(fixture.camera)).expect("activate the camera");
+        let mut camera = fixture.project.camera(fixture.camera).expect("camera").clone();
+        camera
+            .set_projection(CameraProjection::Orthographic { height: Length::from_millimetres(500).expect("height") })
+            .expect("set the projection");
+        fixture.project.set_camera(fixture.camera, camera).expect("store the camera");
+
+        let drawn = scene_build::scene_camera(&fixture.project, view);
+        assert!(matches!(drawn.projection(), Projection::Orthographic { .. }));
+        assert_eq!(
+            projection_button(drawn).0,
+            icons::view::ORTHOGRAPHIC,
+            "an authored orthographic camera draws its own mode, not the viewport's"
+        );
+        assert!(!viewport_owns_view(&fixture.project), "and the toggle stays disabled");
     }
 }
