@@ -31,7 +31,7 @@ pub(crate) enum ObjectAction {
     Toggle,
     /// Switch between vertex and face selection.
     Element(MeshElement),
-    /// Enter contour editing on this constructive object.
+    /// Enter contour editing on this constructive object or path.
     StartContour,
 }
 
@@ -210,6 +210,14 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             primitive: None,
         }),
     }
+}
+
+/// Whether the viewport contour edit mode can reshape this object.
+///
+/// A constructive object stores a ring and a path stores a chain; a mesh or a primitive stores
+/// neither.
+fn offers_contour_edit(summary: &ObjectSummary) -> bool {
+    summary.contour.is_some() || summary.path.is_some()
 }
 
 impl ObjectCard {
@@ -506,8 +514,9 @@ impl ObjectCard {
 
     /// Draws the entry point into the viewport contour edit mode.
     ///
-    /// Only a constructive object has a contour to reshape; a mesh object returns `false` and shows
-    /// nothing. The editor owns the working copy and validates the object again before it starts.
+    /// A constructive object and a path both have a contour or chain to reshape; a mesh or a
+    /// primitive object returns `false` and shows nothing. The editor owns the working copy and
+    /// validates the object again before it starts.
     fn contour_edit_section(
         &self,
         ui: &mut Ui,
@@ -515,7 +524,7 @@ impl ObjectCard {
         contour_editing: bool,
         single_selection: bool,
     ) -> bool {
-        if summary.contour.is_none() {
+        if !offers_contour_edit(summary) {
             return false;
         }
         let mut requested = false;
@@ -748,6 +757,7 @@ mod tests {
         assert_eq!(summary.faces, 6);
         assert_eq!(summary.name, "Cube");
         assert_eq!(summary.contour, None);
+        assert!(!offers_contour_edit(&summary), "a baked mesh has no contour or chain to reshape");
     }
 
     #[test]
@@ -758,6 +768,7 @@ mod tests {
         assert_eq!(summary.contour, Some(rectangle(100, 50)));
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
         assert!(summary.contour.as_ref().is_some_and(|contour| contour.segments().len() == 4));
+        assert!(offers_contour_edit(&summary), "a constructive object has a ring to reshape");
     }
 
     #[test]
@@ -775,6 +786,7 @@ mod tests {
         assert_eq!(summary.primitive, Some(primitive));
         assert_eq!(summary.contour, None);
         assert_eq!(summary.path, None);
+        assert!(!offers_contour_edit(&summary), "a primitive stores parameters, not a contour");
         assert_eq!(summary.faces, 24 * 12);
         assert_eq!(summary.vertices, 2 + 24 * 11);
     }
@@ -886,6 +898,7 @@ mod tests {
         assert_eq!(summary.contour, None);
         assert_eq!(summary.path.as_ref().map(|path| path.segments().len()), Some(2));
         assert_eq!(summary.path.as_ref().map(Path::is_closed), Some(false));
+        assert!(offers_contour_edit(&summary), "a path chain is reshaped in the same viewport mode");
     }
 
     #[test]
