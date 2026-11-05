@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U31 state=idle base=7b0a02e updated=2026-11-05
+STATE: milestone=M7 phase=U task=U32 state=idle base=478ba44 updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -27,10 +27,11 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 - The owner reviewed the editor and queued seven defects and two changes ahead of the icon work
   (X3–X6, U30–U37): the projection icon, the creation parent, tool highlight, the pole views, a
   centre pivot for new drawings, a visible selection outline for line chains, and editing every kind
-  of contour. X3, X4, X6 and U30 are fixed: the projection button draws the view it is in, every
-  creation tool lands at the scene root, the strip draws the armed drawing tool or primitive pressed
-  while the duplicate "Draw" row is gone, and the top and bottom views look straight down their plane
-  (ADR 0057). U31 adds the explicit *Add child* entry (ADR 0056).
+  of contour. X3, X4, X6, U30 and U31 are fixed: the projection button draws the view it is in, every
+  creation tool lands at the scene root unless a container is armed, the strip draws the armed drawing
+  tool or primitive pressed while the duplicate "Draw" row is gone, the top and bottom views look
+  straight down their plane (ADR 0057), and *Add child* arms a group or an assembly so the next
+  created nodes land inside it while the strip names the arm (ADR 0056).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -47,12 +48,11 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U31 is next: a group or an assembly is armed through an explicit *Add child* entry, and the next
-created node lands inside it (ADR 0056). U32 then pivots a new drawing at its bounding-box centre or
-at its first stored point (ADR 0058), and X5 gives a selected line chain a colour of its own plus a
-screen-space outline (ADR 0059). U33–U37 open the edit mode to every contour kind: path math
-(ADR 0060), the path draft, the open-chain gizmo, the rectangle-to-ring conversion (ADR 0061) and
-cutout rings. U27, U28, X2 and U29 follow.
+U32 is next: a new drawing pivots at the centre of its bounding box, or at the first stored point of
+an open chain, so the gizmos grab the shape instead of the world origin (ADR 0058). X5 then gives a
+selected line chain a colour of its own plus a screen-space outline (ADR 0059). U33–U37 open the edit
+mode to every contour kind: path math (ADR 0060), the path draft, the open-chain gizmo, the
+rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28, X2 and U29 follow.
 
 ## Index
 
