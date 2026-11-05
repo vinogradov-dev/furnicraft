@@ -1,6 +1,6 @@
 # 0019. Standard views come from a corner orientation widget
 
-- Status: Accepted
+- Status: Accepted; pole clamp superseded by 0057
 - Date: 2026-10-25
 
 ## Context

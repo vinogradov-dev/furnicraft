@@ -13,7 +13,7 @@
     clippy::unreachable
 )]
 
-use std::f64::consts::{FRAC_PI_4, FRAC_PI_8, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8, PI, TAU};
 use std::sync::Arc;
 
 use furnicraft_geom::{DMat4, DQuat, DVec2, DVec3, MeshData};
@@ -23,12 +23,11 @@ use thiserror::Error;
 /// The default vertical field of view, in radians (45 degrees).
 pub const DEFAULT_FOV_Y: f64 = FRAC_PI_4;
 
-/// Lowest camera pitch, in radians. The camera never reaches the poles, so the up vector stays
-/// well-defined.
-pub const MIN_PITCH: f64 = -85.0 * PI / 180.0;
+/// Lowest camera pitch, in radians: a bottom view looks straight up the view plane.
+pub const MIN_PITCH: f64 = -FRAC_PI_2;
 
-/// Highest camera pitch, in radians.
-pub const MAX_PITCH: f64 = 85.0 * PI / 180.0;
+/// Highest camera pitch, in radians: a top view looks straight down the view plane.
+pub const MAX_PITCH: f64 = FRAC_PI_2;
 
 /// How far outside the viewport a pointer ray is still accepted, in normalized device coordinates.
 ///
@@ -237,11 +236,14 @@ impl Camera {
     }
 
     /// The camera's right vector in world space.
+    ///
+    /// It depends on yaw alone, so it is the exact limit of `forward × Z` and stays unit and
+    /// horizontal at both poles, where the view direction is parallel to `Z`.
     pub fn right(self) -> DVec3 {
         if let Some(fixed) = self.fixed {
             return fixed.right;
         }
-        self.forward().cross(DVec3::Z).try_normalize().unwrap_or(DVec3::X)
+        DVec3::new(-self.yaw.sin(), self.yaw.cos(), 0.0)
     }
 
     /// The camera's up vector in world space.
@@ -249,7 +251,7 @@ impl Camera {
         if let Some(fixed) = self.fixed {
             return fixed.up;
         }
-        self.right().cross(self.forward()).try_normalize().unwrap_or(DVec3::Z)
+        self.right().cross(self.forward())
     }
 
     /// The world-to-view matrix.
@@ -257,7 +259,7 @@ impl Camera {
         let eye = self.eye();
         let forward = self.forward();
         let right = self.right();
-        let up = right.cross(forward);
+        let up = self.up();
         DMat4::from_cols_array(&[
             right.x,
             up.x,
@@ -338,8 +340,9 @@ impl Camera {
 
     /// Orbits the camera by the given deltas in radians.
     ///
-    /// Yaw wraps into `0..TAU`; pitch is clamped just short of the poles. Non-finite deltas are
-    /// ignored. A camera pinned to an authored view does not move.
+    /// Yaw wraps into `0..TAU`; pitch is clamped to the poles, where a yaw delta still turns the
+    /// view about the vertical axis. Non-finite deltas are ignored. A camera pinned to an authored
+    /// view does not move.
     pub fn orbit(&mut self, delta_yaw: f64, delta_pitch: f64) {
         if self.fixed.is_some() || !delta_yaw.is_finite() || !delta_pitch.is_finite() {
             return;
@@ -433,8 +436,9 @@ impl Camera {
     /// Points the camera at its target from the given world direction.
     ///
     /// `direction` is the offset from the target to the eye, not the viewing direction. A zero or
-    /// non-finite direction leaves the camera unchanged. Pitch is clamped to the camera limits, so
-    /// top and bottom views stop five degrees short of the pole and keep a defined up vector.
+    /// non-finite direction leaves the camera unchanged. Pitch is clamped to the poles, so a top or
+    /// bottom view looks straight down or up the view plane; at a pole the direction alone does not
+    /// fix yaw, so the current yaw is kept.
     pub fn look_from(&mut self, direction: DVec3) {
         if self.fixed.is_some() || !direction.is_finite() {
             return;
@@ -1057,6 +1061,49 @@ mod tests {
         camera.look_from(DVec3::new(f64::NAN, 0.0, 0.0));
         assert_eq!(camera.yaw(), yaw);
         assert_eq!(camera.pitch(), MAX_PITCH);
+    }
+
+    #[test]
+    fn a_pole_view_looks_straight_down_and_projects_its_target() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::Z);
+        assert_eq!(camera.pitch(), FRAC_PI_2);
+        assert!((camera.forward() - -DVec3::Z).length() < 1.0e-12, "forward was {:?}", camera.forward());
+        let up = camera.up();
+        assert!(up.is_finite());
+        assert!((up.length() - 1.0).abs() < 1.0e-12, "up was {up:?}");
+        assert!(up.dot(camera.forward()).abs() < 1.0e-12, "up is perpendicular to forward");
+
+        let aspect = 16.0 / 9.0;
+        let centre = camera.ray_ndc(0.0, 0.0, aspect);
+        assert!((centre.direction() - -DVec3::Z).length() < 1.0e-12, "the centre ray looks straight down");
+        let ndc = camera.project_ndc(camera.target(), aspect).expect("the target is in front");
+        assert!(ndc.length() < 1.0e-12, "the target projects to the viewport centre, got {ndc:?}");
+
+        camera.look_from(-DVec3::Z);
+        assert_eq!(camera.pitch(), MIN_PITCH);
+        assert!((camera.forward() - DVec3::Z).length() < 1.0e-12, "forward was {:?}", camera.forward());
+        assert!((camera.up().length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn orbiting_off_a_pole_moves_the_view() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::Z);
+        let before = camera.forward();
+        camera.orbit(0.0, -0.1);
+        assert!((camera.pitch() - (FRAC_PI_2 - 0.1)).abs() < 1.0e-12);
+        assert!((camera.forward() - before).length() > 0.05, "an orbit leaves the pole");
+        assert!((camera.up().length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn the_view_matrix_keeps_an_authored_up_vector() {
+        let up = DVec3::new(0.0, 1.0, 0.005).try_normalize().expect("a finite up vector");
+        let camera = Camera::default().looked_from(DVec3::new(0.0, 0.0, 100.0), DVec3::X, up, -DVec3::Z);
+        assert_close(camera.up(), up);
+        let columns = camera.view_matrix().to_cols_array();
+        assert_close(DVec3::new(columns[1], columns[5], columns[9]), up);
     }
 
     #[test]
