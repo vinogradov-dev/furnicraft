@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=X3 state=doing base=HEAD updated=2026-11-05
+STATE: milestone=M7 phase=U task=X4 state=idle base=HEAD updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -27,7 +27,8 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 - The owner reviewed the editor and queued seven defects and two changes ahead of the icon work
   (X3–X6, U30–U37): the projection icon, the creation parent, tool highlight, the pole views, a
   centre pivot for new drawings, a visible selection outline for line chains, and editing every kind
-  of contour. X4 and U31 move creation to the root and add an explicit *Add child* entry (ADR 0056).
+  of contour. X3 is fixed; X4 and U31 move creation to the root and add an explicit *Add child*
+  entry (ADR 0056).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -44,15 +45,14 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-X3 is next: the projection button draws the mode it is already in, not the one a click would reach,
-and the hint names the action. X4 then makes the scene root the only default parent for every tool,
-with U30 marking the armed tool on the strip and U31 adding the explicit *Add child* entry that
-creates inside a chosen container (ADR 0056). X6 makes the top and bottom views truly perpendicular
-(ADR 0057), U32 pivots a new drawing at its bounding-box centre or at its first stored point
-(ADR 0058), and X5 gives a selected line chain a colour of its own plus a screen-space outline
-(ADR 0059). U33–U37 then open the edit mode to every contour kind: path math (ADR 0060), the path
-draft, the open-chain gizmo, the rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28,
-X2 and U29 follow.
+X4 is next: the scene root is the only default parent for every creation tool, so a selected group
+no longer swallows a new path, panel, assembly, primitive, camera or light; U31 then adds the
+explicit *Add child* entry that creates inside a chosen container (ADR 0056). U30 marks the armed
+tool on the strip, X6 makes the top and bottom views truly perpendicular (ADR 0057), U32 pivots a
+new drawing at its bounding-box centre or at its first stored point (ADR 0058), and X5 gives a
+selected line chain a colour of its own plus a screen-space outline (ADR 0059). U33–U37 then open
+the edit mode to every contour kind: path math (ADR 0060), the path draft, the open-chain gizmo,
+the rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28, X2 and U29 follow.
 
 ## Index
 

@@ -1231,6 +1231,7 @@ mod tests {
     use furnicraft_geom::{DQuat, DVec3};
     use furnicraft_model::{CameraProjection, LightKind};
     use furnicraft_testkit::sample_project;
+    use furnicraft_units::Length;
 
     use super::*;
 
@@ -1382,22 +1383,24 @@ mod tests {
         let mut fixture = fixture();
         let view = Camera::default();
         assert_eq!(
-            projection_button(scene_build::scene_camera(&fixture.project, view)).0,
+            projection_button(scene_build::scene_camera(&fixture.project, view).projection()).0,
             icons::view::PERSPECTIVE,
             "with no authored camera the viewport draws its own perspective view"
         );
 
         fixture.project.set_active_camera(Some(fixture.camera)).expect("activate the camera");
-        let mut camera = fixture.project.camera(fixture.camera).expect("camera").clone();
-        camera
-            .set_projection(CameraProjection::Orthographic { height: Length::from_millimetres(500).expect("height") })
+        fixture
+            .project
+            .set_camera_projection(
+                fixture.camera,
+                CameraProjection::Orthographic { height: Length::from_millimetres(500).expect("height") },
+            )
             .expect("set the projection");
-        fixture.project.set_camera(fixture.camera, camera).expect("store the camera");
 
         let drawn = scene_build::scene_camera(&fixture.project, view);
         assert!(matches!(drawn.projection(), Projection::Orthographic { .. }));
         assert_eq!(
-            projection_button(drawn).0,
+            projection_button(drawn.projection()).0,
             icons::view::ORTHOGRAPHIC,
             "an authored orthographic camera draws its own mode, not the viewport's"
         );

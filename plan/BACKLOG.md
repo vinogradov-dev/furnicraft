@@ -25,15 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X3** the projection toggle draws the mode it is in, not the one it switches to. At
-  `apps/furnicraft/src/main.rs:904-911` the `match` on `Projection` returns `ORTHOGRAPHIC` for a
-  perspective camera and `PERSPECTIVE` for an orthographic one, so the icon reads as the future state
-  and the strip looks like it already switched. Expected: the icon shows the current projection and
-  the hint names the action. Move the pair into one pure
-  `projection_button(Projection) -> (Icon, &'static str)` beside `workspace`, table-test both modes,
-  and keep the disabled state under an authored camera (`viewport_owns_view`, `main.rs:1044`). No ADR.
-  `files: apps/furnicraft/src/main.rs`
-
 - `[ ]` **X4** every creation tool lands at the scene root, never in the selected container. Today
   `crates/ui/src/lib.rs:815-824` `drawing_parent` returns the selected container, or the parent of the
   selected leaf, and both `commit_drawing` (`:361`) and `show_toolbars` (`:470`) feed it into
@@ -234,6 +225,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **X3** the projection toggle draws the mode it is in, not the one it switches to: the icon
+  and the hint come from one pure `projection_button(Projection)`, so a perspective view shows the
+  perspective glyph and the hint names the switch; a table test covers both modes and the
+  authored-camera disable stays where it was — `9bebec0`
 
 - `[x]` **V1** a primitive keeps the parameters that built it: `Geometry::Primitive(Primitive)`
   stores the shape and its parameters, `crates/model/src/primitive.rs` validates them on construction
