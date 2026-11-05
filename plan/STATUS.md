@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U33 state=idle base=0e289e0 updated=2026-11-05
+STATE: milestone=M7 phase=U task=U34 state=idle base=7d6ca68 updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -36,6 +36,8 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   segment's start when it is open — and an extruded body takes the ring's centre (ADR 0058). X5 is
   fixed: a selected chain takes one explicit colour and the shell repaints it over the viewport as a
   thick stroke with a dark underlay, because a one-pixel `LineList` cannot be widened (ADR 0059).
+  U33 is fixed too: `PathCorner` names a corner of an open chain, and `Path` moves, splits, removes
+  and closes its segments through the same helpers as the ring (ADR 0060).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -52,10 +54,10 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U33 is next: path edit math in the model — `PathCorner` addressing, plus move, split, remove and
-close that share the ring helpers, so an open chain can be edited without welding its last segment
-to the first (ADR 0060). U34–U37 follow: the path draft, the open-chain gizmo, the rectangle-to-ring
-conversion (ADR 0061) and cutout rings. U27, U28, X2 and U29 come after them.
+U34 is next: the path edit mode in the editor — `ContourTarget::Path`, a draft that holds either a
+`Contour` or a `Path`, and `object.path.replace` as the one command that applies it. U35–U37 follow:
+the open-chain gizmo, the rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28, X2 and
+U29 come after them.
 
 ## Index
 

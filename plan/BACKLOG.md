@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U33** path edit math in the model: the edit functions only know a ring. `move_corner`,
-  `trim_segment` and `split_segment` (`crates/model/src/contour_edit.rs:73-171`) address a corner by the
-  segment that starts at it, and `position` (`:174-177`) walks a modulo ring, so an open chain has no
-  handle on its last point and would weld the last segment to the first. Add
-  `PathCorner { Start(ContourSegmentId), End(ContourSegmentId) }` and the same operations on `Path`:
-  `move_corner_at`, `split_segment_at`, `remove_segment` (open chains join the neighbours) and `close`,
-  sharing `with_corner`, `join_corner` and `split_document` (`:185-273`) with the ring code. The
-  invariants do not move: ids are never reused, an arc keeps its centre and radius, a joint is exact to
-  one micrometre, and every result is rebuilt through `Path::rebuild`, which keeps the counter and the
-  closed flag. Tests: an open polyline moves its first and its last corner, an arc moves along its
-  circle, removing a segment joins its neighbours, closing is refused when the chain would
-  self-intersect, and a corner off the support is refused. ADR 0060.
-  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs`
-
 - `[ ]` **U34** the path edit mode in the editor: `ContourTarget` only accepts a panel ring and a
   constructive contour (`crates/ui/src/contour_edit.rs:26-49`), so an open line or a circle drawn by the
   drawing tools has no editor. Add `ContourTarget::Path(Id)` and let `ContourEdit` hold either a
@@ -134,6 +120,13 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U33** path edit math in the model: a ring names a corner by the segment that starts on it,
+  which wraps, so an open chain's last point had no name. `PathCorner::Start` and `End` name a corner
+  explicitly; `Path::move_corner_at`, `split_segment_at`, `remove_segment` and `close` share
+  `with_corner`, `join_corner` and `split_document` with the ring code. Ids are never reused,
+  `Path::rebuild_as` keeps the counter while `close` flips the flag, a removal joins the neighbours at
+  the previous end, and `close` refuses a bridge that would cross the chain (ADR 0060) — `7d6ca68`
 
 - `[x]` **X5** a selected line, contour or circle is invisible: a selection tint moved a chain's
   channels by less than the eye resolves, and a one-pixel `LineList` cannot be widened in wgpu. A
