@@ -221,14 +221,15 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
 /// The hint is the tooltip of a drawn icon. An icon whose asset is still a placeholder becomes the
 /// button text itself, shortcut included, because a tooltip alone would leave the button unreadable.
 /// `enabled` disables the button without changing either face, so a panel can keep its layout while
-/// a tool is unavailable.
-pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>, enabled: bool) -> Response {
+/// a tool is unavailable. `on` marks the tool that owns the next click: the button draws pressed with
+/// the theme's selection fill, which is a widget state and not a second SVG asset.
+pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>, enabled: bool, on: bool) -> Response {
     let hint = tool_hint(label, shortcut);
     if !icon.is_drawn() {
-        return ui.add_enabled(enabled, Button::new(hint.clone())).on_hover_text(hint);
+        return ui.add_enabled(enabled, Button::new(hint.clone()).selected(on)).on_hover_text(hint);
     }
     let tint = ui.visuals().text_color();
-    let response = ui.add_enabled(enabled, Button::new(icon_image(tint, icon, &hint)));
+    let response = ui.add_enabled(enabled, Button::new(icon_image(tint, icon, &hint)).selected(on));
     response.on_hover_text(hint)
 }
 
@@ -337,7 +338,7 @@ mod tests {
 
         let ctx = egui::Context::default();
         let output = ctx.run_ui(Default::default(), |ui| {
-            tool_button(ui, placeholder(), "Line", Some("L"), true);
+            tool_button(ui, placeholder(), "Line", Some("L"), true, false);
         });
         let has_hint = drawn_text(&output.shapes).iter().any(|text| text == "Line  (L)");
         output.drop_without_applying_deltas();
@@ -348,7 +349,7 @@ mod tests {
     fn a_disabled_tool_button_still_draws_its_label() {
         let ctx = egui::Context::default();
         let output = ctx.run_ui(Default::default(), |ui| {
-            let response = tool_button(ui, placeholder(), "Circle", Some("C"), false);
+            let response = tool_button(ui, placeholder(), "Circle", Some("C"), false, false);
             assert!(!response.enabled(), "the caller disabled the tool");
         });
         let has_hint = drawn_text(&output.shapes).iter().any(|text| text == "Circle  (C)");
