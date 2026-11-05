@@ -101,7 +101,12 @@ impl ContourGizmo {
             self.reset();
             return Ok(false);
         };
-        let draft = edit.draft().clone();
+        // This gizmo owns a ring; a chain draft is drawn and dragged by the path gizmo.
+        let Some(draft) = edit.draft().as_ring().cloned() else {
+            self.hover_corner = None;
+            self.hover_segment = None;
+            return Ok(false);
+        };
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
         let corner = pointer.and_then(|pointer| corner_at(camera, rect, placement, &draft, pointer));
         let segment = pointer.and_then(|pointer| {
@@ -148,16 +153,21 @@ impl ContourGizmo {
     }
 
     /// Paints the base ring, the working copy and the corner handles over the viewport image.
+    ///
+    /// A chain draft is left to the path gizmo; this one paints only a ring.
     pub(crate) fn paint(&self, ui: &Ui, rect: egui::Rect, camera: Camera, project: &Project, edit: &ContourEdit) {
         let Some(placement) = project.world_placement(edit.target().id()) else {
             return;
         };
+        let (Some(base), Some(contour)) = (edit.base().as_ring(), edit.draft().as_ring()) else {
+            return;
+        };
         let painter = ui.painter().with_clip_rect(rect);
         if edit.is_dirty() {
-            paint_ring(&painter, camera, rect, placement, edit.base(), egui::Stroke::new(1.0, BASE_COLOR));
+            paint_ring(&painter, camera, rect, placement, base, egui::Stroke::new(1.0, BASE_COLOR));
         }
-        paint_ring(&painter, camera, rect, placement, edit.draft(), egui::Stroke::new(2.0, DRAFT_COLOR));
-        for entry in edit.draft().entries() {
+        paint_ring(&painter, camera, rect, placement, contour, egui::Stroke::new(2.0, DRAFT_COLOR));
+        for entry in contour.entries() {
             let Ok(start) = entry.segment().start() else {
                 continue;
             };

@@ -46,8 +46,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize, Path, Placement,
-    Project,
+    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize, Path, PathCorner,
+    Placement, Project,
 };
 use furnicraft_units::Length;
 
@@ -64,7 +64,7 @@ use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
 use crate::toolbars::ToolAction;
 
-pub use contour_edit::{ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
+pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use toolbars::ToolPanel;
 
@@ -276,10 +276,19 @@ impl Editor {
         segment: ContourSegmentId,
         point: [Length; 2],
     ) -> Result<(), ContourEditError> {
+        self.contour_edit_move_corner_at(PathCorner::Start(segment), point)
+    }
+
+    /// Moves the path corner named by `corner` of the working copy.
+    pub fn contour_edit_move_corner_at(
+        &mut self,
+        corner: PathCorner,
+        point: [Length; 2],
+    ) -> Result<(), ContourEditError> {
         let Some(edit) = self.contour_edit.as_mut() else {
-            return Err(ContourEditError::UnknownSegment { segment });
+            return Err(ContourEditError::UnknownSegment { segment: corner.segment() });
         };
-        edit.move_corner(segment, point)
+        edit.move_corner_at(corner, point)
     }
 
     /// Splits one side of the working copy and returns the new segment id.
@@ -771,7 +780,12 @@ impl Editor {
                 }
                 ObjectAction::Element(element) => self.set_mesh_element(element),
                 ObjectAction::StartContour => {
-                    self.start_contour_edit(session.project(), ContourTarget::Object(primary));
+                    let target = if session.project().object_path(primary).is_ok() {
+                        ContourTarget::Path(primary)
+                    } else {
+                        ContourTarget::Object(primary)
+                    };
+                    self.start_contour_edit(session.project(), target);
                 }
             }
         } else if session.project().camera(primary).is_some() {
@@ -966,6 +980,23 @@ mod tests {
         (Project::new(root).expect("project"), Id::new(2).expect("id"))
     }
 
+    /// A project whose root holds one open path object.
+    fn open_path_project() -> (Project, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let path = Path::polyline(
+            vec![
+                [Length::ZERO, Length::ZERO],
+                [Length::from_millimetres(600).expect("x"), Length::ZERO],
+                [Length::from_millimetres(600).expect("x"), Length::from_millimetres(400).expect("y")],
+            ],
+            false,
+        )
+        .expect("open path");
+        let id = project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("path object");
+        (project, id)
+    }
+
     #[test]
     fn mesh_edit_starts_only_on_a_single_mesh_object() {
         let (project, cube) = cube_project();
@@ -1061,6 +1092,40 @@ mod tests {
         project.remove_node(panel).expect("remove the panel");
         editor.retain_contour_edit(&project);
         assert!(editor.contour_edit().is_none(), "a removed target leaves the mode");
+    }
+
+    #[test]
+    fn cancelling_a_path_edit_leaves_the_stored_chain() {
+        let (project, object) = open_path_project();
+        let session = Session::with_catalog(project, sample_catalog());
+        let stored = session.project().object_path(object).expect("path").clone();
+        let revision = session.project().revision();
+        let mut editor = Editor::new();
+        editor.select_node(Some(object));
+        assert!(editor.start_contour_edit(session.project(), ContourTarget::Path(object)));
+
+        let first = editor.contour_edit().and_then(|edit| edit.draft().id_at(0)).expect("first segment");
+        editor
+            .contour_edit_move_corner(first, [Length::ZERO, Length::from_millimetres(-50).expect("y")])
+            .expect("move the free start");
+        editor.end_contour_edit();
+
+        assert!(editor.contour_edit().is_none());
+        assert_eq!(session.project().object_path(object).expect("path"), &stored, "cancel keeps the stored chain");
+        assert_eq!(session.project().revision(), revision, "a cancelled edit changes no document");
+        assert!(!session.can_undo(), "a cancelled edit leaves no undo entry");
+    }
+
+    #[test]
+    fn a_path_edit_ends_when_its_target_disappears() {
+        let (mut project, object) = open_path_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(object));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Path(object)));
+
+        project.remove_node(object).expect("remove the path");
+        editor.retain_contour_edit(&project);
+        assert!(editor.contour_edit().is_none(), "a removed target ends the mode");
     }
 
     #[test]

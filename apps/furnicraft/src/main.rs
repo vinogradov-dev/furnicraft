@@ -937,7 +937,7 @@ impl FurniCraftApp {
             let contour_edit = self
                 .editor
                 .contour_edit()
-                .map(|edit| (edit.draft().segments().len(), edit.is_dirty()));
+                .map(|edit| (edit.draft().segment_count(), edit.is_dirty()));
             let drawing = self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
             let placing = self.editor.pending_primitive();
             ui.horizontal_wrapped(|ui| {
