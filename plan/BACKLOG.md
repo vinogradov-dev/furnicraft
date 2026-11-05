@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X5** a selected line, contour or circle is invisible: the highlight exists
-  (`SceneFrame::with_selection_highlight`, `crates/scene/src/lib.rs:741-757`) but `SELECTION_TINT`
-  mixed at 35 % into `PATH_COLOR = [0.95, 0.72, 0.20]`
-  (`apps/furnicraft/src/scene_build.rs:35`) moves green by 0.06, which the eye cannot see, and the
-  renderer draws a chain as a one-pixel `LineList` (`crates/render/src/lib.rs:261-295`) that cannot be
-  widened in wgpu. Expected: a selected drawing reads at a glance and stays readable on a brown panel
-  and on a light one. Two changes: polylines get one explicit `SELECTION_LINE_COLOR` instead of a tint,
-  and the shell paints the selected chains as a screen-space overlay over the viewport image (2–2.5 pt
-  with a dark 3.5 pt underlay), the way camera glyphs and the mesh selection are already painted
-  (`apps/furnicraft/src/main.rs:726-734`). `upload_scene` keeps the selected chains of the frame it
-  uploads, after the drag preview, so the outline follows a move without lagging; the renderer keeps its
-  one-pixel pipeline. Tests: the scene colour test; a pure `selection_outline` that projects the stored
-  points without a GPU. Manual check on both panel colours. ADR 0059 records the UI-overlay boundary.
-  `files: crates/scene/src/lib.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U33** path edit math in the model: the edit functions only know a ring. `move_corner`,
   `trim_segment` and `split_segment` (`crates/model/src/contour_edit.rs:73-171`) address a corner by the
   segment that starts at it, and `position` (`:174-177`) walks a modulo ring, so an open chain has no
@@ -149,6 +134,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **X5** a selected line, contour or circle is invisible: a selection tint moved a chain's
+  channels by less than the eye resolves, and a one-pixel `LineList` cannot be widened in wgpu. A
+  selected chain now takes one explicit `SELECTION_LINE_COLOR`, and the shell keeps the selected
+  chains of the frame it just uploaded — after the drag preview — and repaints them over the viewport
+  image: a dark 3.5 pt underlay under a 2.25 pt bright stroke. A pure `selection_outline` projects the
+  stored points and cuts a chain behind the camera; the renderer keeps its one-pixel pipeline
+  (ADR 0059) — `0e289e0`
 
 - `[x]` **U32** a new flat figure pivots at its centre or at its first point: `Path::creation_pivot`
   and `Contour::creation_pivot` return the local bounds centre for a closed figure and the start of
