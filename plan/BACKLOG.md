@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X6** the top and bottom views look at an angle to their plane: `MIN_PITCH`/`MAX_PITCH` are
-  ±85° (`crates/scene/src/lib.rs:26-31`) and `look_from` clamps to them (`:438-449`), so a click on the
-  Z ball leaves the camera five degrees off vertical and the grid, the work plane and the drawing all
-  skew. Expected: the camera axis is perpendicular to the plane of the view (owner's answer, was an
-  open question). Set the limits to `±FRAC_PI_2`; make `right()` (`:240-245`) analytic,
-  `(-sin yaw, cos yaw, 0)`, which is the exact limit of today's `forward × Z` and stays unit at the
-  pole; `up()` (`:248-253`) is then `right × forward` with no fallback; `view_matrix` (`:256-279`) uses
-  `self.up()` instead of recomputing `right.cross(forward)`, which also stops an authored camera's
-  pinned up from being overwritten. Tests: `look_from(Z)` gives `pitch == π/2` and `forward == -Z` with
-  a unit finite `up`; `ray_ndc(0, 0)` is `-Z`; the target projects to the viewport centre;
-  `WorkPlane::from_camera` (`apps/furnicraft/src/gizmo_math.rs:419-444`) selects XY from both poles;
-  `gizmo::snap_direction` still flips at the pole (`apps/furnicraft/src/gizmo.rs:115-121`); an orbit
-  off the pole moves. Manual check: grid, gizmo and picking in both pole views. ADR 0057 replaces the
-  five-degree clamp of ADR 0019 (`Accepted; pole clamp superseded by 0057`).
-  `files: crates/scene/src/lib.rs, apps/furnicraft/src/gizmo_math.rs`
-
 - `[ ]` **U31** a child is created by an explicit entry, not by the selection: pick a group or an
   assembly in the tree or in the viewport, choose *Add child*, and the next created node lands inside
   it. `Editor` gains `creation_parent: Option<Id>` — view state, never the document
@@ -198,6 +182,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **X6** the top and bottom views look at an angle to their plane: `MIN_PITCH`/`MAX_PITCH` are
+  ±85° and `look_from` clamps to them, so a click on the Z ball left the camera five degrees off
+  vertical and the grid, the work plane and the drawing all skewed. The limits are now `±FRAC_PI_2`;
+  `right()` is analytic, `(-sin yaw, cos yaw, 0)`, the exact limit of the old `forward × Z`, and
+  stays unit at the pole; `up()` is `right × forward` with no fallback; `view_matrix` uses `self.up()`,
+  so an authored camera's pinned up is not overwritten. Tests cover both poles, the centre ray, the
+  target projection, the work plane, the widget flip and an orbit off the pole. ADR 0057 replaces the
+  five-degree clamp of ADR 0019 (`Accepted; pole clamp superseded by 0057`) — `7b0a02e`
 
 - `[x]` **U30** the armed tool is highlighted: `icons::tool_button` takes `on: bool` and draws
   `Button::selected`, which egui paints with `visuals.selection.bg_fill`, and the text fallback

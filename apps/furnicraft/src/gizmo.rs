@@ -109,9 +109,9 @@ pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera) -> Option<DVec3> {
 
 /// The direction to look from when `direction` is clicked.
 ///
-/// A click on the side the camera already looks from flips to the opposite side. Top and bottom
-/// views stop at the pitch limit, five degrees short of the pole, so their axis balls never align
-/// exactly with the eye; the clamped pitch is treated as aligned.
+/// A click on the side the camera already looks from flips to the opposite side. A top or bottom
+/// view sits exactly at the pole, where its axis ball is the eye direction; the pole check keeps
+/// the flip when the pitch is a hair short of the limit.
 fn snap_direction(direction: DVec3, camera: Camera) -> DVec3 {
     let eye = (camera.eye() - camera.target()).try_normalize().unwrap_or(DVec3::Z);
     let at_top = camera.pitch() >= MAX_PITCH - 1.0e-9;
@@ -149,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_pole_flips_even_though_the_pitch_stops_short_of_it() {
+    fn clicking_a_pole_flips_to_the_opposite_side() {
         let mut camera = Camera::default();
         camera.look_from(DVec3::Z);
         assert_eq!(snap_direction(DVec3::Z, camera), -DVec3::Z);

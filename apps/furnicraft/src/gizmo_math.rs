@@ -34,8 +34,8 @@ pub(crate) const SNAP_GRID_MM: f64 = 10.0;
 /// How close the orbit angles must be to a standard view, in radians.
 ///
 /// A snapped view is exact; any orbit moves the camera far outside this tolerance and becomes an
-/// axonometric view. The top and bottom views are the exception: the camera pitch stops five
-/// degrees short of the pole (ADR 0019) and that clamped pitch is still the standard view.
+/// axonometric view. A top or bottom view sits exactly at its pole (ADR 0057), so its pitch matches
+/// the limit within this tolerance.
 const STANDARD_VIEW_TOLERANCE: f64 = 1.0e-9;
 
 /// Gamma-space colours for the three axes.
@@ -414,7 +414,7 @@ impl WorkPlane {
 
     /// The plane an axis-aligned orthographic view draws on, or world XY for every other view.
     ///
-    /// A top or bottom view is recognised by its clamped pitch; a side view needs an exact
+    /// A top or bottom view is recognised by its pitch at a pole; a side view needs an exact
     /// quarter-turn yaw, because any other yaw is an axonometric view and draws on world XY.
     pub(crate) fn from_camera(camera: Camera) -> Self {
         if !matches!(camera.projection(), Projection::Orthographic { .. }) {
@@ -1061,7 +1061,13 @@ mod tests {
             (-DVec3::Z, -DVec3::Z, DVec3::X, -DVec3::Y, "XY"),
         ];
         for (eye, normal, u, v, label) in cases {
-            let plane = WorkPlane::from_camera(orthographic_view(eye));
+            let camera = orthographic_view(eye);
+            if eye.z > 0.5 {
+                assert_eq!(camera.pitch(), MAX_PITCH, "a top view reaches the pole");
+            } else if eye.z < -0.5 {
+                assert_eq!(camera.pitch(), MIN_PITCH, "a bottom view reaches the pole");
+            }
+            let plane = WorkPlane::from_camera(camera);
             assert_eq!(plane.label(), label, "looking from {eye:?}");
             assert_vector(plane.normal(), normal, "the plane normal");
             assert_vector(plane.world(DVec2::new(1.0, 0.0)), u, "the u axis");

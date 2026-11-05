@@ -23,7 +23,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0016](0016-arc-band-joints.md) | Arc band joints use the same rules as straight ones | Accepted |
 | [0017](0017-panels-are-atomic-assemblies-are-groups.md) | Panels are atomic leaves, assemblies are editable groups | Superseded by 0021 |
 | [0018](0018-picking-ray-casts-the-scene.md) | Picking ray-casts the scene description and returns document ids | Accepted |
-| [0019](0019-standard-views-from-a-corner-widget.md) | Standard views come from a projected corner orientation widget | Accepted |
+| [0019](0019-standard-views-from-a-corner-widget.md) | Standard views come from a projected corner orientation widget | Accepted; pole clamp superseded by 0057 |
 | [0020](0020-the-translate-gizmo-previews-and-commits-one-placement.md) | The translate gizmo previews a frame and commits one placement | Accepted; batch commit extended by 0033 |
 | [0021](0021-assemblies-are-components-groups-are-containers.md) | Assemblies are components, groups are containers | Superseded by 0034; supersedes 0017 |
 | [0022](0022-closed-containers-pick-as-one-object.md) | A closed container picks as one object | Accepted |
@@ -61,6 +61,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0054](0054-a-primitive-keeps-the-parameters-that-built-it.md) | A primitive keeps the parameters that built it | Accepted |
 | [0055](0055-the-ui-rasterises-icons-and-emphasis-is-tonal.md) | The UI rasterises icons itself, and emphasis is tonal | Accepted |
 | [0056](0056-creation-tools-land-at-the-scene-root.md) | Creation tools land at the scene root | Accepted |
+| [0057](0057-the-camera-reaches-the-poles.md) | The camera reaches the poles | Accepted |
 
 ## Format
 
