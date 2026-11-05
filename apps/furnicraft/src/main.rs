@@ -939,7 +939,7 @@ impl FurniCraftApp {
                     cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
                     ui.separator();
                     ui.label("LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
-                } else if let Some((parent, kind, size)) = placing {
+                } else if let Some((kind, size)) = placing {
                     let name = match kind {
                         furnicraft_engine::PrimitiveKind::Cube => "Cube",
                         furnicraft_engine::PrimitiveKind::Cylinder => "Cylinder",
@@ -948,7 +948,6 @@ impl FurniCraftApp {
                     ui.label(format!("Primitive · {name} {size}"));
                     ui.separator();
                     ui.label("LMB place on the work plane  ·  Esc cancel");
-                    let _ = parent;
                 } else {
                     ui.label("Gizmo");
                     ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
@@ -1148,6 +1147,10 @@ impl eframe::App for FurniCraftApp {
         {
             if self.editor.mesh_edit().is_some() {
                 self.editor.end_mesh_edit();
+            } else if self.editor.creation_parent().is_some() {
+                // The arm outranks leaving a container level: it is the mode the next creation uses,
+                // and the chip names it until Escape or ✕ clears it (ADR 0056).
+                self.editor.clear_creation_parent();
             } else {
                 let before = self.editor.selected_nodes().to_vec();
                 self.editor.exit_level(self.session.project());

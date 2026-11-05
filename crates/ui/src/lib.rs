@@ -53,7 +53,7 @@ use furnicraft_units::Length;
 
 use crate::camera_card::CameraCard;
 use crate::command::{dispatch, json};
-use crate::container_card::ContainerCard;
+use crate::container_card::{ContainerAction, ContainerCard};
 use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
 use crate::object_card::{ObjectAction, ObjectCard};
@@ -76,8 +76,6 @@ const NEW_PANEL_WIDTH_MM: i64 = 400;
 /// A primitive waiting for its work-plane click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PendingPrimitive {
-    /// The container that receives the node.
-    parent: Id,
     /// Which primitive to build.
     kind: PrimitiveKind,
     /// Full extent: an edge, a diameter and a height, or a diameter.
@@ -93,6 +91,8 @@ pub struct Editor {
     contour_edit: Option<ContourEdit>,
     drawing: Option<DrawDraft>,
     pending_primitive: Option<PendingPrimitive>,
+    /// The container the next created nodes land in, or `None` for the scene root.
+    creation_parent: Option<Id>,
     toolbars: toolbars::Toolbars,
     card: PanelCard,
     container_card: ContainerCard,
@@ -350,15 +350,15 @@ impl Editor {
 
     /// Commits the running draft as one path object and drops it.
     ///
-    /// The drawing lands at the scene root, like every other creation tool, and is placed on
-    /// `placement`, which maps the work plane onto the object's local XY. The new node becomes the
-    /// selection, so the tool ends with what it just drew visible in the inspector. A refused path
-    /// leaves the draft and the selection untouched.
+    /// The drawing lands in the armed container, or at the scene root like every other creation
+    /// tool, and is placed on `placement`, which maps the work plane onto the object's local XY. The
+    /// new node becomes the selection, so the tool ends with what it just drew visible in the
+    /// inspector. A refused path leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
         };
-        let parent = creation_root(session.project());
+        let parent = self.creation_target(session.project());
         let object = draft.commit(session, parent, placement)?;
         let tool = draft.tool();
         self.drawing = None;
@@ -460,15 +460,64 @@ impl Editor {
         self.open.retain(|id| project.is_container(*id));
     }
 
+    /// The container armed to receive the next created nodes, if any.
+    pub fn creation_parent(&self) -> Option<Id> {
+        self.creation_parent
+    }
+
+    /// Arms `parent` to receive the next created nodes.
+    ///
+    /// The scene root is the default and cannot be armed, because clearing the arm would return to
+    /// the same place; a node that cannot own children cannot be armed either. Returns whether the
+    /// arm took.
+    pub fn arm_creation(&mut self, project: &Project, parent: Id) -> bool {
+        if parent == project.root().id() || !project.is_container(parent) {
+            return false;
+        }
+        self.creation_parent = Some(parent);
+        true
+    }
+
+    /// Drops the arm; the next creation lands at the scene root again.
+    pub fn clear_creation_parent(&mut self) {
+        self.creation_parent = None;
+    }
+
+    /// Drops an arm whose container no longer exists.
+    ///
+    /// Deleting the container, deleting an ancestor, or undoing the container's creation all take
+    /// the armed id out of the document; the editor must not keep pointing at a dead node.
+    pub fn retain_creation_parent(&mut self, project: &Project) {
+        let root = project.root().id();
+        if self.creation_parent.is_some_and(|id| id == root || !project.is_container(id)) {
+            self.creation_parent = None;
+        }
+    }
+
+    /// The container every creation tool lands in: the armed one while it exists, else the root.
+    pub fn creation_target(&self, project: &Project) -> Id {
+        creation_target(project, self.creation_parent)
+    }
+
+    /// The armed container's name, for the strip chip; `None` when nothing is armed.
+    pub fn creation_parent_name<'a>(&self, project: &'a Project) -> Option<&'a str> {
+        let armed = self.creation_parent?;
+        if armed == project.root().id() || !project.is_container(armed) {
+            return None;
+        }
+        project.container(armed).map(|container| container.name())
+    }
+
     /// Draws the themed toolbar strip: one collapsible panel per tool theme.
     ///
     /// The open panels are view state owned by the editor, so they survive a selection change and a
-    /// document command and never reach the scene file. Every creation tool lands at the scene
-    /// root; a child is created only through an explicit entry (ADR 0056). The tool that owns the
+    /// document command and never reach the scene file. A creation tool lands at the scene root
+    /// unless a container was armed through an explicit entry (ADR 0056). The tool that owns the
     /// next click draws pressed, so the strip never hides what the pointer will do. Returns whether a
     /// drawing tool started, so the shell can reset its own pointer state.
     pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
-        let parent = creation_root(session.project());
+        self.retain_creation_parent(session.project());
+        let target = self.creation_target(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
         let selected = self.selection.primary();
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
@@ -476,8 +525,18 @@ impl Editor {
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
         );
+        let creation_parent = self.creation_parent_name(session.project());
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, has_panel_material, selected, selected_path, active, &mut actions);
+        toolbars::show(
+            ui,
+            &mut self.toolbars,
+            has_panel_material,
+            selected,
+            selected_path,
+            active,
+            creation_parent,
+            &mut actions,
+        );
         let mut started_drawing = false;
         for action in actions {
             match action {
@@ -487,12 +546,13 @@ impl Editor {
                     }
                     started_drawing = true;
                 }
-                ToolAction::CreatePanel => self.create_panel(session, parent)?,
-                ToolAction::CreateAssembly => self.create_assembly(session, parent)?,
-                ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(parent, kind, size)?,
-                ToolAction::CreateCamera => self.create_camera(session, parent)?,
-                ToolAction::CreateLight => self.create_light(session, parent)?,
+                ToolAction::CreatePanel => self.create_panel(session, target)?,
+                ToolAction::CreateAssembly => self.create_assembly(session, target)?,
+                ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(kind, size)?,
+                ToolAction::CreateCamera => self.create_camera(session, target)?,
+                ToolAction::CreateLight => self.create_light(session, target)?,
                 ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
+                ToolAction::ClearCreationParent => self.clear_creation_parent(),
             }
         }
         Ok(started_drawing)
@@ -531,21 +591,22 @@ impl Editor {
     ///
     /// The panel asks for a click instead of creating at the origin: the tool is a placement, and a
     /// stale primitive at the world origin is never what the user wanted. Arming leaves the other
-    /// pointer modes, because the next click creates rather than selects.
-    fn arm_primitive(&mut self, parent: Id, kind: PrimitiveKind, size: Length) -> Result<(), String> {
+    /// pointer modes, because the next click creates rather than selects. The parent is resolved at
+    /// the click, so clearing or moving the arm changes where the primitive lands.
+    fn arm_primitive(&mut self, kind: PrimitiveKind, size: Length) -> Result<(), String> {
         if size.micrometres() <= 0 {
             return Err("The primitive size must be positive.".to_owned());
         }
         self.mesh_edit = None;
         self.contour_edit = None;
         self.drawing = None;
-        self.pending_primitive = Some(PendingPrimitive { parent, kind, size });
+        self.pending_primitive = Some(PendingPrimitive { kind, size });
         Ok(())
     }
 
-    /// The primitive waiting for a work-plane click: its parent, kind and size.
-    pub fn pending_primitive(&self) -> Option<(Id, PrimitiveKind, Length)> {
-        self.pending_primitive.map(|pending| (pending.parent, pending.kind, pending.size))
+    /// The primitive waiting for a work-plane click: its kind and size.
+    pub fn pending_primitive(&self) -> Option<(PrimitiveKind, Length)> {
+        self.pending_primitive.map(|pending| (pending.kind, pending.size))
     }
 
     /// Drops an armed primitive without creating anything.
@@ -553,10 +614,11 @@ impl Editor {
         self.pending_primitive = None;
     }
 
-    /// Creates the armed primitive at `placement` and selects it.
+    /// Creates the armed primitive in the creation target and selects it.
     pub fn place_primitive(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
         let pending = self.pending_primitive.ok_or_else(|| "No primitive is waiting for a click.".to_owned())?;
-        self.create_primitive(session, pending.parent, pending.kind, pending.size, placement)?;
+        let parent = self.creation_target(session.project());
+        self.create_primitive(session, parent, pending.kind, pending.size, placement)?;
         self.pending_primitive = None;
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
     }
@@ -651,6 +713,7 @@ impl Editor {
     pub fn show_scene_tree(&mut self, ui: &mut Ui, session: &mut Session) {
         self.selection.retain_existing(session.project());
         self.retain_open(session.project());
+        self.retain_creation_parent(session.project());
         if !self.initialized {
             self.selection.select_first_panel(session.project());
             self.initialized = true;
@@ -716,7 +779,9 @@ impl Editor {
         } else if session.project().light(primary).is_some() {
             self.light_card.show(ui, session, primary);
         } else if session.project().is_container(primary) {
-            self.container_card.show(ui, session, primary);
+            if self.container_card.show(ui, session, primary) == ContainerAction::AddChild {
+                self.arm_creation(session.project(), primary);
+            }
         } else {
             ui.label("Select a node in the scene tree.");
         }
@@ -725,6 +790,9 @@ impl Editor {
 
     fn run_action(&mut self, session: &mut Session, action: TreeAction) -> Result<(), String> {
         match action {
+            TreeAction::AddChild { parent } => {
+                self.arm_creation(session.project(), parent);
+            }
             TreeAction::Duplicate { node } => {
                 let params = json(&NodeDuplicate { node })?;
                 let outcome = dispatch(session, NODE_DUPLICATE_ID, &params)?;
@@ -768,11 +836,13 @@ impl Editor {
                 session.undo().map_err(|error| error.to_string())?;
                 self.selection.retain_existing(session.project());
                 self.retain_open(session.project());
+                self.retain_creation_parent(session.project());
             }
             TreeAction::Redo => {
                 session.redo().map_err(|error| error.to_string())?;
                 self.selection.retain_existing(session.project());
                 self.retain_open(session.project());
+                self.retain_creation_parent(session.project());
             }
         }
         Ok(())
@@ -781,6 +851,7 @@ impl Editor {
     fn after_node_removed(&mut self, session: &Session, parent: Option<Id>) {
         self.selection.retain_existing(session.project());
         self.retain_open(session.project());
+        self.retain_creation_parent(session.project());
         if self.selection.primary().is_none()
             && let Some(parent) = parent
             && session.project().contains_node(parent)
@@ -814,12 +885,14 @@ fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Opti
 
 /// The container every creation tool lands in.
 ///
-/// The scene root is the only default parent, whatever the selection is: choosing a node must not
+/// The scene root is the default parent, whatever the selection is: choosing a node must not
 /// silently change where a new path, panel, assembly, primitive, camera or light goes (ADR 0056).
-/// A child is created through an explicit entry instead. Extruding a path is not a creation tool,
-/// so it stays a sibling of its path.
-fn creation_root(project: &Project) -> Id {
-    project.root().id()
+/// A child is created through an explicit entry instead, which arms a container; the arm falls back
+/// to the root as soon as that node is gone or cannot own children. Extruding a path is not a
+/// creation tool, so it stays a sibling of its path.
+fn creation_target(project: &Project, armed: Option<Id>) -> Id {
+    let root = project.root().id();
+    armed.filter(|id| *id != root && project.is_container(*id)).unwrap_or(root)
 }
 
 /// The direct child of `container` whose subtree contains `node`.
@@ -1125,7 +1198,7 @@ mod tests {
         let mut editor = Editor::new();
 
         editor.select_node(Some(inner));
-        assert_eq!(creation_root(session.project()), root, "the scene root is the only default parent");
+        assert_eq!(editor.creation_target(session.project()), root, "the scene root is the default parent");
         assert!(editor.start_drawing(DrawTool::Line));
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
         editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
@@ -1143,9 +1216,7 @@ mod tests {
         assert_eq!(session.project().parent_of(created_assembly), Some(root), "an assembly lands at the root");
 
         editor.select_node(Some(inner));
-        editor
-            .arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(100).expect("size"))
-            .expect("arm the cube");
+        editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm the cube");
         let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cube");
         assert_eq!(session.project().parent_of(created_primitive), Some(root), "a primitive lands at the root");
 
@@ -1163,6 +1234,72 @@ mod tests {
             assert_ne!(session.project().parent_of(created), Some(inner), "the selected container receives nothing");
         }
         assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
+    }
+
+    #[test]
+    fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let assembly = create_assembly_under(&mut session, root, "Frame");
+        let mut editor = Editor::new();
+        assert!(editor.arm_creation(session.project(), assembly), "a container can be armed");
+        assert_eq!(editor.creation_parent_name(session.project()), Some("Frame"));
+        assert_eq!(editor.creation_target(session.project()), assembly, "the armed container is the target");
+
+        assert!(editor.start_drawing(DrawTool::Line));
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
+        editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
+        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+        assert_eq!(session.project().parent_of(drawn.object), Some(assembly), "the path lands in the arm");
+
+        let target = editor.creation_target(session.project());
+        editor.create_panel(&mut session, target).expect("create the panel");
+        let created_panel = editor.selected_node().expect("the new panel");
+        assert_eq!(session.project().parent_of(created_panel), Some(assembly), "the panel lands in the arm");
+
+        assert!(
+            !editor.arm_creation(session.project(), created_panel),
+            "a panel cannot own children, so it cannot be armed"
+        );
+        assert_eq!(editor.creation_target(session.project()), assembly, "a refused arm changes nothing");
+
+        editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm the cube");
+        let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cube");
+        assert_eq!(session.project().parent_of(created_primitive), Some(assembly), "the primitive lands in the arm");
+    }
+
+    #[test]
+    fn clearing_the_arm_returns_creation_to_the_scene_root() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let assembly = create_assembly_under(&mut session, root, "Frame");
+        let mut editor = Editor::new();
+
+        assert!(editor.arm_creation(session.project(), assembly));
+        editor.clear_creation_parent();
+        assert!(editor.creation_parent().is_none());
+        assert!(editor.creation_parent_name(session.project()).is_none());
+        assert_eq!(editor.creation_target(session.project()), root, "✕ restores the root");
+
+        assert!(!editor.arm_creation(session.project(), root), "the root cannot be armed");
+        assert_eq!(editor.creation_target(session.project()), root);
+    }
+
+    #[test]
+    fn deleting_the_armed_container_clears_the_arm() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let outer = create_assembly_under(&mut session, root, "Outer");
+        let inner = create_assembly_under(&mut session, outer, "Inner");
+        let mut editor = Editor::new();
+
+        assert!(editor.arm_creation(session.project(), inner));
+        editor.run_action(&mut session, TreeAction::Delete { node: outer }).expect("delete the outer assembly");
+        assert!(editor.creation_parent().is_none(), "deleting an ancestor of the arm clears it");
+        assert_eq!(editor.creation_target(session.project()), root);
     }
 
     #[test]
@@ -1211,10 +1348,9 @@ mod tests {
         let (project, panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
-        let root = Id::new(1).expect("root");
         let size = Length::from_millimetres(300).expect("size");
-        editor.arm_primitive(root, PrimitiveKind::Cube, size).expect("arm the cube");
-        assert_eq!(editor.pending_primitive(), Some((root, PrimitiveKind::Cube, size)));
+        editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm the cube");
+        assert_eq!(editor.pending_primitive(), Some((PrimitiveKind::Cube, size)));
         assert!(editor.drawing().is_none(), "an armed primitive leaves a drawing");
 
         let placement = Placement::IDENTITY
@@ -1232,7 +1368,7 @@ mod tests {
         assert_eq!(session.project().revision().get(), 1);
         assert!(session.project().panel(panel).is_some());
 
-        editor.arm_primitive(root, PrimitiveKind::Sphere, size).expect("arm again");
+        editor.arm_primitive(PrimitiveKind::Sphere, size).expect("arm again");
         editor.cancel_primitive();
         assert!(editor.pending_primitive().is_none());
         assert_eq!(session.project().revision().get(), 1, "cancelling creates nothing");
@@ -1241,7 +1377,7 @@ mod tests {
     #[test]
     fn a_cube_edge_must_be_positive() {
         let mut editor = Editor::new();
-        assert!(editor.arm_primitive(Id::new(1).expect("root"), PrimitiveKind::Cylinder, Length::ZERO).is_err());
+        assert!(editor.arm_primitive(PrimitiveKind::Cylinder, Length::ZERO).is_err());
     }
 
     #[test]
@@ -1249,9 +1385,8 @@ mod tests {
         let size = Length::from_millimetres(120).expect("size");
         for kind in [PrimitiveKind::Cube, PrimitiveKind::Cylinder, PrimitiveKind::Sphere] {
             let mut editor = Editor::new();
-            let root = Id::new(1).expect("root");
-            editor.arm_primitive(root, kind, size).expect("arm");
-            assert_eq!(editor.pending_primitive(), Some((root, kind, size)));
+            editor.arm_primitive(kind, size).expect("arm");
+            assert_eq!(editor.pending_primitive(), Some((kind, size)));
             assert!(
                 Session::with_catalog(sample_project(), sample_catalog())
                     .project()
@@ -1272,8 +1407,7 @@ mod tests {
             let (project, _panel) = contour_panel_project();
             let mut session = Session::with_catalog(project, sample_catalog());
             let mut editor = Editor::new();
-            let root = Id::new(1).expect("root");
-            editor.arm_primitive(root, kind, Length::from_millimetres(100).expect("size")).expect("arm");
+            editor.arm_primitive(kind, Length::from_millimetres(100).expect("size")).expect("arm");
             let id = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place");
             let object = session.project().object(id).expect("object");
             assert_eq!(object.name(), name);
@@ -1399,13 +1533,13 @@ mod tests {
     }
 
     #[test]
-    fn the_toolbar_creates_the_cube_in_the_selected_container() {
+    fn the_toolbar_creates_the_cube_at_the_scene_root() {
         let (project, panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         let root = Id::new(1).expect("root");
         editor.select_node(Some(root));
-        editor.arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
+        editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
         editor.place_primitive(&mut session, Placement::IDENTITY).expect("cube");
         let cube = editor.selected_node().expect("the new cube is selected");
         assert!(session.project().object(cube).is_some());
@@ -1664,9 +1798,8 @@ mod tests {
     fn creating_a_cube_dispatches_the_primitive_command_and_selects_it() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let mut editor = Editor::new();
-        let root = session.project().root().id();
 
-        editor.arm_primitive(root, PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
+        editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
         editor.place_primitive(&mut session, Placement::IDENTITY).expect("create cube");
 
         let id = editor.selected_node().expect("the new object is selected");
@@ -1686,7 +1819,6 @@ mod tests {
         let (project, _panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
-        let root = session.project().root().id();
         let ctx = egui::Context::default();
 
         let mut fill = None;
@@ -1707,7 +1839,7 @@ mod tests {
 
         editor.cancel_drawing();
         let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
-        editor.arm_primitive(root, PrimitiveKind::Cube, size).expect("arm");
+        editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm");
         let primitive = ctx.run_ui(Default::default(), |ui| {
             editor.show_toolbars(ui, &mut session).expect("toolbars");
         });

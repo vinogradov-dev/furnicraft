@@ -26,6 +26,16 @@ struct Draft {
     name: String,
 }
 
+/// What the container card asks the editor to do beyond the edits it dispatches itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ContainerAction {
+    /// Nothing was pressed.
+    #[default]
+    None,
+    /// Arm this container so the next created node lands inside it.
+    AddChild,
+}
+
 /// A container's role for display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ContainerKind {
@@ -63,12 +73,15 @@ fn container_summary(project: &Project, id: Id) -> Option<(ContainerKind, &str, 
 
 impl ContainerCard {
     /// Draws the card for the selected container and dispatches accepted edits.
-    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, container_id: Id) {
+    ///
+    /// Returns the creation request separately: arming a container is editor view state, so the
+    /// card asks the editor to hold it instead of touching the document.
+    pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, container_id: Id) -> ContainerAction {
         let Some((kind, name, children)) = container_summary(session.project(), container_id) else {
             self.draft = None;
             self.error = None;
             ui.label("Select a node in the scene tree.");
-            return;
+            return ContainerAction::None;
         };
         let name = name.to_owned();
         if self.draft.as_ref().is_none_or(|draft| draft.container != container_id) {
@@ -77,9 +90,10 @@ impl ContainerCard {
         }
         let is_root = container_id == session.project().root().id();
         let Some(draft) = self.draft.as_mut() else {
-            return;
+            return ContainerAction::None;
         };
 
+        let mut action = ContainerAction::None;
         let mut rename = None;
         let mut name_error = None;
         ui.separator();
@@ -109,6 +123,15 @@ impl ContainerCard {
             ui.label(format!("Children  {children}"));
         });
 
+        if !is_root {
+            ui.separator();
+            section(ui, "container.creation", "Create inside", true, |ui| {
+                if ui.button("Add child").on_hover_text("The next created node lands in this container").clicked() {
+                    action = ContainerAction::AddChild;
+                }
+            });
+        }
+
         if let Some(error) = name_error {
             self.error = Some(error);
         }
@@ -127,6 +150,7 @@ impl ContainerCard {
             ui.separator();
             ui.colored_label(Color32::LIGHT_RED, error);
         }
+        action
     }
 }
 

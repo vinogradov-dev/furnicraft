@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U31** a child is created by an explicit entry, not by the selection: pick a group or an
-  assembly in the tree or in the viewport, choose *Add child*, and the next created node lands inside
-  it. `Editor` gains `creation_parent: Option<Id>` — view state, never the document
-  (`plan/debt.md` `[view-state]`). Entry points: `TreeAction::AddChild { parent }` in the container
-  menu (`crates/ui/src/scene_tree.rs:294`), a button in `crates/ui/src/container_card.rs`, and the
-  strip chip "Adding to: Frame ✕". `creation_root` from X4 becomes
-  `creation_target(project, armed)`, which falls back to the root when the armed id vanished. The arm
-  is sticky until ✕, Escape or the container being deleted, so filling an assembly is one arm and
-  several tools; clearing it on a selection change was rejected because the selection moves to the new
-  node after every create. `after_node_removed` (`crates/ui/src/lib.rs:776`) already drops a dead
-  selection and must drop this too. The root cannot be armed. Tests: arm an assembly, create a path, a
-  panel and a primitive — all three are children; ✕ restores the root; deleting the container clears
-  the arm. ADR 0056 covers this rule together with X4.
-  `files: crates/ui/src/lib.rs, crates/ui/src/scene_tree.rs`
-
 - `[ ]` **U32** a new flat figure pivots at its centre or at its first point: every path and body is
   created with `Pivot::ZERO` (`crates/model/src/object.rs:288-292`, `add_object`,
   `crates/model/src/project/object_cmds.rs:31-50`), so the gizmos grab a drawing at the world origin
@@ -182,6 +167,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U31** a child is created through an explicit arm: `Editor` holds `creation_parent`,
+  `creation_target(project, armed)` falls back to the root when the armed id vanished, the container
+  menu and card arm a group or an assembly, and the strip shows *Adding to: Frame ✕*; Escape and the
+  container's removal clear the arm, while a primitive resolves its parent at the click — `478ba44`
 
 - `[x]` **X6** the top and bottom views look at an angle to their plane: `MIN_PITCH`/`MAX_PITCH` are
   ±85° and `look_from` clamps to them, so a click on the Z ball left the camera five degrees off

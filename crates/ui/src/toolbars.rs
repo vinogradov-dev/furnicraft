@@ -47,6 +47,8 @@ pub enum ToolAction {
     CreateCamera,
     /// Creates a sun light at the scene root.
     CreateLight,
+    /// Drops the armed container, so creation returns to the scene root.
+    ClearCreationParent,
 }
 
 /// The drawing tools of the Contour panel, in button order.
@@ -295,12 +297,27 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
     ToolPanel::ALL.iter().position(|candidate| *candidate == panel)
 }
 
+/// Draws the chip that names the armed container and reports a click on its ✕.
+///
+/// The arm is sticky across creations, so the strip must say where the next node goes; without the
+/// chip a pressed tool would create in a container the user armed much earlier.
+fn creation_chip(ui: &mut Ui, name: &str) -> bool {
+    let mut cleared = false;
+    ui.horizontal(|ui| {
+        ui.label(format!("Adding to: {name}"));
+        cleared = ui.button("✕").on_hover_text("Create at the scene root again").clicked();
+    });
+    cleared
+}
+
 /// Draws the whole strip.
 ///
 /// The headings are collapsible sections. A section that is open draws its tools; every button is
 /// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label. The
-/// strip creates at the scene root, so it carries no parent. `active` is the tool that owns the next
-/// click, and its button draws pressed.
+/// strip itself carries no parent: `creation_parent` names the container armed to receive the next
+/// nodes, and the chip clears that arm. `active` is the tool that owns the next click, and its
+/// button draws pressed.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut Ui,
     state: &mut Toolbars,
@@ -308,10 +325,16 @@ pub fn show(
     selected: Option<Id>,
     selected_path: Option<bool>,
     active: Option<ToolActivity>,
+    creation_parent: Option<&str>,
     actions: &mut Vec<ToolAction>,
 ) {
     let context = StripContext { has_panel_material, selected, selected_path, active };
     ui.heading("Tools");
+    if let Some(name) = creation_parent
+        && creation_chip(ui, name)
+    {
+        actions.push(ToolAction::ClearCreationParent);
+    }
     ui.separator();
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
@@ -477,7 +500,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -493,6 +516,34 @@ mod tests {
             "the primitives panel is filled: {texts:?}"
         );
         assert!(actions.is_empty(), "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn the_strip_names_the_armed_container_and_offers_to_clear_it() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, true, None, None, None, Some("Frame"), &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text.contains("Adding to: Frame")), "the chip names the arm: {texts:?}");
+        assert!(texts.iter().any(|text| text.contains('✕')), "the chip carries its clear button: {texts:?}");
+        assert!(actions.is_empty(), "drawing alone clears nothing");
+    }
+
+    #[test]
+    fn an_idle_strip_shows_no_creation_chip() {
+        let ctx = egui::Context::default();
+        let mut state = Toolbars::new();
+        let mut actions = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(!texts.iter().any(|text| text.contains("Adding to")), "nothing is armed: {texts:?}");
     }
 
     #[test]
@@ -545,7 +596,7 @@ mod tests {
             let mut pressed_fill = None;
             let output = ctx.run_ui(Default::default(), |ui| {
                 pressed_fill = Some(ui.visuals().selection.bg_fill);
-                show(ui, &mut state, true, None, None, activity, &mut actions);
+                show(ui, &mut state, true, None, None, activity, None, &mut actions);
             });
             let pressed_fill = pressed_fill.expect("the strip ran");
             let pressed = drawn_fill(&output.shapes, pressed_fill);
@@ -560,7 +611,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -585,7 +636,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(false), None, &mut actions);
+            show(ui, &mut state, true, Some(node), Some(false), None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -604,7 +655,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(true), None, &mut actions);
+            show(ui, &mut state, true, Some(node), Some(true), None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -642,7 +693,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -657,7 +708,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, false, None, None, None, &mut actions);
+            show(ui, &mut state, false, None, None, None, None, &mut actions);
         });
         output.drop_without_applying_deltas();
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
@@ -682,7 +733,7 @@ mod tests {
         state.set_open(ToolPanel::Scene, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -697,7 +748,7 @@ mod tests {
         state.set_open(ToolPanel::Contour, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
