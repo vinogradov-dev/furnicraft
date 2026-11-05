@@ -182,8 +182,15 @@ fn object_extrude_create_run(
         });
     }
     evaluate_contour(OBJECT_EXTRUDE_CREATE_ID, &params.contour)?;
+    let pivot = params.contour.creation_pivot();
     let constructive = Constructive::extrude(params.contour, params.height).map_err(ProjectError::from)?;
-    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Constructive(constructive))?;
+    let id = project.add_object_with_pivot(
+        params.parent,
+        params.name,
+        params.placement,
+        Geometry::Constructive(constructive),
+        pivot,
+    )?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -283,7 +290,17 @@ fn object_path_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectPathCreate>(params, OBJECT_PATH_CREATE_ID)?;
     validate_name(&params.name, OBJECT_PATH_CREATE_ID)?;
-    let id = project.add_object(params.parent, params.name, params.placement, Geometry::Path(params.path))?;
+    let pivot = params
+        .path
+        .creation_pivot()
+        .map_err(|error| CommandError::InvalidParams { command: OBJECT_PATH_CREATE_ID, message: error.to_string() })?;
+    let id = project.add_object_with_pivot(
+        params.parent,
+        params.name,
+        params.placement,
+        Geometry::Path(params.path),
+        pivot,
+    )?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -388,7 +405,7 @@ fn object_collapse_run(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, Revision};
+    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, Pivot, Revision};
     use furnicraft_testkit::{sample_catalog, sample_project};
     use furnicraft_units::Degrees;
 
@@ -908,6 +925,96 @@ mod tests {
         session.undo().expect("one undo restores the first drawing");
         assert_eq!(session.project().object_path(id), Ok(&original));
         assert!(session.can_undo(), "the creation is still one entry below the replacement");
+    }
+
+    #[test]
+    fn a_created_drawing_pivots_on_its_shape() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+
+        let closed =
+            Path::rectangle([millimetres(100), millimetres(50)], [millimetres(0), millimetres(0)]).expect("rectangle");
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Frame", closed))
+            .expect("create the drawing")
+            .created_id()
+            .expect("id");
+        assert_eq!(
+            session.project().pivot(id),
+            Some(Pivot::new(millimetres(50), millimetres(25), Length::ZERO)),
+            "a closed drawing is grabbed at its centre"
+        );
+
+        let open =
+            Path::polyline(vec![[millimetres(600), millimetres(400)], [millimetres(0), millimetres(400)]], false)
+                .expect("open chain");
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Line", open))
+            .expect("create the line")
+            .created_id()
+            .expect("id");
+        assert_eq!(
+            session.project().pivot(id),
+            Some(Pivot::new(millimetres(600), millimetres(400), Length::ZERO)),
+            "an open chain is grabbed at its first point"
+        );
+    }
+
+    #[test]
+    fn an_extruded_body_pivots_at_the_centre_of_its_ring() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("id");
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        assert_eq!(
+            session.project().pivot(id),
+            Some(Pivot::new(millimetres(50), millimetres(25), Length::ZERO)),
+            "the body takes the ring's centre on its base plane"
+        );
+    }
+
+    #[test]
+    fn a_geometry_replacement_leaves_the_creation_pivot_alone() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+
+        let closed =
+            Path::rectangle([millimetres(100), millimetres(50)], [millimetres(0), millimetres(0)]).expect("rectangle");
+        let path_id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Frame", closed))
+            .expect("create the drawing")
+            .created_id()
+            .expect("id");
+        let path_pivot = session.project().pivot(path_id).expect("pivot");
+        let replacement = Path::polyline(
+            vec![[millimetres(1_000), millimetres(1_000)], [millimetres(2_000), millimetres(1_000)]],
+            false,
+        )
+        .expect("open chain");
+        let value =
+            serde_json::to_value(ObjectPathReplace { object: path_id, path: replacement }).expect("params serialize");
+        session.dispatch(OBJECT_PATH_REPLACE_ID, &value).expect("replace the drawing");
+        assert_eq!(session.project().pivot(path_id), Some(path_pivot), "a path edit never moves the pivot");
+
+        let body_id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("id");
+        let body_pivot = session.project().pivot(body_id).expect("pivot");
+        let value = serde_json::to_value(ObjectContourReplace { object: body_id, contour: rectangle(200, 100) })
+            .expect("params serialize");
+        session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the contour");
+        assert_eq!(session.project().pivot(body_id), Some(body_pivot), "a contour edit never moves the pivot");
     }
 
     #[test]

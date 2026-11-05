@@ -382,6 +382,18 @@ mod tests {
     }
 
     #[test]
+    fn an_object_saved_before_the_pivot_field_loads_with_a_zero_pivot() {
+        let object = sample_object(5);
+        let mut value = serde_json::to_value(&object).expect("serialize");
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("pivot");
+        }
+        let loaded: Object = serde_json::from_value(value).expect("load an older object");
+        assert_eq!(loaded.pivot(), Pivot::ZERO);
+        assert_eq!(loaded.geometry(), object.geometry(), "the rest of the object is unchanged");
+    }
+
+    #[test]
     fn object_node_commands_rename_place_duplicate_and_delete() {
         let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![sample_object(5).into()]);
         let mut project = Project::new(root).expect("valid project");

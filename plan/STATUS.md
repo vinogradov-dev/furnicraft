@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U32 state=idle base=478ba44 updated=2026-11-05
+STATE: milestone=M7 phase=U task=X5 state=idle base=bef8527 updated=2026-11-05
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -31,7 +31,9 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   creation tool lands at the scene root unless a container is armed, the strip draws the armed drawing
   tool or primitive pressed while the duplicate "Draw" row is gone, the top and bottom views look
   straight down their plane (ADR 0057), and *Add child* arms a group or an assembly so the next
-  created nodes land inside it while the strip names the arm (ADR 0056).
+  created nodes land inside it while the strip names the arm (ADR 0056). U32 is fixed too: a new
+  drawing stores the pivot of its own shape — the bounds centre when it is closed, the first stored
+  segment's start when it is open — and an extruded body takes the ring's centre (ADR 0058).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -48,11 +50,10 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U32 is next: a new drawing pivots at the centre of its bounding box, or at the first stored point of
-an open chain, so the gizmos grab the shape instead of the world origin (ADR 0058). X5 then gives a
-selected line chain a colour of its own plus a screen-space outline (ADR 0059). U33–U37 open the edit
-mode to every contour kind: path math (ADR 0060), the path draft, the open-chain gizmo, the
-rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28, X2 and U29 follow.
+X5 is next: a selected line, contour or circle gets an explicit colour and a screen-space outline,
+because the tint cannot be seen and a one-pixel `LineList` cannot be widened (ADR 0059). U33–U37
+open the edit mode to every contour kind: path math (ADR 0060), the path draft, the open-chain
+gizmo, the rectangle-to-ring conversion (ADR 0061) and cutout rings. U27, U28, X2 and U29 follow.
 
 ## Index
 
