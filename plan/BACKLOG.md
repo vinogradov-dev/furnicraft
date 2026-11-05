@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U30** the armed tool is highlighted: choosing Line, Arc, Polyline, Rectangle, Circle or a
-  primitive leaves its button looking idle, so the strip shows the armed tool only in its text
-  (`main.rs:925-959`). `icons::tool_button` (`crates/ui/src/icons.rs:225-233`) gains `on: bool` and
-  draws `Button::selected(on)`, which egui paints with `visuals.selection.bg_fill`; the text fallback
-  takes the same flag. `toolbars::show`/`show_panel` (`crates/ui/src/toolbars.rs:278-374`) take
-  `active: Option<ToolActivity>` (`Draw(DrawTool) | Primitive(PrimitiveKind)`), and the editor passes
-  `drawing().map(DrawDraft::tool)` or `pending_primitive().map(kind)`. Delete the duplicate "Draw"
-  button row at `main.rs:975-981`: U20 made the toolbar the only creator, so it is a second source of
-  truth. Toggled-on is a theme state, not a second SVG (`assets/icons/STYLE_GUIDE.md`, ADR 0055).
-  Tests: the selector is a pure function with a table; one egui run marks exactly one button, and an
-  idle editor marks none.
-  `files: crates/ui/src/icons.rs, crates/ui/src/toolbars.rs`
-
 - `[ ]` **X6** the top and bottom views look at an angle to their plane: `MIN_PITCH`/`MAX_PITCH` are
   ±85° (`crates/scene/src/lib.rs:26-31`) and `look_from` clamps to them (`:438-449`), so a click on the
   Z ball leaves the camera five degrees off vertical and the grid, the work plane and the drawing all
@@ -211,6 +198,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U30** the armed tool is highlighted: `icons::tool_button` takes `on: bool` and draws
+  `Button::selected`, which egui paints with `visuals.selection.bg_fill`, and the text fallback
+  takes the same flag. `ToolActivity` names the two arming tools and the pure `tool_activity`/
+  `is_armed` selectors press exactly one button; the strip takes `active` and the editor derives it
+  from the running draft or the waiting primitive. A one-shot creation never arms. The duplicate
+  "Draw" row is gone, so the strip is the only creator; toggled-on stays a theme state, not a second
+  SVG (ADR 0055) — `78b4d76`
 
 - `[x]` **X4** every creation tool lands at the scene root: `creation_root(project)` is the only
   default parent, `ToolAction` carries no parent and `drawing_parent` is gone, so a selected nested
