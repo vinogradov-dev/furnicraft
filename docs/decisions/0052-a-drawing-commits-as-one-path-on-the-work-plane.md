@@ -1,6 +1,6 @@
 # 0052. A drawing commits as one path on the work plane
 
-- Status: Accepted
+- Status: Accepted; parent rule superseded by 0056
 - Date: 2026-11-04
 
 ## Context
