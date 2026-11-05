@@ -25,15 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U35** the path gizmo: `contour_gizmo` paints a closed ring (`Shape::closed_line`,
-  `apps/furnicraft/src/contour_gizmo.rs:178-200`) and puts a handle on every segment start
-  (`:203-224`), which loses the last point of an open chain. Paint an open chain as `Shape::line`, add
-  the end handle, and address handles with the `PathCorner` of U33 so a drag on the last point edits the
-  last segment. The object card's `contour_edit_section` (`crates/ui/src/object_card.rs:507-535`)
-  currently shows only for a constructive object — show it for a path too. Manual check: line,
-  polyline, arc, rectangle and circle all move a corner and split a side; Enter applies, Escape cancels.
-  `files: apps/furnicraft/src/contour_gizmo.rs, crates/ui/src/object_card.rs`
-
 - `[ ]` **U36** a rectangle panel outline becomes a ring once: `PanelOutline::Rect` stores corners and
   bows (`crates/model/src/panel/mod.rs:49-107`) and has no ring to edit, so *Edit contour* is offered
   only for a panel that is already a ring (`:194-207`). Add `panel.outline.to_contour`
@@ -109,6 +100,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U35** the path gizmo: the contour gizmo painted every draft as a closed ring and put a handle
+  on each segment start, so an open chain lost its last point and no free end could be grabbed.
+  `ContourGizmo` now paints a `ContourDraft`: a closed ring and a closed chain paint as
+  `Shape::closed_line`, an open chain as `Shape::line`, and the open end gets a `PathCorner::End`
+  handle. Handles, the drag and the arc projection are addressed with `PathCorner`, so a drag on the
+  last point edits the last segment and the free start and free end project against their one
+  segment. The object card offers *Edit contour* for a path as well as a constructive object — `f73a8ab`
+  `files: apps/furnicraft/src/contour_gizmo.rs, crates/ui/src/object_card.rs`
 
 - `[x]` **U34** the path edit mode in the editor: `ContourTarget` gains `Path(Id)` and `ContourEdit`
   holds a `ContourDraft` that is either a ring or a chain, so an open line or a circle drawn by the
