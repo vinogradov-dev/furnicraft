@@ -63,6 +63,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0056](0056-creation-tools-land-at-the-scene-root.md) | Creation tools land at the scene root | Accepted |
 | [0057](0057-the-camera-reaches-the-poles.md) | The camera reaches the poles | Accepted |
 | [0058](0058-a-new-drawing-pivots-on-its-own-shape.md) | A new drawing pivots on its own shape | Accepted |
+| [0059](0059-a-selected-line-is-a-screen-space-overlay.md) | A selected line is a screen-space overlay | Accepted |
 
 ## Format
 
