@@ -42,7 +42,7 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Projection, SceneFrame};
-use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, icons, ui_scale};
+use furnicraft_ui::{DrawDraft, Editor, MeshElement, icons, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::DrawGizmo;
@@ -876,7 +876,6 @@ impl FurniCraftApp {
             let mut toggle_projection = false;
             let mut apply_contour = false;
             let mut cancel_contour = false;
-            let mut start_tool = None;
             let mut toggle_grid = false;
             let mut close_drawing = false;
             let mut finish_drawing = false;
@@ -898,7 +897,7 @@ impl FurniCraftApp {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("FurniCraft");
                 ui.separator();
-                reset = icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true).clicked();
+                reset = icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true, false).clicked();
                 reset |= ui.input(|input| input.key_pressed(egui::Key::F));
                 ui.separator();
                 let (projection_icon, projection_hint) = projection_button(self.scene.camera.projection());
@@ -964,14 +963,6 @@ impl FurniCraftApp {
                             "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
                         );
                     }
-                    ui.separator();
-                    ui.label("Draw");
-                    for tool in [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::Rectangle, DrawTool::Circle]
-                    {
-                        if ui.button(tool.label()).clicked() {
-                            start_tool = Some(tool);
-                        }
-                    }
                 }
                 if let Some(camera) = self
                     .session
@@ -989,13 +980,6 @@ impl FurniCraftApp {
             });
             if toggle_grid {
                 self.draw_gizmo.toggle_grid();
-            }
-            if let Some(tool) = start_tool {
-                if self.editor.start_drawing(tool) {
-                    self.draw_gizmo.reset();
-                } else {
-                    self.last_error = Some("A drawing is already in progress; finish or cancel it first.".to_owned());
-                }
             }
             let mut closed = false;
             if close_drawing {

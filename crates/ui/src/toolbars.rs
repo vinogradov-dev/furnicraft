@@ -53,6 +53,44 @@ pub enum ToolAction {
 pub const CONTOUR_TOOLS: [DrawTool; 5] =
     [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::Rectangle, DrawTool::Circle];
 
+/// The tool that owns the next pointer events, drawn as pressed on the strip.
+///
+/// Only the two arming tools have a state to show: a drawing tool holds the pointer until the chain
+/// is committed, and a primitive waits for its work-plane click. A one-shot creation — a panel, an
+/// assembly, a camera or a light — runs and forgets, so it is never armed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolActivity {
+    /// A drawing tool is building a chain.
+    Draw(DrawTool),
+    /// A primitive is waiting for its work-plane click.
+    Primitive(PrimitiveKind),
+}
+
+/// The activity whose button is pressed, from what the editor holds.
+///
+/// The arguments are the two sources of an armed tool, not a decision: a running draft names its
+/// tool and a pending primitive names its kind, and neither outranks the other because the editor
+/// never holds both at once.
+pub fn tool_activity(drawing: Option<DrawTool>, primitive: Option<PrimitiveKind>) -> Option<ToolActivity> {
+    match (drawing, primitive) {
+        (Some(tool), _) => Some(ToolActivity::Draw(tool)),
+        (None, Some(kind)) => Some(ToolActivity::Primitive(kind)),
+        (None, None) => None,
+    }
+}
+
+/// Whether the button for one action is the armed one.
+///
+/// A creation that runs and forgets is never armed, so its button stays idle however long the
+/// selection sits there.
+fn is_armed(activity: Option<ToolActivity>, action: ToolAction) -> bool {
+    match (activity, action) {
+        (Some(ToolActivity::Draw(armed)), ToolAction::Draw(clicked)) => armed == clicked,
+        (Some(ToolActivity::Primitive(armed)), ToolAction::CreatePrimitive { kind, .. }) => armed == kind,
+        _ => false,
+    }
+}
+
 /// The shortcut that starts a drawing tool.
 ///
 /// The letters are free in the viewport (`F` frames, `O` toggles the projection, `G` the grid), so
@@ -261,21 +299,24 @@ fn panel_slot(panel: ToolPanel) -> Option<usize> {
 ///
 /// The headings are collapsible sections. A section that is open draws its tools; every button is
 /// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label. The
-/// strip creates at the scene root, so it carries no parent.
+/// strip creates at the scene root, so it carries no parent. `active` is the tool that owns the next
+/// click, and its button draws pressed.
 pub fn show(
     ui: &mut Ui,
     state: &mut Toolbars,
     has_panel_material: bool,
     selected: Option<Id>,
     selected_path: Option<bool>,
+    active: Option<ToolActivity>,
     actions: &mut Vec<ToolAction>,
 ) {
+    let context = StripContext { has_panel_material, selected, selected_path, active };
     ui.heading("Tools");
     ui.separator();
     for panel in ToolPanel::ALL {
         let open = state.is_open(panel);
         let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, has_panel_material, selected, selected_path, state, actions);
+            show_panel(ui, panel, context, state, actions);
         });
         if response.header_response.clicked() {
             state.set_open(panel, !open);
@@ -283,35 +324,48 @@ pub fn show(
     }
 }
 
+/// What the strip reads from the scene and the pointer while it draws one panel.
+///
+/// The four values travel together because every panel reads the same picture: what the catalogue
+/// offers, what is selected, whether that selection is a closed path, and which tool is armed.
+#[derive(Clone, Copy, Debug, Default)]
+struct StripContext {
+    has_panel_material: bool,
+    selected: Option<Id>,
+    selected_path: Option<bool>,
+    active: Option<ToolActivity>,
+}
+
 /// The body of one open panel.
 fn show_panel(
     ui: &mut Ui,
     panel: ToolPanel,
-    has_panel_material: bool,
-    selected: Option<Id>,
-    selected_path: Option<bool>,
+    context: StripContext,
     state: &mut Toolbars,
     actions: &mut Vec<ToolAction>,
 ) {
+    let StripContext { has_panel_material, selected, selected_path, active } = context;
     ui.horizontal_wrapped(|ui| match panel {
         ToolPanel::Contour => {
             for tool in CONTOUR_TOOLS {
-                if icons::tool_button(ui, tool_icon(tool), tool.label(), shortcut_label(tool), true).clicked() {
-                    actions.push(ToolAction::Draw(tool));
+                let action = ToolAction::Draw(tool);
+                let on = is_armed(active, action);
+                if icons::tool_button(ui, tool_icon(tool), tool.label(), shortcut_label(tool), true, on).clicked() {
+                    actions.push(action);
                 }
             }
         }
         ToolPanel::Scene => {
-            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), has_panel_material).clicked() {
+            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), has_panel_material, false).clicked() {
                 actions.push(ToolAction::CreatePanel);
             }
-            if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true).clicked() {
+            if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true, false).clicked() {
                 actions.push(ToolAction::CreateAssembly);
             }
-            if icons::tool_button(ui, icons::scene::CAMERA, "Camera", None, true).clicked() {
+            if icons::tool_button(ui, icons::scene::CAMERA, "Camera", None, true, false).clicked() {
                 actions.push(ToolAction::CreateCamera);
             }
-            if icons::tool_button(ui, icons::scene::LIGHT, "Light", None, true).clicked() {
+            if icons::tool_button(ui, icons::scene::LIGHT, "Light", None, true, false).clicked() {
                 actions.push(ToolAction::CreateLight);
             }
         }
@@ -324,12 +378,14 @@ fn show_panel(
             }
             let size = state.primitive_size();
             let enabled = size.is_ok();
+            let armed_size = size.as_ref().ok().copied();
             for (kind, icon, label) in [
                 (PrimitiveKind::Cube, icons::primitives::CUBE, "Cube"),
                 (PrimitiveKind::Cylinder, icons::primitives::CYLINDER, "Cylinder"),
                 (PrimitiveKind::Sphere, icons::primitives::SPHERE, "Sphere"),
             ] {
-                if icons::tool_button(ui, icon, &format!("{label}: click the work plane"), None, enabled).clicked()
+                let on = armed_size.is_some_and(|size| is_armed(active, ToolAction::CreatePrimitive { kind, size }));
+                if icons::tool_button(ui, icon, &format!("{label}: click the work plane"), None, enabled, on).clicked()
                     && let Ok(size) = size
                 {
                     actions.push(ToolAction::CreatePrimitive { kind, size });
@@ -348,7 +404,7 @@ fn show_panel(
             // hint names what is missing: a selection, a path, a closed chain, or a usable height.
             let hint = extrude_hint(selected, selected_path);
             let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && height.is_ok();
-            if icons::tool_button(ui, icons::bodies::EXTRUDE, hint, None, enabled).clicked()
+            if icons::tool_button(ui, icons::bodies::EXTRUDE, hint, None, enabled, false).clicked()
                 && let (Some(object), Ok(height)) = (selected, height)
             {
                 actions.push(ToolAction::ExtrudePath { object, height });
@@ -421,7 +477,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -440,12 +496,71 @@ mod tests {
     }
 
     #[test]
+    fn only_the_arming_tool_owns_the_next_click() {
+        let cases = [
+            (None, None, None),
+            (Some(DrawTool::Line), None, Some(ToolActivity::Draw(DrawTool::Line))),
+            (None, Some(PrimitiveKind::Cube), Some(ToolActivity::Primitive(PrimitiveKind::Cube))),
+            (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), Some(ToolActivity::Draw(DrawTool::Arc))),
+        ];
+        for (drawing, primitive, expected) in cases {
+            assert_eq!(tool_activity(drawing, primitive), expected, "drawing={drawing:?} primitive={primitive:?}");
+        }
+    }
+
+    #[test]
+    fn a_button_is_pressed_only_for_its_own_activity() {
+        let size = Length::from_millimetres(DEFAULT_PRIMITIVE_SIZE_MM).expect("default size");
+        let cube = ToolAction::CreatePrimitive { kind: PrimitiveKind::Cube, size };
+        let cases = [
+            (None, ToolAction::Draw(DrawTool::Line), false),
+            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw(DrawTool::Line), true),
+            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw(DrawTool::Circle), false),
+            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::CreatePanel, false),
+            (Some(ToolActivity::Draw(DrawTool::Line)), cube, false),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), cube, true),
+            (
+                Some(ToolActivity::Primitive(PrimitiveKind::Cube)),
+                ToolAction::CreatePrimitive { kind: PrimitiveKind::Sphere, size },
+                false,
+            ),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), ToolAction::CreateLight, false),
+        ];
+        for (activity, action, expected) in cases {
+            assert_eq!(is_armed(activity, action), expected, "activity={activity:?} action={action:?}");
+        }
+    }
+
+    #[test]
+    fn the_strip_marks_exactly_the_armed_tool() {
+        let cases = [
+            (None, 0, "an idle strip presses nothing"),
+            (Some(ToolActivity::Draw(DrawTool::Line)), 1, "the armed Line button is pressed"),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Sphere)), 1, "the armed Sphere button is pressed"),
+        ];
+        for (activity, expected, reason) in cases {
+            let ctx = egui::Context::default();
+            let mut state = Toolbars::new();
+            let mut actions = Vec::new();
+            let mut pressed_fill = None;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                pressed_fill = Some(ui.visuals().selection.bg_fill);
+                show(ui, &mut state, true, None, None, activity, &mut actions);
+            });
+            let pressed_fill = pressed_fill.expect("the strip ran");
+            let pressed = drawn_fill(&output.shapes, pressed_fill);
+            output.drop_without_applying_deltas();
+            assert_eq!(pressed, expected, "{reason}");
+        }
+    }
+
+    #[test]
     fn the_bodies_panel_only_offers_extrude_for_a_closed_path() {
         let ctx = egui::Context::default();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -470,7 +585,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(false), &mut actions);
+            show(ui, &mut state, true, Some(node), Some(false), None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -489,7 +604,7 @@ mod tests {
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(true), &mut actions);
+            show(ui, &mut state, true, Some(node), Some(true), None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -527,7 +642,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -542,7 +657,7 @@ mod tests {
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, false, None, None, &mut actions);
+            show(ui, &mut state, false, None, None, None, &mut actions);
         });
         output.drop_without_applying_deltas();
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
@@ -567,7 +682,7 @@ mod tests {
         state.set_open(ToolPanel::Scene, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
@@ -582,12 +697,33 @@ mod tests {
         state.set_open(ToolPanel::Contour, false);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, &mut actions);
+            show(ui, &mut state, true, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
         assert!(texts.iter().any(|text| text.contains("Contour")), "a closed panel keeps its heading: {texts:?}");
         assert!(!texts.iter().any(|text| text == "Line  (L)"), "the body is not drawn: {texts:?}");
+    }
+
+    /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.
+    fn drawn_fill(shapes: &[egui::epaint::ClippedShape], fill: egui::Color32) -> usize {
+        fn walk(shape: &egui::Shape, fill: egui::Color32, out: &mut usize) {
+            match shape {
+                egui::Shape::Rect(rect) if rect.fill == fill => *out += 1,
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, fill, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, fill, &mut out);
+        }
+        out
     }
 
     /// Collects the text of every text shape, including nested ones.

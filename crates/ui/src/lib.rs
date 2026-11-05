@@ -464,15 +464,20 @@ impl Editor {
     ///
     /// The open panels are view state owned by the editor, so they survive a selection change and a
     /// document command and never reach the scene file. Every creation tool lands at the scene
-    /// root; a child is created only through an explicit entry (ADR 0056). Returns whether a
+    /// root; a child is created only through an explicit entry (ADR 0056). The tool that owns the
+    /// next click draws pressed, so the strip never hides what the pointer will do. Returns whether a
     /// drawing tool started, so the shell can reset its own pointer state.
     pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
         let parent = creation_root(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
         let selected = self.selection.primary();
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
+        let active = toolbars::tool_activity(
+            self.drawing.as_ref().map(|draft| draft.tool()),
+            self.pending_primitive.map(|pending| pending.kind),
+        );
         let mut actions = Vec::new();
-        toolbars::show(ui, &mut self.toolbars, has_panel_material, selected, selected_path, &mut actions);
+        toolbars::show(ui, &mut self.toolbars, has_panel_material, selected, selected_path, active, &mut actions);
         let mut started_drawing = false;
         for action in actions {
             match action {
@@ -1674,6 +1679,61 @@ mod tests {
         editor.run_action(&mut session, TreeAction::Undo).expect("undo");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object(id).is_none());
+    }
+
+    #[test]
+    fn the_toolbar_marks_the_tool_that_owns_the_next_click() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let root = session.project().root().id();
+        let ctx = egui::Context::default();
+
+        let mut fill = None;
+        let idle = ctx.run_ui(Default::default(), |ui| {
+            fill = Some(ui.visuals().selection.bg_fill);
+            editor.show_toolbars(ui, &mut session).expect("toolbars");
+        });
+        let fill = fill.expect("the strip ran");
+        assert_eq!(pressed_fill(&idle.shapes, fill), 0, "an idle editor presses no tool");
+        idle.drop_without_applying_deltas();
+
+        assert!(editor.start_drawing(DrawTool::Line));
+        let drawing = ctx.run_ui(Default::default(), |ui| {
+            editor.show_toolbars(ui, &mut session).expect("toolbars");
+        });
+        assert_eq!(pressed_fill(&drawing.shapes, fill), 1, "the running draft presses its own tool");
+        drawing.drop_without_applying_deltas();
+
+        editor.cancel_drawing();
+        let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
+        editor.arm_primitive(root, PrimitiveKind::Cube, size).expect("arm");
+        let primitive = ctx.run_ui(Default::default(), |ui| {
+            editor.show_toolbars(ui, &mut session).expect("toolbars");
+        });
+        assert_eq!(pressed_fill(&primitive.shapes, fill), 1, "the waiting primitive presses its own button");
+        primitive.drop_without_applying_deltas();
+    }
+
+    /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.
+    fn pressed_fill(shapes: &[egui::epaint::ClippedShape], fill: egui::Color32) -> usize {
+        fn walk(shape: &egui::Shape, fill: egui::Color32, out: &mut usize) {
+            match shape {
+                egui::Shape::Rect(rect) if rect.fill == fill => *out += 1,
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, fill, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, fill, &mut out);
+        }
+        out
     }
 
     #[test]
