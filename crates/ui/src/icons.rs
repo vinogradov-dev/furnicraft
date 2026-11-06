@@ -3,13 +3,18 @@
 //! `assets/icons/**` is embedded at compile time, one module per theme. A zero-byte file is a
 //! documented placeholder, so an icon button whose artwork has not been drawn yet falls back to its
 //! text label and the surface stays usable. A drawn icon is rasterised by the `egui_extras` SVG
-//! loader at the pixel size the button draws and tinted with the theme's text colour, so one
-//! monochrome master serves every theme (`assets/README.md`, ADR 0047).
+//! loader at `pt × pixels_per_point`, tinted with the widget's foreground colour and uploaded as a
+//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055).
 
-use egui::{Button, Color32, Image, Response, Ui, Vec2};
+use egui::{
+    Button, Color32, Response, Role, Sense, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, WidgetInfo, pos2,
+};
 
-/// Point size at which an icon is drawn, before the UI scale turns it into pixels.
+/// Point size of an inline or menu icon, before the UI scale turns it into pixels.
 pub const ICON_POINT_SIZE: f32 = 16.0;
+
+/// Point size of a toolbar tool icon, before the UI scale turns it into pixels.
+pub const TOOL_ICON_POINT_SIZE: f32 = 20.0;
 
 /// The directory that owns an icon: the surface that shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -81,7 +86,7 @@ impl Icon {
         self.name
     }
 
-    /// The `bytes://` URI the image loader caches the rasterised texture under.
+    /// The stable `bytes://` URI that names this icon in the texture cache.
     pub const fn uri(self) -> &'static str {
         self.uri
     }
@@ -195,15 +200,7 @@ icons!(Actions, "actions", actions {
     HELP => "help",
 });
 
-/// Installs the SVG image loader the icon buttons need.
-///
-/// The shell calls this once on the context it creates: a URI with no loader keeps showing the
-/// loading spinner instead of a drawing.
-pub fn install_loaders(ctx: &egui::Context) {
-    egui_extras::install_image_loaders(ctx);
-}
-
-/// Draws `icon` as a square button of [`ICON_POINT_SIZE`], tinted with the current text colour.
+/// Draws `icon` as a square button of [`ICON_POINT_SIZE`] in the widget's foreground colour.
 ///
 /// An empty placeholder asset draws `label` as the button text instead, so a surface whose artwork
 /// is still arriving stays usable. For a drawn icon `label` is the tooltip and the accessible name.
@@ -211,12 +208,11 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
     if !icon.is_drawn() {
         return ui.button(label);
     }
-    let tint = ui.visuals().text_color();
-    let response = ui.add(Button::new(icon_image(tint, icon, label)));
+    let response = icon_widget(ui, icon, ICON_POINT_SIZE, label, true, false);
     if label.is_empty() { response } else { response.on_hover_text(label) }
 }
 
-/// A tool button: the theme icon with a hint that names the tool and its shortcut.
+/// A tool button: a [`TOOL_ICON_POINT_SIZE`] icon with a hint that names the tool and its shortcut.
 ///
 /// The hint is the tooltip of a drawn icon. An icon whose asset is still a placeholder becomes the
 /// button text itself, shortcut included, because a tooltip alone would leave the button unreadable.
@@ -228,9 +224,7 @@ pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>,
     if !icon.is_drawn() {
         return ui.add_enabled(enabled, Button::new(hint.clone()).selected(on)).on_hover_text(hint);
     }
-    let tint = ui.visuals().text_color();
-    let response = ui.add_enabled(enabled, Button::new(icon_image(tint, icon, &hint)).selected(on));
-    response.on_hover_text(hint)
+    icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, &hint, enabled, on).on_hover_text(hint)
 }
 
 /// The readable hint of a tool button: the label and, when it has one, its shortcut.
@@ -241,12 +235,81 @@ pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
     }
 }
 
-/// The image atom an icon button carries: the fixed draw size, the theme tint and the alt text.
-fn icon_image(tint: Color32, icon: Icon, label: &str) -> Image<'static> {
-    Image::from_bytes(icon.uri(), icon.asset())
-        .fit_to_exact_size(Vec2::splat(ICON_POINT_SIZE))
-        .tint(tint)
-        .alt_text(label)
+/// One square button that paints a rasterised icon, its frame following the widget state.
+///
+/// The frame and the foreground colour come from the same [`egui::WidgetVisuals`] a text button
+/// would use, so hover, press, selection and the disabled opacity need no second styling path.
+fn icon_widget(ui: &mut Ui, icon: Icon, point_size: f32, label: &str, enabled: bool, selected: bool) -> Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        let size = Vec2::splat(point_size + 2.0 * ui.spacing().button_padding.y);
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        if ui.is_rect_visible(rect) {
+            let visuals = ui.style().interact_selectable(&response, selected);
+            ui.painter().rect(
+                rect.expand(visuals.expansion),
+                visuals.corner_radius,
+                visuals.weak_bg_fill,
+                visuals.bg_stroke,
+                StrokeKind::Inside,
+            );
+            let px = pixel_size(point_size, ui.pixels_per_point());
+            if let Some(texture) = icon_texture(ui.ctx(), icon, px, visuals.fg_stroke.color) {
+                let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
+                let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                ui.painter().image(texture.id(), icon_rect, uv, Color32::WHITE);
+            }
+        }
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), label));
+        response
+    })
+    .inner
+}
+
+/// The raster side of one icon at this UI scale, in pixels; never zero and bounded.
+fn pixel_size(point_size: f32, pixels_per_point: f32) -> u32 {
+    let px = (point_size * pixels_per_point).round();
+    if !px.is_finite() || px < 1.0 {
+        return 1;
+    }
+    if px > 512.0 { 512 } else { px as u32 }
+}
+
+/// The cached texture of `icon` at `px` pixels and `color`, rasterising it on the first request.
+///
+/// The colour is baked into the uploaded pixels rather than applied as a paint tint, so the theme
+/// colour is what the texture contains and a hover or press only changes the cache key.
+fn icon_texture(ctx: &egui::Context, icon: Icon, px: u32, color: Color32) -> Option<TextureHandle> {
+    let id = egui::Id::unique(("furnicraft.icon", icon.uri(), px, color.to_array()));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let image = egui_extras::image::load_svg_bytes_with_size(
+        icon.asset(),
+        egui::load::SizeHint::Size { width: px, height: px, maintain_aspect_ratio: false },
+        &Default::default(),
+    )
+    .ok()?;
+    let texture = ctx.load_texture(icon.uri(), tint(image, color), TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
+/// Multiplies a white master by `color`, the same product the painter would apply to the vertex.
+fn tint(mut image: egui::ColorImage, color: Color32) -> egui::ColorImage {
+    for pixel in &mut image.pixels {
+        *pixel = Color32::from_rgba_premultiplied(
+            multiply(pixel.r(), color.r()),
+            multiply(pixel.g(), color.g()),
+            multiply(pixel.b(), color.b()),
+            multiply(pixel.a(), color.a()),
+        );
+    }
+    image
+}
+
+/// One channel of a premultiplied colour times the same channel of a tint, rounded.
+fn multiply(channel: u8, tint: u8) -> u8 {
+    ((u16::from(channel) * u16::from(tint) + 127) / 255) as u8
 }
 
 #[cfg(test)]
@@ -259,8 +322,8 @@ mod tests {
 
     use super::*;
 
-    /// A minimal valid icon drawing, used where the real files are still placeholders.
-    const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 12h16" fill="none" stroke="#000" stroke-width="2"/></svg>"##;
+    /// A minimal valid white-ink drawing, used where the real files are still placeholders.
+    const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="#fff"/></svg>"##;
 
     /// An icon whose asset is empty, like every placeholder in the tree today.
     fn placeholder() -> Icon {
@@ -316,7 +379,7 @@ mod tests {
                 let name = format!("{}/{}", icon.theme().as_str(), icon.name());
                 assert!(svg.starts_with("<svg"), "{name} does not start with an SVG root");
                 assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name} is not drawn on the 24 grid");
-                assert!(svg.contains("#000"), "{name} carries no ink");
+                assert!(svg.contains("#fff"), "{name} carries no white ink");
                 for forbidden in ["<text", "<image", "<style", "<defs", "<mask", "<clipPath"] {
                     assert!(!svg.contains(forbidden), "{name} contains {forbidden}");
                 }
@@ -369,46 +432,91 @@ mod tests {
         assert!(has_label);
     }
 
-    #[test]
-    fn a_drawn_asset_paints_at_the_point_size() {
+    /// Runs one icon button under `visuals` at `pixels_per_point` and returns the uploaded colours.
+    fn uploaded_icons(
+        visuals: egui::Visuals,
+        pixels_per_point: f32,
+        draw: impl FnMut(&mut Ui),
+    ) -> Vec<egui::ColorImage> {
         let ctx = egui::Context::default();
-        install_loaders(&ctx);
-        let mut size = Vec2::ZERO;
-        let mut pixels_per_point = 1.0;
-        let output = ctx.run_ui(Default::default(), |ui| {
-            pixels_per_point = ui.pixels_per_point();
-            size = ui.add(icon_image(ui.visuals().text_color(), drawn(), "Confirm")).rect.size();
-        });
-
-        let has_label = drawn_text(&output.shapes).iter().any(|text| text == "Confirm");
-        let expected = (ICON_POINT_SIZE * pixels_per_point).round() as usize;
-        let raster = output.textures_delta.set.values().flatten().find_map(|delta| match &delta.image {
-            ImageData::Color(image) if image.size == [expected, expected] => Some(image.size),
-            _ => None,
-        });
+        ctx.set_visuals(visuals);
+        ctx.set_pixels_per_point(pixels_per_point);
+        let output = ctx.run_ui(Default::default(), draw);
+        let images = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .map(|delta| match &delta.image {
+                ImageData::Color(image) => image.as_ref().clone(),
+            })
+            .collect();
         output.drop_without_applying_deltas();
+        images
+    }
 
-        assert_eq!(size, Vec2::splat(ICON_POINT_SIZE));
-        assert!(!has_label);
-        assert_eq!(raster, Some([expected, expected]), "the loader rasterised at the button's pixel size");
+    /// The square rasters of an icon; the font atlas is a colour image too.
+    fn icon_rasters(images: &[egui::ColorImage], px: usize) -> Vec<&egui::ColorImage> {
+        images.iter().filter(|image| image.size == [px, px]).collect()
     }
 
     #[test]
-    fn the_tint_is_the_theme_text_colour() {
-        let ctx = egui::Context::default();
-        install_loaders(&ctx);
-        let mut expected = Color32::PLACEHOLDER;
-        let output = ctx.run_ui(Default::default(), |ui| {
-            expected = ui.visuals().text_color();
-            ui.add(icon_image(expected, drawn(), "Confirm"));
+    fn the_theme_colour_reaches_the_icon_pixels() {
+        let px = TOOL_ICON_POINT_SIZE as usize;
+        let dark = uploaded_icons(egui::Visuals::dark(), 1.0, |ui| {
+            tool_button(ui, drawn(), "Confirm", None, true, false);
         });
-
-        let tint = output.shapes.iter().find_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect) if rect.fill_texture_id() != egui::TextureId::default() => Some(rect.fill),
-            _ => None,
+        let light = uploaded_icons(egui::Visuals::light(), 1.0, |ui| {
+            tool_button(ui, drawn(), "Confirm", None, true, false);
         });
-        output.drop_without_applying_deltas();
+        let dark = icon_rasters(&dark, px);
+        let light = icon_rasters(&light, px);
 
-        assert_eq!(tint, Some(expected));
+        assert_eq!(dark.len(), 1, "one icon uploads one texture");
+        assert_eq!(light.len(), 1, "one icon uploads one texture");
+        let (dark_color, light_color) = (
+            egui::Visuals::dark().widgets.inactive.fg_stroke.color,
+            egui::Visuals::light().widgets.inactive.fg_stroke.color,
+        );
+        assert_ne!(dark_color, light_color, "the two themes disagree on the ink");
+        assert!(dark[0].pixels.contains(&dark_color), "the dark raster is not the theme colour");
+        assert!(light[0].pixels.contains(&light_color), "the light raster is not the theme colour");
+
+        let dark_alpha: Vec<u8> = dark[0].pixels.iter().map(|pixel| pixel.a()).collect();
+        let light_alpha: Vec<u8> = light[0].pixels.iter().map(|pixel| pixel.a()).collect();
+        assert_eq!(dark_alpha, light_alpha, "a theme change must not change the silhouette");
+    }
+
+    #[test]
+    fn the_raster_follows_the_ui_scale_and_the_button_size() {
+        for pixels_per_point in [1.0_f32, 1.25, 2.0] {
+            for point_size in [TOOL_ICON_POINT_SIZE, ICON_POINT_SIZE] {
+                let images = uploaded_icons(egui::Visuals::dark(), pixels_per_point, |ui| {
+                    if point_size == TOOL_ICON_POINT_SIZE {
+                        tool_button(ui, drawn(), "Confirm", None, true, false);
+                    } else {
+                        icon_button(ui, drawn(), "Confirm");
+                    }
+                });
+                let expected = (point_size * pixels_per_point).round() as usize;
+                let images = icon_rasters(&images, expected);
+                assert_eq!(images.len(), 1, "one icon uploads one texture");
+                assert_eq!(
+                    images[0].size,
+                    [expected, expected],
+                    "{point_size} pt at {pixels_per_point} ppp rasterises at {expected} px"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_icon_size_and_colour_is_rasterised_once() {
+        let images = uploaded_icons(egui::Visuals::dark(), 1.0, |ui| {
+            tool_button(ui, drawn(), "Confirm", None, true, false);
+            tool_button(ui, drawn(), "Confirm", None, true, false);
+        });
+        let images = icon_rasters(&images, TOOL_ICON_POINT_SIZE as usize);
+        assert_eq!(images.len(), 1, "the second button reuses the cached texture");
     }
 }

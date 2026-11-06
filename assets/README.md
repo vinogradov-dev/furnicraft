@@ -25,8 +25,8 @@ assets/icons/<theme>/<name>.svg
 | `view` | `orthographic`, `perspective`, `frame-all` | Viewport strip |
 | `actions` | `confirm`, `dismiss`, `cancel`, `undo`, `redo`, `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`, `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `visible`, `hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help` | Menus, dialogs, strips and shortcut reference |
 
-A theme has no other files: no sprites, no sheets, no per-scale variants. The button rasterises one
-file at the pixel size it draws, so a second size would only drift from the first.
+A theme has no other files: no sprites, no sheets, no per-scale variants. The UI rasterises one file
+at the pixel size it draws, so a second size would only drift from the first.
 
 `assets/icons/STYLE_GUIDE.md` is documentation, not an icon: the loader reads only
 `assets/icons/<theme>/*.svg`.
@@ -47,13 +47,14 @@ file at the pixel size it draws, so a second size would only drift from the firs
 - SVG 1.1, one root `<svg>` with `xmlns="http://www.w3.org/2000/svg"`, `viewBox="0 0 24 24"`,
   `width="24"` and `height="24"`. The file is self-contained: no references to sibling files.
 - a 24 × 24 unit drawing grid with a 2 unit margin, so the ink stays inside `2..22` on both axes.
-  The rasteriser runs at 16–48 px; a shape thinner than 1.5 units disappears.
-- stroke geometry: `fill="none"`, `stroke="#000"`, `stroke-width` between `1.5` and `2.6`,
+  The rasteriser follows the UI scale (16 pt inline, 20 pt in a toolbar, times `pixels_per_point`),
+  so a shape thinner than 1.5 units disappears at a low scale.
+- stroke geometry: `fill="none"`, `stroke="#fff"`, `stroke-width` between `1.5` and `2.6`,
   `stroke-linecap="round"`, `stroke-linejoin="round"`. The weights by role are in
-  `STYLE_GUIDE.md` §7.3. A dot, an arrowhead or a solid silhouette may use `fill="#000"`.
-- one ink colour only. The button tints the rasterised texture with the theme's text colour, so
-  colour never carries meaning and a theme change needs no asset change. No `#hex`, `class`, CSS
-  variable or theme token inside the file.
+  `STYLE_GUIDE.md` §7.3. A dot, an arrowhead or a solid silhouette may use `fill="#fff"`.
+- one ink colour only, and it is white. The UI rasterises the master, multiplies it by the widget's
+  foreground colour and uploads the result, so colour never carries meaning and a theme change needs
+  no asset change. No other `#hex`, `class`, CSS variable or theme token inside the file.
 - geometry only: `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `g` and their
   `transform`, and nothing else. No `<text>` (a glyph that must be a character belongs in the UI, not
   in an icon), no `<defs>`, `<clipPath>`, `<mask>`, `<style>`, `<image>`, `<foreignObject>`,

@@ -497,23 +497,25 @@ mod tests {
     #[test]
     fn the_strip_draws_every_heading_and_a_readable_body() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
+        let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
         for panel in ToolPanel::ALL {
             assert!(texts.iter().any(|text| text == panel.label()), "{} heading is missing", panel.label());
         }
         assert!(
-            texts.iter().any(|text| text.contains("Panel  (N)")),
-            "a drawn icon keeps the labelled shortcut as its alt text: {texts:?}"
+            labels.iter().any(|label| label.contains("Panel  (N)")),
+            "a drawn icon keeps the labelled shortcut as its accessible name: {labels:?}"
         );
         assert!(
-            texts.iter().any(|text| text.contains("Cube: click the work plane")),
-            "the primitives panel is filled: {texts:?}"
+            labels.iter().any(|label| label.contains("Cube: click the work plane")),
+            "the primitives panel is filled: {labels:?}"
         );
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
@@ -608,14 +610,15 @@ mod tests {
     #[test]
     fn the_bodies_panel_only_offers_extrude_for_a_closed_path() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
-        let texts = drawn_text(&output.shapes);
+        let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text.contains("Select a closed path first")));
+        assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
     }
 
@@ -632,17 +635,18 @@ mod tests {
     #[test]
     fn an_open_path_leaves_the_extrude_button_off() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, &mut state, true, Some(node), Some(false), None, None, &mut actions);
         });
-        let texts = drawn_text(&output.shapes);
+        let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
         assert!(
-            texts.iter().any(|text| text.contains("The selected path is open; close it first")),
-            "the panel says why an open path cannot be extruded: {texts:?}"
+            labels.iter().any(|label| label.contains("The selected path is open; close it first")),
+            "the panel says why an open path cannot be extruded: {labels:?}"
         );
         assert!(actions.is_empty(), "a disabled button asks for no action");
     }
@@ -650,6 +654,7 @@ mod tests {
     #[test]
     fn a_closed_path_asks_for_one_extrusion_at_the_typed_height() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let mut state = Toolbars::new();
         state.set_extrude_height_text("24");
         let mut actions = Vec::new();
@@ -657,9 +662,9 @@ mod tests {
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, &mut state, true, Some(node), Some(true), None, None, &mut actions);
         });
-        let texts = drawn_text(&output.shapes);
+        let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text.contains("Extrude the selected path")));
+        assert!(labels.iter().any(|label| label.contains("Extrude the selected path")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(24).expect("height")));
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
@@ -690,15 +695,16 @@ mod tests {
     #[test]
     fn the_three_primitive_buttons_are_filled() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, &mut state, true, None, None, None, None, &mut actions);
         });
-        let texts = drawn_text(&output.shapes);
+        let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
         for label in ["Cube: click the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"] {
-            assert!(texts.iter().any(|text| text.contains(label)), "{label} is missing: {texts:?}");
+            assert!(labels.iter().any(|text| text.contains(label)), "{label} is missing: {labels:?}");
         }
     }
 
@@ -775,6 +781,16 @@ mod tests {
             walk(&clipped.shape, fill, &mut out);
         }
         out
+    }
+
+    /// The accessible labels this frame published: a drawn icon carries its hint here, not as text.
+    fn accessible_labels(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| update.nodes.iter().filter_map(|(_, node)| node.label().map(str::to_owned)).collect())
+            .unwrap_or_default()
     }
 
     /// Collects the text of every text shape, including nested ones.

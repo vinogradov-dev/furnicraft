@@ -71,8 +71,9 @@ If an element cannot be labelled with its role (guide §3), remove it.
 ## 4. Draw inside the contract
 
 - `viewBox="0 0 24 24"`, ink inside `2..22`; centre near `(12, 12)`; coordinates on half units.
-- One ink: `stroke="#000"`, `fill="none"`, round caps and joins. A solid silhouette may use
-  `fill="#000"`. No colour, no class, no CSS variable, no theme token.
+- One ink, and it is white: `stroke="#fff"`, `fill="none"`, round caps and joins. A solid silhouette
+  may use `fill="#fff"`. The UI multiplies the master by the theme colour; no colour, no class, no
+  CSS variable, no theme token in the file.
 - Weights: guide 1.5, main contour 1.6–1.8, result 2.2–2.6, service 2.0–2.4 or solid. Nothing below
   1.5 units, because the icon may be drawn at 16 px.
 - Allowed elements: `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `g`,

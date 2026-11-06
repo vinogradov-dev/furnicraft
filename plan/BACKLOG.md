@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
+- `[~]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
   instead of handing it to `Image::tint`, whose `vertex_colour × texture` product makes a `#000`
   master black in every theme. Rasterise with `egui_extras::image::load_svg_bytes_with_size` at
   `pt × pixels_per_point`, cache a `TextureHandle` per `(uri, px)`, paint through `Painter::image` in
