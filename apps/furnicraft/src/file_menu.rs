@@ -75,7 +75,9 @@ impl FileMenu {
     /// document.
     pub(crate) fn show(&mut self, ui: &mut Ui, dirty: bool) -> Option<FileAction> {
         let mut action = None;
-        ui.menu_button("File", |ui| {
+        let button = egui::Button::new("File")
+            .min_size(egui::vec2(crate::theme::HEADER_TEXT_WIDTH, crate::theme::HEADER_CONTROL_HEIGHT));
+        egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
             if ui.button("New").clicked() {
                 ui.close();
                 action = self.command(MenuCommand::New, dirty);

@@ -7,7 +7,8 @@
 //! minimize or maximize button and only the settings gear sits on its right.
 //!
 //! Every divider on this row separates a meaning group — identity, file, history, tabs, settings —
-//! and comes from [`theme::divider`], so the header and the ribbon share one rhythm.
+//! and comes from [`theme::divider_of_height`], as tall as the controls it separates, so the header
+//! and the ribbon share one rhythm and no hairline stops halfway down a button.
 
 use eframe::egui;
 use eframe::egui::Ui;
@@ -62,20 +63,20 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
                 icons::mark(ui, 18.0, theme::ACCENT);
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(theme::PRODUCT_NAME).strong().size(13.5));
-                theme::divider(ui);
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
                 if icon_button(ui, icons::view::HOME, "Home", true, false).clicked() {
                     action = Some(HeaderAction::Home);
                 }
-                theme::divider(ui);
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
                 file_menu(ui);
-                theme::divider(ui);
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
                 if icon_button(ui, icons::actions::FILE_SAVE, "Save  (Ctrl+S)", true, false).clicked() {
                     action = Some(HeaderAction::Save);
                 }
-                theme::divider(ui);
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
                 let hint = if state.can_undo { "Undo  (Ctrl+Z)" } else { "Nothing to undo" };
                 if icon_button(ui, icons::actions::UNDO, hint, state.can_undo, false).clicked() && state.can_undo {
@@ -85,7 +86,7 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
                 if icon_button(ui, icons::actions::REDO, hint, state.can_redo, false).clicked() && state.can_redo {
                     action = Some(HeaderAction::Redo);
                 }
-                theme::divider(ui);
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
                 if let Some(true) = tab(ui, state) {
                     action = Some(HeaderAction::CloseTab);
@@ -129,8 +130,12 @@ fn tab(ui: &mut Ui, state: &HeaderState) -> Option<bool> {
 }
 
 /// The header's icon button: a drawn icon, or its label if the asset is still empty.
+///
+/// The button is one header control — [`theme::HEADER_CONTROL_HEIGHT`] tall, square — so it lines up
+/// with the `File` text button beside it instead of standing a few points taller. The icon itself is
+/// 18 pt inside that cell, which is the optical size the header needs.
 fn icon_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool, selected: bool) -> egui::Response {
-    icons::icon_button_at(ui, icon, 18.0, label, enabled, selected)
+    icons::icon_button_sized(ui, icon, theme::HEADER_CONTROL_HEIGHT, 18.0, label, enabled, selected)
 }
 
 #[cfg(test)]

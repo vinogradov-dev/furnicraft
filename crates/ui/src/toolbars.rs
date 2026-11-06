@@ -174,6 +174,21 @@ impl RibbonTab {
     /// Every tab, in ribbon order.
     pub const ALL: [Self; 6] = [Self::Furniture, Self::Hardware, Self::Model, Self::Sketch, Self::Scene, Self::View];
 
+    /// The number of tool columns the tab's body draws, so the ribbon can size its cells once.
+    ///
+    /// The count is structural: one per labelled tool and one per numeric field, for the widest state
+    /// of the tab, so the cells do not move as the selection changes. It is the number of cells the tab
+    /// needs, not the number of groups, because a group holds several tools.
+    pub const fn columns(self) -> usize {
+        match self {
+            Self::Furniture | Self::Hardware => 0,
+            Self::Model => 6,
+            Self::Sketch => 7,
+            Self::Scene => 4,
+            Self::View => 3,
+        }
+    }
+
     /// The tab's name, drawn on its own button.
     pub const fn label(self) -> &'static str {
         match self {
@@ -525,11 +540,13 @@ fn apply_tab_gesture(state: &mut Toolbars, tab: RibbonTab, double: bool) {
 /// One tab: its name in the body type, on a control fill with the accent underline while it is open.
 ///
 /// The open tab is marked by the accent, not by a second palette entry: the whole ribbon is chrome,
-/// and one saturated line on the row already says which group row belongs to which tab.
+/// and one saturated line on the row already says which group row belongs to which tab. Every tab
+/// has the same inner padding and a minimum width, so a four-letter name does not read as a stamp
+/// next to a long one.
 fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32) -> egui::Response {
     let font = egui::FontId::proportional(12.0);
     let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(tab.label().to_owned(), font, egui::Color32::PLACEHOLDER));
-    let width = galley.size().x + 4.0 * crate::theme::STEP;
+    let width = (galley.size().x + 6.0 * crate::theme::STEP).max(crate::theme::RIBBON_TAB_MIN_WIDTH);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         if selected {
@@ -556,15 +573,27 @@ fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, action
     if groups.is_empty() {
         return;
     }
+    // One measurement for the whole row, taken before anything is laid out so every cell of every
+    // group shares it (ADR 0067): a caption never sizes its own button. It is measured on the widest
+    // tab, not the active one, so switching tab does not move the cells.
+    let columns = RibbonTab::ALL.into_iter().map(RibbonTab::columns).max().unwrap_or(1);
     egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.set_height(crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT);
-            for (index, group) in groups.iter().enumerate() {
-                if index > 0 {
-                    crate::theme::divider(ui);
+        let cell = crate::theme::RibbonMetrics::measure(ui, columns).cell;
+        // One row for the tools and the caption band under it; the divider between two groups is
+        // drawn at the height of both, so a group boundary runs the whole body.
+        let body_height = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+        // A cell has a floor, so a tab of seven tools is wider than a small window; the body scrolls
+        // sideways rather than losing its last group to the window edge.
+        egui::ScrollArea::horizontal().id_salt("ribbon_body").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.set_height(body_height);
+                for (index, group) in groups.iter().enumerate() {
+                    if index > 0 {
+                        crate::theme::divider_of_height(ui, body_height);
+                    }
+                    show_group(ui, cell, *group, state, context, actions);
                 }
-                show_group(ui, *group, state, context, actions);
-            }
+            });
         });
     });
 }
@@ -575,6 +604,7 @@ fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, action
 /// each caption names the tools above it without spanning the whole ribbon.
 fn show_group(
     ui: &mut Ui,
+    cell: f32,
     group: ToolGroup,
     state: &mut Toolbars,
     context: RibbonContext,
@@ -583,8 +613,12 @@ fn show_group(
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let inner = ui.horizontal(|ui| {
+            // Cells sit edge to edge inside a group: the whole cell is the button, and the only air
+            // between two controls is the padding the cell already carries (ADR 0067). A layout gap
+            // on top of that padding is what made the row read as loose plates.
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.set_height(crate::theme::RIBBON_ROW_HEIGHT);
-            show_group_row(ui, group, state, context, actions);
+            show_group_row(ui, cell, group, state, context, actions);
         });
         let caption = group.label().to_uppercase();
         let galley = ui.fonts_mut(|fonts| {
@@ -601,6 +635,7 @@ fn show_group(
 /// The buttons of one group, before its caption.
 fn show_group_row(
     ui: &mut Ui,
+    cell: f32,
     group: ToolGroup,
     state: &mut Toolbars,
     context: RibbonContext,
@@ -615,7 +650,7 @@ fn show_group_row(
                 let on = is_armed(active, action);
                 let caption = tool.label();
                 let hint = tool_hint(strip_label(tool), shortcut_label(tool));
-                if icons::ribbon_button(ui, tool_icon(tool), caption, &hint, true, on).clicked() {
+                if icons::ribbon_button(ui, cell, tool_icon(tool), caption, &hint, true, on).clicked() {
                     actions.push(action);
                 }
             }
@@ -630,12 +665,14 @@ fn show_group_row(
             } else {
                 "A draft needs three points to close".to_owned()
             };
-            if icons::ribbon_button(ui, icons::contour::CLOSE, "Close", &close_hint, close, false).clicked() && close {
+            if icons::ribbon_button(ui, cell, icons::contour::CLOSE, "Close", &close_hint, close, false).clicked()
+                && close
+            {
                 actions.push(ToolAction::CloseDrawing);
             }
             let cancel = draft.is_some();
             let cancel_hint = tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Esc"));
-            if icons::ribbon_button(ui, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
+            if icons::ribbon_button(ui, cell, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
                 && cancel
             {
                 actions.push(ToolAction::CancelDrawing);
@@ -659,7 +696,7 @@ fn show_group_row(
                     Some(reason) => reason.clone(),
                     None => format!("{label}: click the work plane"),
                 };
-                if icons::ribbon_button(ui, icon, label, &hint, enabled, on).clicked()
+                if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, on).clicked()
                     && let Ok(size) = size
                 {
                     actions.push(ToolAction::CreatePrimitive { kind, size });
@@ -676,7 +713,7 @@ fn show_group_row(
                 Err(reason) => reason.clone(),
             };
             let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && height.is_ok();
-            if icons::ribbon_button(ui, icons::bodies::EXTRUDE, "Extrude", &hint, enabled, false).clicked()
+            if icons::ribbon_button(ui, cell, icons::bodies::EXTRUDE, "Extrude", &hint, enabled, false).clicked()
                 && let (Some(object), Ok(height)) = (selected, height)
             {
                 actions.push(ToolAction::ExtrudePath { object, height });
@@ -690,7 +727,7 @@ fn show_group_row(
                 (icons::scene::LIGHT, "Light", None, true, ToolAction::CreateLight),
             ] {
                 let hint = tool_hint(label, shortcut);
-                if icons::ribbon_button(ui, icon, label, &hint, enabled, false).clicked() {
+                if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, false).clicked() {
                     actions.push(action);
                 }
             }
@@ -698,6 +735,7 @@ fn show_group_row(
         ToolGroup::View => {
             if icons::ribbon_button(
                 ui,
+                cell,
                 icons::view::FRAME_ALL,
                 "Frame all",
                 &tool_hint("Frame all", Some("F")),
@@ -710,13 +748,13 @@ fn show_group_row(
             }
             let (icon, caption) = projection_button(perspective);
             let hint = tool_hint("Switch the projection", Some("O"));
-            if icons::ribbon_button(ui, icon, caption, &hint, owns_view, false).clicked() && owns_view {
+            if icons::ribbon_button(ui, cell, icon, caption, &hint, owns_view, false).clicked() && owns_view {
                 actions.push(ToolAction::ToggleProjection);
             }
         }
         ToolGroup::Display => {
             let hint = tool_hint("Grid snap", Some("G"));
-            if icons::ribbon_button(ui, icons::view::GRID_SNAP, "Grid snap", &hint, owns_view, grid).clicked()
+            if icons::ribbon_button(ui, cell, icons::view::GRID_SNAP, "Grid snap", &hint, owns_view, grid).clicked()
                 && owns_view
             {
                 actions.push(ToolAction::ToggleGrid);
@@ -1085,7 +1123,7 @@ mod tests {
         assert!(icon.is_drawn(), "the Line asset is drawn, so the test exercises the image path");
         let ctx = egui::Context::default();
         let output = ctx.run_ui(Default::default(), |ui| {
-            icons::ribbon_button(ui, icon, "Line", "Line  (L)", true, false);
+            icons::ribbon_button(ui, crate::theme::RIBBON_BUTTON_MAX_WIDTH, icon, "Line", "Line  (L)", true, false);
         });
         let texts = drawn_text(&output.shapes);
         let images = count_images(&output.shapes);
@@ -1206,6 +1244,45 @@ mod tests {
         assert!(labels.iter().any(|label| label.contains("Cancel")), "a draft can always cancel: {labels:?}");
     }
 
+    #[test]
+    fn the_cell_grows_with_the_window_within_its_band() {
+        // The owner's second observation: on a maximised window the reference's buttons get wider. So
+        // the cell is not one number — it is measured and clamped, and every tab uses the same one.
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let cell = |width: f32| {
+            let mut cell = 0.0;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                ui.set_width(width);
+                cell = crate::theme::RibbonMetrics::measure(ui, RibbonTab::Sketch.columns()).cell;
+            });
+            output.drop_without_applying_deltas();
+            cell
+        };
+        let small = cell(640.0);
+        let large = cell(2560.0);
+        assert_eq!(small, crate::theme::RIBBON_BUTTON_MIN_WIDTH, "a narrow window keeps the floor");
+        assert_eq!(large, crate::theme::RIBBON_BUTTON_MAX_WIDTH, "a maximised window stops at the ceiling");
+        assert!(small < large, "the cells grow with the window, within the band");
+        const { assert!(crate::theme::RIBBON_BUTTON_MIN_WIDTH < crate::theme::RIBBON_BUTTON_MAX_WIDTH) };
+    }
+
+    #[test]
+    fn every_tab_of_the_ribbon_is_counted() {
+        // A tab's column count drives the cell, so a tab that undercounts would draw past its share.
+        assert_eq!(RibbonTab::Sketch.columns(), 7, "five drawing tools and the draft pair");
+        assert_eq!(RibbonTab::Model.columns(), 6, "three primitives, the height field and the extrusion");
+        assert_eq!(RibbonTab::Scene.columns(), 4);
+        assert_eq!(RibbonTab::View.columns(), 3);
+        assert_eq!(RibbonTab::Furniture.columns(), 0, "an empty tab never reaches the body");
+        assert_eq!(RibbonTab::Hardware.columns(), 0);
+        assert_eq!(RibbonTab::Sketch.groups().len(), 2, "the Sketch tab draws two groups");
+    }
+
     /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.
     fn drawn_fill(shapes: &[egui::epaint::ClippedShape], fill: egui::Color32) -> usize {
         fn walk(shape: &egui::Shape, fill: egui::Color32, out: &mut usize) {
@@ -1246,6 +1323,49 @@ mod tests {
             walk(&clipped.shape, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn a_group_divider_spans_the_whole_body() {
+        // The owner's complaint: the divider stopped in the middle of the tool row, so a group
+        // boundary looked like a stray tick. It is as tall as the tool row plus its caption band.
+        let mut state = Toolbars::new();
+        state.set_tab(RibbonTab::Sketch);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let body = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+        let mut dividers = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, full_context(), &mut Vec::new());
+        });
+        collect_vertical_lines(&output.shapes, &mut dividers);
+        output.drop_without_applying_deltas();
+        assert!(!dividers.is_empty(), "the Sketch tab separates its two groups");
+        for height in dividers {
+            assert!((height - body).abs() < 0.5, "a group divider is {height} pt tall, the body is {body} pt");
+        }
+    }
+
+    /// Collects the height of every painted vertical line segment, a divider or a `vline`.
+    fn collect_vertical_lines(shapes: &[egui::epaint::ClippedShape], out: &mut Vec<f32>) {
+        fn walk(shape: &egui::Shape, out: &mut Vec<f32>) {
+            match shape {
+                egui::Shape::LineSegment { points, .. } => {
+                    if (points[0].x - points[1].x).abs() < 0.5 {
+                        out.push((points[0].y - points[1].y).abs());
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in shapes {
+            walk(&clipped.shape, out);
+        }
     }
 
     /// The accessible labels this frame published: a drawn icon carries its hint here, not as text.
