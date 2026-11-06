@@ -174,6 +174,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U38** the window reads as one frame: one theme owns the colour and the rhythm, and chrome
+  is separated from content. `crates/ui/src/theme.rs` holds the palette (chrome, surface, panel,
+  control, line, text, dim, disabled, one accent, danger, warn), a 4 pt spacing step, row heights, one
+  rounding and one type scale, and `install` applies the same style to both of `egui`'s variants so a
+  system light preference cannot leave half the window in the stock palette. `header.rs` draws one row
+  — mark, *FurniCraft*, *Home*, *File*, *Save*, *Undo*, *Redo*, the open tab with its unsaved dot, and
+  the gear pinned to the far edge with `Sides` — and returns a `HeaderAction` the shell performs, so
+  the row owns no document state; the window keeps its system frame, so no window buttons are drawn.
+  The status text, the view controls, the work plane and the UI scale moved out of the viewport's first
+  row into a bottom `status_bar`, drawn from a snapshot that applies its one action after both sides
+  have drawn. The scene tree and the inspector lost their stock headings for a themed title and
+  hairline. New assets: `assets/logo.svg`, the `window` theme (`minimize`, `maximize`, `restore`,
+  `close`, drawn for a future frameless mode) and `actions/{file-save,undo,redo,settings}`; `view/home`.
+  ADR 0063 (theme) and 0064 (header) — `c7ad880`
+  `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs`
 - `[x]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
   two-click arc, and a chain that mixes both still closes and extrudes. The arc leaves the last
   vertex: the first click is the point it passes through, the second is its end, and the next
