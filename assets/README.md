@@ -22,8 +22,9 @@ assets/icons/<theme>/<name>.svg
 | `primitives` | `cube`, `cylinder`, `sphere`, `cone` | Primitives toolbar |
 | `bodies` | `extrude`, `revolve`, `sweep` | Bodies toolbar |
 | `scene` | `panel`, `assembly`, `camera`, `light` | Scene toolbar |
-| `view` | `orthographic`, `perspective`, `frame-all` | Viewport strip |
+| `view` | `orthographic`, `perspective`, `frame-all`, `home` | Viewport strip, header |
 | `actions` | `confirm`, `dismiss`, `cancel`, `undo`, `redo`, `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`, `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `visible`, `hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help` | Menus, dialogs, strips and shortcut reference |
+| `window` | `minimize`, `maximize`, `restore`, `close` | The window row of the header; drawn only when the system frame is off |
 
 A theme has no other files: no sprites, no sheets, no per-scale variants. The UI rasterises one file
 at the pixel size it draws, so a second size would only drift from the first.

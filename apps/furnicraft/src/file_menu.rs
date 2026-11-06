@@ -67,42 +67,60 @@ impl FileMenu {
         self.current = path;
     }
 
-    /// Draws the menu bar and any open dialog, returning the operation to perform.
+    /// Draws the File menu button on an existing row and any open dialog.
     ///
-    /// `dirty` marks the current scene as having unsaved changes: Save is still allowed, New asks
-    /// for confirmation and Open warns that it replaces the document.
+    /// The button is a plain menu: the header decides where it sits and draws its own dividers, so
+    /// this function creates no panel of its own. `dirty` marks the current scene as having unsaved
+    /// changes: Save is still allowed, New asks for confirmation and Open warns that it replaces the
+    /// document.
     pub(crate) fn show(&mut self, ui: &mut Ui, dirty: bool) -> Option<FileAction> {
         let mut action = None;
-        egui::Panel::top("file_menu").show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("New").clicked() {
-                        ui.close();
-                        action = self.command(MenuCommand::New, dirty);
-                    }
-                    if ui.button("Open…").clicked() {
-                        ui.close();
-                        action = self.command(MenuCommand::Open, dirty);
-                    }
-                    ui.separator();
-                    if ui.button("Save").clicked() {
-                        ui.close();
-                        action = self.command(MenuCommand::Save, dirty);
-                    }
-                    if ui.button("Save As…").clicked() {
-                        ui.close();
-                        action = self.command(MenuCommand::SaveAs, dirty);
-                    }
-                });
-                ui.separator();
-                ui.label(self.display_name(dirty));
-            });
+        ui.menu_button("File", |ui| {
+            if ui.button("New").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::New, dirty);
+            }
+            if ui.button("Open…").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::Open, dirty);
+            }
+            ui.separator();
+            if ui.button("Save").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::Save, dirty);
+            }
+            if ui.button("Save As…").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::SaveAs, dirty);
+            }
         });
-        if action.is_some() {
-            return action;
-        }
-        let ctx = ui.ctx().clone();
-        if self.confirm_new { self.confirm_new_ui(&ctx) } else { self.path_dialog_ui(&ctx, dirty) }
+        action.or_else(|| self.show_dialogs(ui.ctx(), dirty))
+    }
+
+    /// Draws any open modal dialog and returns the operation it asked for.
+    ///
+    /// A dialog is a window over the whole application, not a child of the header, so the shell
+    /// calls this once per frame however the header is laid out.
+    pub(crate) fn show_dialogs(&mut self, ctx: &egui::Context, dirty: bool) -> Option<FileAction> {
+        if self.confirm_new { self.confirm_new_ui(ctx) } else { self.path_dialog_ui(ctx, dirty) }
+    }
+
+    /// The Save path of the header's save button.
+    ///
+    /// The header calls the same [`MenuCommand::Save`] the File menu does, so the two cannot drift
+    /// into one saving silently and the other opening a path dialog.
+    pub(crate) fn save(&mut self, dirty: bool) -> Option<FileAction> {
+        self.command(MenuCommand::Save, dirty)
+    }
+
+    /// The bare file name the header's tab draws; the dirty marker is its own glyph there.
+    pub(crate) fn file_name(&self) -> String {
+        self.current
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled")
+            .to_owned()
     }
 
     /// Turns a menu entry into an action or a dialog.
@@ -152,6 +170,7 @@ impl FileMenu {
     }
 
     /// The name shown in the menu bar, with a dirty marker.
+    #[cfg(test)]
     fn display_name(&self, dirty: bool) -> String {
         let name =
             self.current.as_deref().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or("Untitled");

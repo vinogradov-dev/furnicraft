@@ -33,11 +33,14 @@ pub enum Theme {
     View,
     /// Menus, dialogs, strips and the shortcut reference.
     Actions,
+    /// The window row of the header: minimize, maximize, restore, close.
+    Window,
 }
 
 impl Theme {
     /// Every theme, in the order of the asset tree.
-    pub const ALL: [Self; 6] = [Self::Contour, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Actions];
+    pub const ALL: [Self; 7] =
+        [Self::Contour, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Actions, Self::Window];
 
     /// The directory name of this theme, which is also the first URI segment of its icons.
     pub const fn as_str(self) -> &'static str {
@@ -48,6 +51,7 @@ impl Theme {
             Self::Scene => "scene",
             Self::View => "view",
             Self::Actions => "actions",
+            Self::Window => "window",
         }
     }
 
@@ -60,6 +64,7 @@ impl Theme {
             Self::Scene => scene::ALL,
             Self::View => view::ALL,
             Self::Actions => actions::ALL,
+            Self::Window => window::ALL,
         }
     }
 }
@@ -167,6 +172,7 @@ icons!(View, "view", view {
     ORTHOGRAPHIC => "orthographic",
     PERSPECTIVE => "perspective",
     FRAME_ALL => "frame-all",
+    HOME => "home",
 });
 
 icons!(Actions, "actions", actions {
@@ -201,6 +207,75 @@ icons!(Actions, "actions", actions {
     INFO => "info",
     HELP => "help",
 });
+
+icons!(Window, "window", window {
+    MINIMIZE => "minimize",
+    MAXIMIZE => "maximize",
+    RESTORE => "restore",
+    CLOSE => "close",
+});
+
+/// The product mark, drawn by the header next to the product name.
+///
+/// It lives in `assets/logo.svg`, not in a theme: a mark is not an icon of a surface, and it keeps
+/// its own drawing even when a theme is renamed. Like an icon it is a white master that the theme
+/// multiplies, so one file serves every variant.
+pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.svg");
+
+/// The stable texture URI of [`LOGO`].
+pub const LOGO_URI: &str = "bytes://logo.svg";
+
+/// A square icon button at an explicit point size, for the header's own rhythm.
+///
+/// The tool strip and the menus keep [`ICON_POINT_SIZE`]; a header row is taller, so its buttons ask
+/// for their size instead of inheriting the inline one.
+pub fn icon_button_at(
+    ui: &mut Ui,
+    icon: Icon,
+    point_size: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+) -> Response {
+    if !icon.is_drawn() {
+        return ui.add_enabled(enabled, Button::new(label).selected(selected)).on_hover_text(label);
+    }
+    let response = icon_widget(ui, icon, point_size, label, enabled, selected);
+    if label.is_empty() { response } else { response.on_hover_text(label) }
+}
+
+/// Paints the product mark as a square image in `color`.
+///
+/// The mark is not a button: it carries no action and takes no focus. It is rasterised through the
+/// same cache as an icon so a theme change re-tints it instead of loading a second file.
+pub fn mark(ui: &mut Ui, size: f32, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    if ui.is_rect_visible(rect)
+        && let Some(texture) = logo_texture(ui.ctx(), size, color)
+    {
+        let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+    }
+    response
+}
+
+/// The rasterised mark at `size` points and `color`, cached like an icon.
+fn logo_texture(ctx: &egui::Context, point_size: f32, color: Color32) -> Option<TextureHandle> {
+    let px = pixel_size(point_size, ctx.pixels_per_point());
+    let id = egui::Id::unique(("furnicraft.logo", px, color.to_array()));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let image = egui_extras::image::load_svg_bytes_with_size(
+        LOGO,
+        egui::load::SizeHint::Size { width: px, height: px, maintain_aspect_ratio: false },
+        &Default::default(),
+    )
+    .ok()?;
+    let texture = ctx.load_texture(LOGO_URI, tint(image, color), TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
 
 /// Draws `icon` as a square button of [`ICON_POINT_SIZE`] in the widget's foreground colour.
 ///
@@ -431,7 +506,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 51);
+        assert_eq!(seen.len(), 56);
     }
 
     #[test]
