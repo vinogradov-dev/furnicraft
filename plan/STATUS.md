@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U28 state=doing base=84a4675 updated=2026-11-06
+STATE: milestone=M7 phase=U task=X2 state=idle base=42f6cde updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -41,23 +41,23 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   open chain open, a cutout ring keeps its anchor and `CutoutDepth` when applied, and
   `panel.outline.to_contour` bakes a rectangle and its banding in one revision (ADR 0061).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
-  1024 sampled points cannot be extruded — waits behind the icon work (`plan/questions.md`).
+  1024 sampled points cannot be extruded — is next.
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
   `Image::tint` made a `#000` master black in every theme, and the set — 18 drawn files of 51, pure
-  stroke — has no mass at 16 pt. U27 is fixed: the UI rasterises each white master at
-  `pt × pixels_per_point`, bakes the widget's foreground colour into the uploaded pixels and caches
-  a texture per `(uri, px, colour)`, at 20 pt tools and 16 pt inline, with a pixel test in both
-  themes. U28 adds tonal fills and one projection; the 33 placeholders are in `plan/debt.md`.
+  stroke — had no mass at 16 pt. U27 rasterises each white master at `pt × pixels_per_point`, bakes the
+  widget's foreground colour into the pixels and caches a texture per `(uri, px, colour)`, at 20 pt
+  tools and 16 pt inline, with a pixel test in both themes. U28: a passive face fills at 12–18 %, the
+  result at 45–60 % under its outline, the volumetric icons share one axonometry (§9.1), and each keeps
+  its ink inside `3..21` at 20–45 % coverage, read off the raster; 33 placeholders are in `plan/debt.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
-  the three plan files; `updated=` must be a real date no older than `base`, and `task=` must name the
-  first unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green. Branches: `dev`,
-  merged to `main` with `--no-ff` (AGENTS §6.2).
+  the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
+  unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U28 is next: allow `fill-opacity`, draw passive faces at 12–18 % and result geometry at 45–60 %,
-publish one axonometry and redraw the 18 drawn icons at a fixed footprint, with a coverage test read
-off the rasterised alpha. Then X2 and U29.
+X2 is next: a valid simple ring whose extrusion cap exceeds `MAX_FACE_VERTICES` must still become a
+solid instead of being refused. Then U29 adds an arc to the Polyline tool; 33 placeholder icons wait
+in `plan/debt.md`.
 
 ## Index
 

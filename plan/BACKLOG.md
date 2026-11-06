@@ -25,13 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
-  gradient or CSS) so a passive face fills at 12–18 % and the result or changed geometry at 45–60 %
-  with the heavy outline, then redraw the 18 drawn icons at a fixed footprint (ink `3..21`, coverage
-  20–45 %) on the one axonometry the guide publishes. One change updates `STYLE_GUIDE.md` §5, §7.3 and
-  §9, the draw-icon skill and a coverage test read off the rasterised alpha. ADR 0055;
-  `files: assets/icons/STYLE_GUIDE.md, crates/ui/src/icons.rs`
-
 - `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
   Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
   A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
@@ -65,6 +58,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U28** mass and one projection: `fill-opacity` is allowed (still no `defs`, `mask`,
+  `clipPath`, gradient or CSS), so a passive face fills at 12–18 % and the result or changed geometry
+  at 45–60 % under the heavy outline. The 18 drawn icons were redrawn inside the fixed `3..21`
+  footprint at 20–45 % coverage on the one published axonometry; `STYLE_GUIDE.md` §5, §7.1, §7.3,
+  §7.4, §9 and §15, `README.md`, `AUDIT.md`, the draw-icon skill and `crates/ui/src/icons.rs` carry
+  the numbers, and a test reads footprint and coverage off the rasterised alpha. ADR 0055 — `42f6cde`
+  `files: assets/icons/STYLE_GUIDE.md, crates/ui/src/icons.rs`
 
 - `[x]` **U27** the theme reaches the icon: `icon_widget` rasterises an embedded white master with
   `egui_extras` at `pt × pixels_per_point`, bakes `WidgetVisuals::fg_stroke.color` into the pixels,
