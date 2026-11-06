@@ -129,7 +129,6 @@ struct FurniCraftApp {
 
 impl FurniCraftApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
-        furnicraft_ui::icons::install_loaders(&cc.egui_ctx);
         let session = sample_session()?;
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();

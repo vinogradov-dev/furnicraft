@@ -13,25 +13,25 @@ below are measurements of that project's public SVG sources, not extracted imple
 
 - `assets/icons/<theme>/<name>.svg` is embedded by `crates/ui/src/icons.rs` (`icons!` macro,
   `include_bytes!`), one module per theme, `ALL` per theme for audits.
-- `icon_button` / `tool_button` wrap the icon in `egui::Image::from_bytes(uri, bytes)`,
-  `.fit_to_exact_size(16 pt)`, `.tint(ui.visuals().text_color())`.
-- `egui_extras`'s SVG loader rasterises with `resvg` at `points × pixels_per_point` and caches per
-  `(uri, SizeHint)`; `ui_scale.rs` therefore re-rasterises on a zoom change instead of stretching.
+- `icon_button` / `tool_button` rasterise the master with `egui_extras::image::load_svg_bytes_with_size`
+  at `pt × pixels_per_point`, tint the pixels, upload a `TextureHandle` cached per `(uri, px, colour)`
+  in the context's temporary data, and paint it with `Painter::image`. `ui_scale.rs` therefore
+  re-rasterises on a zoom change instead of stretching.
+- Sizes are points: 20 pt for a toolbar tool, 16 pt for inline and menu use.
 - A zero-byte file is a documented placeholder: the button draws its text label instead.
 
-Two consequences are worth stating plainly, because both were assumed rather than tested:
+The pipeline this replaced was measured, because both of its assumptions were wrong:
 
 1. `Image::tint` becomes the vertex colour of the mesh, and the egui shader computes
-   `out = in.color * texture` (`egui-wgpu/src/egui.wgsl`). The masters are drawn `stroke="#000"`,
-   so the product is always black: **the theme colour never reaches a glyph.** On the dark theme
-   that is `gray(140)` text on a `gray(50)` inactive button, about 1.4–1.5 : 1 — effectively
-   invisible; on the light theme it is a harsh `0` against `gray(60)` text.
-2. The only test of this path (`the_tint_is_the_theme_text_colour`) inspects the `RectShape.fill`,
-   i.e. the colour handed to the painter, not the pixels that come out. That is why a green suite
-   kept the defect.
+   `out = in.color * texture` (`egui-wgpu/src/egui.wgsl`). The masters were drawn `stroke="#000"`,
+   so the product was always black: **the theme colour never reached a glyph.** On the dark theme
+   that was `gray(140)` text on a `gray(50)` inactive button, about 1.4–1.5 : 1 — effectively
+   invisible; on the light theme it was a harsh `0` against `gray(60)` text.
+2. The only test of that path inspected the `RectShape.fill`, i.e. the colour handed to the painter,
+   not the pixels that came out. That is why a green suite kept the defect.
 
-Colour is not a scaling problem: the raster is produced at the drawn pixel size, so a multi-colour
-master is crisp at 75 % and 200 % alike.
+Colour is not a scaling problem: the raster is produced at the drawn pixel size, so the master is
+crisp at 75 % and 200 % alike.
 
 ## 2. What the set looks like, measured
 
@@ -69,8 +69,9 @@ the whole difference: mass, not detail, is what makes it read at 16 px.
 
 ## 3. Three defects
 
-- **D1 — the theme never reaches the icon.** See §1. Fix: rasterise in the UI and paint the texture
-  in the theme's icon colour, with a pixel test. Owners: `crates/ui/src/icons.rs`.
+- **D1 — the theme never reaches the icon.** See §1. **Fixed by U27**: the UI rasterises the master,
+  bakes the theme colour into the uploaded pixels and guards the path with a pixel test. Owners:
+  `crates/ui/src/icons.rs`.
 - **D2 — no mass, only wireframe.** No file has a fill. Fix: one ink, tonal fills by alpha, so a
   theme change still needs no asset change. Owners: `assets/README.md`, `STYLE_GUIDE.md`, all 18
   drawn SVGs.
@@ -80,10 +81,9 @@ the whole difference: mass, not detail, is what makes it read at 16 px.
 
 ## 4. Approved work
 
-Steps 0 and 1 are approved and queued as backlog tasks **U27** and **U28**. Steps 2–4 are recorded
-below and not approved.
+Step 0 shipped as **U27**; step 1 is queued as **U28**. Steps 2–4 are recorded below and not approved.
 
-### Step 0 — U27: rasterise in the UI
+### Step 0 — U27: rasterise in the UI (done)
 
 - `crates/ui/src/icons.rs` stops using `Image::tint`: it calls
   `egui_extras::image::load_svg_bytes_with_size(asset, SizeHint::Size { width: px, height: px,

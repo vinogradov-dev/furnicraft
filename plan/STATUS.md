@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U27 state=idle base=65b1d31 updated=2026-11-06
+STATE: milestone=M7 phase=U task=U28 state=idle base=84a4675 updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -36,18 +36,18 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   segment's start when it is open — and an extruded body takes the ring's centre (ADR 0058). X5 is
   fixed: a selected chain takes one explicit colour and the shell repaints it over the viewport as a
   thick stroke with a dark underlay, because a one-pixel `LineList` cannot be widened (ADR 0059).
-  U33–U37 are fixed: `PathCorner` names a corner of an open chain, `Path` moves, splits, removes and
-  closes its segments through the ring helpers (ADR 0060), a `ContourDraft` of either kind reshapes a
-  path through one `object.path.replace`, the gizmo paints an open chain open and offers *Edit contour*
-  on a path card, and a contour cutout ring is one more target whose apply keeps the record's anchor
-  and `CutoutDepth`. `panel.outline.to_contour` bakes a rectangle's outline and its banding into the
-  ring it draws, in one revision and one undo entry (ADR 0061).
+  U33–U37 are fixed: `PathCorner` names an open chain's corner, `Path` edits through the ring helpers
+  (ADR 0060), a `ContourDraft` reshapes a path through one `object.path.replace`, the gizmo paints an
+  open chain open, a cutout ring keeps its anchor and `CutoutDepth` when applied, and
+  `panel.outline.to_contour` bakes a rectangle and its banding in one revision (ADR 0061).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — waits behind the icon work (`plan/questions.md`).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
-  `Image::tint` multiplies into the texture, so a `#000` master stayed black in every theme, and the
-  set — 18 drawn files of 51, pure stroke — has no mass at 16 pt. U27 moves rasterisation into the UI
-  with a pixel test, U28 adds tonal fills; the 33 placeholders are recorded in `plan/debt.md`.
+  `Image::tint` made a `#000` master black in every theme, and the set — 18 drawn files of 51, pure
+  stroke — has no mass at 16 pt. U27 is fixed: the UI rasterises each white master at
+  `pt × pixels_per_point`, bakes the widget's foreground colour into the uploaded pixels and caches
+  a texture per `(uri, px, colour)`, at 20 pt tools and 16 pt inline, with a pixel test in both
+  themes. U28 adds tonal fills and one projection; the 33 placeholders are in `plan/debt.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files; `updated=` must be a real date no older than `base`, and `task=` must name the
   first unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green. Branches: `dev`,
@@ -55,9 +55,9 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U27 is next: the theme reaches the icon through `pt × pixels_per_point` rasterisation, a cached
-texture per `(uri, px)` and the widget's foreground colour, with 20 pt tools and 16 pt inline. Then
-U28, X2 and U29.
+U28 is next: allow `fill-opacity`, draw passive faces at 12–18 % and result geometry at 45–60 %,
+publish one axonometry and redraw the 18 drawn icons at a fixed footprint, with a coverage test read
+off the rasterised alpha. Then X2 and U29.
 
 ## Index
 

@@ -25,16 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
-  instead of handing it to `Image::tint`, whose `vertex_colour × texture` product makes a `#000`
-  master black in every theme. Rasterise with `egui_extras::image::load_svg_bytes_with_size` at
-  `pt × pixels_per_point`, cache a `TextureHandle` per `(uri, px)`, paint through `Painter::image` in
-  `visuals.widgets.inactive.fg_stroke.color` (hover/press from the widget state, disabled an alpha
-  multiply). Masters switch to `#fff`; toolbar sizes split into 20 pt tools and 16 pt inline. A pixel
-  test draws one icon in both themes and asserts the theme colour in the uploaded pixels, an
-  identical alpha silhouette and a raster of `round(pt × ppp)` — it fails on today's code. ADR 0055,
-  `assets/README.md` format, `files: crates/ui/src/icons.rs, assets/README.md`
-
 - `[ ]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
   gradient or CSS) so a passive face fills at 12–18 % and the result or changed geometry at 45–60 %
   with the heavy outline, then redraw the 18 drawn icons at a fixed footprint (ink `3..21`, coverage
@@ -75,6 +65,16 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U27** the theme reaches the icon: `icon_widget` rasterises an embedded white master with
+  `egui_extras` at `pt × pixels_per_point`, bakes `WidgetVisuals::fg_stroke.color` into the pixels,
+  caches a `TextureHandle` per `(uri, px, colour)` and paints it through `Painter::image`; the frame,
+  hover/press and disabled alpha come from the same widget visuals a text button uses. Tools draw at
+  20 pt and inline buttons at 16 pt; the 18 masters and the format docs say `#fff`, and the toolbar
+  tests read the accessible name instead of `Image`'s alt text. The pixel test draws one icon in both
+  themes and asserts the theme colour, one alpha silhouette and `round(pt × ppp)` at 1.0, 1.25 and
+  2.0. ADR 0055 — `84a4675`
+  `files: crates/ui/src/icons.rs, assets/README.md`
 
 - `[x]` **U37** a cutout ring is edited in the viewport: `ContourTarget::Cutout { panel, machining }`
   reads the ring from `panel.machining_by_id`, `ContourEdit::apply` rebuilds the record through one

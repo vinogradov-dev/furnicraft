@@ -119,8 +119,9 @@ real gap — never by a hue that exists only in the author's head. See §5.
 
 ### 5.1. One ink
 
-Every icon is drawn in one ink colour. The file carries no colour of its own; the button or the
-theme tints the rasterised image, and the same master serves every theme.
+Every icon is drawn in one ink colour, and that ink is white (`#fff`). The file carries no colour of
+its own; the button rasterises the master and multiplies it by the theme's icon colour, so the same
+master serves every theme.
 
 The emphasis ladder, strongest first:
 
@@ -617,7 +618,7 @@ Forbidden:
 
 Drawing rules:
 
-- `fill="none"`, `stroke="#000"`, one ink; a solid silhouette may use `fill="#000"` with no stroke;
+- `fill="none"`, `stroke="#fff"`, one ink; a solid silhouette may use `fill="#fff"` with no stroke;
 - round caps and round joins;
 - no `scale` transform to fake another size: the loader rasterises at the size it draws;
 - at most two decimal places;
