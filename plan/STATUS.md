@@ -55,9 +55,9 @@ display styles, the layout entry and the three-slider display settings popover, 
 projection-and-angles switch U42 draws under the orientation cube. The bar keeps the armed tool, its
 gesture, the counts and the last error — and now also the creation chip U39 moved out of the ribbon.
 
-Order after U40, fastest first: U41 → U47 (command palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons
-last, so no surface waits on artwork). Read `plan/SESSION.template.md`, ADRs 0063–0066, then
-`apps/furnicraft/src/main.rs` (`scene_tree`, `panel_card`, `status_bar`) and `crates/ui/src/lib.rs`.
+Order after U40: U41 → U47 (palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49
+(English and Russian behind one typed message table). Read `plan/SESSION.template.md`, ADRs 0063–0066,
+then `apps/furnicraft/src/main.rs` (`scene_tree`, `panel_card`, `status_bar`) and `crates/ui/src/lib.rs`.
 
 ## Index
 
