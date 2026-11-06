@@ -20,8 +20,8 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Primitive parameters | `crates/model/src/primitive.rs` (`Primitive`, `Cube`, `Cylinder`, `Sphere`, `PrimitiveKind`, the size and tessellation caps), `crates/model/src/object.rs` (`Geometry::Primitive`), `crates/engine/src/object_cmds.rs` (`ObjectPrimitiveCreate`, `ObjectPrimitiveReplace`) | the parameters are the source of truth; validated on construction and on load; schema 18 |
 | Primitive meshes | `crates/mesh/src/primitive.rs` (`build_primitive_mesh`), `crates/mesh/src/lib.rs` (`evaluate_primitive`, `primitive_mesh`, `EvaluationCache::object`), `crates/model/src/mesh.rs` (`Mesh::cube`) | derived from the parameters; the viewport and `object.collapse` share one evaluator; a cube keeps six faces |
 | Primitive object card | `crates/ui/src/object_card.rs` (`ObjectCard::primitive_section`, `PrimitiveDraft`, `PrimitiveFields`) | the fields the shape has, as millimetres and whole numbers; one Apply is one `object.primitive.replace` |
-| Contour edit commands | `crates/engine/src/panel_cmds.rs` (`PanelOutlineSet`), `crates/engine/src/object_cmds.rs` (`ObjectContourReplace`) | small |
-| Contour panel card UI | `crates/ui/src/panel_card.rs` (`PanelAction::StartContour`) | small |
+| Contour edit commands | `crates/engine/src/panel_cmds.rs` (`PanelOutlineSet`, `PanelOutlineToContour`), `crates/engine/src/object_cmds.rs` (`ObjectContourReplace`) | small; `panel.outline.to_contour` bakes a rectangle outline into a ring (ADR 0061) |
+| Contour panel card UI | `crates/ui/src/panel_card.rs` (`PanelAction::StartContour`, `PanelAction::ToContour`) | small; *Edit contour* bakes first when the panel is still rectangular |
 | Contour object card UI | `crates/ui/src/object_card.rs` (`ObjectAction::StartContour`) | small |
 | Contour segment value type | `crates/model/src/contour.rs` (`ContourSegment`, Line/Arc) | whole file |
 | Contour geometry math | `crates/geom/src/contour.rs` (`offset`, `trimmed`, `intersections_with`, `sample`) | whole file |
@@ -29,7 +29,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Panel core geometry | `crates/model/src/panel/geometry.rs` (`PanelGeometry::from_regions`), `crates/model/src/panel/machining.rs` (`core_violation_of`) | small |
 | Machining descriptors | `crates/model/src/panel/machining.rs` (`MACHINING_DESCRIPTORS`, `MachiningDescriptor`, `MachiningCapabilities`) | small |
 | Face triangulation | `crates/geom/src/triangulate.rs` (`triangulate_face`), `crates/mesh/src/lib.rs` (`object_mesh`) | whole files |
-| Contour panel outline | `crates/model/src/panel/contour.rs` (`nominal_contour`, `contour_paths`) | whole file |
+| Contour panel outline | `crates/model/src/panel/contour.rs` (`nominal_contour`, `contour_paths`, `to_contour_ring`, `BakedOutline`, `document_ring`) | whole file; a rectangle bakes into a ring and moves its banding (ADR 0061) |
 | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |
 | Model panel | `crates/model/src/panel/` (`Panel`, `geometry.rs`, `banding.rs`, `machining.rs`, `contour.rs`) | whole files |
 | Model project | `crates/model/src/project/mod.rs` (`Project`, ids, revision, `scan_tree`) | whole file |

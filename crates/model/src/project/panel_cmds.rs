@@ -74,6 +74,49 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Checks whether a rectangle panel's outline can bake into a contour ring.
+    ///
+    /// The conversion is one-way: the corner features and bows become curve segments, every edge
+    /// and corner band moves onto the ring segment it covered (ADR 0061), and the resulting ring
+    /// must still resolve to a panel geometry. A panel that already stores a ring is refused; so is
+    /// a corner band whose corner has no segment.
+    pub fn validate_panel_contour_conversion(&self, id: Id) -> Result<(), ProjectError> {
+        self.converted_panel(id).map(|_| ())
+    }
+
+    /// Replaces a rectangle panel's outline with the ring it draws, in one revision and one undo.
+    ///
+    /// The ring is anchored at the panel-local zero corner like any contour panel (ADR 0009), so an
+    /// outward bow that extended the outline moves the frame; the placement, pivot and machining
+    /// follow by the same offset so the world-space shape stays fixed. The corner and bow
+    /// parameters are gone, but undo restores the rectangle with its features.
+    pub fn convert_panel_to_contour(&mut self, id: Id) -> Result<Revision, ProjectError> {
+        let candidate = self.converted_panel(id)?;
+        let next_revision = self.next_revision()?;
+        let Some((_depth, panel)) = find_panel_mut(&mut self.root, id, 1) else {
+            return Err(ProjectError::PanelNotFound { id });
+        };
+        *panel = candidate;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Builds and validates the ring panel a rectangle bakes into, without touching the tree.
+    fn converted_panel(&self, id: Id) -> Result<Panel, ProjectError> {
+        let panel = self.panel(id).ok_or(ProjectError::PanelNotFound { id })?;
+        let baked = panel.to_contour_ring()?;
+        let (min, _) = baked.contour().bounds_micrometres();
+        let anchored = Panel::anchored_contour(baked.contour())?;
+        let nominal_size = Panel::contour_size(&anchored)?;
+        let mut candidate = panel.clone();
+        candidate.move_frame_to(min)?;
+        candidate.set_nominal_size(nominal_size);
+        candidate.set_outline(PanelOutline::Contour { contour: anchored });
+        candidate.set_contour_banding(baked.banding().to_vec(), baked.order().to_vec());
+        candidate.geometry_with_fallbacks()?;
+        Ok(candidate)
+    }
+
     /// Renames a panel and bumps the revision once.
     ///
     /// The name is user-visible text; callers validate that it is not blank before calling this
@@ -1223,5 +1266,83 @@ mod tests {
             unchanged.cutout().expect("cutout").shape(),
             &CutoutShape::Rectangle(sample_rect(200, 200, 100, 50))
         );
+    }
+
+    #[test]
+    fn converting_a_rectangle_bakes_one_ring_in_one_revision() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::TopRight.id();
+        project
+            .set_corner_feature(
+                panel_id,
+                CornerFeature::new(corner, CornerFeatureKind::Radius { radius: millimetres(40) }).expect("radius"),
+            )
+            .expect("corner");
+        project
+            .set_edge_banding(
+                panel_id,
+                EdgeBanding::new(RectEdge::Right.id(), sample_material(), false, millimetres(2), millimetres(22))
+                    .expect("band"),
+            )
+            .expect("edge band");
+        project
+            .set_corner_banding(
+                panel_id,
+                CornerBanding::new(corner, sample_material(), false, millimetres(2), millimetres(22))
+                    .expect("corner band"),
+            )
+            .expect("corner band");
+
+        let revision = project.revision();
+        let next = project.convert_panel_to_contour(panel_id).expect("convert");
+        assert_eq!(next, revision.checked_next().expect("revision"));
+        assert_eq!(project.revision(), next);
+
+        let panel = project.panel(panel_id).expect("panel");
+        assert!(panel.is_contour());
+        assert_eq!(panel.nominal_size(), sample_nominal());
+        assert_eq!(panel.outline_contour().expect("ring").bounds_micrometres(), ([0, 0], [700_000, 500_000]));
+        assert!(panel.edge_banding().is_empty());
+        assert!(panel.corner_banding().is_empty());
+        assert_eq!(panel.ring_banding().len(), 2);
+        assert_eq!(panel.band_order().len(), 2);
+        let ring = panel.outline_contour().expect("ring");
+        for band in panel.ring_banding() {
+            assert!(ring.segment(band.segment()).is_some(), "band {band:?} names a missing ring segment");
+        }
+        assert!(panel.geometry_with_fallbacks().is_ok());
+
+        let stored = project.revision();
+        assert_eq!(
+            project.convert_panel_to_contour(panel_id),
+            Err(ProjectError::PanelContour(PanelContourError::AlreadyContour))
+        );
+        assert_eq!(project.revision(), stored, "a refused conversion changes nothing");
+    }
+
+    #[test]
+    fn an_outward_bow_moves_the_frame_without_moving_the_world_shape() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        project
+            .set_edge_bow(panel_id, EdgeBow::new(RectEdge::Bottom.id(), millimetres(10)).expect("bow"))
+            .expect("bow");
+        let before =
+            project.panel(panel_id).expect("panel").nominal_contour().expect("outline").bounds().expect("bounds");
+        assert!((before.0.y + 10.0).abs() < 1e-9, "outward bow lowers the bottom: {before:?}");
+
+        project.convert_panel_to_contour(panel_id).expect("convert");
+        let panel = project.panel(panel_id).expect("panel");
+        let (min, max) = panel.outline_contour().expect("ring").bounds_micrometres();
+        assert_eq!(min, [0, 0]);
+        assert_eq!(max, [700_000, 510_000]);
+        let translation = panel.placement().translation();
+        assert!(translation.x.abs() < 1e-9, "the frame does not move horizontally: {}", translation.x);
+        assert!((translation.y + 10.0).abs() < 1e-9, "the frame moves with the anchored ring: {}", translation.y);
+        let world_min_y = min[1] as f64 / 1000.0 + translation.y;
+        let world_max_y = max[1] as f64 / 1000.0 + translation.y;
+        assert!((world_min_y - before.0.y).abs() < 1e-9, "world bottom {world_min_y}");
+        assert!((world_max_y - before.1.y).abs() < 1e-9, "world top {world_max_y}");
     }
 }

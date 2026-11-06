@@ -6,13 +6,13 @@
 use egui::{Color32, ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
     BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
-    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, RENAME_ID, RESIZE_ID, RING_BANDING_CLEAR_ID,
-    RING_BANDING_SET_ID,
+    EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, OUTLINE_CONTOUR_ID, RENAME_ID, RESIZE_ID,
+    RING_BANDING_CLEAR_ID, RING_BANDING_SET_ID,
 };
 use furnicraft_engine::{
     PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
-    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelRename, PanelResize,
-    PanelRingBandingClear, PanelRingBandingSet, Session,
+    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelOutlineToContour, PanelRename,
+    PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
     ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel,
@@ -70,6 +70,7 @@ enum Action {
     ClearCorner { panel: Id, corner: VertexId },
     SetBow { panel: Id, edge: EdgeId, sagitta: Length },
     ClearBow { panel: Id, edge: EdgeId },
+    ToContour { panel: Id },
 }
 
 /// What the panel card asks the editor to do with the contour edit mode.
@@ -234,6 +235,9 @@ impl PanelCard {
                     self.error = Some(error);
                     break;
                 }
+                if matches!(action, Action::ToContour { .. }) {
+                    contour_request = PanelAction::StartContour;
+                }
                 if matches!(action, Action::Rename { .. } | Action::Resize { .. }) {
                     self.draft = None;
                 }
@@ -317,6 +321,21 @@ impl PanelCard {
                 }
             } else {
                 self.show_outline(ui, panel_id, panel, actions);
+                ui.add_space(4.0);
+                if contour_editing {
+                    ui.label("Editing the outline in the viewport. Apply or cancel in the viewport toolbar.");
+                } else if !single_selection {
+                    ui.label("Select only this panel to edit its contour.");
+                } else if ui
+                    .button("Edit contour")
+                    .on_hover_text(
+                        "Bakes the outline into a ring. Corners, chamfers and bows become segments; \
+                         undo restores them.",
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::ToContour { panel: panel_id });
+                }
             }
         });
         if !panel.is_contour() {
@@ -597,6 +616,10 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
         Action::ClearBow { panel, edge } => {
             let params = json(&PanelBowClear { panel: *panel, edge: *edge })?;
             dispatch(session, BOW_CLEAR_ID, &params)
+        }
+        Action::ToContour { panel } => {
+            let params = json(&PanelOutlineToContour { panel: *panel })?;
+            dispatch(session, OUTLINE_CONTOUR_ID, &params)
         }
     }
 }
@@ -1080,6 +1103,24 @@ mod tests {
         run_action(&mut session, &Action::ClearCornerBand { panel: panel_id, corner }).expect("clear corner band");
         let panel = session.project().panel(panel_id).expect("panel");
         assert!(available_band_segments(panel).contains(&SegmentSource::Corner(corner)));
+    }
+
+    #[test]
+    fn to_contour_action_bakes_a_rectangle_and_refuses_a_ring() {
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel_id = Id::new(2).expect("panel id");
+
+        run_action(&mut session, &Action::ToContour { panel: panel_id }).expect("bake the outline");
+        assert!(session.project().panel(panel_id).expect("panel").is_contour());
+
+        let stored = session.project().revision();
+        let error = run_action(&mut session, &Action::ToContour { panel: panel_id }).expect_err("already a ring");
+        assert!(error.contains("already a contour"), "error was {error}");
+        assert_eq!(session.project().revision(), stored);
+
+        session.undo().expect("undo");
+        assert!(!session.project().panel(panel_id).expect("panel").is_contour());
     }
 
     #[test]

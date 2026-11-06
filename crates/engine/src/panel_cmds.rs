@@ -173,6 +173,52 @@ fn outline_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) ->
     Ok(CommandOutcome::changed())
 }
 
+/// Stable id of the outline-bake command.
+pub const OUTLINE_CONTOUR_ID: &str = "panel.outline.to_contour";
+
+/// User-facing label of the outline-bake command.
+pub const OUTLINE_CONTOUR_LABEL: &str = "Bake panel outline into a contour";
+
+/// Parameters for `panel.outline.to_contour`.
+///
+/// The command bakes a rectangle outline into the ring it draws, in one revision and one undo
+/// entry, so *Edit contour* can reach a panel that is not a ring yet. Corner and bow parameters are
+/// replaced by their curve segments; undo restores them (ADR 0061).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelOutlineToContour {
+    /// Id of the rectangle panel whose outline is baked.
+    pub panel: Id,
+}
+
+impl PanelOutlineToContour {
+    fn parse(params: &Value) -> Result<Self, CommandError> {
+        serde_json::from_value(params.clone())
+            .map_err(|error| CommandError::InvalidParams { command: OUTLINE_CONTOUR_ID, message: error.to_string() })
+    }
+}
+
+/// The `panel.outline.to_contour` command.
+pub(crate) const OUTLINE_CONTOUR: CommandSpec =
+    CommandSpec::new(OUTLINE_CONTOUR_ID, OUTLINE_CONTOUR_LABEL, outline_contour_enabled, outline_contour_run);
+
+fn outline_contour_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = PanelOutlineToContour::parse(params) else {
+        return false;
+    };
+    session.project().validate_panel_contour_conversion(params.panel).is_ok()
+}
+
+fn outline_contour_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = PanelOutlineToContour::parse(params)?;
+    project.convert_panel_to_contour(params.panel)?;
+    Ok(CommandOutcome::changed())
+}
+
 fn create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelCreate::parse(params) else {
         return false;

@@ -99,6 +99,7 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::CREATE,
     panel_cmds::CONTOUR_CREATE,
     panel_cmds::OUTLINE_SET,
+    panel_cmds::OUTLINE_CONTOUR,
     node_cmds::ASSEMBLY_CREATE,
     panel_cmds::RENAME,
     node_cmds::NODE_RENAME,
@@ -267,6 +268,9 @@ mod tests {
         let outline_set = registry.get("panel.outline.set").expect("panel.outline.set is registered");
         assert_eq!(outline_set.id(), "panel.outline.set");
         assert_eq!(outline_set.label(), "Set panel outline");
+        let outline_contour = registry.get("panel.outline.to_contour").expect("panel.outline.to_contour is registered");
+        assert_eq!(outline_contour.id(), "panel.outline.to_contour");
+        assert_eq!(outline_contour.label(), "Bake panel outline into a contour");
         let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
         assert_eq!(assembly_create.id(), "assembly.create");
         assert_eq!(assembly_create.label(), "Create assembly");
@@ -327,6 +331,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 47);
+        assert_eq!(registry.specs().len(), 48);
     }
 }

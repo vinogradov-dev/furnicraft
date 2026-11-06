@@ -280,7 +280,7 @@ pub(crate) fn point_to_document(point: DVec2) -> Result<[Length; 2], ContourSegm
 }
 
 /// Rounds a millimetre value to whole micrometres.
-fn length_to_document(millimetres: f64) -> Result<Length, ContourSegmentError> {
+pub(crate) fn length_to_document(millimetres: f64) -> Result<Length, ContourSegmentError> {
     let micrometres = millimetres * 1_000.0;
     if !micrometres.is_finite() || micrometres.round() < i64::MIN as f64 || micrometres.round() > i64::MAX as f64 {
         return Err(ContourSegmentError::NonFinite);
@@ -291,7 +291,7 @@ fn length_to_document(millimetres: f64) -> Result<Length, ContourSegmentError> {
 }
 
 /// Rounds a radian value to whole millidegrees.
-fn degrees_to_document(radians: f64) -> Result<Degrees, ContourSegmentError> {
+pub(crate) fn degrees_to_document(radians: f64) -> Result<Degrees, ContourSegmentError> {
     Degrees::from_radians(radians).ok_or(ContourSegmentError::NonFinite)
 }
 
@@ -1283,7 +1283,7 @@ pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
 /// A stored ring closes exactly in whole micrometres, while an arc endpoint is exact only in
 /// floating point: after rounding, an arc and the next segment can miss by up to one document
 /// unit. The small bound lets the geometry layer accept such a ring without hiding a real gap.
-const DOCUMENT_JOINT_TOLERANCE_MM: f64 = 1.0e-3;
+pub(crate) const DOCUMENT_JOINT_TOLERANCE_MM: f64 = 1.0e-3;
 
 /// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
 ///

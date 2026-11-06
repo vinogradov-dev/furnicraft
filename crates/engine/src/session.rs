@@ -139,9 +139,9 @@ mod tests {
 
     use furnicraft_model::{
         Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
-        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, MachiningAnchor, MachiningParams, PanelMaterial,
-        Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_FURNTYPE, SegmentSource,
-        VertexId,
+        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
+        PanelContourError, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
+        Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -160,7 +160,8 @@ mod tests {
     use crate::panel_cmds::{
         PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
         PanelCornerClear, PanelCornerSet, PanelCreate, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMachiningAdd,
-        PanelMaterialSet, PanelOutlineSet, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet,
+        PanelMaterialSet, PanelOutlineSet, PanelOutlineToContour, PanelRename, PanelResize, PanelRingBandingClear,
+        PanelRingBandingSet,
     };
 
     fn sample_session() -> Session {
@@ -341,6 +342,93 @@ mod tests {
         session.undo().expect("the refused command left no undo entry");
         assert!(session.project().panel(created).is_none(), "undo removes the creation, nothing was recorded between");
         assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn panel_outline_to_contour_bakes_the_ring_and_one_undo_restores_the_rectangle() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let corner = RectCorner::TopRight.id();
+        session
+            .dispatch(
+                "panel.corner.set",
+                &json_params(&PanelCornerSet {
+                    panel: panel_id,
+                    corner,
+                    feature: CornerFeatureKind::Radius { radius: Length::from_millimetres(40).expect("radius") },
+                }),
+            )
+            .expect("set corner");
+        session
+            .dispatch(
+                "panel.edge_banding.set",
+                &json_params(&PanelEdgeBandingSet {
+                    panel: panel_id,
+                    edge: RectEdge::Right.id(),
+                    material: sample_edge_material_id(),
+                    included_in_size: false,
+                }),
+            )
+            .expect("edge band");
+        session
+            .dispatch(
+                "panel.corner_banding.set",
+                &json_params(&PanelCornerBandingSet {
+                    panel: panel_id,
+                    corner,
+                    material: sample_edge_material_id(),
+                    included_in_size: false,
+                }),
+            )
+            .expect("corner band");
+
+        let request = PanelOutlineToContour { panel: panel_id };
+        let registry = CommandRegistry::new();
+        let spec = registry.get("panel.outline.to_contour").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&request)));
+
+        let before = session.project().revision();
+        let outcome = session.dispatch("panel.outline.to_contour", &json_params(&request)).expect("bake the outline");
+        assert_eq!(outcome.created_id(), None);
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(panel.is_contour());
+        assert!(panel.edge_banding().is_empty());
+        assert!(panel.corner_banding().is_empty());
+        assert!(panel.corner_feature(corner).is_none());
+        assert_eq!(panel.ring_banding().len(), 2);
+        let ring = panel.outline_contour().expect("ring");
+        assert!(panel.ring_banding().iter().all(|band| ring.segment(band.segment()).is_some()));
+        assert_eq!(
+            panel
+                .band_order()
+                .iter()
+                .filter_map(|source| match source {
+                    SegmentSource::Ring(segment) => Some(*segment),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            panel.ring_banding().iter().map(|band| band.segment()).collect::<Vec<_>>(),
+            "the baked bands keep their application order"
+        );
+
+        // A ring has no rectangle left to bake.
+        let stored = session.project().revision();
+        assert!(!spec.enabled(&session, &json_params(&request)));
+        assert!(matches!(
+            session.dispatch("panel.outline.to_contour", &json_params(&request)),
+            Err(CommandError::Model(ProjectError::PanelContour(PanelContourError::AlreadyContour)))
+        ));
+        assert_eq!(session.project().revision(), stored, "a refused bake changes nothing");
+
+        session.undo().expect("undo");
+        let panel = session.project().panel(panel_id).expect("panel");
+        assert!(!panel.is_contour());
+        assert!(panel.corner_feature(corner).is_some());
+        assert_eq!(panel.edge_banding().len(), 1);
+        assert_eq!(panel.corner_banding().len(), 1);
+        assert!(panel.ring_banding().is_empty());
     }
 
     #[test]
