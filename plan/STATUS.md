@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=X2 state=doing base=42f6cde updated=2026-11-06
+STATE: milestone=M7 phase=U task=U29 state=idle base=cb89f2e updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -40,8 +40,9 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   (ADR 0060), a `ContourDraft` reshapes a path through one `object.path.replace`, the gizmo paints an
   open chain open, a cutout ring keeps its anchor and `CutoutDepth` when applied, and
   `panel.outline.to_contour` bakes a rectangle and its banding in one revision (ADR 0061).
-- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
-  1024 sampled points cannot be extruded — is next.
+- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) and X2 are fixed. X2 was a legal
+  ring sampling past the 1024-vertex cap; the chord now follows the shape and a bounded search coarsens
+  it further, so a big drawing becomes a solid (ADR 0062).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
   `Image::tint` made a `#000` master black in every theme, and the set — 18 drawn files of 51, pure
   stroke — had no mass at 16 pt. U27 rasterises each white master at `pt × pixels_per_point`, bakes the
@@ -55,9 +56,8 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-X2 is next: a valid simple ring whose extrusion cap exceeds `MAX_FACE_VERTICES` must still become a
-solid instead of being refused. Then U29 adds an arc to the Polyline tool; 33 placeholder icons wait
-in `plan/debt.md`.
+U29 is next: the Polyline tool gains an arc that mixes with straight segments, and a chain of both
+closes and extrudes. Then the Icon set's remaining 33 placeholders in `plan/debt.md`.
 
 ## Index
 

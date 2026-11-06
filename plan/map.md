@@ -39,7 +39,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Object commands | `crates/engine/src/object_cmds.rs` (`object.*`) | small |
 | Solid plan and evaluation | `crates/param/src/solid.rs` (`SolidPlan`, `PlanBuilder`, `evaluate`), `crates/param/src/constructive.rs` (`build_constructive_mesh`) | whole files |
 | Evaluation cache | `crates/mesh/src/lib.rs` (`EvaluationCache`, `NodeGeometry`, `evaluate_constructive`), `apps/furnicraft/src/scene_build.rs` (`evaluate`, `Evaluation`), `crates/engine/src/object_cmds.rs` (`OBJECT_COLLAPSE`) | one entry per node; a hit compares the derivation inputs, `finish` prunes unvisited nodes; ADR 0053 |
-| Contour to profile conversion | `crates/param/src/profile.rs` (`region_of_contour`, `profile_of_region`, `profile_of_document_contour`) | whole file |
+| Contour to profile conversion | `crates/param/src/profile.rs` (`region_of_contour`, `profile_of_region`, `profile_of_document_contour`, `fit_tolerance`) | whole file; the chord follows the shape and a bounded search coarsens it to fit one cap (ADR 0062) |
 | Panel evaluation | `crates/param/src/lib.rs` (`build_panel`, `build_cutout_tool`, `build_panel_parts_with`, `validate_extrusion_contour`) | small |
 | Machining pipeline | `crates/param/src/machining.rs` (`CompileMachining`, `OpEffect`, `PanelPlan`) | whole file |
 | Scene file envelope | `crates/project/src/lib.rs` (`SceneFile`, `read`, `write`) | — |

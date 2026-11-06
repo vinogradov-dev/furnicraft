@@ -25,14 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
-  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
-  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
-  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
-  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
-  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
-  `files: crates/param/src/lib.rs, crates/model/src/object.rs`
-
 - `[ ]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
   two-click arc, and a chain that mixes both still closes and extrudes. The arc leaves the last
   vertex: the first click is the point it passes through, the second is its end, and the next
@@ -59,6 +51,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
+  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
+  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
+  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
+  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
+  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it. Fixed by ADR
+  0062: the chord is 1e-4 of the shape's diagonal above a 0.05 mm floor, and a ring that still
+  overflows is re-sampled coarser within a bounded search — `cb89f2e`
+  `files: crates/param/src/profile.rs`
 - `[x]` **U28** mass and one projection: `fill-opacity` is allowed (still no `defs`, `mask`,
   `clipPath`, gradient or CSS), so a passive face fills at 12–18 % and the result or changed geometry
   at 45–60 % under the heavy outline. The 18 drawn icons were redrawn inside the fixed `3..21`
