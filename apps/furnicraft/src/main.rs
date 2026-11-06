@@ -45,7 +45,7 @@ use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, Scene
 use furnicraft_ui::{DrawDraft, Editor, MeshElement, icons, ui_scale};
 
 use crate::contour_gizmo::ContourGizmo;
-use crate::draw_gizmo::DrawGizmo;
+use crate::draw_gizmo::{DrawGizmo, DrawModifiers};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::rotate_gizmo::RotateGizmo;
@@ -521,14 +521,19 @@ impl FurniCraftApp {
         }
 
         if drawing {
-            let axis_lock = ui.input(|input| input.modifiers.shift);
+            // Shift locks the next segment to an axis; Alt turns a click into an arc through that
+            // point, and the click after it ends the arc. One modifier, one job.
+            let modifiers = DrawModifiers {
+                axis_lock: ui.input(|input| input.modifiers.shift),
+                arc: ui.input(|input| input.modifiers.alt),
+            };
             let finished = match self.draw_gizmo.update(
                 &response,
                 rect,
                 self.scene.camera,
                 &mut self.editor,
                 pointer_over_widget,
-                axis_lock,
+                modifiers,
             ) {
                 Ok(true) => {
                     ui.ctx().request_repaint();

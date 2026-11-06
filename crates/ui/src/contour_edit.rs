@@ -16,9 +16,9 @@ use furnicraft_engine::{
     ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelMachiningUpdate, PanelOutlineSet, Session,
 };
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentId, Cutout, CutoutShape, Id,
-    MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path, PathCorner, PathError, Placement,
-    Project,
+    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, Cutout,
+    CutoutShape, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path, PathCorner,
+    PathError, Placement, Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -385,15 +385,24 @@ impl DrawTool {
     }
 }
 
-/// One drawing tool's chain of work-plane points.
+/// One drawing tool's chain of work-plane segments.
 ///
-/// The points are whole micrometres in the work-plane frame, so a draft becomes a document
-/// [`Path`] without a float ever entering the document. A draft is view state: it runs no command
-/// and bumps no revision until the drawing is committed.
+/// A polyline holds the segments it has built rather than the points it was given, because an arc
+/// ends where the stored arc ends — its rounded centre and angle can miss the clicked point — and
+/// the next segment must start there. A fixed tool keeps its clicked points and builds its one curve
+/// on demand. Everything is whole micrometres, so a draft becomes a document [`Path`] without a
+/// float entering the document. A draft is view state: it runs no command and bumps no revision
+/// until the drawing is committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawDraft {
     tool: DrawTool,
+    /// The chain a polyline has built, in travel order.
+    segments: Vec<ContourSegment>,
+    /// The clicks, in order. A fixed tool builds its curve from these; a polyline uses them for the
+    /// first anchor and to know the count a fixed tool needs.
     points: Vec<[Length; 2]>,
+    /// An arc through a clicked point, waiting for the point that ends it.
+    pending_arc: Option<[Length; 2]>,
     closed: bool,
 }
 
@@ -406,7 +415,7 @@ impl Default for DrawDraft {
 impl DrawDraft {
     /// An empty, open draft for `tool`.
     pub const fn new(tool: DrawTool) -> Self {
-        Self { tool, points: Vec::new(), closed: false }
+        Self { tool, segments: Vec::new(), points: Vec::new(), pending_arc: None, closed: false }
     }
 
     /// The tool this draft belongs to.
@@ -414,9 +423,27 @@ impl DrawDraft {
         self.tool
     }
 
-    /// The points in the order they were added; a closed chain stores each point once.
+    /// The chain built so far, in travel order.
+    pub fn segments(&self) -> &[ContourSegment] {
+        &self.segments
+    }
+
+    /// The clicks, in the order they happened.
+    ///
+    /// A polyline starts each new segment at the stored end of the previous one, so a click is where
+    /// the user meant the segment to go, not necessarily where a rounded arc actually put its end.
     pub fn points(&self) -> &[[Length; 2]] {
         &self.points
+    }
+
+    /// The stored end of the last segment: where the next one starts.
+    pub fn last_end(&self) -> Option<[Length; 2]> {
+        self.segments.last().and_then(|segment| segment.end().ok()).or_else(|| self.points.last().copied())
+    }
+
+    /// The point a pending arc passes through, or `None` when no arc waits for its end.
+    pub const fn pending_arc(&self) -> Option<[Length; 2]> {
+        self.pending_arc
     }
 
     /// Whether the user closed the chain.
@@ -427,43 +454,52 @@ impl DrawDraft {
         self.closed
     }
 
-    /// Whether the draft holds no point yet.
+    /// Whether the draft holds no segment and no click yet.
+    ///
+    /// A polyline keeps the click that anchors its first segment, so that one click alone is still
+    /// an empty draft.
     pub fn is_empty(&self) -> bool {
-        self.points.is_empty()
+        if self.tool.closes() { self.segments.is_empty() && self.points.len() <= 1 } else { self.points.is_empty() }
     }
 
-    /// The number of points, not segments.
+    /// The number of segments built so far.
     pub fn len(&self) -> usize {
-        self.points.len()
+        self.segments.len()
     }
 
     /// Whether the tool has every point it needs to produce a path.
     pub fn is_complete(&self) -> bool {
+        if self.pending_arc.is_some() {
+            return false;
+        }
         match self.tool.points() {
             Some(need) => self.points.len() == need,
-            None => self.points.len() >= 2,
+            None => !self.segments.is_empty(),
         }
     }
 
-    /// Whether the chain has enough points to close into a ring.
+    /// Whether the chain has enough segments to close into a ring.
     pub fn can_close(&self) -> bool {
-        self.tool.closes() && !self.closed && self.points.len() >= 3
+        self.tool.closes() && !self.closed && self.pending_arc.is_none() && self.segments.len() >= 2
     }
 
     /// Whether the tool is done with this drawing and it should be committed.
     ///
     /// A fixed tool finishes on its last point; a polyline finishes when the user closes the chain;
-    /// an open polyline is committed explicitly, because a chain is a valid drawing.
+    /// an open polyline is committed explicitly, because a chain is a valid drawing. A pending arc is
+    /// never finished: it still waits for the click that ends it.
     pub fn is_finished(&self) -> bool {
-        self.closed || self.tool.points().is_some_and(|need| self.points.len() >= need)
+        self.pending_arc.is_none() && (self.closed || self.tool.points().is_some_and(|need| self.points.len() >= need))
     }
 
-    /// Appends a point, refusing a repeat of the previous point, an out-of-range point, a point
-    /// beyond a fixed tool's count and an overflow of the ring cap.
+    /// Appends a click, which becomes a straight segment on a polyline and one point on a fixed tool.
     ///
-    /// A path may touch or cross itself — the ring rules run only when it becomes a contour — but
-    /// two equal neighbours would make a zero-length segment the document cannot store.
+    /// A path may touch or cross itself — the ring rules run only when it becomes a contour — but two
+    /// equal neighbours would make a zero-length segment the document cannot store.
     pub fn push(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
+        if let Some(through) = self.pending_arc {
+            return self.finish_arc(through, point);
+        }
         if self.closed {
             return Err(DrawDraftError::AlreadyClosed);
         }
@@ -472,25 +508,89 @@ impl DrawDraft {
         {
             return Err(DrawDraftError::Complete { tool: self.tool });
         }
-        if self.points.len() >= MAX_CONTOUR_SEGMENTS {
+        if self.segments.len() >= MAX_CONTOUR_SEGMENTS || self.points.len() >= MAX_CONTOUR_SEGMENTS {
             return Err(DrawDraftError::Full);
         }
         if !point_in_range(point) {
             return Err(DrawDraftError::PointOutOfRange);
         }
-        if self.points.last() == Some(&point) {
+        if !self.tool.closes() {
+            if self.points.last() == Some(&point) {
+                return Err(DrawDraftError::DuplicatePoint);
+            }
+            self.points.push(point);
+            return Ok(());
+        }
+        let Some(&previous) = self.points.last() else {
+            self.points.push(point);
+            return Ok(());
+        };
+        if previous == point && self.segments.is_empty() {
             return Err(DrawDraftError::DuplicatePoint);
         }
+        let start = self.last_end().ok_or(DrawDraftError::TooFewPoints { need: 2, got: 0 })?;
+        if start == point {
+            return Err(DrawDraftError::DuplicatePoint);
+        }
+        self.segments.push(ContourSegment::line(start, point)?);
         self.points.push(point);
         Ok(())
     }
 
-    /// Removes the last action: a close first, then the last point.
+    /// Starts an arc at the chain's last end through `through`, waiting for the point that ends it.
+    ///
+    /// The arc is completed by the next [`DrawDraft::push`], and the following segment starts at its
+    /// stored end rather than at the clicked one. The first click of a drawing only sets the start,
+    /// exactly as it does for a straight segment.
+    pub fn push_arc_through(&mut self, through: [Length; 2]) -> Result<(), DrawDraftError> {
+        if self.pending_arc.is_some() {
+            return Err(DrawDraftError::ArcInProgress);
+        }
+        if self.closed {
+            return Err(DrawDraftError::AlreadyClosed);
+        }
+        if !self.tool.closes() && self.tool != DrawTool::Arc {
+            return Err(DrawDraftError::NotClosable { tool: self.tool });
+        }
+        if self.segments.len() >= MAX_CONTOUR_SEGMENTS || self.points.len() >= MAX_CONTOUR_SEGMENTS {
+            return Err(DrawDraftError::Full);
+        }
+        if !point_in_range(through) {
+            return Err(DrawDraftError::PointOutOfRange);
+        }
+        if self.points.is_empty() || self.tool == DrawTool::Arc {
+            // The Arc tool keeps three points and builds its one arc on demand, like every other
+            // fixed tool; only a polyline grows a chain.
+            if self.last_end() == Some(through) {
+                return Err(DrawDraftError::DuplicatePoint);
+            }
+            self.points.push(through);
+            return Ok(());
+        }
+        if self.last_end() == Some(through) {
+            return Err(DrawDraftError::DuplicatePoint);
+        }
+        self.pending_arc = Some(through);
+        Ok(())
+    }
+
+    /// Removes the last action: a pending arc, then a close, then the last segment.
     ///
     /// Returns `false` for an empty, open draft.
     pub fn undo(&mut self) -> bool {
+        if self.pending_arc.take().is_some() {
+            return true;
+        }
         if self.closed {
             self.closed = false;
+            return true;
+        }
+        if self.tool.closes() && self.segments.pop().is_some() {
+            self.points.pop();
+            if self.segments.is_empty() {
+                // The anchor alone is not a drawing, so undoing the first segment clears it too.
+                self.points.clear();
+            }
             return true;
         }
         self.points.pop().is_some()
@@ -499,58 +599,105 @@ impl DrawDraft {
     /// Closes the chain back to its first point.
     ///
     /// Only a polyline can close; a rectangle and a circle are closed by their constructors and a
-    /// line and an arc stay open. Three points are the fewest a ring can have, so a shorter chain is
-    /// refused. The closed chain is validated before the state changes, so a draft that cannot
-    /// become a path — for example because its last point repeats the first — stays open and
-    /// editable. Whether the ring is simple and non-degenerate is a ring rule that runs when the
-    /// path becomes a contour.
+    /// line and an arc stay open. A ring needs three segments, so a shorter chain is refused. The
+    /// closed chain is validated before the state changes, so a draft that cannot become a path —
+    /// for example because its last point repeats the first — stays open and editable. Whether the
+    /// ring is simple and non-degenerate is a ring rule that runs when the path becomes a contour.
     pub fn close(&mut self) -> Result<(), DrawDraftError> {
+        if self.pending_arc.is_some() {
+            return Err(DrawDraftError::ArcInProgress);
+        }
         if !self.tool.closes() {
             return Err(DrawDraftError::NotClosable { tool: self.tool });
         }
         if self.closed {
             return Err(DrawDraftError::AlreadyClosed);
         }
-        if self.points.len() < 3 {
-            return Err(DrawDraftError::TooFewPoints { need: 3, got: self.points.len() });
+        let closing = self.closing_segment()?;
+        let count = self.segments.len().saturating_add(usize::from(closing.is_some()));
+        if count < 3 {
+            return Err(DrawDraftError::TooFewPoints { need: 3, got: count });
         }
-        self.path_with(None, true)?;
+        let mut segments = self.segments.clone();
+        if let Some(segment) = closing {
+            segments.push(segment);
+        }
+        Path::new(segments, true).map_err(DrawDraftError::from)?;
         self.closed = true;
         Ok(())
     }
 
-    /// The path these points describe, if the tool has all the points it needs.
+    /// The path these segments describe, if the tool has all of them.
     pub fn to_path(&self) -> Result<Path, DrawDraftError> {
         self.path_with(None, self.closed)
     }
 
-    /// The path the draft would have if `next` were added, or `None` when the draft already holds
-    /// every point the tool takes.
+    /// The path the draft would have if `next` were appended as a straight segment, or `None` when
+    /// the draft already holds everything the tool takes.
     ///
     /// This is the preview: a rectangle shows its fourth side and a circle its whole rim while the
-    /// pointer still moves. A polyline previews the next point as one more segment without closing.
+    /// pointer still moves, and a pending arc previews the arc it will become.
     pub fn preview_path(&self, next: [Length; 2]) -> Option<Path> {
         if self.closed || !point_in_range(next) {
             return None;
         }
-        if let Some(need) = self.tool.points()
+        if self.pending_arc.is_none()
+            && let Some(need) = self.tool.points()
             && self.points.len() >= need
         {
             return None;
         }
-        if self.points.len() >= MAX_CONTOUR_SEGMENTS {
+        if self.segments.len() >= MAX_CONTOUR_SEGMENTS {
             return None;
         }
-        if self.points.last() == Some(&next) {
+        if self.last_end() == Some(next) {
             return None;
         }
         self.path_with(Some(next), false).ok()
     }
 
-    /// The path with an optional extra point, built by the draft's tool.
+    /// The one segment that runs from the last stored end back to the first stored start.
+    ///
+    /// A closed chain adds it only when the ends differ, so a chain that already returned to its
+    /// start does not store a zero-length segment.
+    fn closing_segment(&self) -> Result<Option<ContourSegment>, DrawDraftError> {
+        let (Some(first), Some(last)) = (self.segments.first(), self.segments.last()) else {
+            return Ok(None);
+        };
+        let start = first.start()?;
+        let end = last.end()?;
+        if start == end {
+            return Ok(None);
+        }
+        Ok(Some(ContourSegment::line(end, start)?))
+    }
+
+    /// The path with an optional extra click, built by the draft's tool.
+    ///
+    /// Every segment after an arc starts at the stored end of the previous one, so a chain the
+    /// viewport drew is a chain the ring assembler accepts.
     fn path_with(&self, next: Option<[Length; 2]>, closed: bool) -> Result<Path, DrawDraftError> {
-        let mut points = Vec::with_capacity(self.points.len() + 1);
-        points.extend_from_slice(&self.points);
+        if self.tool.closes() {
+            let mut segments = self.segments.clone();
+            if let Some(segment) = self.next_segment(next)? {
+                segments.push(segment);
+            }
+            if segments.is_empty() {
+                return Err(DrawDraftError::TooFewPoints { need: 2, got: 0 });
+            }
+            if closed {
+                let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: segments.len() });
+                };
+                let start = first.start()?;
+                let end = last.end()?;
+                if start != end {
+                    segments.push(ContourSegment::line(end, start)?);
+                }
+            }
+            return Path::new(segments, closed).map_err(DrawDraftError::from);
+        }
+        let mut points = self.points.clone();
         if let Some(next) = next {
             points.push(next);
         }
@@ -560,7 +707,6 @@ impl DrawDraft {
         }
         match self.tool {
             DrawTool::Line => Path::polyline(points, false).map_err(DrawDraftError::from),
-            DrawTool::Polyline => Path::polyline(points, closed).map_err(DrawDraftError::from),
             DrawTool::Arc => {
                 let (Some(&start), Some(&through), Some(&end)) = (points.first(), points.get(1), points.get(2)) else {
                     return Err(DrawDraftError::TooFewPoints { need: 3, got: points.len() });
@@ -579,7 +725,54 @@ impl DrawDraft {
                 };
                 Path::circle_through(center, rim).map_err(DrawDraftError::from)
             }
+            DrawTool::Polyline => Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() }),
         }
+    }
+
+    /// Completes the pending arc through `through` at `point` and clears the waiting state.
+    fn finish_arc(&mut self, through: [Length; 2], point: [Length; 2]) -> Result<(), DrawDraftError> {
+        if !point_in_range(point) {
+            return Err(DrawDraftError::PointOutOfRange);
+        }
+        if self.segments.len() >= MAX_CONTOUR_SEGMENTS || self.points.len() >= MAX_CONTOUR_SEGMENTS {
+            return Err(DrawDraftError::Full);
+        }
+        let Some(&anchor) = self.points.last() else {
+            return Err(DrawDraftError::TooFewPoints { need: 3, got: 0 });
+        };
+        let start = self.segments.last().and_then(|segment| segment.end().ok()).unwrap_or(anchor);
+        if start == point || through == point {
+            return Err(DrawDraftError::DuplicatePoint);
+        }
+        let arc = ContourSegment::arc_through(start, through, point).map_err(|error| match error {
+            ContourSegmentError::DegenerateArc => DrawDraftError::DuplicatePoint,
+            other => DrawDraftError::Segment(other),
+        })?;
+        self.pending_arc = None;
+        self.segments.push(arc);
+        self.points.push(point);
+        Ok(())
+    }
+
+    /// The segment a click would add to a polyline, or the arc a pending one would complete.
+    fn next_segment(&self, next: Option<[Length; 2]>) -> Result<Option<ContourSegment>, DrawDraftError> {
+        let Some(next) = next else {
+            return Ok(None);
+        };
+        if let Some(through) = self.pending_arc {
+            let Some(&anchor) = self.points.last() else {
+                return Err(DrawDraftError::TooFewPoints { need: 3, got: 0 });
+            };
+            let start = self.segments.last().and_then(|segment| segment.end().ok()).unwrap_or(anchor);
+            return Ok(Some(ContourSegment::arc_through(start, through, next)?));
+        }
+        let Some(start) = self.last_end() else {
+            return Ok(None);
+        };
+        if start == next {
+            return Err(DrawDraftError::DuplicatePoint);
+        }
+        Ok(Some(ContourSegment::line(start, next)?))
     }
 }
 
@@ -630,7 +823,13 @@ pub enum DrawDraftError {
         /// The tool that refused the close.
         tool: DrawTool,
     },
-    /// The points do not form a path.
+    /// The chain already has an arc waiting for the click that ends it.
+    #[error("the arc is still waiting for its end point")]
+    ArcInProgress,
+    /// A segment itself is invalid, for example two coincident ends.
+    #[error(transparent)]
+    Segment(#[from] ContourSegmentError),
+    /// The segments do not form a path.
     #[error(transparent)]
     Path(#[from] PathError),
 }
@@ -1044,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drawing_draft_builds_an_open_path_from_its_points() {
+    fn a_drawing_draft_builds_an_open_path_from_its_clicks() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         assert!(draft.is_empty());
         assert!(!draft.can_close());
@@ -1058,9 +1257,9 @@ mod tests {
         for point in points {
             draft.push(point).expect("a fresh point");
         }
-        assert_eq!(draft.len(), 3);
+        assert_eq!(draft.len(), 2, "the first click starts the chain, the next two make segments");
         assert!(!draft.is_closed());
-        assert!(draft.can_close(), "three points enclose an area");
+        assert!(draft.can_close(), "two segments enclose an area");
 
         let path = draft.to_path().expect("an open path");
         assert!(!path.is_closed());
@@ -1068,6 +1267,91 @@ mod tests {
         let mut ends = path.segments().map(|segment| segment.start().expect("start"));
         assert_eq!(ends.next(), Some(points[0]));
         assert_eq!(path.entries().last().and_then(|entry| entry.segment().end().ok()), Some(points[2]));
+    }
+
+    #[test]
+    fn an_arc_mixed_with_lines_closes_and_reaches_a_contour() {
+        // A rounded corner: a straight run, an arc through a control point, then the rest of the box.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("straight run");
+        draft.push_arc_through([millimetres(700), millimetres(100)]).expect("arc through");
+        draft.push([millimetres(600), millimetres(400)]).expect("arc end");
+        draft.push([millimetres(0), millimetres(400)]).expect("top run");
+        draft.close().expect("the chain closes");
+
+        let path = draft.to_path().expect("a mixed path");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4, "three clicks then the closing segment");
+        assert_eq!(
+            path.entries().iter().filter(|entry| entry.segment().is_arc()).count(),
+            1,
+            "the arc survives as one segment"
+        );
+        let ring = path.to_contour().expect("a mixed chain becomes a ring");
+        assert_eq!(ring.entries().len(), 4);
+    }
+
+    #[test]
+    fn the_next_segment_starts_at_the_stored_arc_end() {
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push_arc_through([millimetres(50), millimetres(50)]).expect("arc through");
+        draft.push([millimetres(100), millimetres(0)]).expect("the far end");
+        let arc_end = draft.segments().last().and_then(|segment| segment.end().ok()).expect("a stored end");
+        // The stored end is rounded to whole document units, so it can differ from the click.
+        assert!((arc_end[0].micrometres() - millimetres(100).micrometres()).abs() <= 1);
+        draft.push([millimetres(100), millimetres(400)]).expect("the next straight segment");
+        let line = draft.segments().last().expect("a line");
+        assert_eq!(line.start().ok(), Some(arc_end), "the line starts on the stored arc end");
+    }
+
+    #[test]
+    fn a_one_micrometre_gap_builds_a_path_but_not_a_ring() {
+        // This is the trap U29 has to avoid: a rounded arc end can miss the clicked point, so a
+        // chain that starts its next segment at the click has a one-micrometre gap. `Path` accepts
+        // that, the ring assembler does not, and `to_contour` is the only way to an extrusion — so
+        // the draft follows the stored end instead.
+        let stored = [millimetres(600), millimetres(400)];
+        let gap = [stored[0], Length::from_micrometres(stored[1].micrometres() + 1)];
+        let chain = |end: [Length; 2], next_start: [Length; 2]| {
+            Path::new(
+                vec![
+                    ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)])
+                        .expect("bottom"),
+                    ContourSegment::line([millimetres(600), millimetres(0)], end).expect("right"),
+                    ContourSegment::line(next_start, [millimetres(0), millimetres(400)]).expect("top"),
+                    ContourSegment::line([millimetres(0), millimetres(400)], [millimetres(0), millimetres(0)])
+                        .expect("left"),
+                ],
+                true,
+            )
+        };
+        let drawn = chain(gap, stored).expect("a path tolerates one micrometre");
+        assert!(drawn.to_contour().is_err(), "the ring assembler demands an exact joint");
+        assert!(chain(stored, stored).expect("an exact chain").to_contour().is_ok(), "the exact joint closes");
+    }
+
+    #[test]
+    fn undo_cancels_a_pending_arc_before_the_last_segment() {
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("a line");
+        draft.push_arc_through([millimetres(650), millimetres(50)]).expect("a pending arc");
+        assert!(draft.pending_arc().is_some());
+        assert!(!draft.is_finished(), "an arc still waits for its end");
+        assert_eq!(draft.close(), Err(DrawDraftError::ArcInProgress), "an unfinished arc cannot close");
+
+        // The next click ends the arc instead of starting a straight segment.
+        draft.push([millimetres(700), millimetres(0)]).expect("the arc end");
+        assert!(draft.pending_arc().is_none());
+        assert_eq!(draft.len(), 2);
+        assert!(draft.segments().last().is_some_and(|segment| segment.is_arc()));
+
+        assert!(draft.undo(), "the last segment goes");
+        assert_eq!(draft.len(), 1, "the line before the arc survives");
+        assert!(draft.undo());
+        assert!(draft.is_empty());
     }
 
     #[test]
@@ -1081,7 +1365,7 @@ mod tests {
         draft.close().expect("a triangle closes");
         assert!(draft.is_closed());
         assert!(!draft.can_close());
-        assert_eq!(draft.len(), 3, "a closed chain stores each point once");
+        assert_eq!(draft.len(), 2, "the closing segment is built on demand, not stored as a click");
 
         let path = draft.to_path().expect("a closed path");
         assert!(path.is_closed());
@@ -1094,16 +1378,17 @@ mod tests {
     }
 
     #[test]
-    fn a_drawing_draft_needs_three_points_to_close() {
+    fn a_drawing_draft_needs_three_segments_to_close() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.push([millimetres(0), millimetres(0)]).expect("point");
-        assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 1 }));
-        assert_eq!(draft.close(), Err(DrawDraftError::TooFewPoints { need: 3, got: 1 }));
+        assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 0 }));
+        draft.push([millimetres(600), millimetres(0)]).expect("point");
+        assert_eq!(draft.close(), Err(DrawDraftError::TooFewPoints { need: 3, got: 2 }));
         assert!(!draft.can_close());
     }
 
     #[test]
-    fn undoing_a_drawing_draft_reopens_before_it_drops_a_point() {
+    fn undoing_a_drawing_draft_reopens_before_it_drops_a_segment() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         for point in
             [[millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)]]
@@ -1114,10 +1399,9 @@ mod tests {
 
         assert!(draft.undo(), "the first undo opens the chain");
         assert!(!draft.is_closed());
-        assert_eq!(draft.len(), 3, "opening keeps every point");
-        assert!(draft.undo(), "the next undo drops the last point");
-        assert_eq!(draft.len(), 2);
-        assert!(draft.undo());
+        assert_eq!(draft.len(), 2, "opening keeps every segment");
+        assert!(draft.undo(), "the next undo drops the last segment");
+        assert_eq!(draft.len(), 1);
         assert!(draft.undo());
         assert!(draft.is_empty());
         assert!(!draft.undo(), "an empty open draft has nothing to undo");
@@ -1143,13 +1427,22 @@ mod tests {
     #[test]
     fn a_drawing_draft_stops_at_the_ring_cap() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
-        for index in 0..MAX_CONTOUR_SEGMENTS {
+        // The first click anchors the chain, so one more click than the segment cap is tried.
+        for index in 0..=MAX_CONTOUR_SEGMENTS {
             let x = Length::from_micrometres(i64::try_from(index).expect("index") * 1_000);
-            draft.push([x, Length::ZERO]).expect("a point below the cap");
+            let result = draft.push([x, Length::ZERO]);
+            if index == MAX_CONTOUR_SEGMENTS {
+                assert_eq!(result, Err(DrawDraftError::Full), "a click past the cap is refused");
+            } else {
+                result.expect("a point below the cap");
+            }
         }
-        assert_eq!(draft.len(), MAX_CONTOUR_SEGMENTS);
-        let next = Length::from_micrometres(i64::try_from(MAX_CONTOUR_SEGMENTS).expect("index") * 1_000);
-        assert_eq!(draft.push([next, Length::ZERO]), Err(DrawDraftError::Full));
+        assert_eq!(draft.len(), MAX_CONTOUR_SEGMENTS - 1);
+        assert_eq!(
+            draft.push([Length::from_micrometres(MAX_CONTOUR_SEGMENTS as i64 * 1_000), Length::ZERO]),
+            Err(DrawDraftError::Full),
+            "the anchor click fills the count, so the next one is past the cap"
+        );
     }
 
     #[test]
@@ -1160,9 +1453,9 @@ mod tests {
         {
             draft.push(point).expect("a path need not be simple");
         }
-        assert!(draft.close().is_err(), "closing would make a zero-length segment");
+        assert!(draft.close().is_err(), "two segments cannot become a ring");
         assert!(!draft.is_closed(), "a refused close leaves the draft open and editable");
-        assert_eq!(draft.len(), 3);
+        assert_eq!(draft.len(), 2);
     }
 
     #[test]

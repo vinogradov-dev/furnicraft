@@ -345,9 +345,17 @@ impl Editor {
         true
     }
 
-    /// Appends a work-plane point to the running draft.
+    /// Appends a work-plane point to the running draft as a straight segment.
     pub fn drawing_point(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
         self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.push(point)
+    }
+
+    /// Starts an arc at the running draft's last end through `point`.
+    ///
+    /// The next [`Editor::drawing_point`] ends the arc and the segment after it starts at the stored
+    /// arc end, so a chain that mixes both kinds still closes (ADR 0048).
+    pub fn drawing_arc_through(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
+        self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.push_arc_through(point)
     }
 
     /// Undoes the last drawing action: a close first, then the last point.
@@ -1223,13 +1231,13 @@ mod tests {
         assert!(!editor.start_drawing(DrawTool::Polyline), "a running draft is not replaced");
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first point");
         editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("second point");
-        assert_eq!(editor.drawing().map(DrawDraft::len), Some(2));
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1), "one straight segment");
         assert_eq!(session.project().revision(), revision, "the draft changes no document");
         assert!(!session.can_undo(), "the draft leaves no undo entry behind");
 
         assert!(editor.undo_drawing());
-        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1));
-        assert!(editor.close_drawing().is_err(), "two points enclose nothing");
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(0));
+        assert!(editor.close_drawing().is_err(), "one click encloses nothing");
 
         editor.cancel_drawing();
         assert!(editor.drawing().is_none());

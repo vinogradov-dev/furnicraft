@@ -112,6 +112,17 @@ pub fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
     shortcut(tool).map(egui::Key::name)
 }
 
+/// The strip's label for a drawing tool: its name plus the one gesture the tool does not show.
+///
+/// The label is the button's tooltip and the text a placeholder asset falls back to; it is not the
+/// name of the object the tool creates, which stays [`DrawTool::label`].
+pub const fn strip_label(tool: DrawTool) -> &'static str {
+    match tool {
+        DrawTool::Polyline => "Polyline · Alt+click for an arc",
+        _ => tool.label(),
+    }
+}
+
 /// The icon of a drawing tool.
 const fn tool_icon(tool: DrawTool) -> Icon {
     match tool {
@@ -373,7 +384,8 @@ fn show_panel(
             for tool in CONTOUR_TOOLS {
                 let action = ToolAction::Draw(tool);
                 let on = is_armed(active, action);
-                if icons::tool_button(ui, tool_icon(tool), tool.label(), shortcut_label(tool), true, on).clicked() {
+                let label = strip_label(tool);
+                if icons::tool_button(ui, tool_icon(tool), label, shortcut_label(tool), true, on).clicked() {
                     actions.push(action);
                 }
             }
@@ -620,6 +632,16 @@ mod tests {
         output.drop_without_applying_deltas();
         assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+    }
+
+    #[test]
+    fn the_strip_names_the_arc_gesture_on_the_polyline() {
+        assert_eq!(strip_label(DrawTool::Polyline), "Polyline · Alt+click for an arc");
+        for tool in CONTOUR_TOOLS {
+            if tool != DrawTool::Polyline {
+                assert_eq!(strip_label(tool), tool.label(), "only the polyline mixes segment kinds");
+            }
+        }
     }
 
     #[test]
