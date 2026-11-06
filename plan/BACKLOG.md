@@ -25,38 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
-  (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
-  draws the tool groups of the active tab separated by vertical dividers, heading each group
-  underneath in 10.5 pt caps. A tab whose every group is empty is not drawn at all, so no greyed
-  "coming soon" tool ever appears; the tab that is open is the accent, a collapsed ribbon keeps only
-  its tab row, and clicking the active tab or double-clicking its label collapses and restores the
-  body. The groups map onto the actions that already exist — Sketch: line, polyline, arc, rectangle,
-  circle, close, cancel; Model: cube, cylinder, sphere, cone, extrude; Scene: panel, assembly,
-  camera, light; View: frame all, projection, grid — and the numeric fields (primitive size,
-  extrusion height) become a labelled field inside their group rather than a floating row. A button
-  in the ribbon is a *labelled* button: a 22 pt icon over a 10.5 pt caption, on a 48 pt row, with the
-  group's own 14 pt caption underneath, so the body is about 90 pt tall like the reference the owner
-  showed. `theme::RIBBON_ROW_HEIGHT` grows to 48, `theme::RIBBON_CAPTION_HEIGHT` is added, and a new
-  `icons::ribbon_button` draws icon-plus-caption; `icons::tool_button` stays the icon-only button for
-  the header, the panel headers and the floating viewport cluster, because a caption there would
-  double a 26 pt row. The armed drawing tool or primitive still draws pressed, and the creation chip
-  moves to the status bar (U40). Everything is view state: no command, no schema, no undo entry.
-  Tests: every implemented action appears in exactly one group and every group has at least one
-  action; an empty tab is not drawn; collapsing keeps the tab row; the pressed tool and the disabled
-  extrude hint survive the move; a labelled button paints both its icon and its caption.
-  Session notes (U38 landed the groundwork): `theme::HEADER_HEIGHT`, `RIBBON_ROW_HEIGHT`, `STEP`,
-  `divider` and `ACCENT` already exist and are what the ribbon must use. `Toolbars` keeps
-  `open: [bool; 4]`, the two numeric fields and `ToolPanel::{ALL, label, theme, id}` — add a
-  `RibbonTab` over them rather than rewriting the buttons. `Editor::show_toolbars` is called from
-  `scene_tree()` today; move that call to a new `Panel::top` between the header and the status bar.
-  Density follows the reference the owner sent (`Screenshot 2026-11-06 22-47-27`): icon 22 pt over a
-  caption, 48 pt row, 14 pt group caption — not the 28 pt icon-only row the theme started with.
-  The armed-tool text already lives in `status_state_ui`, so the strip can lose it. Tabs map onto
-  today's panels: Sketch→Contour, Model→Primitives+Bodies, Scene→Scene, View→new groups. Furniture
-  and Hardware have no action yet and must not be drawn until they do.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/lib.rs`
-
 - `[ ]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
   the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
   and folding them leaves a 26 pt vertical strip with the icon and the rotated title, which a click,
@@ -234,6 +202,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
+  (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
+  draws the tool groups of the active tab separated by vertical dividers, heading each group
+  underneath in 10.5 pt caps. A tab whose every group is empty is not drawn at all, so no greyed
+  "coming soon" tool ever appears; the tab that is open is the accent, a collapsed ribbon keeps only
+  its tab row, and clicking the active tab or double-clicking its label collapses and restores the
+  body. The groups map onto the actions that already exist — Sketch: line, polyline, arc, rectangle,
+  circle, close, cancel; Model: cube, cylinder, sphere, cone, extrude; Scene: panel, assembly,
+  camera, light; View: frame all, projection, grid — and the numeric fields (primitive size,
+  extrusion height) become a labelled field inside their group rather than a floating row. A button
+  in the ribbon is a *labelled* button: a 22 pt icon over a 10.5 pt caption, on a 48 pt row, with the
+  group's own 14 pt caption underneath, so the body is about 90 pt tall like the reference the owner
+  showed. `theme::RIBBON_ROW_HEIGHT` grows to 48, `theme::RIBBON_CAPTION_HEIGHT` is added, and a new
+  `icons::ribbon_button` draws icon-plus-caption; `icons::tool_button` stays the icon-only button for
+  the header, the panel headers and the floating viewport cluster, because a caption there would
+  double a 26 pt row. The armed drawing tool or primitive still draws pressed, and the creation chip
+  moves to the status bar (U40). Everything is view state: no command, no schema, no undo entry.
+  Tests: every implemented action appears in exactly one group and every group has at least one
+  action; an empty tab is not drawn; collapsing keeps the tab row; the pressed tool and the disabled
+  extrude hint survive the move; a labelled button paints both its icon and its caption.
+  — `36a9763`
 
 - `[x]` **U38** the window reads as one frame: one theme owns the colour and the rhythm, and chrome
   is separated from content. `crates/ui/src/theme.rs` holds the palette (chrome, surface, panel,
