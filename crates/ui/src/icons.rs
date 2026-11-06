@@ -1,4 +1,4 @@
-//! Themed icon assets and the icon button.
+//! Themed icon assets and the two icon buttons.
 //!
 //! `assets/icons/**` is embedded at compile time, one module per theme. A zero-byte file is a
 //! documented placeholder, so an icon button whose artwork has not been drawn yet falls back to its
@@ -28,17 +28,17 @@ pub const RIBBON_CAPTION_POINT_SIZE: f32 = 10.5;
 /// The directory that owns an icon: the surface that shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Theme {
-    /// The Contour toolbar.
+    /// The ribbon's *Sketch* tab.
     Contour,
-    /// The Primitives toolbar.
+    /// The ribbon's *Model* tab, primitives group.
     Primitives,
-    /// The Bodies toolbar.
+    /// The ribbon's *Model* tab, bodies group.
     Bodies,
-    /// The Scene toolbar.
+    /// The ribbon's *Scene* tab.
     Scene,
-    /// The viewport strip.
+    /// The ribbon's *View* tab and the viewport strip.
     View,
-    /// Menus, dialogs, strips and the shortcut reference.
+    /// Menus, dialogs, the header and the shortcut reference.
     Actions,
     /// The window row of the header: minimize, maximize, restore, close.
     Window,
