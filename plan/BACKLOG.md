@@ -33,6 +33,99 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   the viewport header share a rhythm. No behaviour change: every button, shortcut and command keeps
   its id and its meaning, and only the shell in `apps/furnicraft` and the strip in `crates/ui` move.
   `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs`
+- `[ ]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
+  (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
+  draws the tool groups of the active tab separated by vertical dividers, heading each group
+  underneath in 10.5 pt caps. A tab whose every group is empty is not drawn at all, so no greyed
+  "coming soon" tool ever appears; the tab that is open is the accent, a collapsed ribbon keeps only
+  its tab row, and clicking the active tab or double-clicking its label collapses and restores the
+  body. The groups map onto the actions that already exist — Sketch: line, polyline, arc, rectangle,
+  circle, close, cancel; Model: cube, cylinder, sphere, cone, extrude; Scene: panel, assembly,
+  camera, light; View: frame all, projection, grid — and the numeric fields (primitive size,
+  extrusion height) become a labelled field inside their group rather than a floating row. The armed
+  drawing tool or primitive still draws pressed, and the creation chip moves to the status bar
+  (U40). Everything is view state: no command, no schema, no undo entry. Tests: every implemented
+  action appears in exactly one group and every group has at least one action; an empty tab is not
+  drawn; collapsing keeps the tab row; the pressed tool and the disabled extrude hint survive the
+  move. `files: crates/ui/src/toolbars.rs, crates/ui/src/lib.rs`
+- `[ ]` **U40** the side panels become windows that fold: the scene tree and the inspector each get a
+  header with a title and a fold control, and folding them leaves a 26 pt vertical strip with the
+  icon and the rotated title, which a click, a double-click on its edge or a drag outward restores.
+  The tree keeps only the tree — no tools, no heading of its own — and still supports selection and
+  the context menu. The bottom of the window gets the viewport bar the design calls for: navigation
+  (orbit, pan, zoom), frame all and home on the left of the centre group, the display-style buttons
+  and the layout/settings entries on the right, all on one translucent strip that the eye reads over
+  the scene. The status text that today shares the viewport's first row (armed tool, expected
+  gesture, segment and selection counts, the creation arm, the last error) moves into that bar, so
+  the viewport starts at the scene and not at a wall of labels. A row of buttons is not foldable;
+  only a panel with content is. Tests: folding and restoring a panel keeps its width; an armed
+  container still names itself in the bar and clears from it; a closed panel draws no body; the
+  status line names the armed tool and its gesture. `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
+  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the slider
+  currently in the viewport strip moves here), *Viewport* (default display style, grid on and its
+  step, edges, the view a new viewport opens with), *Ribbon* (background opacity) and *Shortcuts*
+  (the existing table). The window is a view, not a document surface: a change applies at once and
+  never touches the `.fcs`, and a scene saved by another machine carries none of it. The state is
+  written as JSON under the operating system's config directory through a small `settings` module
+  with an atomic write, the same shape `furnicraft-project` uses, so a crash during a save cannot
+  leave a half-written file; a missing, unreadable or older file falls back to the defaults with the
+  reason in the status bar instead of a panic. The same module gains the *Home* surface that the
+  header's house button opens: new, open, the recent files and the empty template, drawn over the
+  workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
+  truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the
+  settings never appear in a serialised document. `files: apps/furnicraft/src, crates/ui/src`
+- `[ ]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
+  splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
+  any border between two views is draggable with a minimum size of 120 pt per side and a ratio
+  clamped to 0.15–0.85. Each leaf owns its camera and its preset (*Front*, *Top*, *Right*,
+  *Axonometric*), *Home* and *Frame all* act on the view under the pointer or on the active one, and
+  the active view carries a thin accent frame. The layout, the cameras and the active leaf are view
+  state in the shell and never reach the document; a preset writes yaw and pitch only, so switching
+  views never moves the model. The renderer draws one offscreen target and one view per pass with a
+  scissored region and a uniform slot per view, rather than one texture per view, so memory does not
+  grow with the grid and egui keeps a single texture id. Tests: a split and a join round-trip; a drag
+  clamps at both ends and never collapses a view; a preset produces the expected orthographic basis;
+  four views produce four scissor rectangles that tile the area exactly. `files: apps/furnicraft/src, crates/render/src/lib.rs, crates/scene/src/lib.rs`
+- `[ ]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
+  *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
+  edge list per mesh, cached in `crates/mesh` against the same derivation inputs as the mesh itself —
+  and drawn as a line pass with a depth bias, because `PolygonMode::Line` is unavailable on Metal and
+  a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges* draws the edge pass with
+  `CompareFunction::Always`; *translucent* draws with blending and no depth write and orders objects
+  by their centre, which is honest for a cabinet of flat panels; *wireframe* draws the edge pass
+  alone. `ShadingStyle` lives in `crates/scene` as frame data and the renderer interprets it, so a
+  test can build a frame without a GPU. The bar's buttons and the settings default stay in step, and
+  a style change re-uploads nothing but the style. Tests: an edge list deduplicates a shared edge and
+  keeps a boundary edge; each style maps to the pipeline state it promises; a translucent pass
+  writes no depth; a wireframe frame draws no triangle. ADR needed. `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
+- `[ ]` **U44** a ground shadow: the scene draws a soft contact shadow under the bounds of every
+  object that touches the floor, so a cabinet reads as standing on something instead of floating in
+  a grid. The first version is a flat ellipse or rounded rectangle derived from the world bound,
+  drawn unlit on the ground plane with a radial falloff — no shadow map, no extra pass, no texture
+  dependency — and it is a toggle in the display settings. A projected shadow map is a later
+  decision with its own ADR, because it is the one feature here that can cost a frame. Tests: a
+  bound with no floor contact draws nothing; the ellipse stays inside the object's footprint; the
+  toggle removes it from the frame. `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
+- `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
+  each with its own session, undo history, selection, camera and dirty marker, and activating a tab
+  swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
+  the last one leaves an empty *Untitled* scene, and *Save*, *Undo* and *Redo* in the header act on
+  the active tab only. This is the one task in the set that changes an architecture boundary rather
+  than a look: `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo state must move from
+  fields of the application into one `Document` per tab with its own renderer target, so it gets a
+  plan of its own and lands last. Tests: a tab keeps its own undo stack and dirty flag; switching
+  tabs restores the selection and the camera; a close with unsaved changes asks and a discard drops
+  only that tab. `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
+- `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
+  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
+  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
+  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
+  `view/front`, `view/top`, `view/right`, `view/axon`, plus the remaining `actions` files the header
+  and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
+  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
+  A placeholder that is still empty keeps the text fallback, so this task can land in slices without
+  breaking a surface. `files: assets/icons, crates/ui/src/icons.rs`
 
 ## Bugs
 
