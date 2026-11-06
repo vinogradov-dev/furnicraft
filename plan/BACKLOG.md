@@ -25,7 +25,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
+- `[ ]` **U38** the window reads as one frame: the mode bar and the panel borders follow the same
+  standard as Blender instead of the default `egui` look. One top bar carries the menus, the scene
+  name and the file state; the tool strip moves out of the scene-tree panel to sit over the viewport
+  it draws into; the status bar at the bottom names the armed tool, the gesture it expects and the
+  counts it would affect, and the panel spacing and rounding come from one place so a side panel and
+  the viewport header share a rhythm. No behaviour change: every button, shortcut and command keeps
+  its id and its meaning, and only the shell in `apps/furnicraft` and the strip in `crates/ui` move.
+  `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs`
+
+## Bugs
+
+## Next
+
+## Done
+
+- `[x]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
   two-click arc, and a chain that mixes both still closes and extrudes. The arc leaves the last
   vertex: the first click is the point it passes through, the second is its end, and the next
   segment starts where the stored arc actually ended. `DrawDraft` therefore stops holding a point
@@ -43,14 +58,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   path whose arc end misses the next line by one micrometre converts through `to_contour` and by two
   is refused, a draft mixes both kinds and closes, an arc endpoint becomes the next vertex, undo
   cancels a pending arc, and the commit is still one `object.path.create`.
+  Shipped as one draft of segments with Alt+click arcs — `ad95254`
   `files: crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs, crates/model/src/contour.rs`
-
-## Bugs
-
-## Next
-
-## Done
-
 - `[x]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
   Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
   A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.

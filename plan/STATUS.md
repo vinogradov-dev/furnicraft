@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U29 state=idle base=cb89f2e updated=2026-11-06
+STATE: milestone=M7 phase=U task=U38 state=idle base=ad95254 updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -40,24 +40,24 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   (ADR 0060), a `ContourDraft` reshapes a path through one `object.path.replace`, the gizmo paints an
   open chain open, a cutout ring keeps its anchor and `CutoutDepth` when applied, and
   `panel.outline.to_contour` bakes a rectangle and its banding in one revision (ADR 0061).
-- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) and X2 are fixed. X2 was a legal
-  ring sampling past the 1024-vertex cap; the chord now follows the shape and a bounded search coarsens
-  it further, so a big drawing becomes a solid (ADR 0062).
+- Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) and X2 are fixed — a legal ring
+  sampled past the 1024-vertex cap, so the chord now follows the shape (ADR 0062).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
-  `Image::tint` made a `#000` master black in every theme, and the set — 18 drawn files of 51, pure
-  stroke — had no mass at 16 pt. U27 rasterises each white master at `pt × pixels_per_point`, bakes the
-  widget's foreground colour into the pixels and caches a texture per `(uri, px, colour)`, at 20 pt
-  tools and 16 pt inline, with a pixel test in both themes. U28: a passive face fills at 12–18 %, the
-  result at 45–60 % under its outline, the volumetric icons share one axonometry (§9.1), and each keeps
-  its ink inside `3..21` at 20–45 % coverage, read off the raster; 33 placeholders are in `plan/debt.md`.
+  `Image::tint` made a `#000` master black in every theme, and the 18 drawn of 51, pure stroke, had no
+  mass at 16 pt. U27 rasterises each white master at `pt × pixels_per_point`, bakes the widget colour
+  into the pixels and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline. U28: a passive
+  face fills at 12–18 %, the result at 45–60 % under its outline, the volumetric icons share one
+  axonometry (§9.1), and each keeps its ink inside `3..21` at 20–45 % coverage, read off the raster;
+  33 placeholders are in `plan/debt.md`.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U29 is next: the Polyline tool gains an arc that mixes with straight segments, and a chain of both
-closes and extrudes. Then the Icon set's remaining 33 placeholders in `plan/debt.md`.
+U38 is next and it is a visual pass, not new behaviour: one top bar, the tool strip over the viewport,
+a status bar naming the armed gesture, and one spacing scale for the window. It needs a written plan
+and the owner's approval before code; 33 placeholder icons wait in `plan/debt.md`.
 
 ## Index
 
