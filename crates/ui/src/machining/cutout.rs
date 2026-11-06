@@ -8,6 +8,7 @@ use egui::{ComboBox, Ui};
 use furnicraft_model::{Cutout, CutoutDepth, CutoutShape, Id, MachiningId, PanelRect};
 use furnicraft_units::Length;
 
+use crate::contour_edit::ContourEntry;
 use crate::panel_card::{millimetre_field, positive_length, signed_length};
 
 /// The starting depth of a new blind cutout: half the panel, so it is legal on any usable panel.
@@ -41,35 +42,75 @@ impl DepthMode {
     }
 }
 
-/// Draws the cutout body and returns edited parameters when a field commits a change.
+/// What the cutout section wants after one frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CutoutEdit {
+    /// Replacement parameters when a field committed a change.
+    pub(crate) params: Option<Cutout>,
+    /// Whether the user asked to reshape the stored ring in the viewport.
+    pub(crate) edit_contour: bool,
+}
+
+impl CutoutEdit {
+    /// The changes this frame carries.
+    const fn new(params: Option<Cutout>, edit_contour: bool) -> Self {
+        Self { params, edit_contour }
+    }
+}
+
+/// Draws the cutout body and reports edited parameters and a contour-edit request.
+///
+/// `entry` tells the section whether this record's ring is already being reshaped in the viewport,
+/// whether another contour edit owns it, or whether the selection rule blocks the mode.
 pub(crate) fn show(
     ui: &mut Ui,
     panel_id: Id,
     machining: MachiningId,
     cutout: &Cutout,
     thickness: Length,
-) -> Option<Cutout> {
-    let shape = show_shape(ui, cutout.shape());
+    entry: ContourEntry,
+) -> CutoutEdit {
+    let (shape, edit_contour) = show_shape(ui, cutout.shape(), entry);
     let depth = show_depth(ui, panel_id, machining, cutout.depth(), thickness);
-    if shape.is_none() && depth.is_none() {
-        return None;
-    }
-    let shape = shape.unwrap_or_else(|| cutout.shape().clone());
-    let depth = depth.unwrap_or(cutout.depth());
-    Some(Cutout::new(shape, depth))
+    let params = (shape.is_some() || depth.is_some()).then(|| {
+        let shape = shape.unwrap_or_else(|| cutout.shape().clone());
+        let depth = depth.unwrap_or(cutout.depth());
+        Cutout::new(shape, depth)
+    });
+    CutoutEdit::new(params, edit_contour)
 }
 
-/// Draws the shape controls. A rectangle is edited in place; a stored ring is a summary, because it
-/// comes from the contour edit mode rather than from four numbers.
-fn show_shape(ui: &mut Ui, shape: &CutoutShape) -> Option<CutoutShape> {
+/// Draws the shape controls. A rectangle is edited in place; a stored ring is a summary with the
+/// viewport edit entry, because it comes from the contour edit mode rather than from four numbers.
+fn show_shape(ui: &mut Ui, shape: &CutoutShape, entry: ContourEntry) -> (Option<CutoutShape>, bool) {
     match shape {
-        CutoutShape::Rectangle(rect) => show_rectangle(ui, *rect).map(CutoutShape::Rectangle),
+        CutoutShape::Rectangle(rect) => (show_rectangle(ui, *rect).map(CutoutShape::Rectangle), false),
         CutoutShape::Contour(contour) => {
             let segments = contour.segments().len();
             let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
             let suffix = if arcs > 0 { format!(" · {arcs} arcs") } else { String::new() };
-            ui.label(format!("Contour ring · {segments} segments{suffix}"));
-            None
+            let mut edit_contour = false;
+            ui.horizontal(|ui| {
+                ui.label(format!("Contour ring · {segments} segments{suffix}"));
+                match entry {
+                    ContourEntry::Editing => {
+                        ui.label("Editing in the viewport. Apply or cancel in the viewport toolbar.");
+                    }
+                    ContourEntry::Busy => {
+                        ui.label("Finish the current contour edit in the viewport first.");
+                    }
+                    ContourEntry::SelectSingle => {
+                        ui.label("Select only this panel to edit its contour.");
+                    }
+                    ContourEntry::Ready => {
+                        edit_contour = ui
+                            .button("Edit contour")
+                            .on_hover_text("Reshapes this ring in the viewport. Undo restores the stored ring.")
+                            .clicked();
+                    }
+                }
+            });
+            (None, edit_contour)
         }
     }
 }

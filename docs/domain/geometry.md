@@ -147,12 +147,17 @@ drawing rather than a solid, described in section 6; a primitive is described in
 
 ## 7. Contour editing
 
-A constructive contour and a contour panel outline are reshaped in one viewport mode. Its state is
-view state, not document data ([0029](../decisions/0029-view-state-belongs-to-the-session.md)).
+A constructive contour, a contour panel outline, a path chain and a contour cutout ring are reshaped
+in one viewport mode. Its state is view state, not document data
+([0029](../decisions/0029-view-state-belongs-to-the-session.md)).
 
-- The mode is entered with exactly one selected node that stores a ring: a contour panel outline or a
-  constructive object. A rectangle panel, a mesh object and a multi-selection have nothing to edit.
+- The mode is entered with exactly one selected node that stores a ring or a chain: a contour panel
+  outline, a constructive object, a path object or a contour cutout on the selected panel. A
+  rectangle panel, a rectangle cutout, a mesh object and a multi-selection have nothing to edit.
   Mesh editing and contour editing are mutually exclusive.
+- A path is a chain rather than a ring: its free start and end are handles of their own, closing adds
+  the bridge segment, and a corner after an arc is the stored arc end. A cutout ring is nominal
+  panel-local and the panel node frames it; applying it replaces the record's shape alone.
 - The editor keeps the stored ring as a **base** and a **draft** working copy. Every gesture rewrites
   only the draft, so the document, its revision and the undo history are untouched until the user
   applies. Leaving the mode without applying drops the draft.
@@ -174,11 +179,14 @@ view state, not document data ([0029](../decisions/0029-view-state-belongs-to-th
 - Each intermediate draft must be a valid ring: closed, at least three segments, non-zero area,
   inside the coordinate limit and not self-intersecting. A gesture that would break the ring is
   rejected and leaves the last valid draft in place, so a corner simply stops at the boundary.
-- **Apply** dispatches exactly one command — `panel.outline.set` for a panel,
-  `object.contour.replace` for an object — and one undo entry is the whole edit. Enter applies and
-  Escape cancels. A rejected apply keeps the draft so the user can fix it or cancel; a successful
-  apply leaves the mode. An untouched draft dispatches no command and creates no empty undo entry.
-- A selection change, a deleted target or a target that no longer stores a ring ends the mode.
+- **Apply** dispatches exactly one command — `panel.outline.set` for a panel outline,
+  `object.contour.replace` for an object, `object.path.replace` for a path and
+  `panel.machining.update` for a cutout ring — and one undo entry is the whole edit. A cutout update
+  keeps the record's anchor and its `CutoutDepth`. Enter applies and Escape cancels. A rejected apply
+  keeps the draft so the user can fix it or cancel; a successful apply leaves the mode. An untouched
+  draft dispatches no command and creates no empty undo entry.
+- A selection change, a deleted target or a target that no longer stores a ring or a chain ends the
+  mode.
 - The whole mode is a client of the commands: the draft never reaches the document by another path.
 
 ## 8. Evaluation
@@ -282,10 +290,12 @@ At minimum:
 - one out-of-bounds vertex index rejects the whole move;
 - a failing evaluation keeps the object, its data and its placement and reports a diagnostic;
 - a constructive object's mesh never appears in a saved file, and neither does a primitive's;
-- contour editing starts only on a single node that stores a ring, and mesh editing and contour
-  editing exclude each other;
+- contour editing starts only on a single node that stores a ring or a chain, or on a contour cutout
+  of the selected panel, and mesh editing and contour editing exclude each other;
 - moving a corner and splitting a side change only the draft, and applying is one command and one
   undo entry;
+- a cutout ring edit keeps its anchor and depth, and a ring outside the core is refused before the
+  record changes;
 - a split keeps the first part's id and the new part takes the next id; untouched segments keep
   theirs;
 - an arc corner slides on its circle, and a corner off the circle is rejected;

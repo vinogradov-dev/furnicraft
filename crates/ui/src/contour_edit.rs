@@ -11,11 +11,14 @@
 //! the last one, closes the chain or cancels it, and no command runs until the drawing is committed.
 
 use furnicraft_engine::object_cmds::{OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_CREATE_ID, OBJECT_PATH_REPLACE_ID};
-use furnicraft_engine::panel_cmds::OUTLINE_SET_ID;
-use furnicraft_engine::{ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelOutlineSet, Session};
+use furnicraft_engine::panel_cmds::{MACHINING_UPDATE_ID, OUTLINE_SET_ID};
+use furnicraft_engine::{
+    ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelMachiningUpdate, PanelOutlineSet, Session,
+};
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentId, Id, MAX_CONTOUR_COORDINATE,
-    MAX_CONTOUR_SEGMENTS, Path, PathCorner, PathError, Placement, Project,
+    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentId, Cutout, CutoutShape, Id,
+    MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path, PathCorner, PathError, Placement,
+    Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -31,6 +34,16 @@ pub enum ContourTarget {
     Object(Id),
     /// The open or closed chain of a path object.
     Path(Id),
+    /// The ring of a contour cutout on a panel.
+    ///
+    /// The panel is also the node whose placement frames the ring, because machining coordinates are
+    /// nominal panel-local.
+    Cutout {
+        /// The panel that owns the cutout.
+        panel: Id,
+        /// The stable machining record the ring belongs to.
+        machining: MachiningId,
+    },
 }
 
 impl ContourTarget {
@@ -38,6 +51,19 @@ impl ContourTarget {
     pub const fn id(self) -> Id {
         match self {
             Self::Panel(id) | Self::Object(id) | Self::Path(id) => id,
+            Self::Cutout { panel, .. } => panel,
+        }
+    }
+
+    /// The ring of a contour cutout, when this target names one.
+    fn cutout_ring(self, project: &Project) -> Option<&Contour> {
+        let Self::Cutout { panel, machining } = self else {
+            return None;
+        };
+        let record = project.panel(panel)?.machining_by_id(machining)?;
+        match record.cutout()?.shape() {
+            CutoutShape::Contour(contour) => Some(contour),
+            CutoutShape::Rectangle(_) => None,
         }
     }
 
@@ -47,6 +73,7 @@ impl ContourTarget {
             Self::Panel(id) => project.panel(id)?.outline_contour().cloned().map(ContourDraft::Ring),
             Self::Object(id) => project.object_contour(id).ok().cloned().map(ContourDraft::Ring),
             Self::Path(id) => project.object_path(id).ok().cloned().map(ContourDraft::Chain),
+            Self::Cutout { .. } => self.cutout_ring(project).cloned().map(ContourDraft::Ring),
         }
     }
 
@@ -56,6 +83,35 @@ impl ContourTarget {
             Self::Panel(id) => project.panel(id).and_then(|panel| panel.outline_contour()).is_some(),
             Self::Object(id) => project.object_contour(id).is_ok(),
             Self::Path(id) => project.object_path(id).is_ok(),
+            Self::Cutout { .. } => self.cutout_ring(project).is_some(),
+        }
+    }
+}
+
+/// What a card entry into the contour edit mode can do.
+///
+/// The editor owns one live edit at a time, so a card section must know whether it is the live
+/// target, whether another target owns the viewport, or whether the selection rule blocks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContourEntry {
+    /// This target is the live edit.
+    Editing,
+    /// Another contour target owns the viewport.
+    Busy,
+    /// The selection is not exactly the target's node.
+    SelectSingle,
+    /// The entry button can start the edit.
+    Ready,
+}
+
+impl ContourEntry {
+    /// The entry state for `mine`, given the live target and the selection rule.
+    pub(crate) fn of(target: Option<ContourTarget>, mine: ContourTarget, single_selection: bool) -> Self {
+        match target {
+            Some(current) if current == mine => Self::Editing,
+            Some(_) => Self::Busy,
+            None if !single_selection => Self::SelectSingle,
+            None => Self::Ready,
         }
     }
 }
@@ -245,6 +301,19 @@ impl ContourEdit {
             (ContourTarget::Path(object), ContourDraft::Chain(path)) => {
                 let params = json(&ObjectPathReplace { object, path: path.clone() })?;
                 dispatch(session, OBJECT_PATH_REPLACE_ID, &params).map(|_| ())
+            }
+            (ContourTarget::Cutout { panel, machining }, ContourDraft::Ring(contour)) => {
+                let record = session
+                    .project()
+                    .panel(panel)
+                    .and_then(|panel| panel.machining_by_id(machining))
+                    .ok_or_else(|| format!("machining {machining} is gone"))?;
+                let cutout = record.cutout().ok_or_else(|| format!("machining {machining} is not a cutout"))?;
+                let params =
+                    MachiningParams::Cutout(Cutout::new(CutoutShape::Contour(contour.clone()), cutout.depth()));
+                let request = PanelMachiningUpdate { panel, machining, anchor: record.anchor(), params };
+                let params = json(&request)?;
+                dispatch(session, MACHINING_UPDATE_ID, &params).map(|_| ())
             }
             _ => Err("the contour draft does not match its target".to_owned()),
         }
@@ -596,8 +665,12 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_engine::NodeDelete;
+    use furnicraft_engine::PanelMachiningAdd;
     use furnicraft_engine::node_cmds::NODE_DELETE_ID;
-    use furnicraft_model::{Constructive, Container, Geometry, Panel, Placement, Project};
+    use furnicraft_engine::panel_cmds::MACHINING_ADD_ID;
+    use furnicraft_model::{
+        Constructive, Container, CutoutDepth, FaceSide, Geometry, MachiningAnchor, Panel, Placement, Project,
+    };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
     use super::*;
@@ -641,6 +714,35 @@ mod tests {
             .add_object(root, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("object");
         (project, id)
+    }
+
+    /// A rectangle inside the sample panel, with its minimum corner at `(x, y)`.
+    fn offset_rectangle(x: i64, y: i64, width: i64, height: i64) -> Contour {
+        Contour::from_polygon(vec![
+            [millimetres(x), millimetres(y)],
+            [millimetres(x + width), millimetres(y)],
+            [millimetres(x + width), millimetres(y + height)],
+            [millimetres(x), millimetres(y + height)],
+        ])
+        .expect("offset rectangle")
+    }
+
+    /// A session whose sample panel owns one blind contour cutout, anchored on face B.
+    fn cutout_session() -> (Session, Id, MachiningId) {
+        let mut session = session(sample_project());
+        let panel = Id::new(2).expect("panel id");
+        let request = PanelMachiningAdd {
+            panel,
+            anchor: MachiningAnchor::face(FaceSide::B),
+            params: MachiningParams::Cutout(Cutout::new(
+                CutoutShape::Contour(offset_rectangle(100, 100, 200, 100)),
+                CutoutDepth::Blind { depth: millimetres(6) },
+            )),
+        };
+        let params = json(&request).expect("params");
+        let outcome = session.dispatch(MACHINING_ADD_ID, &params).expect("add the contour cutout");
+        let machining = outcome.created_machining_id().expect("the command created a record");
+        (session, panel, machining)
     }
 
     /// A project whose root holds one path object.
@@ -732,6 +834,118 @@ mod tests {
         assert!(ContourEdit::start(&project, ContourTarget::Panel(rectangle_panel)).is_none());
         assert!(!ContourEdit::is_editable(&project, ContourTarget::Panel(rectangle_panel)));
         assert!(ContourEdit::start(&project, ContourTarget::Object(Id::new(99).expect("id"))).is_none());
+    }
+
+    #[test]
+    fn a_contour_entry_knows_the_live_edit_and_the_selection_rule() {
+        let panel = Id::new(2).expect("id");
+        let machining = MachiningId::new(10).expect("id");
+        let mine = ContourTarget::Cutout { panel, machining };
+        assert_eq!(ContourEntry::of(None, mine, true), ContourEntry::Ready);
+        assert_eq!(ContourEntry::of(None, mine, false), ContourEntry::SelectSingle);
+        assert_eq!(ContourEntry::of(Some(mine), mine, false), ContourEntry::Editing);
+        assert_eq!(
+            ContourEntry::of(Some(ContourTarget::Panel(panel)), mine, true),
+            ContourEntry::Busy,
+            "another target owns the viewport"
+        );
+    }
+
+    #[test]
+    fn a_cutout_ring_edit_is_one_revision_and_one_undo() {
+        let (mut session, panel, machining) = cutout_session();
+        let target = ContourTarget::Cutout { panel, machining };
+        assert_eq!(target.id(), panel, "the panel frames the ring");
+        assert!(ContourEdit::is_editable(session.project(), target));
+        let stored = offset_rectangle(100, 100, 200, 100);
+        let mut edit = ContourEdit::start(session.project(), target).expect("a contour cutout is editable");
+        assert_eq!(edit.base().as_ring(), Some(&stored));
+        assert!(!edit.is_dirty());
+
+        let segment = edit.draft().id_at(1).expect("right edge");
+        edit.move_corner(segment, [millimetres(340), millimetres(100)]).expect("move the corner");
+        assert!(edit.is_dirty());
+        assert_eq!(
+            session
+                .project()
+                .panel(panel)
+                .and_then(|panel| panel.machining_by_id(machining))
+                .and_then(|record| record.cutout())
+                .map(|cutout| cutout.shape().clone()),
+            Some(CutoutShape::Contour(stored.clone())),
+            "the document still has the stored ring"
+        );
+
+        let revision = session.project().revision();
+        edit.apply(&mut session).expect("apply the cutout ring");
+        let record = session
+            .project()
+            .panel(panel)
+            .and_then(|panel| panel.machining_by_id(machining))
+            .expect("the record stays");
+        let cutout = record.cutout().expect("a cutout record");
+        assert_eq!(cutout.shape(), &CutoutShape::Contour(edit.draft().as_ring().expect("ring").clone()));
+        assert_eq!(record.anchor().as_face(), Some(FaceSide::B), "the anchor is unchanged");
+        assert_eq!(cutout.depth(), CutoutDepth::Blind { depth: millimetres(6) }, "the depth is unchanged");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+
+        session.undo().expect("one undo restores the ring");
+        assert_eq!(
+            session
+                .project()
+                .panel(panel)
+                .and_then(|panel| panel.machining_by_id(machining))
+                .and_then(|record| record.cutout())
+                .map(|cutout| cutout.shape().clone()),
+            Some(CutoutShape::Contour(stored)),
+        );
+    }
+
+    #[test]
+    fn a_cutout_ring_that_leaves_the_core_is_refused() {
+        let (mut session, panel, machining) = cutout_session();
+        let target = ContourTarget::Cutout { panel, machining };
+        let mut edit = ContourEdit::start(session.project(), target).expect("editable");
+        let segment = edit.draft().id_at(1).expect("right edge");
+        edit.move_corner(segment, [millimetres(900), millimetres(100)]).expect("move the corner out");
+
+        let revision = session.project().revision();
+        assert!(edit.apply(&mut session).is_err(), "the ring no longer fits the core");
+        assert_eq!(session.project().revision(), revision, "a refused update changes nothing");
+        assert!(edit.is_dirty(), "the draft stays so the user can fix it");
+        assert_eq!(
+            session
+                .project()
+                .panel(panel)
+                .and_then(|panel| panel.machining_by_id(machining))
+                .and_then(|record| record.cutout())
+                .map(|cutout| cutout.shape().clone()),
+            Some(CutoutShape::Contour(offset_rectangle(100, 100, 200, 100))),
+            "the stored ring is untouched"
+        );
+    }
+
+    #[test]
+    fn a_rectangle_cutout_has_no_ring_to_edit() {
+        let mut session = session(sample_project());
+        let panel = Id::new(2).expect("panel id");
+        let request = PanelMachiningAdd {
+            panel,
+            anchor: MachiningAnchor::face(FaceSide::A),
+            params: MachiningParams::Cutout(Cutout::new(
+                CutoutShape::Rectangle(furnicraft_testkit::sample_cutout_rect()),
+                CutoutDepth::Through,
+            )),
+        };
+        let params = json(&request).expect("params");
+        let machining = session
+            .dispatch(MACHINING_ADD_ID, &params)
+            .expect("add the rectangle cutout")
+            .created_machining_id()
+            .expect("record");
+        let target = ContourTarget::Cutout { panel, machining };
+        assert!(ContourEdit::start(session.project(), target).is_none());
+        assert!(!ContourEdit::is_editable(session.project(), target));
     }
 
     #[test]
