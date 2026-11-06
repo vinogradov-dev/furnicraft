@@ -15,13 +15,14 @@ use furnicraft_engine::{
     PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
-    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MaterialId, Panel,
-    PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
+    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MachiningId,
+    MaterialId, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
 };
 use furnicraft_units::Length;
 use serde_json::Value;
 
 use crate::command::{dispatch as dispatch_command, json};
+use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
 use crate::section::section;
 
@@ -79,8 +80,34 @@ pub(crate) enum PanelAction {
     /// Nothing was pressed.
     #[default]
     None,
-    /// Enter contour editing on this panel.
+    /// Enter contour editing on this panel's outline.
     StartContour,
+    /// Enter contour editing on one cutout ring of this panel.
+    StartCutoutContour {
+        /// The panel that owns the cutout.
+        panel: Id,
+        /// The machining record whose ring is edited.
+        machining: MachiningId,
+    },
+}
+
+/// Draws the shared *Edit contour* entry state and returns whether the button was pressed.
+fn contour_entry(ui: &mut Ui, entry: ContourEntry, hover: &str) -> bool {
+    match entry {
+        ContourEntry::Editing => {
+            ui.label("Editing in the viewport. Apply or cancel in the viewport toolbar.");
+            false
+        }
+        ContourEntry::Busy => {
+            ui.label("Finish the current contour edit in the viewport first.");
+            false
+        }
+        ContourEntry::SelectSingle => {
+            ui.label("Select only this panel to edit its contour.");
+            false
+        }
+        ContourEntry::Ready => ui.button("Edit contour").on_hover_text(hover).clicked(),
+    }
 }
 
 /// The three states of a corner in the outline editor.
@@ -107,14 +134,14 @@ impl PanelCard {
     /// Draws the card for the current panel and dispatches any accepted edits.
     ///
     /// Returns what the user asked to do with contour editing; the editor owns the mode and the
-    /// working copy. `contour_editing` tells the card that this panel is already being reshaped in
-    /// the viewport, so it shows the state instead of the entry button.
+    /// working copy. `contour_target` names the live edit, so the section it belongs to shows the
+    /// state instead of the entry button and the outline does not claim a cutout edit.
     pub(crate) fn show(
         &mut self,
         ui: &mut Ui,
         session: &mut Session,
         selected: Option<Id>,
-        contour_editing: bool,
+        contour_target: Option<ContourTarget>,
         single_selection: bool,
     ) -> PanelAction {
         let Some(panel_id) = selected else {
@@ -143,6 +170,7 @@ impl PanelCard {
         let mut machining_actions: Vec<MachiningAction> = Vec::new();
         let mut errors = Vec::new();
         let mut contour_request = PanelAction::None;
+        let panel_entry = ContourEntry::of(contour_target, ContourTarget::Panel(panel_id), single_selection);
         let diagnostics = session.panel_diagnostics(panel_id);
         let thickness = session
             .panel_geometry(panel_id)
@@ -204,7 +232,7 @@ impl PanelCard {
         });
         ui.separator();
         section(ui, "panel.shape", "Shape", true, |ui| {
-            contour_request = self.show_shape(ui, panel_id, panel, contour_editing, single_selection, &mut actions);
+            contour_request = self.show_shape(ui, panel_id, panel, panel_entry, &mut actions);
         });
         ui.separator();
         section(ui, "panel.banding", "Banding", true, |ui| {
@@ -212,7 +240,18 @@ impl PanelCard {
         });
         ui.separator();
         section(ui, "panel.machining", "Machining", true, |ui| {
-            self.machining.show(ui, panel_id, panel, thickness, &diagnostics, &mut machining_actions);
+            if let Some(machining) = self.machining.show(
+                ui,
+                panel_id,
+                panel,
+                thickness,
+                &diagnostics,
+                contour_target,
+                single_selection,
+                &mut machining_actions,
+            ) {
+                contour_request = PanelAction::StartCutoutContour { panel: panel_id, machining };
+            }
         });
         ui.separator();
         section(ui, "panel.diagnostics", "Diagnostics", true, |ui| {
@@ -297,8 +336,7 @@ impl PanelCard {
         ui: &mut Ui,
         panel_id: Id,
         panel: &Panel,
-        contour_editing: bool,
-        single_selection: bool,
+        entry: ContourEntry,
         actions: &mut Vec<Action>,
     ) -> PanelAction {
         let mut request = PanelAction::None;
@@ -312,28 +350,18 @@ impl PanelCard {
                         ui.label(format!("Arcs  {arcs}"));
                     }
                 }
-                if contour_editing {
-                    ui.label("Editing the outline in the viewport. Apply or cancel in the viewport toolbar.");
-                } else if !single_selection {
-                    ui.label("Select only this panel to edit its contour.");
-                } else if ui.button("Edit contour").clicked() {
+                if contour_entry(ui, entry, "Reshapes the ring in the viewport. Undo restores it.") {
                     request = PanelAction::StartContour;
                 }
             } else {
                 self.show_outline(ui, panel_id, panel, actions);
                 ui.add_space(4.0);
-                if contour_editing {
-                    ui.label("Editing the outline in the viewport. Apply or cancel in the viewport toolbar.");
-                } else if !single_selection {
-                    ui.label("Select only this panel to edit its contour.");
-                } else if ui
-                    .button("Edit contour")
-                    .on_hover_text(
-                        "Bakes the outline into a ring. Corners, chamfers and bows become segments; \
-                         undo restores them.",
-                    )
-                    .clicked()
-                {
+                if contour_entry(
+                    ui,
+                    entry,
+                    "Bakes the outline into a ring. Corners, chamfers and bows become segments; \
+                     undo restores them.",
+                ) {
                     actions.push(Action::ToContour { panel: panel_id });
                 }
             }
@@ -1235,7 +1263,7 @@ mod tests {
             |ui| {
                 let panel = session.project().panel(panel_id).expect("panel");
                 let card = PanelCard::default();
-                let _ = card.show_shape(ui, panel_id, panel, false, true, &mut actions);
+                let _ = card.show_shape(ui, panel_id, panel, ContourEntry::Ready, &mut actions);
             },
         );
         output.textures_delta.clear();

@@ -25,6 +25,7 @@ use furnicraft_model::{
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
+use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::panel_card::{diagnostic_message, edge_label};
 
 /// One machining edit the card wants to dispatch after the immutable UI borrow ends.
@@ -51,6 +52,11 @@ pub(crate) struct MachiningSection {
 
 impl MachiningSection {
     /// Draws the section and collects the edits the user made.
+    ///
+    /// `contour_target` names the live contour edit, so this section can show a cutout ring as
+    /// editing, busy or ready; `single_selection` mirrors the editor rule that one selected panel
+    /// owns the mode. Returns the record whose *Edit contour* was pressed.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn show(
         &mut self,
         ui: &mut Ui,
@@ -58,20 +64,37 @@ impl MachiningSection {
         panel: &Panel,
         thickness: Length,
         diagnostics: &[PanelDiagnostic],
+        contour_target: Option<ContourTarget>,
+        single_selection: bool,
         actions: &mut Vec<MachiningAction>,
-    ) {
+    ) -> Option<MachiningId> {
         self.retain_existing(panel);
 
         if panel.machining().is_empty() {
             ui.label("No machining.");
         }
         let count = panel.machining().len();
+        let mut contour_request = None;
         for (index, record) in panel.machining().iter().enumerate() {
-            self.show_record(ui, panel_id, record, index, count, thickness, diagnostics, actions);
+            if self.show_record(
+                ui,
+                panel_id,
+                record,
+                index,
+                count,
+                thickness,
+                diagnostics,
+                contour_target,
+                single_selection,
+                actions,
+            ) {
+                contour_request = Some(record.id());
+            }
         }
 
         ui.add_space(4.0);
         self.show_add_menu(ui, panel_id, panel, actions);
+        contour_request
     }
 
     /// Dispatches one edit and returns the record an add created.
@@ -120,6 +143,8 @@ impl MachiningSection {
     }
 
     /// Draws one operation row: chrome, then the body its kind contributes.
+    ///
+    /// Returns whether the user pressed *Edit contour* on this record.
     #[allow(clippy::too_many_arguments)]
     fn show_record(
         &mut self,
@@ -130,8 +155,10 @@ impl MachiningSection {
         count: usize,
         thickness: Length,
         diagnostics: &[PanelDiagnostic],
+        contour_target: Option<ContourTarget>,
+        single_selection: bool,
         actions: &mut Vec<MachiningAction>,
-    ) {
+    ) -> bool {
         let id = record.id();
         let messages = bound_messages(diagnostics, id);
         let mut open = self.open.contains(&id);
@@ -158,36 +185,52 @@ impl MachiningSection {
         });
 
         if open {
-            Self::show_body(ui, panel_id, record, thickness, &messages, actions);
+            let contour_request =
+                Self::show_body(ui, panel_id, record, thickness, &messages, contour_target, single_selection, actions);
             self.open.insert(id);
+            contour_request
         } else {
             self.open.remove(&id);
+            false
         }
     }
 
     /// Draws the expanded body: the shared anchor control, the kind section and its diagnostics.
+    ///
+    /// Returns whether the user pressed *Edit contour*.
+    #[allow(clippy::too_many_arguments)]
     fn show_body(
         ui: &mut Ui,
         panel_id: Id,
         record: &Machining,
         thickness: Length,
         messages: &[String],
+        contour_target: Option<ContourTarget>,
+        single_selection: bool,
         actions: &mut Vec<MachiningAction>,
-    ) {
+    ) -> bool {
         let capabilities = record.params().descriptor().capabilities();
         let mut anchor = record.anchor();
         let mut params = record.params().clone();
         let mut changed = false;
+        let mut contour_request = false;
 
         ui.indent(("machining_body", record.id().get()), |ui| {
             if let Some(edited) = anchor_editor(ui, panel_id, record.id(), anchor, capabilities) {
                 anchor = edited;
                 changed = true;
             }
-            if let Some(edited) = kind_body(ui, panel_id, record, thickness) {
+            let entry = ContourEntry::of(
+                contour_target,
+                ContourTarget::Cutout { panel: panel_id, machining: record.id() },
+                single_selection,
+            );
+            let body = kind_body(ui, panel_id, record, thickness, entry);
+            if let Some(edited) = body.params {
                 params = edited;
                 changed = true;
             }
+            contour_request = body.edit_contour;
             for message in messages {
                 ui.colored_label(Color32::LIGHT_RED, message);
             }
@@ -196,6 +239,7 @@ impl MachiningSection {
         if changed {
             actions.push(MachiningAction::Update { panel: panel_id, machining: record.id(), anchor, params });
         }
+        contour_request
     }
 
     /// Draws the add menu from the descriptor table, grouped by category.
@@ -331,11 +375,21 @@ fn anchor_editor(
     (chosen != side).then_some(MachiningAnchor::face(chosen))
 }
 
+/// What one kind's body contributed to the card this frame.
+#[derive(Debug, Default)]
+struct BodyEdit {
+    /// Replacement parameters when a field committed a change.
+    params: Option<MachiningParams>,
+    /// Whether the user pressed *Edit contour*.
+    edit_contour: bool,
+}
+
 /// Draws the body one operation kind contributes.
-fn kind_body(ui: &mut Ui, panel_id: Id, record: &Machining, thickness: Length) -> Option<MachiningParams> {
+fn kind_body(ui: &mut Ui, panel_id: Id, record: &Machining, thickness: Length, entry: ContourEntry) -> BodyEdit {
     match record.params() {
         MachiningParams::Cutout(cutout) => {
-            cutout::show(ui, panel_id, record.id(), cutout, thickness).map(MachiningParams::Cutout)
+            let edited = cutout::show(ui, panel_id, record.id(), cutout, thickness, entry);
+            BodyEdit { params: edited.params.map(MachiningParams::Cutout), edit_contour: edited.edit_contour }
         }
     }
 }
@@ -382,15 +436,17 @@ mod tests {
             .panel_geometry(panel_id())
             .map_or_else(|_| panel.last_known_thickness(), |geometry| geometry.thickness());
         let mut actions = Vec::new();
+        let mut request = None;
         let context = egui::Context::default();
         let mut output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))),
                 ..Default::default()
             },
-            |ui| section.show(ui, panel_id(), panel, thickness, &diagnostics, &mut actions),
+            |ui| request = section.show(ui, panel_id(), panel, thickness, &diagnostics, None, true, &mut actions),
         );
         output.textures_delta.clear();
+        assert!(request.is_none(), "no frame presses Edit contour");
         actions
     }
 

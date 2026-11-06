@@ -758,11 +758,17 @@ impl Editor {
             self.pivot_card.show(ui, session, primary);
         }
         if session.project().panel(primary).is_some() {
-            let contour_editing = self.contour_edit.as_ref().is_some_and(|edit| edit.target().id() == primary);
+            let contour_target = self.contour_edit.as_ref().map(ContourEdit::target);
             let single_selection = self.selection.ids().len() == 1;
-            let action = self.card.show(ui, session, Some(primary), contour_editing, single_selection);
-            if action == PanelAction::StartContour {
-                self.start_contour_edit(session.project(), ContourTarget::Panel(primary));
+            let action = self.card.show(ui, session, Some(primary), contour_target, single_selection);
+            match action {
+                PanelAction::None => {}
+                PanelAction::StartContour => {
+                    self.start_contour_edit(session.project(), ContourTarget::Panel(primary));
+                }
+                PanelAction::StartCutoutContour { panel, machining } => {
+                    self.start_contour_edit(session.project(), ContourTarget::Cutout { panel, machining });
+                }
             }
         } else if session.project().object(primary).is_some() {
             let single_selection = self.selection.ids().len() == 1;
@@ -943,8 +949,8 @@ mod tests {
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
     use furnicraft_model::Contour;
     use furnicraft_model::{
-        Container, DEFAULT_BANDS, DEFAULT_SEGMENTS, FurnType, Geometry, Mesh, Panel, Placement, PropertyValue,
-        SYSTEM_FURNTYPE,
+        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, FurnType, Geometry,
+        MachiningAnchor, MachiningParams, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE,
     };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
@@ -1092,6 +1098,42 @@ mod tests {
         project.remove_node(panel).expect("remove the panel");
         editor.retain_contour_edit(&project);
         assert!(editor.contour_edit().is_none(), "a removed target leaves the mode");
+    }
+
+    #[test]
+    fn a_cutout_ring_enters_the_edit_mode_on_the_panel_selection() {
+        let (mut project, panel) = contour_panel_project();
+        let ring = Contour::from_polygon(vec![
+            [Length::from_millimetres(100).expect("x"), Length::from_millimetres(100).expect("y")],
+            [Length::from_millimetres(300).expect("x"), Length::from_millimetres(100).expect("y")],
+            [Length::from_millimetres(300).expect("x"), Length::from_millimetres(200).expect("y")],
+            [Length::from_millimetres(100).expect("x"), Length::from_millimetres(200).expect("y")],
+        ])
+        .expect("cutout ring");
+        let machining = project
+            .add_machining(
+                panel,
+                MachiningAnchor::face(FaceSide::A),
+                MachiningParams::Cutout(Cutout::new(CutoutShape::Contour(ring), CutoutDepth::Through)),
+            )
+            .expect("cutout");
+        let target = ContourTarget::Cutout { panel, machining };
+        let mut editor = Editor::new();
+        assert!(!editor.start_contour_edit(&project, target), "nothing is selected");
+
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, target), "the panel selection frames the cutout");
+        assert_eq!(editor.contour_edit().map(ContourEdit::target), Some(target));
+
+        editor.select_node(Some(project.root().id()));
+        editor.retain_contour_edit(&project);
+        assert!(editor.contour_edit().is_none(), "a selection change leaves the mode");
+
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, target));
+        project.remove_machining(panel, machining).expect("remove the cutout");
+        editor.retain_contour_edit(&project);
+        assert!(editor.contour_edit().is_none(), "a removed cutout leaves the mode");
     }
 
     #[test]
