@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U38 state=idle base=ad95254 updated=2026-11-06
+STATE: milestone=M7 phase=U task=U39 state=idle base=HEAD updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -24,22 +24,11 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 - The UI plan (U1–U26) is shipped: themed toolbars — Scene, Contour, Primitives, Bodies — with SVG
   icons rasterised at render size, no creation buttons in the scene tree, a work plane from the
   current ortho view, a projection toggle, and draw/pick/snap for a `Path` (ADRs 0047–0052).
-- The owner reviewed the editor and queued seven defects and two changes ahead of the icon work
-  (X3–X6, U30–U37): the projection icon, the creation parent, tool highlight, the pole views, a
-  centre pivot for new drawings, a visible selection outline for line chains, and editing every kind
-  of contour. X3, X4, X6, U30 and U31 are fixed: the projection button draws the view it is in, every
-  creation tool lands at the scene root unless a container is armed, the strip draws the armed drawing
-  tool or primitive pressed while the duplicate "Draw" row is gone, the top and bottom views look
-  straight down their plane (ADR 0057), and *Add child* arms a group or an assembly so the next
-  created nodes land inside it while the strip names the arm (ADR 0056). U32 is fixed too: a new
-  drawing stores the pivot of its own shape — the bounds centre when it is closed, the first stored
-  segment's start when it is open — and an extruded body takes the ring's centre (ADR 0058). X5 is
-  fixed: a selected chain takes one explicit colour and the shell repaints it over the viewport as a
-  thick stroke with a dark underlay, because a one-pixel `LineList` cannot be widened (ADR 0059).
-  U33–U37 are fixed: `PathCorner` names an open chain's corner, `Path` edits through the ring helpers
-  (ADR 0060), a `ContourDraft` reshapes a path through one `object.path.replace`, the gizmo paints an
-  open chain open, a cutout ring keeps its anchor and `CutoutDepth` when applied, and
-  `panel.outline.to_contour` bakes a rectangle and its banding in one revision (ADR 0061).
+- The owner reviewed the editor and queued seven defects and two changes ahead of the icon work;
+  X3–X6 and U30–U37 are all fixed (ADRs 0056–0061): the projection button draws the view it is in, a
+  creation lands at the scene root unless a container is armed, the armed tool draws pressed, the pole
+  views look down their plane, a new drawing pivots on its own shape, a selected chain is a screen-space
+  stroke, and every kind of contour edits through one draft.
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) and X2 are fixed — a legal ring
   sampled past the 1024-vertex cap, so the chord now follows the shape (ADR 0062).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
@@ -49,15 +38,25 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   face fills at 12–18 %, the result at 45–60 % under its outline, the volumetric icons share one
   axonometry (§9.1), and each keeps its ink inside `3..21` at 20–45 % coverage, read off the raster;
   33 placeholders are in `plan/debt.md`.
+- U38 landed the visual pass: `crates/ui/src/theme.rs` owns the palette, the 4 pt spacing step, the row
+  heights, the rounding and the type scale (ADR 0063); `header.rs` draws one row — mark, name, Home,
+  File, Save, Undo, Redo, the open tab, the gear — and returns a `HeaderAction` instead of touching
+  the document (ADR 0064); the view controls and the armed-tool text left the viewport's first row for
+  a bottom status bar, and the window keeps its system frame. U39–U46 queue the rest of the owner's
+  design with the notes a fresh session needs.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U38 is next and it is a visual pass, not new behaviour: one top bar, the tool strip over the viewport,
-a status bar naming the armed gesture, and one spacing scale for the window. It needs a written plan
-and the owner's approval before code; 33 placeholder icons wait in `plan/debt.md`.
+U39 is next: the ribbon replaces the strip that still lives inside the scene tree. U38 landed the
+groundwork it needs — `crates/ui/src/theme.rs` owns every colour, spacing step and row height, the
+header returns a `HeaderAction` instead of touching the document, and the status bar already owns the
+armed-tool text, so the strip can lose it. The owner fixed the order as "fastest first" and the names
+as *Furniture, Hardware, Model, Sketch, Scene, View*; a PNG mockup was declined as too expensive, so
+the ribbon is judged on screen. Read `plan/SESSION.template.md` before starting, then ADR 0063 and
+0064, then `crates/ui/src/toolbars.rs` and `Editor::show_toolbars`.
 
 ## Index
 
