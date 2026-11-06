@@ -16,7 +16,7 @@ mod geometry;
 mod machining;
 
 pub use banding::{BandingSpec, CornerBanding, EdgeBanding, RingBanding};
-pub use contour::{ContourPath, PanelContourError, SegmentSource};
+pub use contour::{BakedOutline, ContourPath, PanelContourError, SegmentSource};
 pub use geometry::{
     EntryFace, FaceSide, PanelDimensionError, PanelGeometry, PanelGeometryError, PanelNominalSize, PanelRect,
     PanelRectError, RectCorner, RectEdge,
@@ -312,6 +312,18 @@ impl Panel {
     /// Replaces the outline; the size that goes with it is set separately.
     pub(crate) fn set_outline(&mut self, outline: PanelOutline) {
         self.outline = outline;
+    }
+
+    /// Replaces every edge and corner band with the ring records it moves to.
+    ///
+    /// This is the banding half of a rectangle-to-ring conversion (ADR 0061); the new records name
+    /// segments of the ring that is stored in the same change, so the panel never holds a record
+    /// without its segment.
+    pub(crate) fn set_contour_banding(&mut self, banding: Vec<RingBanding>, order: Vec<SegmentSource>) {
+        self.edge_banding.clear();
+        self.corner_banding.clear();
+        self.ring_banding = banding;
+        self.band_order = order;
     }
 
     /// Replaces the selected material.

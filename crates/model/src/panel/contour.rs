@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::{
     BandingSpec, ContourSegmentId, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Length, Panel,
-    PanelNominalSize, RectCorner, RectEdge, RingBanding, VertexId,
+    PanelDimensionError, PanelNominalSize, RectCorner, RectEdge, RingBanding, VertexId,
 };
 
 /// The ring of a contour panel as the nominal outline, with one source per segment.
@@ -36,7 +36,7 @@ fn ring_segments(
         segments.push(entry.segment().to_geom()?);
         sources.push(SegmentSource::Ring(entry.id()));
     }
-    Ok((Contour::new(segments, true)?, sources))
+    Ok((Contour::new_with_tolerance(segments, true, crate::contour::DOCUMENT_JOINT_TOLERANCE_MM)?, sources))
 }
 
 /// Why a panel's nominal contour cannot be built.
@@ -88,6 +88,50 @@ pub enum PanelContourError {
         /// The ring's extent along Y, in micrometres.
         width: i64,
     },
+    /// A rectangle outline was required, but the panel already stores a ring.
+    #[error("the panel outline is already a contour ring")]
+    AlreadyContour,
+    /// A corner banding record has no corner segment to move onto.
+    #[error("corner banding on corner {corner} has no corner segment in the outline")]
+    CornerBandWithoutSegment {
+        /// The banded corner.
+        corner: VertexId,
+    },
+    /// A moved banding record cannot be rebuilt on its ring segment.
+    #[error(transparent)]
+    Dimension(#[from] PanelDimensionError),
+    /// The baked ring is not a valid document contour.
+    #[error(transparent)]
+    Ring(#[from] crate::ContourError),
+}
+
+/// A rectangle outline baked into the ring it draws.
+///
+/// The corner features and bows are gone: the ring is the finished curve. Every edge and corner
+/// band has moved onto the one nominal segment that band covered, under that segment's own stable
+/// id, so the banded sides survive the conversion (ADR 0061).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BakedOutline {
+    contour: crate::Contour,
+    banding: Vec<RingBanding>,
+    order: Vec<SegmentSource>,
+}
+
+impl BakedOutline {
+    /// The closed ring, counter-clockwise in the panel-local plane.
+    pub const fn contour(&self) -> &crate::Contour {
+        &self.contour
+    }
+
+    /// The banding records, one per moved edge or corner band.
+    pub fn banding(&self) -> &[RingBanding] {
+        &self.banding
+    }
+
+    /// The banded ring segments in application order; the last one is drawn on top.
+    pub fn order(&self) -> &[SegmentSource] {
+        &self.order
+    }
 }
 
 /// Where one nominal contour segment comes from.
@@ -171,6 +215,69 @@ impl Panel {
         self.contour_with_sources_for(nominal_size).map(|(contour, _)| contour)
     }
 
+    /// Bakes this rectangular outline into the ring it draws, moving every band with it.
+    ///
+    /// A ring panel cannot carry edge or corner banding, so the conversion translates each record
+    /// to the nominal segment the band covered: an edge produced exactly one segment and a corner
+    /// treatment produced exactly one segment, and [`SegmentSource`] already names both. The
+    /// records keep their material, their inclusion and their application order, and they take the
+    /// ring segment's own stable id.
+    ///
+    /// A panel that already stores a ring is refused, because it has no rectangle left to bake. A
+    /// hand-edited file can also pair a corner band with a corner that has no treatment; there is no
+    /// segment under that band, so the conversion is refused instead of dropping it.
+    pub fn to_contour_ring(&self) -> Result<BakedOutline, PanelContourError> {
+        if self.is_contour() {
+            return Err(PanelContourError::AlreadyContour);
+        }
+        let (geometry, sources) = self.contour_with_sources_for(self.nominal_size())?;
+        let (contour, sources) = document_ring(&geometry, sources)?;
+        let mut moving = self.band_order.clone();
+        for band in &self.edge_banding {
+            let source = SegmentSource::Edge(band.edge());
+            if !moving.contains(&source) {
+                moving.push(source);
+            }
+        }
+        for band in &self.corner_banding {
+            let source = SegmentSource::Corner(band.corner());
+            if !moving.contains(&source) {
+                moving.push(source);
+            }
+        }
+
+        let mut banding = Vec::with_capacity(moving.len());
+        let mut order = Vec::with_capacity(moving.len());
+        for source in moving {
+            let spec = match source {
+                SegmentSource::Edge(edge) => {
+                    self.edge_banding.iter().find(|band| band.edge() == edge).map(EdgeBanding::spec)
+                }
+                SegmentSource::Corner(corner) => self.corner_banding_at(corner).map(|band| band.spec()),
+                SegmentSource::Ring(_) => None,
+            };
+            let Some(spec) = spec else {
+                continue;
+            };
+            let Some(segment) = ring_source_id(&contour, &sources, source) else {
+                let SegmentSource::Corner(corner) = source else {
+                    return Err(PanelContourError::FeatureGeometry);
+                };
+                return Err(PanelContourError::CornerBandWithoutSegment { corner });
+            };
+            let band = RingBanding::new(
+                segment,
+                spec.material(),
+                spec.included_in_size(),
+                spec.last_known_thickness(),
+                spec.last_known_width(),
+            )?;
+            banding.push(band);
+            order.push(SegmentSource::Ring(segment));
+        }
+        Ok(BakedOutline { contour, banding, order })
+    }
+
     /// Groups the nominal outline into maximal tangent-continuous paths.
     pub fn contour_paths(&self) -> Result<Vec<ContourPath>, PanelContourError> {
         self.contour_paths_for(self.nominal_size())
@@ -211,7 +318,14 @@ impl Panel {
                     break;
                 }
             }
-            paths.push(ContourPath { contour: Contour::new(path_segments, false)?, sources: path_sources });
+            paths.push(ContourPath {
+                contour: Contour::new_with_tolerance(
+                    path_segments,
+                    false,
+                    crate::contour::DOCUMENT_JOINT_TOLERANCE_MM,
+                )?,
+                sources: path_sources,
+            });
         }
         Ok(paths)
     }
@@ -424,7 +538,8 @@ impl Panel {
             pieces.push((piece, *source));
         }
         let nominal_segments = nominal.iter().map(|(segment, _)| *segment).collect();
-        let nominal_contour = Contour::new(nominal_segments, true)?;
+        let nominal_contour =
+            Contour::new_with_tolerance(nominal_segments, true, crate::contour::DOCUMENT_JOINT_TOLERANCE_MM)?;
         let bounds = if included {
             nominal_contour.bounds().map(Some).ok_or(ContourError::InvalidInput("panel outline bounds"))?
         } else {
@@ -554,6 +669,105 @@ impl Panel {
     }
 }
 
+/// The ring segment that one nominal source produced.
+///
+/// The generator emits one segment per source in travel order, so the source list and the ring
+/// entries stay aligned; a source that is missing (a corner band with no treatment) has no segment.
+fn ring_source_id(
+    contour: &crate::Contour,
+    sources: &[SegmentSource],
+    source: SegmentSource,
+) -> Option<ContourSegmentId> {
+    let index = sources.iter().position(|candidate| *candidate == source)?;
+    contour.id_at(index)
+}
+
+/// Converts a nominal geometry ring back into the document ring its panel stores.
+///
+/// The geometry layer validates joints with a micrometre tolerance because a document ring is
+/// quantized, while [`crate::Contour`] compares rounded endpoints exactly. The conversion therefore
+/// keeps every segment and snaps each joint: a line moves its own start, an arc turns its start
+/// angle (and radius) to the previous segment's end. The ring is rotated to begin on a line when it
+/// has one, so the closing joint can always be snapped through a line instead of drifting between
+/// two arcs. A ring made only of arcs that still does not close is refused.
+fn document_ring(
+    geometry: &Contour,
+    mut sources: Vec<SegmentSource>,
+) -> Result<(crate::Contour, Vec<SegmentSource>), PanelContourError> {
+    let mut segments =
+        geometry.segments().iter().copied().map(crate::ContourSegment::from_geom).collect::<Result<Vec<_>, _>>()?;
+    if segments.is_empty() || segments.len() != sources.len() {
+        return Err(PanelContourError::FeatureGeometry);
+    }
+    if let Some(start) = segments.iter().position(|segment| !segment.is_arc()) {
+        segments.rotate_left(start);
+        sources.rotate_left(start);
+    }
+
+    for index in 1..segments.len() {
+        let (before, after) = segments.split_at_mut(index);
+        let previous = before.last_mut().ok_or(PanelContourError::FeatureGeometry)?;
+        let current = after.first_mut().ok_or(PanelContourError::FeatureGeometry)?;
+        let joint = previous.end()?;
+        if current.start()? == joint {
+            continue;
+        }
+        match *previous {
+            // A line can always reach the next segment's rounded start; keeping the arc exact is
+            // preferable because an arc's start point is derived from its angle.
+            crate::ContourSegment::Line { start, .. } => {
+                *previous = crate::ContourSegment::line(start, current.start()?)?;
+            }
+            crate::ContourSegment::Arc { .. } => match *current {
+                crate::ContourSegment::Line { end, .. } => {
+                    *current = crate::ContourSegment::line(joint, end)?;
+                }
+                crate::ContourSegment::Arc { center, sweep, .. } => {
+                    let snapped = arc_starting_at(center, sweep, joint)?;
+                    if snapped.start()? != joint {
+                        return Err(PanelContourError::FeatureGeometry);
+                    }
+                    *current = snapped;
+                }
+            },
+        }
+    }
+
+    let first_start = segments.first().ok_or(PanelContourError::FeatureGeometry)?.start()?;
+    let last_end = segments.last().ok_or(PanelContourError::FeatureGeometry)?.end()?;
+    if last_end != first_start {
+        let last = segments.last_mut().ok_or(PanelContourError::FeatureGeometry)?;
+        if matches!(*last, crate::ContourSegment::Line { .. }) {
+            let crate::ContourSegment::Line { start, .. } = *last else {
+                return Err(PanelContourError::FeatureGeometry);
+            };
+            *last = crate::ContourSegment::line(start, first_start)?;
+        } else {
+            let first = segments.first_mut().ok_or(PanelContourError::FeatureGeometry)?;
+            let crate::ContourSegment::Line { end, .. } = *first else {
+                return Err(PanelContourError::FeatureGeometry);
+            };
+            *first = crate::ContourSegment::line(last_end, end)?;
+        }
+    }
+
+    let contour = crate::Contour::new(segments)?;
+    Ok((contour, sources))
+}
+
+/// An arc of the same centre and sweep that starts at a document point.
+fn arc_starting_at(
+    center: [Length; 2],
+    sweep: furnicraft_units::Degrees,
+    start: [Length; 2],
+) -> Result<crate::ContourSegment, PanelContourError> {
+    let dx = start[0].millimetres_f64() - center[0].millimetres_f64();
+    let dy = start[1].millimetres_f64() - center[1].millimetres_f64();
+    let radius = crate::contour::length_to_document(dx.hypot(dy))?;
+    let start_angle = crate::contour::degrees_to_document(dy.atan2(dx))?;
+    Ok(crate::ContourSegment::arc(center, radius, start_angle, sweep)?)
+}
+
 fn corner_segment(
     feature: CornerFeature,
     incoming_point: DVec2,
@@ -673,7 +887,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use crate::{EdgeBow, Id, MaterialId, PanelNominalSize, Placement, RectCorner, RectEdge};
+    use crate::{CornerBanding, EdgeBow, Id, MaterialId, PanelNominalSize, Placement, RectCorner, RectEdge};
     use furnicraft_units::Length;
 
     fn millimetres(value: i64) -> Length {
@@ -918,5 +1132,91 @@ mod tests {
         assert_eq!(paths.len(), 4);
         let bottom = paths.iter().find(|path| path.edge_ids().eq([RectEdge::Bottom.id()])).expect("bottom path");
         assert_eq!(bottom.sources(), &[SegmentSource::Edge(RectEdge::Bottom.id())]);
+    }
+
+    #[test]
+    fn baking_a_plain_rectangle_keeps_its_bounds_and_has_no_banding() {
+        let panel = panel(100, 60);
+        let baked = panel.to_contour_ring().expect("bake the outline");
+        assert_eq!(baked.contour().bounds_micrometres(), ([0, 0], [100_000, 60_000]));
+        assert_eq!(baked.contour().entries().len(), 4);
+        assert_eq!(baked.contour().signed_area2().expect("area"), 12_000_000_000.0);
+        assert!(baked.banding().is_empty());
+        assert!(baked.order().is_empty());
+    }
+
+    #[test]
+    fn baking_moves_each_band_onto_the_ring_segment_it_covered() {
+        let mut panel = panel(100, 60);
+        let corner = RectCorner::TopRight.id();
+        panel.upsert_corner_feature(
+            CornerFeature::new(corner, CornerFeatureKind::Radius { radius: millimetres(10) }).expect("radius"),
+        );
+        let edge_material = MaterialId::new(1).expect("material");
+        panel
+            .apply_edge_banding(
+                EdgeBanding::new(RectEdge::Right.id(), edge_material, false, millimetres(2), millimetres(20))
+                    .expect("edge band"),
+            )
+            .expect("apply edge band");
+        panel.add_band_source(SegmentSource::Edge(RectEdge::Right.id()));
+        let corner_material = MaterialId::new(2).expect("material");
+        panel.upsert_corner_banding(
+            CornerBanding::new(corner, corner_material, true, millimetres(1), millimetres(15)).expect("corner band"),
+        );
+        panel.add_band_source(SegmentSource::Corner(corner));
+
+        let (_, sources) = panel.contour_with_sources_for(panel.nominal_size()).expect("sources");
+        let segment_id = |source: SegmentSource| {
+            let index = sources.iter().position(|candidate| *candidate == source).expect("source") as u32;
+            ContourSegmentId::new(index + 1).expect("segment id")
+        };
+        let right_segment = segment_id(SegmentSource::Edge(RectEdge::Right.id()));
+        let corner_segment = segment_id(SegmentSource::Corner(corner));
+
+        let baked = panel.to_contour_ring().expect("bake the outline");
+        assert_eq!(baked.banding().len(), 2);
+        assert_eq!(
+            baked.order(),
+            &[SegmentSource::Ring(right_segment), SegmentSource::Ring(corner_segment)],
+            "the application order survives the conversion"
+        );
+        let right = baked.banding().iter().find(|band| band.segment() == right_segment).expect("right band");
+        assert_eq!(right.spec(), panel.segment_banding(SegmentSource::Edge(RectEdge::Right.id())).expect("edge spec"));
+        let moved_corner = baked.banding().iter().find(|band| band.segment() == corner_segment).expect("corner band");
+        assert_eq!(moved_corner.spec(), panel.segment_banding(SegmentSource::Corner(corner)).expect("corner spec"));
+        for band in baked.banding() {
+            assert!(
+                baked.contour().segment(band.segment()).is_some(),
+                "band {band:?} names a segment the baked ring does not have"
+            );
+        }
+    }
+
+    #[test]
+    fn baking_a_ring_is_refused() {
+        let ring = crate::Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [millimetres(100), Length::ZERO],
+            [millimetres(100), millimetres(60)],
+            [Length::ZERO, millimetres(60)],
+        ])
+        .expect("ring");
+        let panel =
+            Panel::new_contour(Id::new(8).expect("id"), "ring", ring, None, millimetres(18), Placement::IDENTITY)
+                .expect("contour panel");
+        assert_eq!(panel.to_contour_ring(), Err(PanelContourError::AlreadyContour));
+    }
+
+    #[test]
+    fn a_corner_band_without_a_treatment_has_no_segment_to_move_to() {
+        let mut panel = panel(100, 60);
+        let corner = RectCorner::TopRight.id();
+        panel.upsert_corner_banding(
+            CornerBanding::new(corner, MaterialId::new(1).expect("material"), false, millimetres(2), millimetres(20))
+                .expect("corner band"),
+        );
+        panel.add_band_source(SegmentSource::Corner(corner));
+        assert_eq!(panel.to_contour_ring(), Err(PanelContourError::CornerBandWithoutSegment { corner }));
     }
 }

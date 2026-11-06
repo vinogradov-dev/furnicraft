@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U36** a rectangle panel outline becomes a ring once: `PanelOutline::Rect` stores corners and
-  bows (`crates/model/src/panel/mod.rs:49-107`) and has no ring to edit, so *Edit contour* is offered
-  only for a panel that is already a ring (`:194-207`). Add `panel.outline.to_contour`
-  (`crates/engine/src/panel_cmds.rs`) that bakes the current outline through `Panel::nominal_contour`
-  (`crates/model/src/panel/contour.rs:165`) in one revision and one undo entry, then opens the ordinary
-  edit mode. The hard part is banding: a ring panel cannot keep `EdgeBanding` or `CornerBanding` (the
-  loader refuses `ContourWithBanding`, `crates/model/src/panel/mod.rs:899-903`), so the command
-  translates each edge band and each corner band into the ring segments `contour_with_sources_for` says
-  it produced, and refuses with a readable reason when a corner band has no unique ring source. The card
-  warns that the corner and bow parameters are gone; undo brings them back. Tests: the ring keeps the
-  outline bounds; the converted banding names the same segments; undo restores the rectangle with its
-  features; a second conversion is refused. ADR 0061.
-  `files: crates/engine/src/panel_cmds.rs, crates/model/src/panel/contour.rs`
-
 - `[ ]` **U37** a cutout ring is edited in the viewport: a `CutoutShape::Contour`
   (`crates/model/src/panel/machining.rs:390-414`) shows only a one-line summary
   (`crates/ui/src/machining/cutout.rs:64-73`) and nothing can reshape it. Add
@@ -100,6 +86,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U36** a rectangle panel outline becomes a ring once: `PanelOutline::Rect` stores corners and
+  bows (`crates/model/src/panel/mod.rs:49-107`) and has no ring to edit, so *Edit contour* is offered
+  only for a panel that is already a ring (`:194-207`). Add `panel.outline.to_contour`
+  (`crates/engine/src/panel_cmds.rs`) that bakes the current outline through `Panel::nominal_contour`
+  (`crates/model/src/panel/contour.rs:165`) in one revision and one undo entry, then opens the ordinary
+  edit mode. The hard part is banding: a ring panel cannot keep `EdgeBanding` or `CornerBanding` (the
+  loader refuses `ContourWithBanding`, `crates/model/src/panel/mod.rs:899-903`), so the command
+  translates each edge band and each corner band into the ring segments `contour_with_sources_for` says
+  it produced, and refuses with a readable reason when a corner band has no unique ring source. The card
+  warns that the corner and bow parameters are gone; undo brings them back. Tests: the ring keeps the
+  outline bounds; the converted banding names the same segments; undo restores the rectangle with its
+  features; a second conversion is refused. ADR 0061 — `8ae7de5`
+  `files: crates/engine/src/panel_cmds.rs, crates/model/src/panel/contour.rs`
 
 - `[x]` **U35** the path gizmo: the contour gizmo painted every draft as a closed ring and put a handle
   on each segment start, so an open chain lost its last point and no free end could be grabbed.

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U36 state=idle base=f73a8ab updated=2026-11-05
+STATE: milestone=M7 phase=U task=U37 state=idle base=8ae7de5 updated=2026-11-06
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the current task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -36,10 +36,11 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   segment's start when it is open — and an extruded body takes the ring's centre (ADR 0058). X5 is
   fixed: a selected chain takes one explicit colour and the shell repaints it over the viewport as a
   thick stroke with a dark underlay, because a one-pixel `LineList` cannot be widened (ADR 0059).
-  U33–U35 are fixed: `PathCorner` names a corner of an open chain, `Path` moves, splits, removes and
+  U33–U36 are fixed: `PathCorner` names a corner of an open chain, `Path` moves, splits, removes and
   closes its segments through the ring helpers (ADR 0060), a `ContourDraft` of either kind reshapes a
   path through one `object.path.replace`, and the gizmo paints an open chain open, handles its free
-  end and offers *Edit contour* on a path card.
+  end and offers *Edit contour* on a path card. `panel.outline.to_contour` bakes a rectangle's outline
+  and its banding into the ring it draws, in one revision and one undo entry (ADR 0061).
 - Defects live in `## Bugs` with an `X` id: X1 (the concave cap flap) is fixed; X2 — a legal ring over
   1024 sampled points cannot be extruded — is filed behind the icon work, its options in
   `plan/questions.md`.
@@ -54,10 +55,9 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
 
 ## Next
 
-U36 is next: `panel.outline.to_contour` bakes a rectangle panel's outline into a ring in one revision
-and one undo entry, translating each edge and corner band into the ring segments it produced, so
-*Edit contour* reaches a panel that is not a ring yet (ADR 0061). U37 follows with cutout rings, then
-U27, U28, X2 and U29.
+U37 is next: a `CutoutShape::Contour` gains a `ContourTarget::Cutout { panel, machining }`, so the
+cutout card offers *Edit contour* and an edit stays one revision and one undo entry while keeping the
+anchor and the `CutoutDepth`. Then U27, U28, X2 and U29.
 
 ## Index
 
