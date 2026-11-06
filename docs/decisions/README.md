@@ -67,6 +67,9 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0060](0060-an-open-path-is-edited-by-its-corners.md) | An open path is edited by its corners | Accepted |
 | [0061](0061-a-rectangle-outline-bakes-into-a-ring.md) | A rectangle outline bakes into a ring | Accepted |
 | [0062](0062-a-large-ring-samples-to-fit-its-cap.md) | A large ring samples to fit its cap | Accepted |
+| [0063](0063-one-theme-owns-the-window.md) | One theme owns the window's colour and rhythm | Accepted |
+| [0064](0064-the-header-is-chrome-that-returns-an-action.md) | The header is chrome that returns an action | Accepted |
+| [0065](0065-visibility-and-lock-are-session-state.md) | Visibility and lock are session state | Accepted |
 
 ## Format
 

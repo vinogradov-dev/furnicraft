@@ -25,8 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-
-
 - `[ ]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
   (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
   draws the tool groups of the active tab separated by vertical dividers, heading each group
@@ -36,40 +34,54 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   body. The groups map onto the actions that already exist — Sketch: line, polyline, arc, rectangle,
   circle, close, cancel; Model: cube, cylinder, sphere, cone, extrude; Scene: panel, assembly,
   camera, light; View: frame all, projection, grid — and the numeric fields (primitive size,
-  extrusion height) become a labelled field inside their group rather than a floating row. The armed
-  drawing tool or primitive still draws pressed, and the creation chip moves to the status bar
-  (U40). Everything is view state: no command, no schema, no undo entry. Tests: every implemented
-  action appears in exactly one group and every group has at least one action; an empty tab is not
-  drawn; collapsing keeps the tab row; the pressed tool and the disabled extrude hint survive the
-  move.
+  extrusion height) become a labelled field inside their group rather than a floating row. A button
+  in the ribbon is a *labelled* button: a 22 pt icon over a 10.5 pt caption, on a 48 pt row, with the
+  group's own 14 pt caption underneath, so the body is about 90 pt tall like the reference the owner
+  showed. `theme::RIBBON_ROW_HEIGHT` grows to 48, `theme::RIBBON_CAPTION_HEIGHT` is added, and a new
+  `icons::ribbon_button` draws icon-plus-caption; `icons::tool_button` stays the icon-only button for
+  the header, the panel headers and the floating viewport cluster, because a caption there would
+  double a 26 pt row. The armed drawing tool or primitive still draws pressed, and the creation chip
+  moves to the status bar (U40). Everything is view state: no command, no schema, no undo entry.
+  Tests: every implemented action appears in exactly one group and every group has at least one
+  action; an empty tab is not drawn; collapsing keeps the tab row; the pressed tool and the disabled
+  extrude hint survive the move; a labelled button paints both its icon and its caption.
   Session notes (U38 landed the groundwork): `theme::HEADER_HEIGHT`, `RIBBON_ROW_HEIGHT`, `STEP`,
   `divider` and `ACCENT` already exist and are what the ribbon must use. `Toolbars` keeps
   `open: [bool; 4]`, the two numeric fields and `ToolPanel::{ALL, label, theme, id}` — add a
   `RibbonTab` over them rather than rewriting the buttons. `Editor::show_toolbars` is called from
   `scene_tree()` today; move that call to a new `Panel::top` between the header and the status bar.
+  Density follows the reference the owner sent (`Screenshot 2026-11-06 22-47-27`): icon 22 pt over a
+  caption, 48 pt row, 14 pt group caption — not the 28 pt icon-only row the theme started with.
   The armed-tool text already lives in `status_state_ui`, so the strip can lose it. Tabs map onto
   today's panels: Sketch→Contour, Model→Primitives+Bodies, Scene→Scene, View→new groups. Furniture
   and Hardware have no action yet and must not be drawn until they do.
   `files: crates/ui/src/toolbars.rs, crates/ui/src/lib.rs`
 
-- `[ ]` **U40** the side panels become windows that fold: the scene tree and the inspector each get a
-  header with a title and a fold control, and folding them leaves a 26 pt vertical strip with the
-  icon and the rotated title, which a click, a double-click on its edge or a drag outward restores.
-  The tree keeps only the tree — no tools, no heading of its own — and still supports selection and
-  the context menu. The bottom of the window gets the viewport bar the design calls for: navigation
-  (orbit, pan, zoom), frame all and home on the left of the centre group, the display-style buttons
-  and the layout/settings entries on the right, all on one translucent strip that the eye reads over
-  the scene. The status text that today shares the viewport's first row (armed tool, expected
-  gesture, segment and selection counts, the creation arm, the last error) moves into that bar, so
-  the viewport starts at the scene and not at a wall of labels. A row of buttons is not foldable;
-  only a panel with content is. Tests: folding and restoring a panel keeps its width; an armed
-  container still names itself in the bar and clears from it; a closed panel draws no body; the
-  status line names the armed tool and its gesture.
+- `[ ]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
+  the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
+  and folding them leaves a 26 pt vertical strip with the icon and the rotated title, which a click,
+  a double-click on its edge or a drag outward restores. The tree keeps only the tree — no tools, no
+  heading of its own — and still supports selection and the context menu. The view controls become a
+  translucent cluster floating over the centre of the viewport, anchored `CENTER_BOTTOM` with a small
+  offset: *orbit / pan / zoom* · *frame all / home* · the display-style buttons · the layout entry and
+  the three-slider display settings popover, which also carries the *show projection and angles*
+  switch that draws the pitch/yaw/roll and the projection word under the orientation cube (U42). The
+  bottom status bar stays thin and holds only the armed tool, the gesture it expects, the counts and
+  the last error, so the viewport starts at the scene and not at a wall of labels. A row of buttons is
+  not foldable; only a panel with content is. Tests: folding and restoring a panel keeps its width;
+  an armed container still names itself in the bar and clears from it; a closed panel draws no body;
+  the status line names the armed tool and its gesture; the cluster is anchored to the bottom centre
+  and does not move when the side panels resize; the settings popover toggles the angle readout.
   Session notes: `egui::Panel::show_collapsible` (with `is_expanded: &mut bool`) folds a panel and
   keeps a grab handle; `theme::COLLAPSED_PANEL_WIDTH` is the 26 pt strip. `scene_tree()` and
   `panel_card()` draw the two side panels; `status_bar()` already uses `egui::Sides` with
   `status_info()` and `StatusOut`. Two `Sides` closures cannot both borrow `&mut self`: draw from the
-  snapshot and apply one action afterwards, as `apply_status` does.
+  snapshot and apply one action afterwards, as `apply_status` does. The floating cluster is an
+  `egui::Area` anchored `Align2::CENTER_BOTTOM` inside the central panel's rect, with a `Frame` whose
+  fill is `theme::SURFACE` at about 88 % alpha and `CornerRadius::same(theme::RADIUS)`; it must be
+  `Order::Middle` so a menu or a modal still paints over it. The owner's reference has exactly this:
+  navigation and display styles float over the scene, the thin history/filter strip sits at the
+  window edge (we have no timeline yet).
   `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs`
 
 - `[ ]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
@@ -91,6 +103,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `serde_json` is present, and `XDG_CONFIG_HOME` / `APPDATA` / `HOME` cover the three targets.
   `files: apps/furnicraft/src, crates/ui/src`
 
+- `[ ]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
+  listing a command's label, its id and whether it is enabled for the current session; the chosen
+  entry dispatches it with parameters built from the current selection, and an entry that cannot run
+  says why instead of failing silently. The palette is the reference's "command search" and it costs
+  no new command: the registry already carries 48 specs with a stable id, a label and a pure
+  `enabled` check, so the work is a fuzzy filter, a keyboard loop (`↑`/`↓`/`Enter`/`Esc`) and one
+  parameter builder per command family — node deletion, duplication, renaming and the view actions
+  first, with the rest reported as "needs a selection" until a builder exists. Command history and
+  the last-used list are session state, never document data. Tests: a prefix and a substring both
+  find `node.delete`; a disabled command is listed but not runnable and explains itself; `Esc`
+  closes without dispatching; a chosen entry dispatches exactly one command and one undo entry.
+  Session notes: `CommandRegistry::specs()` returns `&'static [CommandSpec]`, `spec.id()` and
+  `spec.label()` are the search fields and `spec.enabled(session, &params)` is the pure check;
+  `crate::command::dispatch` in `crates/ui` is the one dispatch path. `Ctrl+K` is free — `F`, `O`,
+  `G` and the drawing letters are taken, and `ui.input(|i| i.modifiers.command)` must not fire while
+  a text field has focus.
+  `files: apps/furnicraft/src, crates/ui/src`
+
 - `[ ]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
   splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
   any border between two views is draggable with a minimum size of 120 pt per side and a ratio
@@ -98,10 +128,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   *Axonometric*), *Home* and *Frame all* act on the view under the pointer or on the active one, and
   the active view carries a thin accent frame. The layout, the cameras and the active leaf are view
   state in the shell and never reach the document; a preset writes yaw and pitch only, so switching
-  views never moves the model. The renderer draws one offscreen target and one view per pass with a
-  scissored region and a uniform slot per view, rather than one texture per view, so memory does not
-  grow with the grid and egui keeps a single texture id. Tests: a split and a join round-trip; a drag
-  clamps at both ends and never collapses a view; a preset produces the expected orthographic basis; four views produce four scissor rectangles that tile the area exactly.
+  views never moves the model. The orientation widget gains a *home* button that returns the active
+  leaf to *Axonometric*, and an optional readout under it — `Pitch 32.1° · Yaw -51.7° · Roll 0.0° ·
+  Ortho` — drawn only when the switch U40 added to the display-settings popover is on; the numbers
+  come from `Camera::pitch`/`yaw` and `Projection`, formatted through `furnicraft-units`, so no new
+  document data and no second source of truth. The renderer draws one offscreen target and one view
+  per pass with a scissored region and a uniform slot per view, rather than one texture per view, so
+  memory does not grow with the grid and egui keeps a single texture id. Tests: a split and a join
+  round-trip; a drag clamps at both ends and never collapses a view; a preset produces the expected
+  orthographic basis; four views produce four scissor rectangles that tile the area exactly; the home
+  button restores the axonometric preset; the readout is hidden when its switch is off and names
+  `Ortho` or `Persp` in step with the projection.
   Session notes: `viewport()` owns the single target and calls `resize` +
   `update_egui_texture_from_wgpu_texture`. A split view needs a scissored pass per leaf into the same
   target (`set_scissor_rect`), and `ViewportRenderer` writes one `CameraUniform` per
@@ -155,13 +192,37 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   the shell.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
 
+- `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
+  visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
+  and both are session state keyed by node `Id` — no command, no schema, no undo entry (ADR 0065).
+  Hiding a row hides its whole subtree from the viewport: the scene builder skips a hidden node, and
+  picking skips it too, so a hidden node cannot be selected by a click while the tree can still show
+  it as hidden and restore it. Locking a row keeps it drawn and selectable but refuses a gizmo drag
+  and a destructive command, and the status bar says which node is locked; the refusal happens in the
+  shell before a dispatch, because it is a guard on a gesture rather than a document rule. Both sets
+  are pruned like the open containers, so a deleted or undone node never leaves a stale flag, and an
+  *Isolate* / *Show all* pair in the tree's context menu covers the common case of focusing on one
+  assembly. Tests: hiding a container hides its children from the frame but not from the tree;
+  picking returns nothing for a hidden node; a locked node still selects and still resists a drag and
+  a delete; a deleted node's flags are dropped and an undone deletion starts visible and unlocked;
+  the flags survive a selection change and die with the session.
+  Session notes: `Editor` owns `open: HashSet<Id>` in `crates/ui/src/lib.rs` and prunes it in
+  `retain_open`, which is the shape to copy for `hidden` and `locked`; `scene_build::evaluate` in
+  `apps/furnicraft/src/scene_build.rs` is where a skipped subtree disappears, and
+  `mesh_pick::pick_scene` plus `scene_gizmo::pick` are where picking must agree. `icons::actions`
+  already declares `VISIBLE`, `HIDDEN`, `LOCK`, `UNLOCK` as zero-byte placeholders, so the buttons
+  draw their text label until U46 fills them.
+  `files: crates/ui/src/scene_tree.rs, apps/furnicraft/src/scene_build.rs`
+
 - `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
   viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
   is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
   `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
-  `view/front`, `view/top`, `view/right`, `view/axon`, plus the remaining `actions` files the header
-  and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
+  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
+  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
   button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
+  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
+  are needed by U48.
   A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
   Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
   `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,

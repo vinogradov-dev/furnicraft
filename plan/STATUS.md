@@ -38,25 +38,24 @@ only the files the current task names in `plan/BACKLOG.md`, and answer from `STA
   face fills at 12–18 %, the result at 45–60 % under its outline, the volumetric icons share one
   axonometry (§9.1), and each keeps its ink inside `3..21` at 20–45 % coverage, read off the raster;
   33 placeholders are in `plan/debt.md`.
-- U38 landed the visual pass: `crates/ui/src/theme.rs` owns the palette, the 4 pt spacing step, the row
-  heights, the rounding and the type scale (ADR 0063); `header.rs` draws one row — mark, name, Home,
-  File, Save, Undo, Redo, the open tab, the gear — and returns a `HeaderAction` instead of touching
-  the document (ADR 0064); the view controls and the armed-tool text left the viewport's first row for
-  a bottom status bar, and the window keeps its system frame. U39–U46 queue the rest of the owner's
-  design with the notes a fresh session needs.
+- U38 landed the visual pass: `theme.rs` owns the palette, the 4 pt step, the row heights and the type
+  scale (ADR 0063); `header.rs` draws one row and returns a `HeaderAction` (ADR 0064); the view
+  controls left the viewport's first row for a bottom status bar. U39–U48 queue the rest of the
+  owner's design with a session note each, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U39 is next: the ribbon replaces the strip that still lives inside the scene tree. U38 landed the
-groundwork it needs — `crates/ui/src/theme.rs` owns every colour, spacing step and row height, the
-header returns a `HeaderAction` instead of touching the document, and the status bar already owns the
-armed-tool text, so the strip can lose it. The owner fixed the order as "fastest first" and the names
-as *Furniture, Hardware, Model, Sketch, Scene, View*; a PNG mockup was declined as too expensive, so
-the ribbon is judged on screen. Read `plan/SESSION.template.md` before starting, then ADR 0063 and
-0064, then `crates/ui/src/toolbars.rs` and `Editor::show_toolbars`.
+U39 is next: the ribbon replaces the strip that still lives inside the scene tree. U38 left the
+groundwork (`theme.rs`, `HeaderAction`, the status bar). Density follows the owner's reference
+(`Screenshot 2026-11-06 22-47-27`): icon over a caption on a 48 pt row, group caption underneath, not
+the 28 pt icon-only row the theme started with. That reference also settled two deviations: the view
+controls become a translucent cluster floating over the bottom centre of the viewport (U40), and
+visibility and lock are session state (ADR 0065, task U48). Order, fastest first: U39 → U40 → U41 →
+U47 (command palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last, so no surface waits on
+artwork). Read `plan/SESSION.template.md`, then ADRs 0063–0065, then `crates/ui/src/toolbars.rs`.
 
 ## Index
 

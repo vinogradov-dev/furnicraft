@@ -25,7 +25,6 @@ this file only when a task touches the question.
   step is acceptable in practice; if not, revisit before changing the core offsets.
 - At a sharp joint between two included paths with different thicknesses, the model uses butt
   connectors and leaves the step as-is. Confirm whether later-band coverage should replace it.
-- Whether visibility and lock are document data or session state.
 - Whether a camera or light node is an ordinary tree child or a separate scene collection.
 - The future material database schema stays open; see `docs/domain/materials.md` › Open questions.
 - Icons (ADR 0055): whether one semantic accent token joins the one-ink rule for the "result"
