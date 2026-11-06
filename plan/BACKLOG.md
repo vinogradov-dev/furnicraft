@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
+- `[~]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
   gradient or CSS) so a passive face fills at 12–18 % and the result or changed geometry at 45–60 %
   with the heavy outline, then redraw the 18 drawn icons at a fixed footprint (ink `3..21`, coverage
   20–45 %) on the one axonometry the guide publishes. One change updates `STYLE_GUIDE.md` §5, §7.3 and

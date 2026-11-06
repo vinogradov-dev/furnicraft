@@ -36,52 +36,56 @@ crisp at 75 % and 200 % alike.
 ## 2. What the set looks like, measured
 
 Rendered with `rsvg-convert` at 64 px and reduced to the 24-unit grid; alpha above 16 counts as ink.
-Drawn files only (18 of 51; the other 33 are zero-byte placeholders).
+Coverage is alpha-weighted ink over the fixed 18 × 18 footprint (`STYLE_GUIDE.md` §7.4), so a passive
+face counts as its tone rather than as a solid block. Drawn files only (18 of 51; the other 33 are
+zero-byte placeholders). Measured after U28, 2026-11-06.
 
 | icon | ink bbox (grid units) | size | coverage |
 |---|---|---|---|
-| bodies/extrude | 1.1..22.1 × 6.4..20.2 | 21.0 × 13.9 | 26.0 % |
-| contour/arc | 2.2..21.8 × 5.2..18.8 | 19.5 × 13.5 | 11.0 % |
-| contour/cancel | 4.9..19.1 × 4.9..19.1 | 14.2 × 14.2 | 14.6 % |
-| contour/circle | 3.4..20.6 × 3.4..20.6 | 17.2 × 17.2 | 18.8 % |
-| contour/close | 3.4..18.8 × 6.4..19.5 | 15.4 × 13.1 | 15.6 % |
-| contour/line | 3.4..20.6 × 3.4..20.6 | 17.2 × 17.2 | 8.4 % |
-| contour/polyline | 3.4..20.6 × 4.5..19.5 | 17.2 × 15.0 | 13.2 % |
-| contour/rectangle | 2.2..21.8 × 4.5..19.5 | 19.5 × 15.0 | 22.1 % |
-| primitives/cube | 3.0..21.0 × 1.9..22.1 | 18.0 × 20.2 | 31.0 % |
-| primitives/cylinder | 4.5..19.5 × 3.0..21.4 | 15.0 × 18.4 | 26.1 % |
-| primitives/sphere | 3.4..20.6 × 3.4..20.6 | 17.2 × 17.2 | 27.7 % |
-| scene/assembly | 1.9..22.1 × 3.8..20.2 | 20.2 × 16.5 | 26.1 % |
-| scene/camera | 2.2..21.8 × 5.6..19.1 | 19.5 × 13.5 | 26.2 % |
-| scene/light | 1.9..22.1 × 1.9..22.1 | 20.2 × 20.2 | 24.5 % |
-| scene/panel | 1.5..20.6 × 4.5..18.4 | 19.1 × 13.9 | 22.7 % |
-| view/frame-all | 2.2..21.8 × 2.2..21.8 | 19.5 × 19.5 | 23.0 % |
-| view/orthographic | 2.2..21.8 × 4.1..19.9 | 19.5 × 15.8 | 36.1 % |
-| view/perspective | 1.9..22.1 × 5.2..20.2 | 20.2 × 15.0 | 29.1 % |
+| bodies/extrude | 4.88..19.12 × 4.88..19.50 | 14.2 × 14.6 | 37.1 % |
+| contour/arc | 3.00..21.00 × 4.50..20.62 | 18.0 × 16.1 | 22.8 % |
+| contour/cancel | 4.12..19.88 × 4.12..19.88 | 15.8 × 15.8 | 31.1 % |
+| contour/circle | 3.38..20.62 × 3.38..20.62 | 17.2 × 17.2 | 38.7 % |
+| contour/close | 3.00..19.12 × 6.00..20.25 | 16.1 × 14.2 | 28.8 % |
+| contour/line | 3.00..21.00 × 3.00..21.00 | 18.0 × 18.0 | 21.9 % |
+| contour/polyline | 3.00..21.00 × 3.38..20.62 | 18.0 × 17.2 | 31.5 % |
+| contour/rectangle | 3.38..20.62 × 4.50..19.50 | 17.2 × 15.0 | 35.0 % |
+| primitives/cube | 4.50..19.50 × 3.75..20.25 | 15.0 × 16.5 | 36.6 % |
+| primitives/cylinder | 5.25..18.75 × 4.12..20.25 | 13.5 × 16.1 | 30.2 % |
+| primitives/sphere | 4.88..19.12 × 4.88..19.12 | 14.2 × 14.2 | 33.2 % |
+| scene/assembly | 3.00..21.00 × 4.88..19.12 | 18.0 × 14.2 | 34.1 % |
+| scene/camera | 3.38..19.88 × 6.75..18.00 | 16.5 × 11.2 | 33.8 % |
+| scene/light | 3.00..21.00 × 3.00..21.00 | 18.0 × 18.0 | 33.1 % |
+| scene/panel | 3.75..20.25 × 5.62..19.12 | 16.5 × 13.5 | 32.0 % |
+| view/frame-all | 3.00..21.00 × 3.00..21.00 | 18.0 × 18.0 | 27.9 % |
+| view/orthographic | 4.88..19.12 × 4.88..19.12 | 14.2 × 14.2 | 37.9 % |
+| view/perspective | 3.38..20.62 × 3.38..20.62 | 17.2 × 17.2 | 39.0 % |
 
-Optical size wanders over 14.2…21.0 units and coverage over 8.4…36.1 %, so the set does not read as
-one family. Stroke weights are 1.6…2.4 units, which is 1.07…1.6 px at 16 pt: on a 1× display the ink
-breaks up, and only a 2× display looks clean.
+Optical size now sits at 13.5–18 units and coverage at 21.9–39.0 %, so the set reads as one family;
+the stroke weights stay inside 1.5–2.6 units. The five volumetric icons share the one basis of
+`STYLE_GUIDE.md` §9.1, and the UI test in `crates/ui/src/icons.rs` asserts the footprint and the
+coverage band from the rasterised alpha.
 
-The neighbour set, measured the same way, sits at 25–56 % coverage with a consistent footprint, and
-its modelled objects are **filled volumes with a grey passive face**, not outlines. That contrast is
-the whole difference: mass, not detail, is what makes it read at 16 px.
+The mass is what changed. Before U28 the same set was pure outline: 8.4–36.1 % coverage, with the
+modelled objects drawn as wireframe while the neighbour set drew them as filled volumes with a grey
+passive face. Detail did not make the difference at 16 px; tone did.
 
 ## 3. Three defects
 
 - **D1 — the theme never reaches the icon.** See §1. **Fixed by U27**: the UI rasterises the master,
   bakes the theme colour into the uploaded pixels and guards the path with a pixel test. Owners:
   `crates/ui/src/icons.rs`.
-- **D2 — no mass, only wireframe.** No file has a fill. Fix: one ink, tonal fills by alpha, so a
-  theme change still needs no asset change. Owners: `assets/README.md`, `STYLE_GUIDE.md`, all 18
-  drawn SVGs.
+- **D2 — no mass, only wireframe.** No file had a fill. **Fixed by U28**: one ink, tonal fills by
+  alpha — a passive face at 12–18 %, the result at 45–60 % — so a theme change still needs no asset
+  change. Owners: `assets/README.md`, `STYLE_GUIDE.md` §5.4/§7.3, all 18 drawn SVGs.
 - **D3 — no canonical projection or footprint.** `primitives/cube`, `scene/panel`, `scene/assembly`
-  and `bodies/extrude` each invent their own axonometry, with no shared projection and no enforced
-  optical size. Owners: `STYLE_GUIDE.md` §9, four SVG files.
+  and `bodies/extrude` each invented their own axonometry. **Fixed by U28**: one published basis
+  (`STYLE_GUIDE.md` §9.1) and one 3..21 footprint with a 20–45 % coverage band. Owners:
+  `STYLE_GUIDE.md` §9, the five volumetric SVGs, `crates/ui/src/icons.rs`.
 
 ## 4. Approved work
 
-Step 0 shipped as **U27**; step 1 is queued as **U28**. Steps 2–4 are recorded below and not approved.
+Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below and not approved.
 
 ### Step 0 — U27: rasterise in the UI (done)
 
@@ -101,22 +105,23 @@ Step 0 shipped as **U27**; step 1 is queued as **U28**. Steps 2–4 are recorded
   byte-identical between the two, assert the colours differ, and assert the raster size is
   `round(pt × pixels_per_point)` at 1.0, 1.25 and 2.0.
 
-### Step 1 — U28: mass and one projection
+### Step 1 — U28: mass and one projection (done)
 
-- Allow `fill-opacity` (and `opacity`) alongside the white ink; `defs`, `mask`, `clipPath`,
+- `fill-opacity` is allowed alongside the white ink; `opacity`, `defs`, `mask`, `clipPath`,
   gradients, filters and CSS stay forbidden.
 - Language: passive face = fill 12–18 % + full-strength outline; **result or changed geometry** =
   fill 45–60 % + the heavy outline (2.2–2.6); service glyphs stay bare stroke or solid silhouette.
   Emphasis is still structural and still readable in one ink, so no per-theme asset exists.
-- Publish one axonometry in `STYLE_GUIDE.md` (vertical axis vertical, both receding axes at 30°, a
-  face circle as a `0.577` ellipse) and redraw `cube`, `cylinder`, `panel`, `assembly`, `extrude` on
-  it. A plate stays a plate.
-- Redraw all 18 drawn icons; target footprint 3…21 units, coverage 20–45 %.
-- One change updates `assets/README.md`, `assets/icons/STYLE_GUIDE.md` (§5, §7.3, §9),
-  `.opencode/skills/draw-icon/SKILL.md` (§4), `crates/ui/src/icons.rs`, the 18 SVGs and the tests.
-- Acceptance: `cargo xtask ci` green; every drawn icon rasterises non-empty at 16 and 20 px and
-  stays inside `3..21`; coverage inside the band (asserted from the rasterised alpha in a test); the
-  toolbar compared by eye in both themes (`AGENTS.md` §4.7).
+- One axonometry is published in `STYLE_GUIDE.md` §9.1 (`x = 0.866 (u − v)`, `y = 0.5 (u + v) − w`,
+  a face circle as a `0.577` ellipse); `cube`, `cylinder`, `panel`, `assembly` and `extrude` are
+  drawn on it, and a plate stays a plate.
+- All 18 drawn icons are redrawn inside the fixed 3..21 footprint at 20–45 % coverage, measured as
+  alpha-weighted ink.
+- The same change updated `assets/README.md`, `assets/icons/STYLE_GUIDE.md` (§5, §7.1, §7.3, §7.4,
+  §9, §15), `.opencode/skills/draw-icon/SKILL.md` (§4, §6), `crates/ui/src/icons.rs` and the 18 SVGs.
+- Acceptance: `cargo xtask ci` green; every drawn icon rasterises non-empty at 16 and 20 px and stays
+  inside `3..21`; coverage inside the band, asserted from the rasterised alpha; the toolbar compared
+  by eye in both themes (`AGENTS.md` §4.7).
 
 ## 5. Deferred, not approved
 

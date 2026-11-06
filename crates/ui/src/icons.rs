@@ -4,7 +4,9 @@
 //! documented placeholder, so an icon button whose artwork has not been drawn yet falls back to its
 //! text label and the surface stays usable. A drawn icon is rasterised by the `egui_extras` SVG
 //! loader at `pt × pixels_per_point`, tinted with the widget's foreground colour and uploaded as a
-//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055).
+//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055). Its ink
+//! stays inside the fixed `3..21` footprint and covers 20–45 % of it; the tests below read both off
+//! the raster (`assets/icons/STYLE_GUIDE.md` §7.4).
 
 use egui::{
     Button, Color32, Response, Role, Sense, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, WidgetInfo, pos2,
@@ -325,6 +327,70 @@ mod tests {
     /// A minimal valid white-ink drawing, used where the real files are still placeholders.
     const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="#fff"/></svg>"##;
 
+    /// The 24-unit design grid.
+    const GRID: f32 = 24.0;
+
+    /// The fixed footprint of the style guide, in grid units: `3..21` on both axes.
+    const FOOTPRINT_MIN: f32 = 3.0;
+    const FOOTPRINT_MAX: f32 = 21.0;
+
+    /// The raster size the footprint and coverage are measured at.
+    const AUDIT_PX: usize = 64;
+
+    /// What one drawn icon measures on the grid.
+    struct Footprint {
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+        /// Alpha-weighted ink as a fraction of the fixed 18 × 18 footprint.
+        coverage: f32,
+    }
+
+    /// Rasterises `icon` and measures its ink bounds and tone against the fixed footprint.
+    ///
+    /// A pixel is ink above alpha 16, the threshold `assets/icons/AUDIT.md` used. Coverage is
+    /// alpha-weighted, so a passive face at 15 % adds a sixth of its area rather than a solid block.
+    fn footprint(icon: Icon) -> Footprint {
+        let image = egui_extras::image::load_svg_bytes_with_size(
+            icon.asset(),
+            egui::load::SizeHint::Size {
+                width: AUDIT_PX as u32,
+                height: AUDIT_PX as u32,
+                maintain_aspect_ratio: false,
+            },
+            &Default::default(),
+        )
+        .expect("a drawn icon rasterises");
+        assert_eq!(image.size, [AUDIT_PX, AUDIT_PX], "the audit raster is square");
+        let unit = GRID / AUDIT_PX as f32;
+        let mut ink = 0.0_f64;
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (AUDIT_PX, AUDIT_PX, 0_usize, 0_usize);
+        for (index, pixel) in image.pixels.iter().enumerate() {
+            ink += f64::from(pixel.a()) / 255.0 * f64::from(unit) * f64::from(unit);
+            if pixel.a() <= 16 {
+                continue;
+            }
+            let x = index % AUDIT_PX;
+            let y = index / AUDIT_PX;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        if max_x < min_x {
+            return Footprint { min_x: 0.0, max_x: 0.0, min_y: 0.0, max_y: 0.0, coverage: 0.0 };
+        }
+        let footprint = f64::from(FOOTPRINT_MAX - FOOTPRINT_MIN).powi(2);
+        Footprint {
+            min_x: min_x as f32 * unit,
+            max_x: (max_x + 1) as f32 * unit,
+            min_y: min_y as f32 * unit,
+            max_y: (max_y + 1) as f32 * unit,
+            coverage: (ink / footprint) as f32,
+        }
+    }
+
     /// An icon whose asset is empty, like every placeholder in the tree today.
     fn placeholder() -> Icon {
         Icon::new(Theme::Actions, "confirm", "bytes://icons/actions/confirm.svg", &[])
@@ -380,8 +446,31 @@ mod tests {
                 assert!(svg.starts_with("<svg"), "{name} does not start with an SVG root");
                 assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name} is not drawn on the 24 grid");
                 assert!(svg.contains("#fff"), "{name} carries no white ink");
-                for forbidden in ["<text", "<image", "<style", "<defs", "<mask", "<clipPath"] {
+                for forbidden in [
+                    "<text",
+                    "<image",
+                    "<style",
+                    "<defs",
+                    "<mask",
+                    "<clipPath",
+                    "<filter",
+                    "<linearGradient",
+                    "<radialGradient",
+                    " opacity=\"",
+                ] {
                     assert!(!svg.contains(forbidden), "{name} contains {forbidden}");
+                }
+                let mut at = 0;
+                while let Some(found) = svg[at..].find("fill-opacity=\"") {
+                    let start = at + found + "fill-opacity=\"".len();
+                    let rest = &svg[start..];
+                    let end = rest.find('"').expect("a fill-opacity attribute is quoted");
+                    let value: f32 = rest[..end].parse().expect("fill-opacity is a number");
+                    assert!(
+                        (0.12..=0.18).contains(&value) || (0.45..=0.60).contains(&value),
+                        "{name} paints a fill at {value}, outside the passive and result bands"
+                    );
+                    at = start + end;
                 }
                 let raster = egui_extras::image::load_svg_bytes_with_size(
                     icon.asset(),
@@ -389,6 +478,44 @@ mod tests {
                     &Default::default(),
                 );
                 assert!(raster.is_ok(), "{name} does not rasterise: {:?}", raster.err());
+            }
+        }
+    }
+
+    #[test]
+    fn every_drawn_icon_holds_its_footprint_and_coverage() {
+        for theme in Theme::ALL {
+            for icon in theme.icons() {
+                if !icon.is_drawn() {
+                    continue;
+                }
+                let name = format!("{}/{}", icon.theme().as_str(), icon.name());
+                let ink = footprint(*icon);
+                assert!(
+                    ink.min_x >= FOOTPRINT_MIN
+                        && ink.max_x <= FOOTPRINT_MAX
+                        && ink.min_y >= FOOTPRINT_MIN
+                        && ink.max_y <= FOOTPRINT_MAX,
+                    "{name} leaves the 3..21 footprint: {:.2}..{:.2} x {:.2}..{:.2}",
+                    ink.min_x,
+                    ink.max_x,
+                    ink.min_y,
+                    ink.max_y
+                );
+                assert!(
+                    (0.20..=0.45).contains(&ink.coverage),
+                    "{name} covers {:.1}% of the footprint, outside 20..45%",
+                    ink.coverage * 100.0
+                );
+                for px in [16, 20] {
+                    let raster = egui_extras::image::load_svg_bytes_with_size(
+                        icon.asset(),
+                        egui::load::SizeHint::Width(px),
+                        &Default::default(),
+                    )
+                    .expect("a drawn icon rasterises small");
+                    assert!(raster.pixels.iter().any(|pixel| pixel.a() > 0), "{name} is empty at {px} px");
+                }
             }
         }
     }
