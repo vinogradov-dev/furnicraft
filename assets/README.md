@@ -18,11 +18,11 @@ assets/icons/<theme>/<name>.svg
 
 | Theme | Icons | Shown by |
 |---|---|---|
-| `contour` | `line`, `polyline`, `arc`, `rectangle`, `circle`, `close`, `cancel` | Contour toolbar |
-| `primitives` | `cube`, `cylinder`, `sphere`, `cone` | Primitives toolbar |
-| `bodies` | `extrude`, `revolve`, `sweep` | Bodies toolbar |
-| `scene` | `panel`, `assembly`, `camera`, `light` | Scene toolbar |
-| `view` | `orthographic`, `perspective`, `frame-all`, `home` | Viewport strip, header |
+| `contour` | `line`, `polyline`, `arc`, `rectangle`, `circle`, `close`, `cancel` | The ribbon *Sketch* tab |
+| `primitives` | `cube`, `cylinder`, `sphere`, `cone` | The ribbon *Model* tab |
+| `bodies` | `extrude`, `revolve`, `sweep` | The ribbon *Model* tab |
+| `scene` | `panel`, `assembly`, `camera`, `light` | The ribbon *Scene* tab |
+| `view` | `orthographic`, `perspective`, `frame-all`, `home`, `grid-snap` | The ribbon *View* tab, the viewport strip, the header |
 | `actions` | `confirm`, `dismiss`, `cancel`, `undo`, `redo`, `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`, `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `visible`, `hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help` | Menus, dialogs, strips and shortcut reference |
 | `window` | `minimize`, `maximize`, `restore`, `close` | The window row of the header; drawn only when the system frame is off |
 

@@ -70,6 +70,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0063](0063-one-theme-owns-the-window.md) | One theme owns the window's colour and rhythm | Accepted |
 | [0064](0064-the-header-is-chrome-that-returns-an-action.md) | The header is chrome that returns an action | Accepted |
 | [0065](0065-visibility-and-lock-are-session-state.md) | Visibility and lock are session state | Accepted |
+| [0066](0066-the-ribbon-owns-the-tabs-and-a-tool-is-a-labelled-button.md) | The ribbon owns the tabs, and a tool is a labelled button | Accepted |
 
 ## Format
 

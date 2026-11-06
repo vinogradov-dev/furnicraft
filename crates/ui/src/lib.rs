@@ -67,7 +67,7 @@ use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
-pub use toolbars::ToolPanel;
+pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
 
 /// Default length of a newly created panel, in millimetres.
 const NEW_PANEL_LENGTH_MM: i64 = 600;
@@ -526,14 +526,20 @@ impl Editor {
         project.container(armed).map(|container| container.name())
     }
 
-    /// Draws the themed toolbar strip: one collapsible panel per tool theme.
+    /// Draws the ribbon: the row of tabs and the tool groups of the active tab.
     ///
-    /// The open panels are view state owned by the editor, so they survive a selection change and a
-    /// document command and never reach the scene file. A creation tool lands at the scene root
-    /// unless a container was armed through an explicit entry (ADR 0056). The tool that owns the
-    /// next click draws pressed, so the strip never hides what the pointer will do. Returns whether a
-    /// drawing tool started, so the shell can reset its own pointer state.
-    pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
+    /// The open body, the active tab and the numeric fields are view state owned by the editor, so
+    /// they survive a selection change and a document command and never reach the scene file. A
+    /// creation tool lands at the scene root unless a container was armed through an explicit entry
+    /// (ADR 0056). The tool that owns the next click draws pressed, so the ribbon never hides what
+    /// the pointer will do. The view actions it returns — frame all, the projection, the grid snap —
+    /// belong to the shell, which owns the view camera and the drawing gizmo.
+    pub fn show_ribbon(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        view: toolbars::RibbonView,
+    ) -> Result<toolbars::RibbonOutcome, String> {
         self.retain_creation_parent(session.project());
         let target = self.creation_target(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
@@ -543,26 +549,27 @@ impl Editor {
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
         );
-        let creation_parent = self.creation_parent_name(session.project());
-        let mut actions = Vec::new();
-        toolbars::show(
-            ui,
-            &mut self.toolbars,
+        let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
+        let context = toolbars::RibbonContext {
             has_panel_material,
             selected,
             selected_path,
             active,
-            creation_parent,
-            &mut actions,
-        );
-        let mut started_drawing = false;
+            perspective: view.perspective,
+            owns_view: view.owns_view,
+            grid: view.grid,
+            draft,
+        };
+        let mut actions = Vec::new();
+        toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
                 ToolAction::Draw(tool) => {
                     if !self.start_drawing(tool) {
                         return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
                     }
-                    started_drawing = true;
+                    outcome.started_drawing = true;
                 }
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,
@@ -571,9 +578,16 @@ impl Editor {
                 ToolAction::CreateLight => self.create_light(session, target)?,
                 ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
+                ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
+                ToolAction::CancelDrawing => self.cancel_drawing(),
+                ToolAction::FrameAll => outcome.view = Some(toolbars::RibbonViewAction::FrameAll),
+                ToolAction::ToggleProjection => {
+                    outcome.view = Some(toolbars::RibbonViewAction::ToggleProjection);
+                }
+                ToolAction::ToggleGrid => outcome.view = Some(toolbars::RibbonViewAction::ToggleGrid),
             }
         }
-        Ok(started_drawing)
+        Ok(outcome)
     }
 
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
@@ -717,14 +731,24 @@ impl Editor {
         self.initialized = true;
     }
 
-    /// Whether the panel of the toolbar strip is open.
-    pub fn toolbar_open(&self, panel: ToolPanel) -> bool {
-        self.toolbars.is_open(panel)
+    /// Whether the ribbon's body is open.
+    pub fn ribbon_open(&self) -> bool {
+        self.toolbars.is_open()
     }
 
-    /// Opens or closes one panel of the toolbar strip.
-    pub fn set_toolbar_open(&mut self, panel: ToolPanel, open: bool) -> bool {
-        self.toolbars.set_open(panel, open)
+    /// Opens or closes the ribbon's body and returns its new state.
+    pub fn set_ribbon_open(&mut self, open: bool) -> bool {
+        self.toolbars.set_open(open)
+    }
+
+    /// The tab whose groups the ribbon draws.
+    pub fn ribbon_tab(&self) -> toolbars::RibbonTab {
+        self.toolbars.tab()
+    }
+
+    /// Opens one ribbon tab.
+    pub fn set_ribbon_tab(&mut self, tab: toolbars::RibbonTab) -> toolbars::RibbonTab {
+        self.toolbars.set_tab(tab)
     }
 
     /// Draws the scene tree and dispatches the tree actions.
@@ -954,6 +978,7 @@ mod tests {
 
     use super::*;
 
+    use crate::toolbars::RibbonView;
     use furnicraft_engine::NodePropertySet;
     use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
     use furnicraft_model::Contour;
@@ -1931,24 +1956,25 @@ mod tests {
     }
 
     #[test]
-    fn the_toolbar_marks_the_tool_that_owns_the_next_click() {
+    fn the_ribbon_marks_the_tool_that_owns_the_next_click() {
         let (project, _panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         let ctx = egui::Context::default();
+        let view = RibbonView { perspective: true, owns_view: true, grid: true };
 
         let mut fill = None;
         let idle = ctx.run_ui(Default::default(), |ui| {
             fill = Some(ui.visuals().selection.bg_fill);
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
-        let fill = fill.expect("the strip ran");
+        let fill = fill.expect("the ribbon ran");
         assert_eq!(pressed_fill(&idle.shapes, fill), 0, "an idle editor presses no tool");
         idle.drop_without_applying_deltas();
 
         assert!(editor.start_drawing(DrawTool::Line));
         let drawing = ctx.run_ui(Default::default(), |ui| {
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
         assert_eq!(pressed_fill(&drawing.shapes, fill), 1, "the running draft presses its own tool");
         drawing.drop_without_applying_deltas();
@@ -1956,11 +1982,26 @@ mod tests {
         editor.cancel_drawing();
         let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
         editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm");
+        editor.set_ribbon_tab(RibbonTab::Model);
         let primitive = ctx.run_ui(Default::default(), |ui| {
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
         assert_eq!(pressed_fill(&primitive.shapes, fill), 1, "the waiting primitive presses its own button");
         primitive.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_ribbon_returns_the_view_action_it_was_asked_for() {
+        // The ribbon draws the view buttons but never moves the camera: the action comes back and
+        // the shell performs it with the same method the status bar calls.
+        let mut editor = Editor::new();
+        editor.set_ribbon_tab(RibbonTab::View);
+        assert_eq!(editor.ribbon_tab(), RibbonTab::View);
+        assert!(editor.ribbon_open());
+        assert!(!editor.set_ribbon_open(false), "the body closes");
+        assert!(!editor.ribbon_open());
+        assert!(editor.set_ribbon_open(true), "the body opens again");
+        assert!(editor.ribbon_open());
     }
 
     /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.

@@ -9,7 +9,8 @@
 //! the raster (`assets/icons/STYLE_GUIDE.md` §7.4).
 
 use egui::{
-    Button, Color32, Response, Role, Sense, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, WidgetInfo, pos2,
+    Button, Color32, FontFamily, FontId, Response, Role, Sense, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2,
+    WidgetInfo, pos2,
 };
 
 /// Point size of an inline or menu icon, before the UI scale turns it into pixels.
@@ -17,6 +18,12 @@ pub const ICON_POINT_SIZE: f32 = 16.0;
 
 /// Point size of a toolbar tool icon, before the UI scale turns it into pixels.
 pub const TOOL_ICON_POINT_SIZE: f32 = 20.0;
+
+/// Point size of a ribbon button's icon, before the UI scale turns it into pixels.
+pub const RIBBON_ICON_POINT_SIZE: f32 = 22.0;
+
+/// Point size of a ribbon button's caption, before the UI scale turns it into pixels.
+pub const RIBBON_CAPTION_POINT_SIZE: f32 = 10.5;
 
 /// The directory that owns an icon: the surface that shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,6 +180,7 @@ icons!(View, "view", view {
     PERSPECTIVE => "perspective",
     FRAME_ALL => "frame-all",
     HOME => "home",
+    GRID_SNAP => "grid-snap",
 });
 
 icons!(Actions, "actions", actions {
@@ -310,6 +318,56 @@ pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
         Some(shortcut) if !shortcut.is_empty() => format!("{label}  ({shortcut})"),
         _ => label.to_owned(),
     }
+}
+
+/// A ribbon button: a [`RIBBON_ICON_POINT_SIZE`] icon over a [`RIBBON_CAPTION_POINT_SIZE`] caption.
+///
+/// The ribbon is the one surface with a row tall enough to name a tool under its glyph, so a tool
+/// reads without a hover and a group reads without a heading above it. `caption` is the word painted
+/// under the icon and `hint` is the tooltip and the accessible name, which can be longer than the
+/// caption — the polyline's caption is its name while its hint also names the arc gesture. `on` marks
+/// the tool that owns the next click, and `enabled` keeps the face while a tool is unavailable. An
+/// empty placeholder asset draws the hint as the button's text, because a caption under nothing would
+/// look like a lost drawing.
+pub fn ribbon_button(ui: &mut Ui, icon: Icon, caption: &str, hint: &str, enabled: bool, on: bool) -> Response {
+    if !icon.is_drawn() {
+        return ui.add_enabled(enabled, Button::new(hint).selected(on)).on_hover_text(hint);
+    }
+    // The caption is laid out in the placeholder colour and painted in the widget's foreground, so
+    // one layout serves the resting, hovered and pressed faces without being rebuilt per state.
+    let font = FontId::new(RIBBON_CAPTION_POINT_SIZE, FontFamily::Proportional);
+    let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(caption.to_owned(), font, Color32::PLACEHOLDER));
+    let width = (galley.size().x + 2.0 * ui.spacing().button_padding.y).max(RIBBON_ICON_POINT_SIZE + 4.0);
+    let height = crate::theme::RIBBON_ROW_HEIGHT;
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+            if ui.is_rect_visible(rect) {
+                let visuals = ui.style().interact_selectable(&response, on);
+                ui.painter().rect(
+                    rect.expand(visuals.expansion),
+                    visuals.corner_radius,
+                    visuals.weak_bg_fill,
+                    visuals.bg_stroke,
+                    StrokeKind::Inside,
+                );
+                let icon_rect = egui::Rect::from_center_size(
+                    pos2(rect.center().x, rect.top() + RIBBON_ICON_POINT_SIZE / 2.0 + 4.0),
+                    Vec2::splat(RIBBON_ICON_POINT_SIZE),
+                );
+                let px = pixel_size(RIBBON_ICON_POINT_SIZE, ui.pixels_per_point());
+                if let Some(texture) = icon_texture(ui.ctx(), icon, px, visuals.fg_stroke.color) {
+                    let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    ui.painter().image(texture.id(), icon_rect, uv, Color32::WHITE);
+                }
+                let caption_pos = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - 2.0);
+                ui.painter().galley(caption_pos, galley.clone(), visuals.fg_stroke.color);
+            }
+            response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), on, hint));
+            response
+        })
+        .inner;
+    if hint.is_empty() { response } else { response.on_hover_text(hint) }
 }
 
 /// One square button that paints a rasterised icon, its frame following the widget state.
@@ -506,7 +564,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 56);
+        assert_eq!(seen.len(), 57);
     }
 
     #[test]

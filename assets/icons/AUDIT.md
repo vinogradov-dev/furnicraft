@@ -37,8 +37,9 @@ crisp at 75 % and 200 % alike.
 
 Rendered with `rsvg-convert` at 64 px and reduced to the 24-unit grid; alpha above 16 counts as ink.
 Coverage is alpha-weighted ink over the fixed 18 × 18 footprint (`STYLE_GUIDE.md` §7.4), so a passive
-face counts as its tone rather than as a solid block. Drawn files only (18 of 51; the other 33 are
-zero-byte placeholders). Measured after U28, 2026-11-06.
+face counts as its tone rather than as a solid block. Drawn files only (20 of 57; the other 37 are
+zero-byte placeholders). Measured after U28, 2026-11-06; U39 added `view/grid-snap`, the icon the
+ribbon's *Display* group draws.
 
 | icon | ink bbox (grid units) | size | coverage |
 |---|---|---|---|
@@ -60,6 +61,7 @@ zero-byte placeholders). Measured after U28, 2026-11-06.
 | view/frame-all | 3.00..21.00 × 3.00..21.00 | 18.0 × 18.0 | 27.9 % |
 | view/orthographic | 4.88..19.12 × 4.88..19.12 | 14.2 × 14.2 | 37.9 % |
 | view/perspective | 3.38..20.62 × 3.38..20.62 | 17.2 × 17.2 | 39.0 % |
+| view/grid-snap | 4.12..19.88 × 4.12..19.88 | 15.8 × 15.8 | 27.2 % |
 
 Optical size now sits at 13.5–18 units and coverage at 21.9–39.0 %, so the set reads as one family;
 the stroke weights stay inside 1.5–2.6 units. The five volumetric icons share the one basis of
@@ -135,7 +137,7 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
   (`tiny-skia::Pixmap::encode_png`). Plus a runtime audit test: every `Icon` the UI asks for exists
   and every drawn icon rasterises non-empty. Plus an alias table if a real duplicate appears; the
   README's "a shared drawing is two files" rule is the open question.
-- **Step 4 — coverage.** 33 zero-byte files: the whole `actions` theme (30) plus
+- **Step 4 — coverage.** 37 zero-byte files: the whole `actions` theme (30) plus
   `primitives/cone`, `bodies/revolve` and `bodies/sweep`. Tracked in `plan/debt.md` until drawn.
 
 ## 6. Deliberately not copied

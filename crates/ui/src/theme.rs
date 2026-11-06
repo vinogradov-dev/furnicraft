@@ -60,7 +60,16 @@ pub const STEP: f32 = 4.0;
 pub const HEADER_HEIGHT: f32 = 36.0;
 
 /// The height of a ribbon group's tool row, in points.
-pub const RIBBON_ROW_HEIGHT: f32 = 28.0;
+pub const RIBBON_ROW_HEIGHT: f32 = 48.0;
+
+/// The height of the ribbon's tab row, in points.
+pub const RIBBON_TAB_HEIGHT: f32 = 28.0;
+
+/// The height of the caption band under a ribbon group, in points.
+///
+/// The band carries the 10.5 pt group name in capitals and is type-derived, so it is the one row
+/// height that is not a multiple of [`STEP`]: a caption is a line of small type, not a control.
+pub const RIBBON_CAPTION_HEIGHT: f32 = 14.0;
 
 /// The height of the viewport bar at the bottom of the window, in points.
 pub const STATUS_HEIGHT: f32 = 28.0;
@@ -276,9 +285,18 @@ mod tests {
         assert_eq!(STEP, 4.0, "the whole window is laid out on the 4-point grid");
         assert_eq!(HEADER_HEIGHT % STEP, 0.0, "the header sits on the grid");
         assert_eq!(STATUS_HEIGHT % STEP, 0.0, "the viewport bar sits on the grid");
-        // The chrome rows keep one order: the header is busiest, the bar is the quietest.
+        assert_eq!(RIBBON_ROW_HEIGHT % STEP, 0.0, "the ribbon tool row sits on the grid");
+        assert_eq!(RIBBON_TAB_HEIGHT % STEP, 0.0, "the ribbon tab row sits on the grid");
+        assert_eq!(RIBBON_CAPTION_HEIGHT, 14.0, "the caption band is one line of small type");
+        // The chrome rows keep one order: the header is busiest, the bar is the quietest, and the
+        // ribbon is the tallest because it carries an icon over a caption.
         const { assert!(HEADER_HEIGHT > STATUS_HEIGHT) };
-        const { assert!(HEADER_HEIGHT < 48.0) };
-        const { assert!(RIBBON_ROW_HEIGHT > STEP * 4.0) };
+        const { assert!(HEADER_HEIGHT < RIBBON_ROW_HEIGHT) };
+        const { assert!(RIBBON_CAPTION_HEIGHT < RIBBON_TAB_HEIGHT) };
+        const { assert!(RIBBON_TAB_HEIGHT < RIBBON_ROW_HEIGHT) };
+        // A body is a tool row plus the caption band under it; the owner's reference is about 90 pt
+        // once the two margins are added.
+        const RIBBON_BODY: f32 = RIBBON_ROW_HEIGHT + RIBBON_CAPTION_HEIGHT;
+        const { assert!(RIBBON_BODY >= 60.0 && RIBBON_BODY <= 72.0) };
     }
 }

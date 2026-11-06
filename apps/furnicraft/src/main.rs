@@ -933,16 +933,45 @@ impl FurniCraftApp {
                 });
                 ui.add_space(theme::STEP);
                 rule(ui);
-                match self.editor.show_toolbars(ui, &mut self.session) {
-                    Ok(true) => self.draw_gizmo.reset(),
-                    Ok(false) => {}
-                    Err(error) => self.last_error = Some(error),
-                }
-                ui.add_space(theme::STEP);
-                rule(ui);
                 self.editor.show_scene_tree(ui, &mut self.session);
             });
         });
+    }
+
+    /// The ribbon under the header: the tabs and the tool groups of the active tab.
+    ///
+    /// The ribbon owns no document state and no viewport state: it returns whether a drawing tool
+    /// started and at most one view action, which the shell performs with the same methods the
+    /// status bar uses. It sits between the header and the side panels, so it spans the window.
+    fn ribbon(&mut self, ui: &mut egui::Ui) {
+        let view = furnicraft_ui::RibbonView {
+            perspective: matches!(self.view_camera.projection(), Projection::Perspective { .. }),
+            owns_view: viewport_owns_view(self.session.project()),
+            grid: self.draw_gizmo.grid(),
+        };
+        let mut outcome = None;
+        // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
+        // one that the side panels use behind their content.
+        let frame = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(6, 2));
+        egui::Panel::top("ribbon").frame(frame).show(ui, |ui| {
+            ui.add_space(theme::STEP);
+            match self.editor.show_ribbon(ui, &mut self.session, view) {
+                Ok(result) => outcome = Some(result),
+                Err(error) => self.last_error = Some(error),
+            }
+            ui.add_space(theme::STEP);
+        });
+        if let Some(outcome) = outcome {
+            if outcome.started_drawing {
+                self.draw_gizmo.reset();
+            }
+            match outcome.view {
+                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
+                Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => self.view_camera.toggle_projection(),
+                Some(furnicraft_ui::RibbonViewAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
+                None => {}
+            }
+        }
     }
 
     fn panel_card(&mut self, ui: &mut egui::Ui) {
@@ -1012,6 +1041,7 @@ impl FurniCraftApp {
                 .active_camera()
                 .and_then(|id| self.session.project().camera(id))
                 .map(|camera| camera.name().to_owned()),
+            creation_parent: self.editor.creation_parent_name(self.session.project()).map(str::to_owned),
         }
     }
 
@@ -1043,6 +1073,7 @@ impl FurniCraftApp {
             }
             Some(StatusAction::CancelDraft) => self.cancel_drawing(),
             Some(StatusAction::CancelPrimitive) => self.editor.cancel_primitive(),
+            Some(StatusAction::ClearCreationParent) => self.editor.clear_creation_parent(),
             None => {}
         }
         match out.view {
@@ -1063,6 +1094,8 @@ struct StatusInfo {
     grid: bool,
     mesh: Option<(MeshElement, usize)>,
     camera: Option<String>,
+    /// The container armed to receive the next creation, if any.
+    creation_parent: Option<String>,
 }
 
 /// What the bar asked for, after both sides have drawn.
@@ -1083,6 +1116,7 @@ enum StatusAction {
     FinishDraft,
     CancelDraft,
     CancelPrimitive,
+    ClearCreationParent,
 }
 
 /// What the right group of the bar asked the view to do.
@@ -1101,6 +1135,15 @@ fn hint(ui: &mut egui::Ui, text: &str) {
 fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction>, Option<TransformMode>) {
     if let Some(error) = &info.error {
         ui.colored_label(theme::DANGER, error);
+        theme::divider(ui);
+    }
+    // The arm is sticky across creations, so the bar names the container the next node lands in;
+    // without the chip a pressed tool would create in a container armed much earlier (ADR 0056).
+    if let Some(name) = &info.creation_parent {
+        ui.label(format!("Adding to: {name}"));
+        if ui.button("✕").on_hover_text("Create at the scene root again").clicked() {
+            return (Some(StatusAction::ClearCreationParent), None);
+        }
         theme::divider(ui);
     }
     if let Some((segments, dirty)) = info.contour {
@@ -1424,6 +1467,7 @@ impl eframe::App for FurniCraftApp {
         if let Some(action) = header_action {
             self.handle_header_action(action);
         }
+        self.ribbon(ui);
         self.scene_tree(ui);
         self.panel_card(ui);
         self.status_bar(ui);
@@ -1709,6 +1753,7 @@ mod tests {
             grid: true,
             mesh: None,
             camera: None,
+            creation_parent: None,
         };
         let mut out = StatusOut::default();
         let input = egui::RawInput {
@@ -1740,6 +1785,7 @@ mod tests {
             grid: false,
             mesh: None,
             camera: None,
+            creation_parent: None,
         };
         let mut out = StatusOut::default();
         let output = ctx.run_ui(Default::default(), |ui| {
