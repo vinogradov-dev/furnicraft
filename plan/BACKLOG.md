@@ -25,17 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U37** a cutout ring is edited in the viewport: a `CutoutShape::Contour`
-  (`crates/model/src/panel/machining.rs:390-414`) shows only a one-line summary
-  (`crates/ui/src/machining/cutout.rs:64-73`) and nothing can reshape it. Add
-  `ContourTarget::Cutout { panel, machining }`: `contour` reads the ring from `panel.machining_by_id`
-  (`crates/model/src/panel/mod.rs:358`) and `apply` rebuilds the record with `panel.machining.update`
-  (`crates/engine/src/panel_cmds.rs:348-385`), keeping the anchor and the `CutoutDepth`. The card gets an
-  *Edit contour* button beside the ring summary. Tests: an edit is one revision and one undo entry; the
-  anchor and the depth are unchanged; a ring that no longer fits the core is reported on the operation,
-  not silently stored.
-  `files: crates/ui/src/machining/cutout.rs, crates/ui/src/contour_edit.rs`
-
 - `[ ]` **U27** the theme reaches the icon: `crates/ui/src/icons.rs` rasterises an embedded master
   instead of handing it to `Image::tint`, whose `vertex_colour × texture` product makes a `#000`
   master black in every theme. Rasterise with `egui_extras::image::load_svg_bytes_with_size` at
@@ -86,6 +75,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U37** a cutout ring is edited in the viewport: `ContourTarget::Cutout { panel, machining }`
+  reads the ring from `panel.machining_by_id`, `ContourEdit::apply` rebuilds the record through one
+  `panel.machining.update` while keeping the anchor and the `CutoutDepth`, and the cutout card puts
+  *Edit contour* beside the ring summary. `ContourEntry` names the editing, busy, ready and
+  single-selection states, so the outline and the cutout never both claim the one live edit. Tests:
+  an edit is one revision and one undo entry, the anchor and depth are unchanged, and a ring outside
+  the core is refused while the draft stays — `65b1d31`
+  `files: crates/ui/src/machining/cutout.rs, crates/ui/src/contour_edit.rs`
 
 - `[x]` **U36** a rectangle panel outline becomes a ring once: `PanelOutline::Rect` stores corners and
   bows (`crates/model/src/panel/mod.rs:49-107`) and has no ring to edit, so *Edit contour* is offered
