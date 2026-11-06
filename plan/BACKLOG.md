@@ -239,6 +239,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X7** a ribbon button is one measured cell, so a caption never sizes it: the tool row of
+  every tab draws buttons of one width and one height, whatever their caption and whatever the
+  window width, and a caption that does not fit is elided with `…` instead of widening the button.
+  A placeholder asset keeps the same cell and draws its caption as the face, so a half-drawn icon
+  set has one rhythm. The vertical divider between two groups spans the whole body — the tool row
+  and the caption band — instead of the 16 pt header hairline, and the header's own row follows the
+  same rule: `File` and the icon buttons are one 26 pt control, and its hairlines are as tall as they
+  are. Observed: the Sketch row had buttons from 41 to 83 pt wide, Rectangle was the widest and the
+  Arc tool the narrowest, the divider stopped in the middle of the row, and a maximised window
+  stretched every caption into its own width. Expected: one cell, one pitch, one divider height, and
+  captions that read as a column. The cell is measured once per row from the window and clamped to
+  a minimum and a maximum — the owner's second observation — and the minimum is what the longest
+  Russian caption needs, which is the U49 requirement. Tests: every caption of the ribbon yields the
+  same cell width and height; a caption past the inner width is elided; the Russian tool captions fit
+  the narrowest cell; a placeholder occupies the same cell as a drawn icon; a narrow window gives the
+  floor and a maximised one the ceiling; the group divider is as tall as the tool row plus its caption
+  band; every tab's column count is right. ADR 0067 — `7d4895c`
+  `files: crates/ui/src/icons.rs, crates/ui/src/theme.rs, crates/ui/src/toolbars.rs`
+
 - `[x]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
   (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
   draws the tool groups of the active tab separated by vertical dividers, heading each group

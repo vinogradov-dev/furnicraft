@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U40 state=idle base=9c34671 updated=2026-11-07
+STATE: milestone=M7 phase=U task=U40 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -27,8 +27,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   creation lands at the scene root unless a container is armed, the armed tool draws pressed, the pole
   views look down their plane, a new drawing pivots on its own shape, a selected chain is a screen-space
   stroke, and every kind of contour edits through one draft.
-- X1 (the concave cap flap) and X2 are fixed: a legal ring sampled past the 1024-vertex cap, so the
-  chord now follows the shape (ADR 0062).
+- X1, X2 and X7 are fixed: a legal ring sampled past the 1024-vertex cap, so the chord follows the
+  shape (ADR 0062); a ribbon tool is one measured cell with an elided caption (ADR 0067).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
   U27 rasterises each white master at `pt × pixels_per_point`, bakes the widget colour into the pixels
   and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 gives a passive face 12–18 %
@@ -56,7 +56,7 @@ projection-and-angles switch U42 draws under the orientation cube. The bar keeps
 gesture, the counts and the last error — and now also the creation chip U39 moved out of the ribbon.
 
 Order after U40: U41 → U47 (palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49
-(English and Russian behind one typed message table). Read `plan/SESSION.template.md`, ADRs 0063–0066,
+(English and Russian behind one typed message table). Read `plan/SESSION.template.md`, ADRs 0063–0067,
 then `apps/furnicraft/src/main.rs` (`scene_tree`, `panel_card`, `status_bar`) and `crates/ui/src/lib.rs`.
 
 ## Index
