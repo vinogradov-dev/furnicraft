@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
+- `[~]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
   Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
   A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
   Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at

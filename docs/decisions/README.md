@@ -65,6 +65,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0058](0058-a-new-drawing-pivots-on-its-own-shape.md) | A new drawing pivots on its own shape | Accepted |
 | [0059](0059-a-selected-line-is-a-screen-space-overlay.md) | A selected line is a screen-space overlay | Accepted |
 | [0060](0060-an-open-path-is-edited-by-its-corners.md) | An open path is edited by its corners | Accepted |
+| [0061](0061-a-rectangle-outline-bakes-into-a-ring.md) | A rectangle outline bakes into a ring | Accepted |
+| [0062](0062-a-large-ring-samples-to-fit-its-cap.md) | A large ring samples to fit its cap | Accepted |
 
 ## Format
 

@@ -26,7 +26,7 @@
     clippy::unreachable
 )]
 
-use furnicraft_geom::{Contour, ContourError, DVec2, DVec3, Frame, RegionError, Segment};
+use furnicraft_geom::{ContourError, DVec2, DVec3, Frame, RegionError, Segment};
 use furnicraft_kernel::{BodyId, BooleanOp, KernelError, Profile, SolidKernel};
 use furnicraft_model::{
     BandingSpec, ContourSegmentId, Cutout, CutoutDepth, CutoutShape, EdgeBanding, EdgeId, FaceSide, MachiningId,
@@ -384,9 +384,8 @@ where
     let end = joint.end_points(nominal, true, outer, inner, band_profile);
     let outer = outer.trimmed(start.0, end.0)?;
     let inner = inner.trimmed(start.1, end.1)?;
-    let mut points = Contour::new(vec![outer], false)?.sample(profile::CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    let inner_points = Contour::new(vec![inner], false)?.sample(profile::CONTOUR_SAMPLE_TOLERANCE_MM)?;
-    points.extend(inner_points.into_iter().rev());
+    // One chord for both boundaries, taken from the strip's own extent so its two arcs agree.
+    let points = profile::strip_points(&outer, &inner)?;
     Ok(Profile::new(points, Vec::new())?)
 }
 
