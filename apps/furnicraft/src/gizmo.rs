@@ -163,17 +163,20 @@ fn home_button(ui: &Ui, rect: Rect) -> bool {
 
 /// Paints the one-line readout under the widget.
 ///
-/// It is drawn outside [`widget_rect`], so it never blocks a click; the clip rectangle is the
-/// widget's column widened only by the text's own width on each side.
+/// It is drawn outside [`widget_rect`], so it never blocks a click; the line is right-aligned to the
+/// widget's right edge because the widget sits in the viewport's corner, so the text grows into the
+/// scene instead of running under a side panel.
 fn paint_readout(ui: &Ui, widget: Rect, camera: Camera) {
     let text = readout(camera);
     let color = theme::text_dim(ui);
     let galley = ui.painter().layout_no_wrap(text, FontId::proportional(9.5), color);
     let size = galley.size();
-    let center = egui::pos2(widget.center().x, widget.bottom() + GAP + READOUT_HEIGHT / 2.0);
-    let position = egui::pos2(center.x - size.x / 2.0, center.y - size.y / 2.0);
-    let clip =
-        Rect::from_center_size(egui::pos2(center.x, center.y), Vec2::new(size.x.max(widget.width()), READOUT_HEIGHT));
+    let center_y = widget.bottom() + GAP + READOUT_HEIGHT / 2.0;
+    let position = egui::pos2(widget.right() - size.x, center_y - size.y / 2.0);
+    let clip = Rect::from_min_max(
+        egui::pos2(position.x, center_y - READOUT_HEIGHT / 2.0),
+        egui::pos2(widget.right(), center_y + READOUT_HEIGHT / 2.0),
+    );
     ui.painter().with_clip_rect(clip).galley(position, galley, color);
 }
 
