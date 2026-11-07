@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
-  *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
-  edge list per mesh, cached in `crates/mesh` against the same derivation inputs as the mesh itself —
-  and drawn as a line pass with a depth bias, because `PolygonMode::Line` is unavailable on Metal and
-  a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges* draws the edge pass with
-  `CompareFunction::Always`; *translucent* draws with blending and no depth write and orders objects
-  by their centre, which is honest for a cabinet of flat panels; *wireframe* draws the edge pass
-  alone. `ShadingStyle` lives in `crates/scene` as frame data and the renderer interprets it, so a
-  test can build a frame without a GPU. The bar's buttons and the settings default stay in step, and
-  a style change re-uploads nothing but the style. Tests: an edge list deduplicates a shared edge and
-  keeps a boundary edge; each style maps to the pipeline state it promises; a translucent pass writes no depth; a wireframe frame draws no triangle. ADR needed.
-  Session notes: `ShadingStyle` goes into `crates/scene` next to `Grid` and `Lighting`; the renderer
-  reads it. Edges are derived data and belong in `crates/mesh`, cached under the same key as
-  `EvaluationCache` (ADR 0053). An edge pass needs a depth bias and no depth write, like the existing
-  `line_pipeline`; `PolygonMode::Line` is unavailable on Metal and cannot be widened (ADR 0059). Do
-  not collide with `SELECTION_LINE_COLOR`, which the shell paints as an overlay.
-  `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
-
 - `[ ]` **U44** a ground shadow: the scene draws a soft contact shadow under the bounds of every
   object that touches the floor, so a cabinet reads as standing on something instead of floating in
   a grid. The first version is a flat ellipse or rounded rectangle derived from the world bound,
@@ -201,6 +183,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
+  *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
+  edge list per mesh, cached in `crates/mesh` against the same derivation inputs as the mesh itself —
+  and drawn as a line pass with a depth bias, because `PolygonMode::Line` is unavailable on Metal and
+  a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges* draws the edge pass with
+  `CompareFunction::Always`; *translucent* draws with blending and no depth write and orders objects
+  by their centre, which is honest for a cabinet of flat panels; *wireframe* draws the edge pass
+  alone. `ShadingStyle` lives in `crates/scene` as frame data and the renderer interprets it, so a
+  test can build a frame without a GPU. The bar's buttons and the settings default stay in step, and
+  a style change re-uploads nothing but the style. Tests: an edge list deduplicates a shared edge and
+  keeps a boundary edge; each style maps to the pipeline state it promises; a translucent pass writes
+  no depth; a wireframe frame draws no triangle. ADR 0070 — `fc585cc`
+  `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
 
 - `[x]` **X9** a split viewport draws each camera in the wrong half: with two views stacked or four in
   a grid, orbiting, panning or picking in the top view moved the bottom one, and clicking an axis on
