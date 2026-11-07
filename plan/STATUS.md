@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U42 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U43 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -18,11 +18,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   machining is one ordered list of anchored records driving staged effects and the cards
   (ADRs 0044–0046, schema 16). `crates/mesh` caches by derivation inputs, so a rebuild reuses every
   untouched node and a collapsed object keeps the shape the user saw (ADR 0053).
-- Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus up to
-  eight point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
-- The UI plan (U1–U26) is shipped: SVG icons rasterised at render size, no creation buttons in the
-  scene tree, a work plane from the current ortho view, a projection toggle, and draw/pick/snap for a
-  `Path` (ADRs 0047–0052).
+- Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus eight
+  point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
+- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the current ortho view, a projection
+  toggle, and draw/pick/snap for a `Path` (ADRs 0047–0052).
 - X3–X6 and U30–U37 are all fixed (ADRs 0056–0061): the projection button draws the view it is in, a
   creation lands at the scene root unless a container is armed, the armed tool draws pressed, the pole
   views look down their plane, a new drawing pivots on its own shape, a selected chain is a screen-space
@@ -31,33 +30,32 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   shape (ADR 0062); a ribbon tool is one measured cell with an elided caption (ADR 0067).
 - The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
   U27 rasterises each white master at `pt × pixels_per_point`, bakes the widget colour into the pixels
-  and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 gives a passive face 12–18 %
-  fill, the result 45–60 % under its outline, one axonometry, and ink inside `3..21` at 20–45 %
-  coverage (ADR 0066 adds a 22 pt ribbon button). 47 placeholders are in `plan/debt.md`.
-- U38–U41 landed the visual pass: `theme.rs` owns two palettes (dark and light, the accent folded in),
-  the 4 pt step, the row heights and the type scale (ADRs 0063, 0069); `header.rs` draws one row and
-  returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (one row of tabs over the tool groups of
-  the active tab, each tool a 22 pt icon over a 10.5 pt caption, ADR 0066); U40 made the side panels
-  fold over one header row and moved the view controls into a translucent `Order::Middle` cluster at
-  the viewport's bottom centre, leaving the bar only the armed tool or gesture, its counts, the
-  creation chip and the last error. U41 added the *Settings* modal (appearance, viewport, ribbon,
-  shortcuts), the versioned `settings.json` in the OS config directory written atomically (ADR 0068)
-  and the *Home* start surface; a change applies at once and a `.fcs` carries none of it. U47 added the
-  `Ctrl+K` palette over the registry; U42–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
+  and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 fixes the tonal emphasis
+  (ADR 0066 adds a 22 pt ribbon button). 47 placeholders are in `plan/debt.md`.
+- U38–U42 landed the visual pass: `theme.rs` owns two palettes and the type scale (ADRs 0063, 0069);
+  `header.rs` returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (22 pt icons over captions,
+  ADR 0066); U40 folded the side panels over one header row and moved the view controls into a
+  translucent cluster at the viewport's bottom centre; U41 added the *Settings* modal, the atomic
+  `settings.json` (ADR 0068) and *Home*. U47 added the `Ctrl+K` palette, and U42 divided the central
+  area into one, two or four views: `view_layout.rs` owns the split tree, its clamped borders and each
+  leaf's camera and preset, `ViewportRenderer` draws one target with a scissored pass and a camera slot
+  per view, and the orientation widget gained a home button and an optional pitch/yaw/roll readout.
+  U43–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U42 is next: the workspace divides into views. A layout tree of leaves and splits holds one view by
-default, then two vertical, two horizontal and four from the bar, with draggable borders clamped to
-0.15–0.85 and 120 pt per side. Each leaf owns its camera and preset; *Home* and *Frame all* act on
-the view under the pointer or the active one, and the renderer uses one target with a scissored pass
-per leaf. The layout and cameras are shell view state, never document data.
+U43 is next: the five display styles become real. Edges are derived data, one deduplicated edge list
+per mesh cached in `crates/mesh` under the same derivation inputs as the mesh, then drawn as a line
+pass with a depth bias because a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges*
+compares always, *translucent* blends without a depth write and orders by centre, *wireframe* draws
+the edge pass alone; `ShadingStyle` moves into `crates/scene` so a frame can be tested without a GPU.
+It needs an ADR.
 
-Order: U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U42 entry, `viewport()` and
-`ViewportRenderer::render_with_lighting`.
+Order: U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U43 entry, the `line_pipeline` in
+`ViewportRenderer` and the evaluation cache in `crates/mesh`.
 
 ## Index
 
