@@ -331,11 +331,19 @@ impl<'a> Evaluation<'a> {
         self.palette_index = self.palette_index.saturating_add(1);
         if let Some(body) = evaluated.body() {
             self.bounds.include_mesh(body, transform);
-            self.frame.push(Drawable::new(panel.id(), Arc::clone(body), transform, color));
+            let drawable = Drawable::new(panel.id(), Arc::clone(body), transform, color);
+            self.frame.push(match evaluated.body_edges() {
+                Some(edges) => drawable.with_edges(Arc::clone(edges)),
+                None => drawable,
+            });
         }
-        for mesh in evaluated.bands() {
+        for (index, mesh) in evaluated.bands().iter().enumerate() {
             self.bounds.include_mesh(mesh, transform);
-            self.frame.push(Drawable::new(panel.id(), Arc::clone(mesh), transform, EDGE_BAND_COLOR));
+            let drawable = Drawable::new(panel.id(), Arc::clone(mesh), transform, EDGE_BAND_COLOR);
+            self.frame.push(match evaluated.band_edges().get(index) {
+                Some(edges) => drawable.with_edges(Arc::clone(edges)),
+                None => drawable,
+            });
         }
         Ok(())
     }
@@ -361,7 +369,11 @@ impl<'a> Evaluation<'a> {
         }
         if let Some(mesh) = evaluated.body() {
             self.bounds.include_mesh(mesh, transform);
-            self.frame.push(Drawable::new(object.id(), Arc::clone(mesh), transform, OBJECT_COLOR));
+            let drawable = Drawable::new(object.id(), Arc::clone(mesh), transform, OBJECT_COLOR);
+            self.frame.push(match evaluated.body_edges() {
+                Some(edges) => drawable.with_edges(Arc::clone(edges)),
+                None => drawable,
+            });
             return Ok(());
         }
         Err(format!("{}: the object has no drawable geometry", object.name()))

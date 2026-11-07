@@ -532,6 +532,57 @@ impl Ray {
     }
 }
 
+/// How the renderer shades the drawables of a frame.
+///
+/// The value is frame data, not document data: a viewport chooses it and the settings file remembers
+/// the default, but a `.fcs` never carries it (ADR 0029, ADR 0070). The renderer turns each style
+/// into pipelines; [`ShadingStyle`] only promises which passes are on, so a frame can be tested
+/// without a GPU.
+///
+/// [ADR 0029]: ../docs/decisions/0029-view-state-belongs-to-the-session.md
+/// [ADR 0070]: ../docs/decisions/0070-display-styles-are-frame-data.md
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShadingStyle {
+    /// Shaded faces with the deduplicated mesh edges drawn over them.
+    #[default]
+    ShadedWithEdges,
+    /// Shaded faces with no edge pass.
+    Shaded,
+    /// The edge pass alone, with no faces.
+    Wireframe,
+    /// Edges drawn through the faces, so hidden geometry stays visible.
+    ShadedWithHiddenEdges,
+    /// Blended faces with no depth write, drawn back to front by object centre.
+    Translucent,
+}
+
+impl ShadingStyle {
+    /// Every style, in the order the viewport cluster draws its buttons.
+    pub const ALL: [Self; 5] =
+        [Self::ShadedWithEdges, Self::Shaded, Self::Wireframe, Self::ShadedWithHiddenEdges, Self::Translucent];
+
+    /// Whether the style draws filled faces.
+    pub const fn draws_faces(self) -> bool {
+        !matches!(self, Self::Wireframe)
+    }
+
+    /// Whether the style draws the mesh edge pass.
+    pub const fn draws_edges(self) -> bool {
+        !matches!(self, Self::Shaded | Self::Translucent)
+    }
+
+    /// Whether the edge pass ignores the depth test, drawing edges through the faces.
+    pub const fn edges_through_faces(self) -> bool {
+        matches!(self, Self::ShadedWithHiddenEdges)
+    }
+
+    /// Whether the faces are blended and write no depth.
+    pub const fn is_translucent(self) -> bool {
+        matches!(self, Self::Translucent)
+    }
+}
+
 /// A floor grid on the world XY plane.
 ///
 /// The renderer derives line geometry from these values; the document knows nothing about it.
@@ -628,6 +679,11 @@ pub struct Drawable {
     pub id: Id,
     /// Local-space triangles.
     pub mesh: Arc<MeshData>,
+    /// Deduplicated local-space edges of `mesh`, two vertex indices per edge.
+    ///
+    /// The list is derived beside the mesh and cached with it (ADR 0053), so the edge pass costs no
+    /// search per frame. `None` means the drawable has no edge pass.
+    pub edges: Option<Arc<[u32]>>,
     /// Rigid local-to-world transform.
     pub world_transform: DMat4,
     /// Linear RGB colour and opacity.
@@ -636,8 +692,16 @@ pub struct Drawable {
 
 impl Drawable {
     /// Creates a drawable from a document id, a mesh, a rigid world transform and a colour.
+    ///
+    /// The drawable starts with no edge list; [`Drawable::with_edges`] adds one.
     pub fn new(id: Id, mesh: Arc<MeshData>, world_transform: DMat4, color: [f32; 4]) -> Self {
-        Self { id, mesh, world_transform, color }
+        Self { id, mesh, edges: None, world_transform, color }
+    }
+
+    /// Attaches the deduplicated edge list derived from `mesh`.
+    pub fn with_edges(mut self, edges: Arc<[u32]>) -> Self {
+        self.edges = Some(edges);
+        self
     }
 }
 
@@ -671,6 +735,8 @@ impl Polyline {
 pub struct SceneFrame {
     /// The active orbit camera.
     pub camera: Camera,
+    /// How the drawables are shaded.
+    pub shading: ShadingStyle,
     /// The floor grid.
     pub grid: Grid,
     /// The key light.
@@ -687,6 +753,7 @@ impl Default for SceneFrame {
     fn default() -> Self {
         Self {
             camera: Camera::default(),
+            shading: ShadingStyle::default(),
             grid: Grid::default(),
             lighting: Lighting::default(),
             background: [0.10, 0.11, 0.13, 1.0],
@@ -983,6 +1050,17 @@ mod tests {
 
     fn assert_close(actual: DVec3, expected: DVec3) {
         assert!((actual - expected).length() < 1.0e-9, "actual {actual:?}, expected {expected:?}");
+    }
+
+    #[test]
+    fn a_display_style_is_frame_data_with_a_default() {
+        assert_eq!(SceneFrame::default().shading, ShadingStyle::ShadedWithEdges);
+        assert_eq!(ShadingStyle::ALL.len(), 5, "the cluster offers every style the renderer interprets");
+        assert!(ShadingStyle::Wireframe.draws_edges() && !ShadingStyle::Wireframe.draws_faces());
+        assert!(!ShadingStyle::Translucent.draws_edges() && ShadingStyle::Translucent.is_translucent());
+        assert!(!ShadingStyle::Shaded.draws_edges() && ShadingStyle::Shaded.draws_faces());
+        assert!(ShadingStyle::ShadedWithHiddenEdges.edges_through_faces());
+        assert!(!ShadingStyle::ShadedWithEdges.edges_through_faces());
     }
 
     #[test]

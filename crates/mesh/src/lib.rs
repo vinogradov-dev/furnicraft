@@ -17,7 +17,7 @@
     clippy::unreachable
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use furnicraft_geom::{DVec3, MeshData, triangulate_face};
@@ -150,8 +150,53 @@ pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
     Ok(data)
 }
 
-/// Samples a stored path into the local points the viewport draws as a line chain.
+/// The unique triangle edges of a mesh, as pairs of vertex indices.
 ///
+/// Vertices are matched by their position quantised to one micrometre, so a flat-shaded mesh that
+/// stores one vertex per face still yields one edge per geometric edge. An edge shared by two
+/// triangles appears once, and a boundary edge appears once; a degenerate edge, a missing index and
+/// a non-finite position are skipped. The result is therefore always safe to draw as a line list.
+///
+/// The list is derived beside the mesh and cached with it under the same inputs (ADR 0053), so the
+/// edge pass never searches the mesh per frame.
+pub fn mesh_edges(mesh: &MeshData) -> Vec<u32> {
+    let mut edges = Vec::with_capacity(mesh.indices.len());
+    let mut seen = HashSet::new();
+    for triangle in mesh.indices.as_chunks::<3>().0 {
+        for (a, b) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+            if a == b {
+                continue;
+            }
+            let (Some(first), Some(second)) = (edge_key(mesh, a), edge_key(mesh, b)) else {
+                continue;
+            };
+            if first == second {
+                continue;
+            }
+            let key = if first <= second { (first, second) } else { (second, first) };
+            if seen.insert(key) {
+                edges.extend_from_slice(&[a, b]);
+            }
+        }
+    }
+    edges
+}
+
+/// The quantised position of one vertex, or `None` for a missing or non-finite one.
+fn edge_key(mesh: &MeshData, index: u32) -> Option<[i64; 3]> {
+    let position = mesh.positions.get(index as usize)?;
+    let mut key = [0i64; 3];
+    for (slot, value) in key.iter_mut().zip(position) {
+        let scaled = f64::from(*value) * 1000.0;
+        if !scaled.is_finite() || !(-9.0e18..=9.0e18).contains(&scaled) {
+            return None;
+        }
+        *slot = scaled.round() as i64;
+    }
+    Some(key)
+}
+
+/// Samples a stored path into the local points the viewport draws as a line chain.///
 /// The chain is sampled as an open contour even when the path is closed, so the closing segment is
 /// drawn; the one-micrometre joint tolerance is the document's own.
 pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
@@ -174,7 +219,9 @@ pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NodeGeometry {
     body: Option<Arc<MeshData>>,
+    body_edges: Option<Arc<[u32]>>,
     bands: Vec<Arc<MeshData>>,
+    band_edges: Vec<Arc<[u32]>>,
     polyline: Option<Arc<[DVec3]>>,
 }
 
@@ -184,9 +231,19 @@ impl NodeGeometry {
         self.body.as_ref()
     }
 
+    /// The deduplicated edges of [`NodeGeometry::body`], two vertex indices per edge.
+    pub const fn body_edges(&self) -> Option<&Arc<[u32]>> {
+        self.body_edges.as_ref()
+    }
+
     /// One mesh per evaluated band, in application order.
     pub fn bands(&self) -> &[Arc<MeshData>] {
         &self.bands
+    }
+
+    /// The edges of each evaluated band, in the same order as [`NodeGeometry::bands`].
+    pub fn band_edges(&self) -> &[Arc<[u32]>] {
+        &self.band_edges
     }
 
     /// The line chain of a path object, when the node has no solid.
@@ -376,14 +433,20 @@ impl EvaluationCache {
         let inputs = PanelInputs::capture(panel, geometry, profile);
         let parts = build_panel_parts_with(kernel, panel, geometry, profile)?;
         let body = tessellate_panel(&*kernel, parts.body(), options)?;
+        let body_edges: Arc<[u32]> = mesh_edges(&body).into();
         let mut bands = Vec::with_capacity(parts.bands().len());
+        let mut band_edges = Vec::with_capacity(parts.bands().len());
         for part in parts.bands() {
-            bands.push(tessellate_panel(&*kernel, part.body(), options)?);
+            let mesh = tessellate_panel(&*kernel, part.body(), options)?;
+            band_edges.push(Arc::from(mesh_edges(&mesh)));
+            bands.push(Arc::new(mesh));
         }
         kernel.clear();
         let geometry = NodeGeometry {
             body: Some(Arc::new(body)),
-            bands: bands.into_iter().map(Arc::new).collect(),
+            body_edges: Some(body_edges),
+            bands,
+            band_edges,
             polyline: None,
         };
         self.store(id, revision, Payload::Panel(inputs), geometry.clone());
@@ -416,21 +479,15 @@ impl EvaluationCache {
         let (payload, geometry) = match object.geometry() {
             furnicraft_model::Geometry::Mesh(mesh) => {
                 let data = object_mesh(mesh)?;
-                (Payload::Mesh(mesh.clone()), NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() })
+                (Payload::Mesh(mesh.clone()), solid_geometry(data))
             }
             furnicraft_model::Geometry::Constructive(constructive) => {
                 let data = constructive_mesh(constructive)?;
-                (
-                    Payload::Constructive(constructive.clone()),
-                    NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() },
-                )
+                (Payload::Constructive(constructive.clone()), solid_geometry(data))
             }
             furnicraft_model::Geometry::Primitive(primitive) => {
                 let data = primitive_mesh(primitive)?;
-                (
-                    Payload::Primitive(primitive.clone()),
-                    NodeGeometry { body: Some(Arc::new(data)), ..NodeGeometry::default() },
-                )
+                (Payload::Primitive(primitive.clone()), solid_geometry(data))
             }
             furnicraft_model::Geometry::Path(path) => {
                 let points = path_points(path)?;
@@ -444,10 +501,16 @@ impl EvaluationCache {
         Ok(geometry)
     }
 
-    /// Stores one freshly derived node and tags it with the current pass.
+    /// Stores one freshly derived solid and its edge list, tagged with the current pass.
     fn store(&mut self, id: Id, revision: Revision, payload: Payload, geometry: NodeGeometry) {
         self.nodes.insert(id, Entry { revision, payload, geometry, pass: self.pass });
     }
+}
+
+/// The derived geometry of one solid: the render mesh and its deduplicated edge list.
+fn solid_geometry(data: MeshData) -> NodeGeometry {
+    let edges: Arc<[u32]> = mesh_edges(&data).into();
+    NodeGeometry { body: Some(Arc::new(data)), body_edges: Some(edges), ..NodeGeometry::default() }
 }
 
 /// The face's vertices in local millimetres, in face order.
@@ -701,6 +764,50 @@ mod tests {
             }
         }
         inside
+    }
+
+    #[test]
+    fn an_edge_list_deduplicates_a_shared_edge_and_keeps_a_boundary_edge() {
+        // Two triangles of a square, each with its own copy of the shared corners, exactly as a
+        // flat-shaded mesh stores them. The diagonal must survive once, not twice, and each
+        // boundary edge must be there.
+        let mesh = MeshData {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [10.0, 10.0, 0.0],
+                [0.0, 10.0, 0.0],
+            ],
+            normals: Vec::new(),
+            indices: vec![0, 1, 2, 3, 4, 5],
+        };
+        let edges = mesh_edges(&mesh);
+        assert_eq!(edges.len() / 2, 5, "six triangle edges share one diagonal");
+        assert!(edges.len().is_multiple_of(2));
+
+        let pairs = edges.as_chunks::<2>().0;
+        let same = |pair: &[u32; 2], a: [f32; 3], b: [f32; 3]| {
+            let first = mesh.positions[pair[0] as usize];
+            let second = mesh.positions[pair[1] as usize];
+            (first == a && second == b) || (first == b && second == a)
+        };
+        let diagonal = pairs.iter().filter(|pair| same(pair, [0.0, 0.0, 0.0], [10.0, 10.0, 0.0])).count();
+        assert_eq!(diagonal, 1, "the shared diagonal is recorded once");
+        let boundary = pairs.iter().filter(|pair| same(pair, [0.0, 0.0, 0.0], [10.0, 0.0, 0.0])).count();
+        assert_eq!(boundary, 1, "a boundary edge is kept");
+    }
+
+    #[test]
+    fn mesh_edges_skip_degenerate_and_malformed_edges() {
+        let mesh = MeshData {
+            positions: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+            normals: Vec::new(),
+            indices: vec![0, 1, 1, 0, 2, 9],
+        };
+        let edges = mesh_edges(&mesh);
+        assert_eq!(edges, vec![0, 1, 0, 2], "a repeated vertex and a missing one produce no edge");
     }
 
     #[test]

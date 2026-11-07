@@ -16,7 +16,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{Camera, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame};
+use furnicraft_scene::{Camera, Drawable, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame, ShadingStyle};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
@@ -34,6 +34,47 @@ const MAX_GRID_DIVISIONS: i64 = 512;
 
 /// The most views one frame may split into; the camera uniform holds one slot per view.
 pub const MAX_VIEWS: usize = 4;
+
+/// Gamma-space colour of the mesh edge pass.
+///
+/// The line pipeline is unlit and the colour is already in gamma space, like a grid or path colour.
+/// A dark ink reads over an oak panel and a white one without changing the shaded faces.
+const EDGE_COLOR: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
+
+/// Depth bias applied to the edge pass so a line on a face wins without z-fighting.
+///
+/// A negative constant pulls the line towards the camera; the slope term compensates a face lying
+/// at a grazing angle. The value is one depth unit at the 32-bit float scale, which is enough to
+/// separate a line from the triangle it lies on and too small to move it through a panel.
+const EDGE_DEPTH_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: -2, slope_scale: -1.0, clamp: 0.0 };
+
+/// The passes one display style turns on, derived without a GPU.
+///
+/// A style promises passes, not pipeline objects: the renderer turns this into the four pipelines it
+/// built, and a test can assert the promise without a device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StylePasses {
+    /// Filled faces drawn with a depth write.
+    pub opaque_faces: bool,
+    /// Filled faces blended with no depth write.
+    pub translucent_faces: bool,
+    /// Edges tested against the faces.
+    pub visible_edges: bool,
+    /// Edges drawn through the faces.
+    pub through_edges: bool,
+}
+
+impl StylePasses {
+    /// The passes one style promises.
+    pub const fn new(style: ShadingStyle) -> Self {
+        Self {
+            opaque_faces: style.draws_faces() && !style.is_translucent(),
+            translucent_faces: style.is_translucent(),
+            visible_edges: style.draws_edges() && !style.edges_through_faces(),
+            through_edges: style.draws_edges() && style.edges_through_faces(),
+        }
+    }
+}
 
 /// A reason why scene geometry could not be uploaded.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -118,6 +159,8 @@ struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    /// World-space centre, used to order translucent objects back to front.
+    centre: DVec3,
 }
 
 /// One line-list vertex buffer: the grid and the frame's polylines each own one.
@@ -200,12 +243,21 @@ impl ViewRegion {
 /// exposes the colour view that egui should display.
 pub struct ViewportRenderer {
     mesh_pipeline: wgpu::RenderPipeline,
+    translucent_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    edge_pipeline: wgpu::RenderPipeline,
+    hidden_edge_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     /// The stride between two camera slots, which is the device's uniform offset alignment.
     camera_stride: u64,
     drawables: Vec<GpuMesh>,
+    /// World-space centres parallel to `drawables`, in upload order.
+    centres: Vec<DVec3>,
+    /// A reusable index list, sorted back to front for each translucent view.
+    draw_order: Vec<usize>,
+    /// The edges of every solid drawable, flattened into one line list.
+    edges: Option<GpuLineList>,
     grid: Option<GpuLineList>,
     polylines: Option<GpuLineList>,
     targets: RenderTargets,
@@ -265,90 +317,52 @@ impl ViewportRenderer {
             immediate_size: 0,
         });
 
-        let color_target =
-            Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL });
-
-        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("FurniCraft shaded mesh pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_mesh"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                // Panels are thin solids; showing their back faces avoids holes when the camera
-                // moves inside a cutout.
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_mesh"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: std::slice::from_ref(&color_target),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("FurniCraft line pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_line"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(vertex_layout())],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_line"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[color_target],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let mesh_pipeline = create_triangle_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "FurniCraft shaded mesh pipeline",
+            "fs_mesh",
+            ShadingStyle::Shaded,
+        );
+        let translucent_pipeline = create_triangle_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "FurniCraft translucent mesh pipeline",
+            "fs_mesh_translucent",
+            ShadingStyle::Translucent,
+        );
+        let line_pipeline =
+            create_line_pipeline(device, &pipeline_layout, &shader, "FurniCraft line pipeline", line_depth_state());
+        let edge_pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "FurniCraft edge pipeline",
+            edge_depth_state(false),
+        );
+        let hidden_edge_pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "FurniCraft hidden edge pipeline",
+            edge_depth_state(true),
+        );
 
         Self {
             mesh_pipeline,
+            translucent_pipeline,
             line_pipeline,
+            edge_pipeline,
+            hidden_edge_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_stride,
             drawables: Vec::new(),
+            centres: Vec::new(),
+            draw_order: Vec::new(),
+            edges: None,
             grid: None,
             polylines: None,
             targets,
@@ -401,13 +415,19 @@ impl ViewportRenderer {
                 contents: bytemuck::cast_slice(&indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
-            drawables.push(GpuMesh { vertex_buffer, index_buffer, index_count });
+            let centre = mesh_centre(&drawable.mesh, drawable.world_transform);
+            drawables.push(GpuMesh { vertex_buffer, index_buffer, index_count, centre });
         }
 
         let grid = line_list(device, "FurniCraft grid vertices", grid_vertices(&frame.grid))?;
         let polylines = line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines())?)?;
+        let edges = line_list(device, "FurniCraft edge vertices", edge_vertices(frame.drawables()))?;
 
+        let draw_order: Vec<usize> = (0..drawables.len()).collect();
         self.drawables = drawables;
+        self.centres = self.drawables.iter().map(|mesh| mesh.centre).collect();
+        self.draw_order = draw_order;
+        self.edges = edges;
         self.grid = grid;
         self.polylines = polylines;
         Ok(())
@@ -501,7 +521,8 @@ impl ViewportRenderer {
             });
         }
 
-        for ((_, region), offset) in views.iter().zip(offsets) {
+        let passes = StylePasses::new(frame.shading);
+        for ((camera, region), offset) in views.iter().zip(offsets) {
             let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
                 view: &self.targets.color_view,
@@ -526,7 +547,7 @@ impl ViewportRenderer {
             pass.set_scissor_rect(x, y, width, height);
             pass.set_bind_group(0, &self.camera_bind_group, &[offset]);
 
-            if !self.drawables.is_empty() {
+            if passes.opaque_faces && !self.drawables.is_empty() {
                 pass.set_pipeline(&self.mesh_pipeline);
                 for mesh in &self.drawables {
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
@@ -545,6 +566,32 @@ impl ViewportRenderer {
                     pass.set_vertex_buffer(0, polylines.vertex_buffer.slice(..));
                     pass.draw(0..polylines.vertex_count, 0..1);
                 }
+            }
+
+            // Blended faces go after the opaque scene and back to front, so a nearer panel tints a
+            // farther one instead of hiding it. The order is per view: two views see the same
+            // centre from opposite sides.
+            if passes.translucent_faces && !self.drawables.is_empty() {
+                sort_back_to_front(&self.centres, camera.eye(), &mut self.draw_order);
+                pass.set_pipeline(&self.translucent_pipeline);
+                for &index in &self.draw_order {
+                    let Some(mesh) = self.drawables.get(index) else {
+                        continue;
+                    };
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            }
+
+            // Edges last, so a line sits on top of the faces it belongs to. *Shaded with hidden
+            // edges* uses the always pass, *wireframe* reaches here with no faces before it.
+            if (passes.visible_edges || passes.through_edges)
+                && let Some(edges) = &self.edges
+            {
+                pass.set_pipeline(if passes.through_edges { &self.hidden_edge_pipeline } else { &self.edge_pipeline });
+                pass.set_vertex_buffer(0, edges.vertex_buffer.slice(..));
+                pass.draw(0..edges.vertex_count, 0..1);
             }
         }
         queue.submit(Some(encoder.finish()));
@@ -570,6 +617,204 @@ impl ViewportRenderer {
             point_color,
         }
     }
+}
+
+/// One opaque or translucent face pipeline at the scene's colour format.
+///
+/// A translucent style blends and writes no depth; an opaque one replaces the fragment and wins the
+/// depth test. The two differ only in these two states, so one constructor serves both.
+fn create_triangle_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    label: &str,
+    fragment_entry: &str,
+    style: ShadingStyle,
+) -> wgpu::RenderPipeline {
+    let translucent = style.is_translucent();
+    let target = face_target(if translucent { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_mesh"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(vertex_layout())],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            // Panels are thin solids; showing their back faces avoids holes when the camera
+            // moves inside a cutout.
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(face_depth_state(style)),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: std::slice::from_ref(&target),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The depth state of the face pass: opaque faces write depth, translucent faces do not.
+fn face_depth_state(style: ShadingStyle) -> wgpu::DepthStencilState {
+    let translucent = style.is_translucent();
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        // A translucent surface tests against the opaque scene but must not occlude a later
+        // object, so it writes no depth.
+        depth_write_enabled: Some(!translucent),
+        depth_compare: Some(if translucent { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less }),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+/// The scene colour target with an optional blend state.
+fn face_target(blend: Option<wgpu::BlendState>) -> Option<wgpu::ColorTargetState> {
+    Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })
+}
+
+/// One line pipeline with the given depth state: the grid, the visible edges or the hidden edges.
+fn create_line_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    label: &str,
+    depth: wgpu::DepthStencilState,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_line"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(vertex_layout())],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(depth),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_line"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: std::slice::from_ref(&face_target(None)),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The depth state of the grid and path lines: tested against the scene, writing nothing.
+fn line_depth_state() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
+/// The depth state of the mesh edge pass.
+///
+/// `through` is *shaded with hidden edges*: the comparison is always satisfied, so every edge shows
+/// regardless of the faces in front of it. Otherwise the bias pulls the line toward the camera, so
+/// it wins against the triangle it lies on without z-fighting.
+fn edge_depth_state(through: bool) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(if through { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
+        stencil: wgpu::StencilState::default(),
+        bias: if through { wgpu::DepthBiasState::default() } else { EDGE_DEPTH_BIAS },
+    }
+}
+
+/// The world-space centre of a drawable's local bounds, used to order translucent objects.
+///
+/// A missing or non-finite position is ignored, and a mesh with none has no centre to sort by.
+fn mesh_centre(mesh: &MeshData, transform: DMat4) -> DVec3 {
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    let mut seen = false;
+    for position in &mesh.positions {
+        let world = transform.transform_point3(vector(*position));
+        if !world.is_finite() {
+            continue;
+        }
+        min = min.min(world);
+        max = max.max(world);
+        seen = true;
+    }
+    if seen { (min + max) * 0.5 } else { DVec3::ZERO }
+}
+
+/// Flattens the edge list of every drawable into one line list in world space.
+///
+/// The edge list is derived data that `crates/mesh` cached beside the mesh (ADR 0053), so this is a
+/// transform and a copy, never a search. A malformed edge or a non-finite vertex is skipped: an
+/// edge is decoration and must never turn a whole frame into an error.
+fn edge_vertices(drawables: &[Drawable]) -> Vec<MeshVertex> {
+    let mut vertices = Vec::new();
+    for drawable in drawables {
+        let Some(edges) = drawable.edges.as_deref() else {
+            continue;
+        };
+        if !drawable.world_transform.is_finite() {
+            continue;
+        }
+        for edge in edges.as_chunks::<2>().0 {
+            let (Some(a), Some(b)) = (position_at(&drawable.mesh, edge[0]), position_at(&drawable.mesh, edge[1]))
+            else {
+                continue;
+            };
+            let a = drawable.world_transform.transform_point3(a);
+            let b = drawable.world_transform.transform_point3(b);
+            if !a.is_finite() || !b.is_finite() {
+                continue;
+            }
+            if vertices.len().saturating_add(2) > MAX_VERTICES {
+                return vertices;
+            }
+            push_line(&mut vertices, [a.x, a.y, a.z], [b.x, b.y, b.z], EDGE_COLOR);
+        }
+    }
+    vertices
+}
+
+/// Rewrites `order` so far objects come first, which is the order a blended pass needs.
+///
+/// The comparison is on squared distance to the eye, so no square root is taken per pair. A
+/// non-finite eye or centre sorts as the origin, which keeps the order total instead of panicking.
+fn sort_back_to_front(centres: &[DVec3], eye: DVec3, order: &mut Vec<usize>) {
+    order.clear();
+    order.extend(0..centres.len());
+    let eye = if eye.is_finite() { eye } else { DVec3::ZERO };
+    order.sort_by(|&a, &b| {
+        let far = centres.get(a).map_or(0.0, |centre| (centre - eye).length_squared());
+        let near = centres.get(b).map_or(0.0, |centre| (centre - eye).length_squared());
+        near.total_cmp(&far)
+    });
 }
 
 fn clamp_size(width: u32, height: u32, max_dimension: u32) -> [u32; 2] {
@@ -956,6 +1201,85 @@ mod tests {
         assert_eq!(positions[0], [0.0, 0.0, 0.0, 0.0]);
         assert_eq!(positions[MAX_POINT_LIGHTS - 1], [(MAX_POINT_LIGHTS - 1) as f32, 0.0, 0.0, 0.0]);
         assert_eq!(colors[0], [0.25, 0.5, 0.75, 1000.0]);
+    }
+
+    #[test]
+    fn each_display_style_maps_to_the_passes_it_promises() {
+        assert_eq!(
+            StylePasses::new(ShadingStyle::ShadedWithEdges),
+            StylePasses { opaque_faces: true, translucent_faces: false, visible_edges: true, through_edges: false }
+        );
+        assert_eq!(
+            StylePasses::new(ShadingStyle::Shaded),
+            StylePasses { opaque_faces: true, translucent_faces: false, visible_edges: false, through_edges: false }
+        );
+        let wireframe = StylePasses::new(ShadingStyle::Wireframe);
+        assert!(!wireframe.opaque_faces, "wireframe draws no triangle");
+        assert!(!wireframe.translucent_faces);
+        assert!(wireframe.visible_edges, "it draws the edge pass alone");
+        assert!(!wireframe.through_edges);
+        let hidden = StylePasses::new(ShadingStyle::ShadedWithHiddenEdges);
+        assert!(hidden.opaque_faces, "hidden edges keep the shaded faces");
+        assert!(hidden.through_edges, "and draw the edges through them");
+        assert!(!hidden.visible_edges);
+        let ghost = StylePasses::new(ShadingStyle::Translucent);
+        assert!(ghost.translucent_faces);
+        assert!(!ghost.opaque_faces, "one face pass, blended, not two");
+        assert!(!ghost.visible_edges && !ghost.through_edges);
+    }
+
+    #[test]
+    fn a_translucent_face_pass_writes_no_depth() {
+        let ghost = face_depth_state(ShadingStyle::Translucent);
+        assert_eq!(ghost.depth_write_enabled, Some(false), "a ghost must not occlude the next object");
+        assert_eq!(ghost.depth_compare, Some(wgpu::CompareFunction::LessEqual));
+
+        let opaque = face_depth_state(ShadingStyle::Shaded);
+        assert_eq!(opaque.depth_write_enabled, Some(true));
+        assert_eq!(opaque.depth_compare, Some(wgpu::CompareFunction::Less));
+    }
+
+    #[test]
+    fn hidden_edges_ignore_the_depth_test_and_visible_ones_are_biased() {
+        assert_eq!(edge_depth_state(true).depth_compare, Some(wgpu::CompareFunction::Always));
+        assert_eq!(edge_depth_state(false).depth_compare, Some(wgpu::CompareFunction::LessEqual));
+        assert_eq!(edge_depth_state(false).bias, EDGE_DEPTH_BIAS);
+        assert_ne!(edge_depth_state(false).bias.constant, 0, "a visible edge is pulled toward the camera");
+        assert_eq!(edge_depth_state(true).depth_write_enabled, Some(false));
+    }
+
+    #[test]
+    fn translucent_drawables_are_ordered_far_to_near() {
+        let centres = [DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.0, 0.0, 10.0), DVec3::new(0.0, 0.0, 5.0)];
+        let mut order = Vec::new();
+        sort_back_to_front(&centres, DVec3::ZERO, &mut order);
+        assert_eq!(order, vec![1, 2, 0]);
+
+        // A second view reuses the vector instead of allocating, and a garbage eye sorts at the origin.
+        sort_back_to_front(&centres, DVec3::new(f64::NAN, 0.0, 0.0), &mut order);
+        assert_eq!(order.len(), centres.len());
+    }
+
+    #[test]
+    fn a_drawable_centre_is_the_world_space_centre_of_its_bounds() {
+        let transform = DMat4::from_translation(DVec3::new(100.0, 20.0, 5.0));
+        let centre = mesh_centre(&triangle(), transform);
+        assert!((centre - DVec3::new(105.0, 25.0, 5.0)).length() < 1.0e-9);
+    }
+
+    #[test]
+    fn edges_become_world_space_lines_and_skip_malformed_entries() {
+        let mut mesh = triangle();
+        mesh.normals.clear();
+        let edges: Arc<[u32]> = Arc::from(vec![0, 1, 0, 9]);
+        let transform = DMat4::from_translation(DVec3::new(100.0, 20.0, 5.0));
+        let drawable = Drawable::new(Id::new(1).expect("id"), Arc::new(mesh), transform, [1.0; 4]).with_edges(edges);
+
+        let vertices = edge_vertices(&[drawable]);
+        assert_eq!(vertices.len(), 2, "the edge naming a missing vertex is skipped");
+        assert_eq!(vertices[0].position, [100.0, 20.0, 5.0]);
+        assert_eq!(vertices[1].position, [110.0, 20.0, 5.0]);
+        assert_eq!(vertices[0].color, EDGE_COLOR);
     }
 
     #[test]

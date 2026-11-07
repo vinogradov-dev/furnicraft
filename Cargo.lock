@@ -1416,6 +1416,7 @@ dependencies = [
  "furnicraft-geom",
  "furnicraft-mesh",
  "furnicraft-model",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -1435,6 +1436,7 @@ dependencies = [
  "egui_extras",
  "furnicraft-engine",
  "furnicraft-model",
+ "furnicraft-scene",
  "furnicraft-testkit",
  "furnicraft-units",
  "serde",

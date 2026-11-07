@@ -10,7 +10,7 @@
 
 use eframe::egui;
 use furnicraft_scene::Projection;
-use furnicraft_ui::display::{OpeningView, ShadingStyle};
+use furnicraft_ui::display::{OpeningView, ShadingStyle, shading_caption, shading_icon, shading_label};
 use furnicraft_ui::{icons, theme};
 
 use crate::view_layout::{LayoutKind, MAX_LEAVES};
@@ -78,8 +78,6 @@ pub(crate) struct ViewCluster {
     pub(crate) navigation: Option<NavigationMode>,
     /// The display style the viewport draws with.
     pub(crate) style: ShadingStyle,
-    /// Whether panel and silhouette edges are drawn (U43 uses the value).
-    pub(crate) edges: bool,
     /// Whether the display-settings popover is open.
     pub(crate) settings_open: bool,
     /// Whether the split-view choices are open.
@@ -99,7 +97,6 @@ impl Default for ViewCluster {
         Self {
             navigation: None,
             style: ShadingStyle::default(),
-            edges: true,
             settings_open: false,
             layout_open: false,
             show_angles: false,
@@ -248,7 +245,9 @@ const fn navigation_caption(mode: NavigationMode) -> &'static str {
 fn style_buttons(ui: &mut egui::Ui, state: &mut ViewCluster) {
     for style in ShadingStyle::ALL {
         let on = state.style == style;
-        if icons::tool_button_labelled(ui, style.icon(), style.caption(), style.label(), true, on).clicked() {
+        if icons::tool_button_labelled(ui, shading_icon(style), shading_caption(style), shading_label(style), true, on)
+            .clicked()
+        {
             state.style = style;
         }
     }

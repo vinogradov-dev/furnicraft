@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U43 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U44 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -40,22 +40,23 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   area into one, two or four views: `view_layout.rs` owns the split tree, its clamped borders and each
   leaf's camera and preset, `ViewportRenderer` draws one target with a scissored pass and a camera slot
   per view, and the orientation widget gained a home button and an optional pitch/yaw/roll readout.
-  U43–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
+  U43 made the five display styles real: `ShadingStyle` is frame data in `crates/scene` (ADR 0070),
+  `crates/mesh` caches one deduplicated edge list per mesh, and the renderer draws biased visible
+  edges, always-tested hidden edges, wireframe edges alone and blended back-to-front translucent
+  faces. U44–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U43 is next: the five display styles become real. Edges are derived data, one deduplicated edge list
-per mesh cached in `crates/mesh` under the same derivation inputs as the mesh, then drawn as a line
-pass with a depth bias because a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges*
-compares always, *translucent* blends without a depth write and orders by centre, *wireframe* draws
-the edge pass alone; `ShadingStyle` moves into `crates/scene` so a frame can be tested without a GPU.
-It needs an ADR.
+U44 is next: a soft contact shadow under every object that touches the floor. The first version is a
+flat ellipse or rounded rectangle derived from the world bound, drawn unlit on the ground plane with
+a radial falloff — no shadow map, no extra pass, no texture — and a toggle in the display settings.
+It is view data, a `SceneFrame` field next to `grid`; a projected shadow map is a later decision.
 
-Order: U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U43 entry, the `line_pipeline` in
-`ViewportRenderer` and the evaluation cache in `crates/mesh`.
+Order: U44 → U45 → U48 → U46 (icons last) → U49. Read the U44 entry, `crates/scene`'s `Grid`, the
+`Bounds` in `scene_build.rs` and the line/face passes in `ViewportRenderer`.
 
 ## Index
 
