@@ -2423,6 +2423,45 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_in_a_view_reaches_the_camera_drawn_under_it() {
+        // The shell tests the pointer against top-left rectangles and the renderer scissors each
+        // view from the same rectangle unchanged. A flip on one side alone would draw one camera
+        // under another view's pointer, so this pins the two together.
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut layout = crate::view_layout::Layout::new(Camera::default());
+        layout.set_kind(crate::view_layout::LayoutKind::Quad);
+        let regions = layout.regions(area);
+        assert_eq!(regions.len(), 4);
+
+        for (leaf, view) in &regions {
+            let region = view_region(area, *view, 1.0);
+            // The pointer at the centre of this view resolves to this leaf.
+            let pointer = view.center();
+            let hits = regions.iter().find(|(_, rect)| rect.contains(pointer)).map(|(leaf, _)| *leaf);
+            assert_eq!(hits, Some(*leaf), "the pointer over {view:?} names that view");
+
+            // And the scissor of this leaf covers the pixel under that pointer.
+            let pixel = (pointer.x as u32, pointer.y as u32);
+            let (x, y, width, height) = (region.x, region.y, region.width, region.height);
+            assert!(
+                (x..x + width).contains(&pixel.0) && (y..y + height).contains(&pixel.1),
+                "the camera under {pointer:?} is drawn inside {x},{y} {width}×{height}"
+            );
+        }
+
+        // The top half of the workspace holds the top row of views, in both coordinate systems.
+        let top_left = egui::pos2(200.0, 100.0);
+        let (leaf, view) = regions
+            .iter()
+            .find(|(_, rect)| rect.contains(top_left))
+            .map(|(leaf, rect)| (*leaf, *rect))
+            .expect("a view under the pointer");
+        let region = view_region(area, view, 1.0);
+        assert_eq!((region.x, region.y), (0, 0), "the top-left view is drawn in the target's top-left");
+        assert_eq!(layout.leaf(leaf).map(|leaf| leaf.camera()), Some(Camera::default()));
+    }
+
+    #[test]
     fn selection_outline_projects_every_stored_point_at_the_stored_transform() {
         let camera = Camera::default();
         let viewport = outline_viewport();

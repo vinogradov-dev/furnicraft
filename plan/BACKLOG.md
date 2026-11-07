@@ -202,6 +202,16 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X9** a split viewport draws each camera in the wrong half: with two views stacked or four in
+  a grid, orbiting, panning or picking in the top view moved the bottom one, and clicking an axis on
+  the orientation widget in one view snapped its neighbour. Expectation: a view draws the camera its
+  own rectangle belongs to, so a gesture and a widget click act on the view under the pointer, in
+  both directions and in all four quadrants. Suspected cause: `ViewRegion::scissor` flipped the
+  region's `y` as though the framebuffer grew upwards, while the pointer was tested against the
+  top-left rectangles the shell paints; a one-view workspace hid it because the whole target is one
+  region and a flip of it is the identity — `6690ae6`
+  `files: crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
+
 - `[x]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
   splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
   any border between two views is draggable with a minimum size of 120 pt per side and a ratio
