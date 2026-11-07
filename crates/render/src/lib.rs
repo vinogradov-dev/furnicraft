@@ -41,13 +41,6 @@ pub const MAX_VIEWS: usize = 4;
 /// A dark ink reads over an oak panel and a white one without changing the shaded faces.
 const EDGE_COLOR: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
 
-/// Depth bias applied to the edge pass so a line on a face wins without z-fighting.
-///
-/// A negative constant pulls the line towards the camera; the slope term compensates a face lying
-/// at a grazing angle. The value is one depth unit at the 32-bit float scale, which is enough to
-/// separate a line from the triangle it lies on and too small to move it through a panel.
-const EDGE_DEPTH_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: -2, slope_scale: -1.0, clamp: 0.0 };
-
 /// The passes one display style turns on, derived without a GPU.
 ///
 /// A style promises passes, not pipeline objects: the renderer turns this into the four pipelines it
@@ -333,13 +326,20 @@ impl ViewportRenderer {
             "fs_mesh_translucent",
             ShadingStyle::Translucent,
         );
-        let line_pipeline =
-            create_line_pipeline(device, &pipeline_layout, &shader, "FurniCraft line pipeline", line_depth_state());
+        let line_pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "FurniCraft line pipeline",
+            "vs_line",
+            line_depth_state(),
+        );
         let edge_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
             "FurniCraft edge pipeline",
+            "vs_edge",
             edge_depth_state(false),
         );
         let hidden_edge_pipeline = create_line_pipeline(
@@ -347,6 +347,7 @@ impl ViewportRenderer {
             &pipeline_layout,
             &shader,
             "FurniCraft hidden edge pipeline",
+            "vs_edge",
             edge_depth_state(true),
         );
 
@@ -685,12 +686,16 @@ fn face_target(blend: Option<wgpu::BlendState>) -> Option<wgpu::ColorTargetState
     Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })
 }
 
-/// One line pipeline with the given depth state: the grid, the visible edges or the hidden edges.
+/// One line pipeline with the given vertex entry and depth state.
+///
+/// The grid and paths use `vs_line`; the edge pass uses `vs_edge`, whose clip-space nudge replaces
+/// the depth bias wgpu cannot apply to a line topology.
 fn create_line_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     label: &str,
+    vertex_entry: &str,
     depth: wgpu::DepthStencilState,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -698,7 +703,7 @@ fn create_line_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_line"),
+            entry_point: Some(vertex_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[Some(vertex_layout())],
         },
@@ -735,18 +740,20 @@ fn line_depth_state() -> wgpu::DepthStencilState {
     }
 }
 
-/// The depth state of the mesh edge pass.
+/// Depth comparison of the edge pass.
+///
+/// wgpu rejects `DepthBiasState` on a line topology, so the nudge toward the camera lives in the
+/// edge vertex shader (`vs_edge` in `scene.wgsl`) and this state only chooses the comparison.
 ///
 /// `through` is *shaded with hidden edges*: the comparison is always satisfied, so every edge shows
-/// regardless of the faces in front of it. Otherwise the bias pulls the line toward the camera, so
-/// it wins against the triangle it lies on without z-fighting.
+/// regardless of the faces in front of it.
 fn edge_depth_state(through: bool) -> wgpu::DepthStencilState {
     wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: Some(false),
         depth_compare: Some(if through { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
         stencil: wgpu::StencilState::default(),
-        bias: if through { wgpu::DepthBiasState::default() } else { EDGE_DEPTH_BIAS },
+        bias: wgpu::DepthBiasState::default(),
     }
 }
 
@@ -1240,12 +1247,13 @@ mod tests {
     }
 
     #[test]
-    fn hidden_edges_ignore_the_depth_test_and_visible_ones_are_biased() {
+    fn hidden_edges_ignore_the_depth_test_and_visible_ones_are_only_compared() {
         assert_eq!(edge_depth_state(true).depth_compare, Some(wgpu::CompareFunction::Always));
         assert_eq!(edge_depth_state(false).depth_compare, Some(wgpu::CompareFunction::LessEqual));
-        assert_eq!(edge_depth_state(false).bias, EDGE_DEPTH_BIAS);
-        assert_ne!(edge_depth_state(false).bias.constant, 0, "a visible edge is pulled toward the camera");
         assert_eq!(edge_depth_state(true).depth_write_enabled, Some(false));
+        assert_eq!(edge_depth_state(false).depth_write_enabled, Some(false));
+        // wgpu rejects DepthBiasState on a line topology; the shader nudges the edge instead.
+        assert_eq!(edge_depth_state(false).bias, wgpu::DepthBiasState::default());
     }
 
     #[test]
