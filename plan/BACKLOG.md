@@ -25,31 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
-  splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
-  any border between two views is draggable with a minimum size of 120 pt per side and a ratio
-  clamped to 0.15–0.85. Each leaf owns its camera and its preset (*Front*, *Top*, *Right*,
-  *Axonometric*), *Home* and *Frame all* act on the view under the pointer or on the active one, and
-  the active view carries a thin accent frame. The layout, the cameras and the active leaf are view
-  state in the shell and never reach the document; a preset writes yaw and pitch only, so switching
-  views never moves the model. The orientation widget gains a *home* button that returns the active
-  leaf to *Axonometric*, and an optional readout under it — `Pitch 32.1° · Yaw -51.7° · Roll 0.0° ·
-  Ortho` — drawn only when the switch U40 added to the display-settings popover is on; the numbers
-  come from `Camera::pitch`/`yaw` and `Projection`, formatted through `furnicraft-units`, so no new
-  document data and no second source of truth. The renderer draws one offscreen target and one view
-  per pass with a scissored region and a uniform slot per view, rather than one texture per view, so
-  memory does not grow with the grid and egui keeps a single texture id. Tests: a split and a join
-  round-trip; a drag clamps at both ends and never collapses a view; a preset produces the expected
-  orthographic basis; four views produce four scissor rectangles that tile the area exactly; the home
-  button restores the axonometric preset; the readout is hidden when its switch is off and names
-  `Ortho` or `Persp` in step with the projection.
-  Session notes: `viewport()` owns the single target and calls `resize` +
-  `update_egui_texture_from_wgpu_texture`. A split view needs a scissored pass per leaf into the same
-  target (`set_scissor_rect`), and `ViewportRenderer` writes one `CameraUniform` per
-  `render_with_lighting`, so a slot array with a dynamic offset keeps one buffer. Respect ADR 0049 per
-  leaf: an authored camera pins its own projection. Reuse `scene_build::home_camera` for a leaf's fit.
-  `files: apps/furnicraft/src, crates/render/src/lib.rs, crates/scene/src/lib.rs`
-
 - `[ ]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
   *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
   edge list per mesh, cached in `crates/mesh` against the same derivation inputs as the mesh itself —
@@ -226,6 +201,32 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
+  splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
+  any border between two views is draggable with a minimum size of 120 pt per side and a ratio
+  clamped to 0.15–0.85. Each leaf owns its camera and its preset (*Front*, *Top*, *Right*,
+  *Axonometric*), *Home* and *Frame all* act on the view under the pointer or on the active one, and
+  the active view carries a thin accent frame. The layout, the cameras and the active leaf are view
+  state in the shell and never reach the document; a preset writes yaw and pitch only, so switching
+  views never moves the model. The orientation widget gains a *home* button that returns the active
+  leaf to *Axonometric*, and an optional readout under it — `Pitch 32.1° · Yaw -51.7° · Roll 0.0° ·
+  Ortho` — drawn only when the switch U40 added to the display-settings popover is on; the numbers
+  come from `Camera::pitch`/`yaw` and `Projection`, formatted through `furnicraft-units`, so no new
+  document data and no second source of truth. The renderer draws one offscreen target and one view
+  per pass with a scissored region and a uniform slot per view, rather than one texture per view, so
+  memory does not grow with the grid and egui keeps a single texture id. Tests: a split and a join
+  round-trip; a drag clamps at both ends and never collapses a view; a preset produces the expected
+  orthographic basis; four views produce four scissor rectangles that tile the area exactly; the home
+  button restores the axonometric preset; the readout is hidden when its switch is off and names
+  `Ortho` or `Persp` in step with the projection.
+  Session notes: `viewport()` owns the single target and calls `resize` +
+  `update_egui_texture_from_wgpu_texture`. A split view needs a scissored pass per leaf into the same
+  target (`set_scissor_rect`), and `ViewportRenderer` writes one `CameraUniform` per
+  `render_with_lighting`, so a slot array with a dynamic offset keeps one buffer. Respect ADR 0049 per
+  leaf: an authored camera pins its own projection. Reuse `scene_build::home_camera` for a leaf's fit —
+  `502f870`
+  `files: apps/furnicraft/src, crates/render/src/lib.rs, crates/scene/src/lib.rs`
 
 - `[x]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
   listing a command's label, its id and whether it is enabled for the current session; the chosen

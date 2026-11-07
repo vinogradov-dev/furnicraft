@@ -140,6 +140,26 @@ impl Degrees {
         Some(Self(millidegrees.round() as i64))
     }
 
+    /// Formats the angle with exactly `decimals` fractional digits, rounding to that place.
+    ///
+    /// A readout that shows three angles in a row keeps one width only with a fixed number of
+    /// digits; [`Degrees`]'s own `Display` trims trailing zeros instead, which suits a field and
+    /// not a column. `decimals` above three adds no precision: the value is stored in millidegrees.
+    pub fn format_fixed(self, decimals: u8) -> String {
+        let decimals = decimals.min(3);
+        let step = 10_i64.pow(u32::from(3 - decimals));
+        let rounded = (self.0 + self.0.signum() * step / 2) / step * step;
+        let sign = if rounded < 0 { "-" } else { "" };
+        let absolute = rounded.unsigned_abs();
+        let degrees = absolute / 1_000;
+        if decimals == 0 {
+            return format!("{sign}{degrees}°");
+        }
+        let mut fraction = format!("{:03}", absolute % 1_000);
+        fraction.truncate(usize::from(decimals));
+        format!("{sign}{degrees}.{fraction}°")
+    }
+
     /// Parses an angle from decimal degrees, with an optional `°` or `deg` suffix.
     ///
     /// The parser works on digits, not floats, so `30.5` becomes exactly 30 500 millidegrees and a
@@ -395,6 +415,19 @@ mod tests {
         assert_eq!(Degrees::from_millidegrees(30_500).to_string(), "30.5°");
         assert_eq!(Degrees::from_millidegrees(-1).to_string(), "-0.001°");
         assert_eq!(Degrees::ZERO.to_string(), "0°");
+    }
+
+    #[test]
+    fn a_fixed_width_readout_keeps_its_decimal_places() {
+        assert_eq!(Degrees::from_millidegrees(32_100).format_fixed(1), "32.1°");
+        assert_eq!(Degrees::from_millidegrees(32_000).format_fixed(1), "32.0°");
+        assert_eq!(Degrees::from_millidegrees(-51_700).format_fixed(1), "-51.7°");
+        assert_eq!(Degrees::from_millidegrees(0).format_fixed(1), "0.0°");
+        assert_eq!(Degrees::from_millidegrees(32_140).format_fixed(0), "32°");
+        assert_eq!(Degrees::from_millidegrees(32_160).format_fixed(0), "32°", "the value is 32.16°, so it rounds down");
+        assert_eq!(Degrees::from_millidegrees(32_540).format_fixed(0), "33°");
+        assert_eq!(Degrees::from_millidegrees(32_123).format_fixed(2), "32.12°");
+        assert_eq!(Degrees::from_millidegrees(32_129).format_fixed(9), "32.129°", "millidegrees cap the precision");
     }
 
     #[test]

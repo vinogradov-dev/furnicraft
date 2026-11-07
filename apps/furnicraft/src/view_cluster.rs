@@ -1,16 +1,19 @@
-//! The floating viewport cluster: navigation, framing, display style and display settings.
+//! The floating viewport cluster: navigation, framing, display style, layout and display settings.
 //!
 //! The cluster floats over the scene instead of living in a bar, so the viewport starts at the model
-//! and not at a wall of labels (U40). It is anchored to the bottom centre of the central panel and
-//! follows that panel when a side panel folds or resizes; nothing here is document data. The shell
-//! owns the camera, the gizmos and the drawing tools, so the cluster only reports the actions it
-//! cannot perform itself — framing, the projection toggle and the layout entry. Its own settings,
-//! the armed navigation mode and the display style are view state on [`ViewCluster`].
+//! and not at a wall of labels (U40). It is anchored to the bottom centre of the viewport it belongs
+//! to and follows that view when a side panel folds or the workspace splits; nothing here is
+//! document data. The shell owns the cameras, the gizmos and the drawing tools, so the cluster only
+//! reports the actions it cannot perform itself — framing, the projection toggle and the layout
+//! choice. Its own settings, the armed navigation mode and the display style are view state on
+//! [`ViewCluster`].
 
 use eframe::egui;
 use furnicraft_scene::Projection;
-use furnicraft_ui::display::ShadingStyle;
+use furnicraft_ui::display::{OpeningView, ShadingStyle};
 use furnicraft_ui::{icons, theme};
+
+use crate::view_layout::{LayoutKind, MAX_LEAVES};
 
 /// The navigation gesture a primary-button drag performs while it is armed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +82,8 @@ pub(crate) struct ViewCluster {
     pub(crate) edges: bool,
     /// Whether the display-settings popover is open.
     pub(crate) settings_open: bool,
+    /// Whether the split-view choices are open.
+    pub(crate) layout_open: bool,
     /// Whether the orientation widget draws the pitch/yaw/roll and projection readout (U42).
     pub(crate) show_angles: bool,
     /// Grid strength, 0–100.
@@ -96,6 +101,7 @@ impl Default for ViewCluster {
             style: ShadingStyle::default(),
             edges: true,
             settings_open: false,
+            layout_open: false,
             show_angles: false,
             grid_strength: 60.0,
             edge_strength: 70.0,
@@ -116,23 +122,29 @@ impl ViewCluster {
 pub(crate) struct ClusterView {
     /// Whether the viewport owns its navigation and projection.
     pub(crate) owns_view: bool,
-    /// The projection the viewport is drawing with.
+    /// The projection the target view is drawing with.
     pub(crate) projection: Projection,
     /// The work plane the pointer maps onto, for the settings popover.
     pub(crate) work_plane: &'static str,
+    /// The layout the workspace is in.
+    pub(crate) layout: LayoutKind,
+    /// The preset the target view is in, if it has not been orbited since.
+    pub(crate) preset: Option<OpeningView>,
 }
 
 /// What the cluster asks the shell to do; everything else it changes on its own state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClusterAction {
-    /// Frame the whole scene.
+    /// Frame the whole scene in the target view.
     FrameAll,
-    /// Return to the home view.
+    /// Return the target view to the axonometric home view.
     Home,
-    /// Switch between perspective and orthographic.
+    /// Switch the target view between perspective and orthographic.
     ToggleProjection,
-    /// Open the split-view layout (U42).
-    Layout,
+    /// Divide the workspace into this layout.
+    SetLayout(LayoutKind),
+    /// Point the target view along a standard preset.
+    SetPreset(OpeningView),
 }
 
 /// The point the cluster's bottom centre is pinned to: the bottom centre of `viewport`, raised by
@@ -180,18 +192,29 @@ pub(crate) fn show(
                     theme::divider(ui);
                     style_buttons(ui, state);
                     theme::divider(ui);
-                    if icons::tool_button(ui, icons::view::LAYOUT, "Layout", None, true, false).clicked() {
-                        action = Some(ClusterAction::Layout);
+                    let open = state.layout_open;
+                    if icons::tool_button(ui, icons::view::LAYOUT, "Layout", None, true, open).clicked() {
+                        state.layout_open = !state.layout_open;
+                        state.settings_open = false;
                     }
                     let open = state.settings_open;
                     if icons::tool_button(ui, icons::view::SLIDERS, "Display settings", None, true, open).clicked() {
                         state.settings_open = !state.settings_open;
+                        state.layout_open = false;
                     }
                 });
             });
         });
     let rect = response.response.rect;
 
+    if state.layout_open {
+        if ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            state.layout_open = false;
+        } else if let Some(asked) = layout_popover(ui, viewport, rect, view) {
+            state.layout_open = false;
+            action = Some(asked);
+        }
+    }
     if state.settings_open {
         if ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             state.settings_open = false;
@@ -231,6 +254,61 @@ fn style_buttons(ui: &mut egui::Ui, state: &mut ViewCluster) {
     }
 }
 
+/// The split-view choices above the cluster: one view, two vertical, two horizontal and four.
+///
+/// The active layout draws pressed, so the bar and the workspace agree without a second label. A
+/// choice is always present — the button that returns to one view is the same row — so a border is
+/// never the only way out of a split.
+fn layout_popover(
+    ui: &mut egui::Ui,
+    viewport: egui::Rect,
+    cluster: egui::Rect,
+    view: ClusterView,
+) -> Option<ClusterAction> {
+    let mut action = None;
+    let anchor = egui::pos2(cluster.center().x, cluster.top() - theme::STEP);
+    egui::Area::new(egui::Id::unique("view_cluster_layout"))
+        .order(egui::Order::Middle)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .fixed_pos(anchor)
+        .constrain_to(viewport)
+        .show(ui.ctx(), |ui| {
+            let frame = egui::Frame::new()
+                .fill(theme::floating(ui))
+                .stroke(egui::Stroke::new(1.0, theme::line(ui)))
+                .corner_radius(egui::CornerRadius::same(theme::RADIUS))
+                .inner_margin(egui::Margin::same(10));
+            frame.show(ui, |ui| {
+                ui.set_width(220.0);
+                ui.label(egui::RichText::new("Layout").strong());
+                for kind in LayoutKind::ALL {
+                    let on = view.layout == kind;
+                    if ui.add(egui::Button::new(kind.label()).selected(on)).clicked() {
+                        action = Some(ClusterAction::SetLayout(kind));
+                    }
+                }
+                ui.separator();
+                ui.label(egui::RichText::new("View preset").strong());
+                for preset in OpeningView::ALL {
+                    let on = view.preset == Some(preset);
+                    if ui.add(egui::Button::new(preset.label()).selected(on)).clicked() {
+                        action = Some(ClusterAction::SetPreset(preset));
+                    }
+                }
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} of {MAX_LEAVES} views · drag a border to resize",
+                        view.layout.leaves()
+                    ))
+                    .small()
+                    .color(theme::text_dim(ui)),
+                );
+            });
+        });
+    action
+}
+
 /// The display-settings popover above the cluster: the angle switch, the projection and three
 /// strengths.
 fn settings_popover(
@@ -258,9 +336,9 @@ fn settings_popover(
                 ui.label(egui::RichText::new("Display").strong());
                 let angles = ui.checkbox(&mut state.show_angles, "Show projection and angles");
                 angles.on_hover_text(if state.angles_visible() {
-                    "The orientation readout is drawn under the cube (U42)"
+                    "The orientation readout is drawn under the cube"
                 } else {
-                    "Draw the pitch, yaw, roll and the projection under the cube (U42)"
+                    "Draw the pitch, yaw, roll and the projection under the cube"
                 });
                 let (icon, hint) = projection_button(view.projection);
                 let toggle = icons::tool_button(ui, icon, hint, Some("O"), view.owns_view, false);
