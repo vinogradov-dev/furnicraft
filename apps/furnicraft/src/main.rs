@@ -28,6 +28,7 @@ mod settings_store;
 mod translate_gizmo;
 mod vertex_gizmo;
 mod view_cluster;
+mod view_layout;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -62,6 +63,7 @@ use crate::settings_store::SettingsStore;
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
 use crate::view_cluster::{ClusterAction, ClusterView, NavigationMode, ViewCluster};
+use crate::view_layout::{Layout, LayoutKind};
 
 /// Orbit sensitivity in radians per point dragged.
 const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
@@ -111,9 +113,11 @@ struct FurniCraftApp {
     /// the editing did not touch.
     cache: EvaluationCache,
     scene: SceneFrame,
-    /// The navigable view camera. The rendered camera in `scene` is this one unless an authored
-    /// camera is active, so orbit, pan and zoom never overwrite authored camera data.
-    view_camera: Camera,
+    /// The workspace's views: their cameras, presets and the tree that lays them out. View state in
+    /// the shell; the document never sees it (ADR 0029).
+    layout: Layout,
+    /// The camera a fresh view opens with, framed on the scene from the chosen direction. *Frame all*
+    /// puts every view back here.
     home_camera: Camera,
     scene_revision: Revision,
     renderer: ViewportRenderer,
@@ -156,6 +160,11 @@ struct FurniCraftApp {
     home_open: bool,
     /// The command palette and its last-used order; session state, never document data.
     palette: Palette,
+    /// The pointer in viewport points from the previous frame, so an action outside the viewport
+    /// (the cluster, the ribbon) can still name the view it belongs to.
+    pointer_position: Option<egui::Pos2>,
+    /// Whether a view border owns the primary button until it is released.
+    divider_dragging: bool,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
     settings_notice: Option<String>,
 }
@@ -173,10 +182,13 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let node_count = session.project().query(&NodeQuery::any()).len();
         let home_camera = opening_camera(evaluated.bounds, settings.viewport.opening_view)?;
-        let view_camera = home_camera;
+        let mut layout = Layout::new(home_camera);
+        if let Some(leaf) = layout.leaf_mut(layout.active()) {
+            leaf.apply_preset(settings.viewport.opening_view);
+        }
         let mut scene = evaluated.frame;
         apply_viewport_defaults(&mut scene.grid, &settings.viewport);
-        scene.camera = scene_build::scene_camera(session.project(), view_camera);
+        scene.camera = scene_build::scene_camera(session.project(), layout.active_camera());
 
         let render_state =
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
@@ -197,7 +209,7 @@ impl FurniCraftApp {
             kernel,
             cache,
             scene,
-            view_camera,
+            layout,
             home_camera,
             renderer,
             render_state,
@@ -224,6 +236,8 @@ impl FurniCraftApp {
             settings_open: false,
             home_open: false,
             palette: Palette::new(),
+            pointer_position: None,
+            divider_dragging: false,
             settings_notice: loaded.notice,
         })
     }
@@ -238,17 +252,22 @@ impl FurniCraftApp {
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let home_camera = opening_camera(evaluated.bounds, self.settings.viewport.opening_view)?;
-        let view_camera = home_camera;
         let mut scene = evaluated.frame;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
-        scene.camera = scene_build::scene_camera(session.project(), view_camera);
+
+        // A new document keeps the split the user arranged: only the cameras are refitted, so a
+        // four-view workspace opens the new scene framed in every view.
+        self.layout.reset_cameras(home_camera);
+        if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
+            leaf.apply_preset(self.settings.viewport.opening_view);
+        }
+        scene.camera = scene_build::scene_camera(session.project(), self.layout.active_camera());
 
         self.session = session;
         self.node_count = self.session.project().query(&NodeQuery::any()).len();
         self.kernel = kernel;
         self.cache = cache;
         self.scene = scene;
-        self.view_camera = view_camera;
         self.home_camera = home_camera;
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
@@ -375,7 +394,7 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
-        scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
+        scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
         self.scene = scene;
         self.scene_revision = revision;
         self.upload_scene()
@@ -548,9 +567,36 @@ impl FurniCraftApp {
         self.sync_scene()
     }
 
+    /// Refits every view on the scene, keeping the split.
     fn reset_view(&mut self) {
-        self.view_camera = self.home_camera;
-        self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
+        self.layout.reset_cameras(self.home_camera);
+        if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
+            leaf.apply_preset(self.settings.viewport.opening_view);
+        }
+        self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
+    }
+
+    /// Returns one view to *Axonometric* without refitting the scene.
+    ///
+    /// The preset writes yaw and pitch only, so the model does not move and the view keeps its
+    /// target, its distance and its projection (ADR 0049).
+    fn home_view(&mut self, leaf: crate::view_layout::LeafId) {
+        if let Some(leaf) = self.layout.leaf_mut(leaf) {
+            leaf.home();
+        }
+        self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
+    }
+
+    /// The view the pointer is over, or the active one.
+    ///
+    /// *Home* and *Frame all* act on the view under the pointer, because the cluster floats over the
+    /// workspace and the pointer names the view the user means; without a pointer over a view they
+    /// act on the active one.
+    fn pointer_leaf(&self, leaf_rects: &[(crate::view_layout::LeafId, egui::Rect)]) -> crate::view_layout::LeafId {
+        let pointer = self.pointer_position;
+        pointer
+            .and_then(|pointer| leaf_rects.iter().find(|(_, rect)| rect.contains(pointer)).map(|(leaf, _)| *leaf))
+            .unwrap_or(self.layout.active())
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui) {
@@ -561,15 +607,60 @@ impl FurniCraftApp {
         if available.width() < 1.0 || available.height() < 1.0 {
             return;
         }
-        let (rect, response) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
-        if !ui.is_rect_visible(rect) {
+        let (area, response) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
+        if !ui.is_rect_visible(area) {
             return;
         }
+        self.pointer_position = ui.input(|input| input.pointer.hover_pos());
+
+        // The viewport is the whole central area; the layout divides it into views. Every view has
+        // its own camera and every border is draggable, so the pointer names the view an action
+        // belongs to: a press activates it, and a press on a border starts a resize instead.
+        let regions = self.layout.regions(area);
+        let pointer = self.pointer_position;
+        let hovered =
+            pointer.and_then(|pointer| regions.iter().find(|(_, rect)| rect.contains(pointer)).map(|(leaf, _)| *leaf));
+        let pressed = ui.input(|input| input.pointer.primary_pressed());
+        if pressed && let Some(pointer) = response.interact_pointer_pos() {
+            if self.layout.begin_drag(area, pointer) {
+                // A border drag owns the primary button until it is released; nothing else in the
+                // workspace reads the pointer meanwhile, so a resize cannot select an object or
+                // move an axis under the user's hand.
+                self.divider_dragging = true;
+            } else if let Some(leaf) = hovered {
+                self.layout.set_active(leaf);
+            }
+        }
+        if self.divider_dragging {
+            let delta = response.drag_delta();
+            self.layout.drag_by(area, delta);
+            if !ui.input(|input| input.pointer.primary_down()) {
+                self.layout.end_drag();
+                self.divider_dragging = false;
+            }
+            if let Some(axis) = self.layout.dragging_axis() {
+                ui.ctx().set_cursor_icon(axis.cursor());
+            }
+            ui.ctx().request_repaint();
+        } else if let Some(pointer) = self.pointer_position
+            && let Some(axis) = self.layout.border_at(area, pointer)
+        {
+            ui.ctx().set_cursor_icon(axis.cursor());
+        }
+
+        // The view this frame's actions belong to: the one under the pointer, or the active one.
+        let target_leaf = hovered.unwrap_or_else(|| self.layout.active());
+        let target_rect = regions.iter().find(|(leaf, _)| *leaf == target_leaf).map(|(_, rect)| *rect).unwrap_or(area);
+        let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or_default();
+        // The scene's camera is the one the pointer view draws with; an authored camera wins over
+        // both, exactly as it does for a single view (ADR 0049).
+        self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
+        let rect = target_rect;
         let gizmo_rect = gizmo::widget_rect(rect);
 
         let points_per_pixel = ui.ctx().pixels_per_point();
-        let width = (rect.width() * points_per_pixel).round().max(1.0) as u32;
-        let height = (rect.height() * points_per_pixel).round().max(1.0) as u32;
+        let width = (area.width() * points_per_pixel).round().max(1.0) as u32;
+        let height = (area.height() * points_per_pixel).round().max(1.0) as u32;
         let device = self.render_state.device.clone();
         if self.renderer.resize(&device, width, height) {
             self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
@@ -582,12 +673,15 @@ impl FurniCraftApp {
 
         let pointer_over_widget =
             response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
+        // A border drag owns the pointer: the tools, the gizmos and picking all stay out of its way
+        // until it is released, so a resize can never select an object or move an axis.
+        let interactive = !self.divider_dragging;
         // A contour edit owns the pointer: the object gizmo and picking would fight the corner drag.
-        let contour_editing = self.editor.contour_edit().is_some();
+        let contour_editing = interactive && self.editor.contour_edit().is_some();
         // A drawing tool owns it too: the left button places points, not selections.
-        let drawing = self.editor.drawing().is_some();
+        let drawing = interactive && self.editor.drawing().is_some();
         // An armed primitive owns the next click: it places a cube, it does not select.
-        let placing = self.editor.pending_primitive().is_some();
+        let placing = interactive && self.editor.pending_primitive().is_some();
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = self.cluster.navigation;
@@ -747,12 +841,17 @@ impl FurniCraftApp {
         };
 
         // Looking through an authored camera pins the view: navigation would move a camera the
-        // document owns, and a command is the only way to edit document data.
+        // document owns, and a command is the only way to edit document data. The gesture acts on
+        // the view under the pointer, so an orbit in one view leaves its neighbour alone.
         let navigable = viewport_owns_view(self.session.project());
+        let navigation_rect = target_rect;
+        let navigable = navigable && interactive;
         if navigable && response.hovered() && !dragging {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-            if scroll != 0.0 {
-                self.view_camera.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
+            if scroll != 0.0
+                && let Some(leaf) = self.layout.leaf_mut(target_leaf)
+            {
+                leaf.zoom((-f64::from(scroll) * ZOOM_PER_SCROLL_POINT).exp());
             }
         }
 
@@ -761,14 +860,23 @@ impl FurniCraftApp {
         // neither updated nor painted then, so the drag cannot move an axis under the user's hand.
         if navigable && !dragging && navigating && response.dragged_by(egui::PointerButton::Primary) {
             match navigation {
-                Some(NavigationMode::Orbit) => self
-                    .view_camera
-                    .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT),
+                Some(NavigationMode::Orbit) => {
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.orbit(
+                            -f64::from(drag.x) * ORBIT_RADIANS_PER_POINT,
+                            -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT,
+                        );
+                    }
+                }
                 Some(NavigationMode::Pan) => {
-                    self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()))
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(navigation_rect.height()));
+                    }
                 }
                 Some(NavigationMode::Zoom) => {
-                    self.view_camera.zoom((-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp());
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.zoom((-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp());
+                    }
                 }
                 None => {}
             }
@@ -777,20 +885,28 @@ impl FurniCraftApp {
         // pointer and change the drag parameter under the user's hand.
         if navigable && !dragging && response.dragged_by(egui::PointerButton::Middle) {
             let modifiers = ui.input(|input| input.modifiers);
-            if modifiers.shift {
-                self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
-            } else if modifiers.ctrl {
-                let factor = (-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp();
-                self.view_camera.zoom(factor);
-            } else {
-                self.view_camera
-                    .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT);
+            if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                if modifiers.shift {
+                    leaf.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(navigation_rect.height()));
+                } else if modifiers.ctrl {
+                    leaf.zoom((-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp());
+                } else {
+                    leaf.orbit(
+                        -f64::from(drag.x) * ORBIT_RADIANS_PER_POINT,
+                        -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT,
+                    );
+                }
             }
-        } else if navigable && !dragging && response.dragged_by(egui::PointerButton::Secondary) {
-            self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()));
+        } else if navigable
+            && !dragging
+            && response.dragged_by(egui::PointerButton::Secondary)
+            && let Some(leaf) = self.layout.leaf_mut(target_leaf)
+        {
+            leaf.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(navigation_rect.height()));
         }
-        // The composite camera follows the navigable view unless an authored camera wins.
-        self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
+        // The composite camera follows the navigated view unless an authored camera wins.
+        let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
+        self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
 
         if contour_editing {
             ui.ctx().set_cursor_icon(self.contour_gizmo.cursor());
@@ -809,13 +925,14 @@ impl FurniCraftApp {
         let pointer_over_gizmo = response
             .interact_pointer_pos()
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
-        let clicked = if mesh_object.is_some() {
-            // A double-click would otherwise toggle the same vertex twice; the first click of the
-            // pair already selected it.
-            response.clicked() && !response.double_clicked()
-        } else {
-            response.clicked() || response.double_clicked()
-        };
+        let clicked = interactive
+            && if mesh_object.is_some() {
+                // A double-click would otherwise toggle the same vertex twice; the first click of
+                // the pair already selected it.
+                response.clicked() && !response.double_clicked()
+            } else {
+                response.clicked() || response.double_clicked()
+            };
         if !contour_editing
             && !drawing
             && !placing
@@ -885,23 +1002,46 @@ impl FurniCraftApp {
             scene_build::authored_lighting_with(self.session.project(), &previewed)
                 .unwrap_or_else(|| self.scene.lighting.clone())
         };
-        self.renderer.render_with_lighting(&self.render_state.device, &self.render_state.queue, &self.scene, &lighting);
-        ui.painter().with_clip_rect(rect).image(
+        // One pass per view into the same target: the camera comes from the view, the region from
+        // its rectangle, and the aspect ratio from the region, so a narrow view is not stretched
+        // by the workspace's shape.
+        let views: Vec<(Camera, furnicraft_render::ViewRegion)> = regions
+            .iter()
+            .filter_map(|(leaf, view_rect)| {
+                let leaf = self.layout.leaf(*leaf)?;
+                let camera = scene_build::scene_camera(self.session.project(), leaf.camera());
+                Some((camera, view_region(area, *view_rect, points_per_pixel)))
+            })
+            .collect();
+        self.renderer.render_views(&self.render_state.device, &self.render_state.queue, &self.scene, &lighting, &views);
+        ui.painter().with_clip_rect(area).image(
             self.texture_id,
-            rect,
+            area,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        scene_gizmo::paint(
-            ui,
-            rect,
-            self.scene.camera,
-            self.session.project(),
-            self.editor.selected_nodes(),
-            &previewed,
-        );
-        self.paint_mesh_selection(ui, rect);
-        self.paint_selection_outline(ui, rect);
+        // The overlaid feedback is drawn per view, with that view's camera and rectangle, so a
+        // camera glyph or a selection outline lands where its own pass drew the model.
+        for (leaf, view_rect) in &regions {
+            let active = *leaf == self.layout.active();
+            let camera = self
+                .layout
+                .leaf(*leaf)
+                .map(|leaf| scene_build::scene_camera(self.session.project(), leaf.camera()))
+                .unwrap_or(self.scene.camera);
+            scene_gizmo::paint(
+                ui,
+                *view_rect,
+                camera,
+                self.session.project(),
+                self.editor.selected_nodes(),
+                &previewed,
+            );
+            if active {
+                self.paint_mesh_selection(ui, *view_rect);
+                self.paint_selection_outline(ui, *view_rect);
+            }
+        }
         let paint_target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
@@ -929,24 +1069,95 @@ impl FurniCraftApp {
                 TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
             }
         }
+        // The widget belongs to the view under the pointer, so clicking an axis snaps that view and
+        // the readout names the camera it draws with.
         if self.session.project().active_camera().is_none()
-            && let Some(direction) = gizmo::show(ui, rect, self.view_camera)
+            && let Some(action) = gizmo::show(ui, rect, target_camera, self.cluster.angles_visible())
         {
-            self.view_camera.look_from(direction);
-            self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
+            match action {
+                gizmo::GizmoAction::LookFrom(direction) => {
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.look_from(direction);
+                    }
+                }
+                gizmo::GizmoAction::Home => self.home_view(target_leaf),
+            }
+            let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
+            self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
         }
 
         // The cluster floats over the drawn viewport, so it is the last thing painted inside it.
         let view = ClusterView {
             owns_view: viewport_owns_view(self.session.project()),
             projection: self.scene.camera.projection(),
-            work_plane: WorkPlane::from_camera(self.view_camera).label(),
+            work_plane: WorkPlane::from_camera(target_camera).label(),
+            layout: self.layout.kind(),
+            preset: self.layout.preset(target_leaf),
         };
-        match view_cluster::show(ui, rect, &mut self.cluster, view) {
-            Some(ClusterAction::FrameAll | ClusterAction::Home) => self.reset_view(),
-            Some(ClusterAction::ToggleProjection) => self.view_camera.toggle_projection(),
-            Some(ClusterAction::Layout) => self.last_error = Some("Split views are not built yet.".to_owned()),
+        match view_cluster::show(ui, area, &mut self.cluster, view) {
+            Some(ClusterAction::FrameAll) => self.reset_view(),
+            // Home acts on the view the cluster hovers over, or the active one when the pointer is
+            // not over a view.
+            Some(ClusterAction::Home) => {
+                let leaf = self.pointer_leaf(&regions);
+                self.home_view(leaf);
+            }
+            Some(ClusterAction::ToggleProjection) => {
+                if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                    leaf.toggle_projection();
+                }
+                let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
+                self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
+            }
+            Some(ClusterAction::SetLayout(kind)) => self.set_layout(kind),
+            Some(ClusterAction::SetPreset(preset)) => {
+                if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                    leaf.apply_preset(preset);
+                }
+                let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
+                self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
+            }
             None => {}
+        }
+        self.paint_view_frames(ui, area, &regions);
+    }
+
+    /// Divides the workspace into `kind`, keeping the cameras the views already have.
+    fn set_layout(&mut self, kind: LayoutKind) {
+        self.layout.set_kind(kind);
+        self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
+    }
+
+    /// Paints the accent frame of the active view and the borders between views.
+    ///
+    /// The frame is a thin stroke on the active leaf's rectangle, drawn after the cluster so it
+    /// cannot be lost behind a widget; the borders are hairlines on the shared edges and are the
+    /// only visible part of the layout, so a split reads as a surface rather than as clipped views.
+    fn paint_view_frames(&self, ui: &egui::Ui, area: egui::Rect, regions: &[(crate::view_layout::LeafId, egui::Rect)]) {
+        let painter = ui.painter().with_clip_rect(area);
+        let line = theme::line(ui);
+        for divider in self.layout.dividers(area) {
+            let (start, end) = match divider.axis {
+                crate::view_layout::SplitAxis::Columns => {
+                    let x = divider.first.right();
+                    (egui::pos2(x, divider.rect.top()), egui::pos2(x, divider.rect.bottom()))
+                }
+                crate::view_layout::SplitAxis::Rows => {
+                    let y = divider.first.bottom();
+                    (egui::pos2(divider.rect.left(), y), egui::pos2(divider.rect.right(), y))
+                }
+            };
+            painter.line_segment([start, end], egui::Stroke::new(1.0, line));
+        }
+        if regions.len() > 1
+            && let Some((_, active)) = regions.iter().find(|(leaf, _)| *leaf == self.layout.active())
+        {
+            painter.rect_stroke(
+                active.shrink(0.5),
+                egui::CornerRadius::ZERO,
+                egui::Stroke::new(1.0, theme::accent(ui)),
+                egui::StrokeKind::Inside,
+            );
         }
     }
 
@@ -1075,7 +1286,10 @@ impl FurniCraftApp {
     /// status bar uses. It sits between the header and the side panels, so it spans the window.
     fn ribbon(&mut self, ui: &mut egui::Ui) {
         let view = furnicraft_ui::RibbonView {
-            perspective: matches!(self.view_camera.projection(), Projection::Perspective { .. }),
+            perspective: matches!(
+                scene_build::scene_camera(self.session.project(), self.layout.active_camera()).projection(),
+                Projection::Perspective { .. }
+            ),
             owns_view: viewport_owns_view(self.session.project()),
             grid: self.draw_gizmo.grid(),
         };
@@ -1103,7 +1317,13 @@ impl FurniCraftApp {
             }
             match outcome.view {
                 Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
-                Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => self.view_camera.toggle_projection(),
+                Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => {
+                    if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
+                        leaf.toggle_projection();
+                    }
+                    let camera = self.layout.active_camera();
+                    self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
+                }
                 Some(furnicraft_ui::RibbonViewAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
                 None => {}
             }
@@ -1709,6 +1929,26 @@ fn apply_viewport_defaults(grid: &mut furnicraft_scene::Grid, viewport: &Viewpor
     grid.spacing_mm = f64::from(viewport.grid_step_mm.max(1));
 }
 
+/// The physical pixels one view's rectangle covers inside the workspace.
+///
+/// The view rect is a point rectangle in the central panel; the target starts at the panel's
+/// top-left. Both edges are rounded separately and the size is the difference, so two neighbours
+/// that share an edge in points also share exactly one edge in pixels instead of overlapping or
+/// leaving a seam. A view narrower than half a pixel still reaches one pixel.
+fn view_region(area: egui::Rect, view: egui::Rect, points_per_pixel: f32) -> furnicraft_render::ViewRegion {
+    let scale = |value: f32| (value * points_per_pixel).round().max(0.0) as u32;
+    let left = scale(view.left() - area.left());
+    let top = scale(view.top() - area.top());
+    let right = scale(view.right() - area.left());
+    let bottom = scale(view.bottom() - area.top());
+    furnicraft_render::ViewRegion {
+        x: left,
+        y: top,
+        width: right.saturating_sub(left).max(1),
+        height: bottom.saturating_sub(top).max(1),
+    }
+}
+
 /// The global shortcuts, read in one pass and consumed so one key does one thing.
 ///
 /// The list is the one the Settings window draws; a key added there has to be added here, and a key
@@ -1844,7 +2084,11 @@ impl eframe::App for FurniCraftApp {
                 self.reset_view();
             }
             if shortcuts.projection {
-                self.view_camera.toggle_projection();
+                if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
+                    leaf.toggle_projection();
+                }
+                let camera = self.layout.active_camera();
+                self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
             }
         }
         let dirty = self.session.is_dirty();
@@ -2114,6 +2358,63 @@ mod tests {
 
     fn selection_chain(points: Vec<DVec3>) -> Polyline {
         Polyline::new(Id::new(7).expect("id"), Arc::from(points), DMat4::IDENTITY, SELECTION_LINE_COLOR)
+    }
+
+    #[test]
+    fn one_view_region_covers_the_whole_target_and_four_tile_it() {
+        let area = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(1000.0, 600.0));
+        let whole = view_region(area, area, 1.0);
+        assert_eq!(whole, furnicraft_render::ViewRegion { x: 0, y: 0, width: 1000, height: 600 });
+
+        // Two columns and two rows at the default ratio, converted at 2 physical pixels per point.
+        let half = egui::vec2(500.0, 300.0);
+        let quadrants = [
+            egui::Rect::from_min_size(area.min, half),
+            egui::Rect::from_min_size(area.min + egui::vec2(0.0, 300.0), half),
+            egui::Rect::from_min_size(area.min + egui::vec2(500.0, 0.0), half),
+            egui::Rect::from_min_size(area.min + egui::vec2(500.0, 300.0), half),
+        ];
+        let regions: Vec<_> = quadrants.iter().map(|quadrant| view_region(area, *quadrant, 2.0)).collect();
+        assert_eq!(
+            regions,
+            vec![
+                furnicraft_render::ViewRegion { x: 0, y: 0, width: 1000, height: 600 },
+                furnicraft_render::ViewRegion { x: 0, y: 600, width: 1000, height: 600 },
+                furnicraft_render::ViewRegion { x: 1000, y: 0, width: 1000, height: 600 },
+                furnicraft_render::ViewRegion { x: 1000, y: 600, width: 1000, height: 600 },
+            ]
+        );
+        let covered: u32 = regions.iter().map(|region| region.width * region.height).sum();
+        assert_eq!(covered as f32, 1000.0 * 600.0 * 4.0, "four views cover the target exactly");
+    }
+
+    #[test]
+    fn a_view_is_never_a_zero_pixel_region() {
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(10.0, 10.0));
+        let sliver = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(0.1, 0.1));
+        let region = view_region(area, sliver, 0.5);
+        assert_eq!((region.width, region.height), (1, 1), "a rounding edge still reaches one pixel");
+    }
+
+    #[test]
+    fn adjacent_view_regions_share_one_edge_without_overlapping() {
+        // The point rectangles tile the area, but each region is rounded from its own rect. Both
+        // sides compute the same corner from the same number, so they meet exactly; the widths are
+        // rounded separately, so the pair can leave at most one pixel for the background clear.
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(801.0, 601.0));
+        let x = area.left() + area.width() * 0.37;
+        let left = egui::Rect::from_min_max(area.min, egui::pos2(x, area.bottom()));
+        let right = egui::Rect::from_min_max(egui::pos2(x, area.top()), area.max);
+        for scale in [1.0, 1.25, 2.0] {
+            let left = view_region(area, left, scale);
+            let right = view_region(area, right, scale);
+            let whole = view_region(area, area, scale);
+            assert_eq!(left.x, 0);
+            assert_eq!(left.y, 0);
+            assert_eq!(right.x, left.x + left.width, "the right view starts where the left one ends");
+            assert_eq!(right.x + right.width, whole.width, "the pair covers the target exactly");
+            assert!(left.width >= 1 && right.width >= 1);
+        }
     }
 
     #[test]

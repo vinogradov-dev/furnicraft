@@ -16,7 +16,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame};
+use furnicraft_scene::{Camera, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
@@ -31,6 +31,9 @@ const MAX_VERTICES: usize = 4_000_000;
 
 /// Largest number of grid divisions on each side of the origin.
 const MAX_GRID_DIVISIONS: i64 = 512;
+
+/// The most views one frame may split into; the camera uniform holds one slot per view.
+pub const MAX_VIEWS: usize = 4;
 
 /// A reason why scene geometry could not be uploaded.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -94,6 +97,10 @@ fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
 }
 
 /// Uniform data shared by the mesh and grid pipelines.
+///
+/// One slot describes one view: the view-projection, the eye, and the lighting that view shades
+/// with. Splitting the workspace into several views therefore adds slots to one buffer instead of a
+/// second camera buffer per view.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct CameraUniform {
@@ -155,6 +162,38 @@ impl RenderTargets {
     }
 }
 
+/// One view's rectangle inside the shared offscreen target, in physical pixels.
+///
+/// `x` and `y` are the top-left corner counted from the target's top-left; the renderer flips `y`
+/// for wgpu's bottom-left origin. Every view is drawn with its own scissor and clears only its own
+/// region, so several views share one texture and one egui texture id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewRegion {
+    /// Left edge, in pixels.
+    pub x: u32,
+    /// Top edge, in pixels.
+    pub y: u32,
+    /// Width, in pixels; at least one.
+    pub width: u32,
+    /// Height, in pixels; at least one.
+    pub height: u32,
+}
+
+impl ViewRegion {
+    /// The wgpu scissor rectangle for this region, in bottom-left origin.
+    ///
+    /// The rectangle is clamped to the target, so a rounding edge at the workspace boundary can
+    /// never ask for an out-of-range scissor, which wgpu would reject.
+    fn scissor(self, target_width: u32, target_height: u32) -> (u32, u32, u32, u32) {
+        let x = self.x.min(target_width);
+        let y = self.y.min(target_height);
+        let width = self.width.min(target_width.saturating_sub(x)).max(1);
+        let height = self.height.min(target_height.saturating_sub(y)).max(1);
+        let bottom = target_height.saturating_sub(y.saturating_add(height));
+        (x, bottom, width, height)
+    }
+}
+
 /// An offscreen scene renderer for one viewport.
 ///
 /// The shell owns the window and the egui integration; this type owns the GPU scene resources and
@@ -164,6 +203,8 @@ pub struct ViewportRenderer {
     line_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    /// The stride between two camera slots, which is the device's uniform offset alignment.
+    camera_stride: u64,
     drawables: Vec<GpuMesh>,
     grid: Option<GpuLineList>,
     polylines: Option<GpuLineList>,
@@ -183,9 +224,12 @@ impl ViewportRenderer {
             source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
         });
 
+        let uniform_size = std::mem::size_of::<CameraUniform>() as u64;
+        let alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(1);
+        let camera_stride = uniform_size.next_multiple_of(alignment);
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FurniCraft camera uniform"),
-            size: std::mem::size_of::<CameraUniform>() as u64,
+            size: camera_stride * MAX_VIEWS as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -197,8 +241,8 @@ impl ViewportRenderer {
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(uniform_size),
                 },
                 count: None,
             }],
@@ -208,7 +252,11 @@ impl ViewportRenderer {
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(camera_buffer.as_entire_buffer_binding()),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &camera_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(uniform_size),
+                }),
             }],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -299,6 +347,7 @@ impl ViewportRenderer {
             line_pipeline,
             camera_buffer,
             camera_bind_group,
+            camera_stride,
             drawables: Vec::new(),
             grid: None,
             polylines: None,
@@ -372,7 +421,7 @@ impl ViewportRenderer {
         self.render_with_lighting(device, queue, frame, &frame.lighting);
     }
 
-    /// Draws the frame with lighting that may differ from the uploaded scene.
+    /// Draws the frame into the whole target with lighting that may differ from the uploaded scene.
     ///
     /// A drag preview commits nothing, but the uniform can still follow a moved light: a sun
     /// direction or a point-light position updates here without touching geometry buffers.
@@ -383,27 +432,27 @@ impl ViewportRenderer {
         frame: &SceneFrame,
         lighting: &Lighting,
     ) {
-        let aspect = f64::from(self.size[0]) / f64::from(self.size[1].max(1));
-        let camera = frame.camera;
-        let eye = camera.eye();
-        let light = lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
-        let (point_count, point_position, point_color) = point_uniforms(lighting);
-        let uniform = CameraUniform {
-            view_projection: camera.view_projection(aspect).as_mat4().to_cols_array_2d(),
-            camera_position: [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
-            light_direction: [light.x as f32, light.y as f32, light.z as f32, 0.0],
-            light_color: [
-                lighting.key_color[0],
-                lighting.key_color[1],
-                lighting.key_color[2],
-                lighting.ambient.clamp(0.0, 1.0),
-            ],
-            point_count,
-            point_position,
-            point_color,
-        };
-        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        let region = ViewRegion { x: 0, y: 0, width: self.size[0], height: self.size[1] };
+        self.render_views(device, queue, frame, lighting, &[(frame.camera, region)]);
+    }
 
+    /// Draws the frame once per view into one target, each pass scissored to its own rectangle.
+    ///
+    /// One texture and one egui texture id serve the whole workspace, so splitting the viewport
+    /// costs a pass and a uniform slot rather than a second texture. The passes share one cleared
+    /// attachment: the first clears the colour and depth, every other pass loads them, and each
+    /// draws inside its own viewport and scissor so a view never writes over its neighbour.
+    ///
+    /// At most [`MAX_VIEWS`] views are drawn; a longer slice is truncated. An empty slice clears the
+    /// target and draws nothing.
+    pub fn render_views(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frame: &SceneFrame,
+        lighting: &Lighting,
+        views: &[(Camera, ViewRegion)],
+    ) {
         let background = sanitize_color(frame.background);
         let clear = wgpu::Color {
             r: f64::from(background[0]),
@@ -411,8 +460,25 @@ impl ViewportRenderer {
             b: f64::from(background[2]),
             a: f64::from(background[3]),
         };
+
+        let views = &views[..views.len().min(MAX_VIEWS)];
+        let mut offsets = Vec::with_capacity(views.len());
+        let mut uniforms = Vec::with_capacity(views.len());
+        for (index, (camera, region)) in views.iter().enumerate() {
+            let aspect = f64::from(region.width.max(1)) / f64::from(region.height.max(1));
+            uniforms.push(self.camera_uniform(*camera, lighting, aspect));
+            offsets.push((index as u64 * self.camera_stride) as u32);
+            let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
+            debug_assert!(x.saturating_add(width) <= self.size[0] && y.saturating_add(height) <= self.size[1]);
+        }
+        for (index, uniform) in uniforms.iter().enumerate() {
+            queue.write_buffer(&self.camera_buffer, index as u64 * self.camera_stride, bytemuck::bytes_of(uniform));
+        }
+
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("FurniCraft scene encoder") });
+        // One clear for the whole target, so a view that does not cover every pixel of a rounding
+        // edge leaves the background there instead of the previous frame's image.
         {
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
                 view: &self.targets.color_view,
@@ -425,15 +491,40 @@ impl ViewportRenderer {
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FurniCraft scene pass"),
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("FurniCraft clear pass"),
                 color_attachments: &[color_attachment],
                 depth_stencil_attachment: Some(depth_attachment),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        }
+
+        for ((_, region), offset) in views.iter().zip(offsets) {
+            let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
+            let color_attachment = Some(wgpu::RenderPassColorAttachment {
+                view: &self.targets.color_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            });
+            let depth_attachment = wgpu::RenderPassDepthStencilAttachment {
+                view: &self.targets.depth_view,
+                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                stencil_ops: None,
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("FurniCraft view pass"),
+                color_attachments: &[color_attachment],
+                depth_stencil_attachment: Some(depth_attachment),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x as f32, y as f32, width as f32, height as f32, 0.0, 1.0);
+            pass.set_scissor_rect(x, y, width, height);
+            pass.set_bind_group(0, &self.camera_bind_group, &[offset]);
 
             if !self.drawables.is_empty() {
                 pass.set_pipeline(&self.mesh_pipeline);
@@ -457,6 +548,27 @@ impl ViewportRenderer {
             }
         }
         queue.submit(Some(encoder.finish()));
+    }
+
+    /// The uniform one view shades with.
+    fn camera_uniform(&self, camera: Camera, lighting: &Lighting, aspect: f64) -> CameraUniform {
+        let eye = camera.eye();
+        let light = lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
+        let (point_count, point_position, point_color) = point_uniforms(lighting);
+        CameraUniform {
+            view_projection: camera.view_projection(aspect).as_mat4().to_cols_array_2d(),
+            camera_position: [eye.x as f32, eye.y as f32, eye.z as f32, 1.0],
+            light_direction: [light.x as f32, light.y as f32, light.z as f32, 0.0],
+            light_color: [
+                lighting.key_color[0],
+                lighting.key_color[1],
+                lighting.key_color[2],
+                lighting.ambient.clamp(0.0, 1.0),
+            ],
+            point_count,
+            point_position,
+            point_color,
+        }
     }
 }
 
@@ -852,5 +964,44 @@ mod tests {
         let mut validator =
             naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all());
         validator.validate(&module).expect("the scene shader validates");
+    }
+
+    #[test]
+    fn four_view_regions_tile_the_target_in_bottom_left_coordinates() {
+        // The shell gives top-left origin rectangles; wgpu scissors from the bottom-left.
+        let target_height = 600;
+        let regions = [
+            ViewRegion { x: 0, y: 0, width: 400, height: 300 },
+            ViewRegion { x: 400, y: 0, width: 400, height: 300 },
+            ViewRegion { x: 0, y: 300, width: 400, height: 300 },
+            ViewRegion { x: 400, y: 300, width: 400, height: 300 },
+        ];
+        let scissors: Vec<_> = regions.iter().map(|region| region.scissor(800, target_height)).collect();
+        assert_eq!(scissors, vec![(0, 300, 400, 300), (400, 300, 400, 300), (0, 0, 400, 300), (400, 0, 400, 300)]);
+
+        // A top-left region sits at the top of the texture: its bottom edge is high.
+        assert_eq!(ViewRegion { x: 0, y: 0, width: 10, height: 10 }.scissor(100, 100), (0, 90, 10, 10));
+        // A region reaching past the target clamps to it rather than making an invalid scissor.
+        assert_eq!(ViewRegion { x: 0, y: 0, width: 10, height: 10 }.scissor(5, 5), (0, 0, 5, 5));
+        // An offset past the far edge still yields a drawable one-pixel scissor inside the target.
+        assert_eq!(ViewRegion { x: 900, y: 700, width: 10, height: 10 }.scissor(800, 600), (800, 0, 1, 1));
+    }
+
+    #[test]
+    fn a_camera_slot_stride_is_aligned_for_a_dynamic_offset() {
+        let uniform = std::mem::size_of::<CameraUniform>() as u64;
+        // The default device alignment is 256; a slot must start on a multiple of it.
+        let stride = uniform.next_multiple_of(256);
+        assert!(stride >= uniform, "the stride never overlaps the next slot");
+        assert_eq!(stride % 256, 0, "and keeps the dynamic offset aligned");
+        assert!(stride * MAX_VIEWS as u64 > uniform, "four views need four distinct slots");
+    }
+
+    #[test]
+    fn an_aspect_ratio_is_per_view_not_per_target() {
+        let camera = Camera::default();
+        let whole = camera.view_projection(2.0);
+        let half = camera.view_projection(1.0);
+        assert_ne!(whole, half, "a narrow view must not borrow the target's aspect");
     }
 }
