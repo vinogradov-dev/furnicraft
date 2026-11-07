@@ -187,6 +187,7 @@ impl FurniCraftApp {
             leaf.apply_preset(settings.viewport.opening_view);
         }
         let mut scene = evaluated.frame;
+        scene.shading = settings.viewport.style;
         apply_viewport_defaults(&mut scene.grid, &settings.viewport);
         scene.camera = scene_build::scene_camera(session.project(), layout.active_camera());
 
@@ -199,8 +200,7 @@ impl FurniCraftApp {
         };
         renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
 
-        let cluster =
-            ViewCluster { style: settings.viewport.style, edges: settings.viewport.edges, ..ViewCluster::default() };
+        let cluster = ViewCluster { style: settings.viewport.style, ..ViewCluster::default() };
 
         Ok(Self {
             scene_revision: session.project().revision(),
@@ -253,6 +253,7 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let home_camera = opening_camera(evaluated.bounds, self.settings.viewport.opening_view)?;
         let mut scene = evaluated.frame;
+        scene.shading = self.settings.viewport.style;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
 
         // A new document keeps the split the user arranged: only the cameras are refitted, so a
@@ -275,7 +276,6 @@ impl FurniCraftApp {
         self.editor = Editor::new();
         self.cluster = ViewCluster::default();
         self.cluster.style = self.settings.viewport.style;
-        self.cluster.edges = self.settings.viewport.edges;
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
@@ -395,6 +395,7 @@ impl FurniCraftApp {
         self.node_count = self.session.project().query(&NodeQuery::any()).len();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
+        scene.shading = self.cluster.style;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
         scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
         self.scene = scene;
@@ -998,6 +999,9 @@ impl FurniCraftApp {
             }
         }
 
+        // The style is frame data the renderer reads when it draws, so a button in the cluster
+        // changes the next frame without re-uploading a buffer.
+        self.scene.shading = self.cluster.style;
         // A drag preview commits nothing, but the frame can still follow a moved light: the shader
         // reads one uniform, so a sun direction or a point-light position updates without a mesh
         // rebuild. With no moved light the base lighting is already correct.
@@ -1491,9 +1495,13 @@ impl FurniCraftApp {
         }
         if self.settings.viewport != before.viewport {
             self.cluster.style = self.settings.viewport.style;
-            self.cluster.edges = self.settings.viewport.edges;
+            self.scene.shading = self.cluster.style;
+            let grid_changed = self.settings.viewport.grid != before.viewport.grid
+                || self.settings.viewport.grid_step_mm != before.viewport.grid_step_mm;
             apply_viewport_defaults(&mut self.scene.grid, &self.settings.viewport);
-            if let Err(error) = self.upload_scene() {
+            // A style is frame data the renderer reads at draw time; only a grid change rebuilds a
+            // line list.
+            if grid_changed && let Err(error) = self.upload_scene() {
                 self.last_error = Some(error);
             }
         }

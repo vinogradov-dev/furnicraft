@@ -16,7 +16,7 @@ use egui::{Align, Context, Id, Layout, Modal, Ui};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::display::{OpeningView, ShadingStyle};
+use crate::display::{OpeningView, ShadingStyle, shading_label};
 use crate::{theme, ui_scale};
 
 /// The settings schema this build writes and reads.
@@ -106,21 +106,13 @@ pub struct ViewportSettings {
     pub grid: bool,
     /// The minor grid spacing, in millimetres.
     pub grid_step_mm: u32,
-    /// Whether panel and silhouette edges are drawn.
-    pub edges: bool,
     /// The direction a viewport opens from.
     pub opening_view: OpeningView,
 }
 
 impl Default for ViewportSettings {
     fn default() -> Self {
-        Self {
-            style: ShadingStyle::default(),
-            grid: true,
-            grid_step_mm: 100,
-            edges: true,
-            opening_view: OpeningView::default(),
-        }
+        Self { style: ShadingStyle::default(), grid: true, grid_step_mm: 100, opening_view: OpeningView::default() }
     }
 }
 
@@ -364,11 +356,11 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
     ui.heading("Viewport");
     ui.horizontal(|ui| {
         ui.label("Display style");
-        egui::ComboBox::from_id_salt("settings_style").selected_text(settings.viewport.style.label()).show_ui(
+        egui::ComboBox::from_id_salt("settings_style").selected_text(shading_label(settings.viewport.style)).show_ui(
             ui,
             |ui| {
                 for style in ShadingStyle::ALL {
-                    changed |= ui.selectable_value(&mut settings.viewport.style, style, style.label()).changed();
+                    changed |= ui.selectable_value(&mut settings.viewport.style, style, shading_label(style)).changed();
                 }
             },
         );
@@ -393,7 +385,6 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
                 .speed(5.0),
         )
         .changed();
-    changed |= ui.checkbox(&mut settings.viewport.edges, "Draw panel and silhouette edges").changed();
     ui.label(
         egui::RichText::new("These are the defaults of a new viewport; the open view keeps its own state.")
             .small()
@@ -480,7 +471,6 @@ mod tests {
                 style: ShadingStyle::Wireframe,
                 grid: false,
                 grid_step_mm: 25,
-                edges: false,
                 opening_view: OpeningView::Top,
             },
             ribbon: RibbonSettings { opacity: 0.6 },

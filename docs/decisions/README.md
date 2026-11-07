@@ -74,6 +74,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0067](0067-a-ribbon-tool-is-one-measured-cell.md) | A ribbon tool is one measured cell, and a caption never sizes it | Accepted |
 | [0068](0068-the-workspace-lives-outside-the-document.md) | The workspace lives outside the document | Accepted |
 | [0069](0069-the-light-variant-is-a-second-palette.md) | The light variant is a second palette | Accepted |
+| [0070](0070-display-styles-are-frame-data.md) | Display styles are frame data | Accepted |
 
 ## Format
 

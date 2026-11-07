@@ -74,24 +74,47 @@ struct MeshIn {
     @builtin(front_facing) front_facing: bool,
 };
 
-@fragment
-fn fs_mesh(fragment: MeshIn) -> @location(0) vec4<f32> {
+// Linear colour of one shaded surface, before the gamma encode the target and egui expect.
+fn shade_surface(
+    normal_input: vec3<f32>,
+    front_facing: bool,
+    world_position: vec3<f32>,
+    color: vec4<f32>,
+) -> vec3<f32> {
     // Panels are open on both faces, so flip the normal for back-facing triangles instead of
     // culling them or lighting the inside of a cutout black.
-    let normal = normalize(select(-fragment.normal, fragment.normal, fragment.front_facing));
+    let normal = normalize(select(-normal_input, normal_input, front_facing));
     let light_direction = safe_normalize(camera.light_direction.xyz);
-    let view_direction = safe_normalize(camera.camera_position.xyz - fragment.world_position);
+    let view_direction = safe_normalize(camera.camera_position.xyz - world_position);
     let half_vector = safe_normalize(light_direction + view_direction);
 
     let diffuse = max(dot(normal, light_direction), 0.0);
     let specular = pow(max(dot(normal, half_vector), 0.0), 32.0) * 0.12;
     let key = camera.light_color.rgb * diffuse + vec3<f32>(camera.light_color.a);
-    let points = point_lighting(normal, fragment.world_position, view_direction);
-    let rgb = fragment.color.rgb * (key + points) + vec3<f32>(specular);
+    let points = point_lighting(normal, world_position, view_direction);
+    return color.rgb * (key + points) + vec3<f32>(specular);
+}
 
-    // The offscreen target is Rgba8Unorm, which is what egui registers as a native texture.
-    // Encode gamma here so the viewport matches the rest of the interface.
-    return vec4<f32>(pow(rgb, vec3<f32>(1.0 / 2.2)), fragment.color.a);
+// The offscreen target is Rgba8Unorm, which is what egui registers as a native texture.
+// Encode gamma here so the viewport matches the rest of the interface.
+fn gamma_encode(rgb: vec3<f32>) -> vec3<f32> {
+    return pow(rgb, vec3<f32>(1.0 / 2.2));
+}
+
+@fragment
+fn fs_mesh(fragment: MeshIn) -> @location(0) vec4<f32> {
+    let rgb = shade_surface(fragment.normal, fragment.front_facing, fragment.world_position, fragment.color);
+    return vec4<f32>(gamma_encode(rgb), fragment.color.a);
+}
+
+// The translucent pass reduces opacity so blending reveals what lies behind; with alpha 1 the
+// blend would copy the surface and the style would be indistinguishable from *shaded*.
+const GHOST_ALPHA: f32 = 0.22;
+
+@fragment
+fn fs_mesh_translucent(fragment: MeshIn) -> @location(0) vec4<f32> {
+    let rgb = shade_surface(fragment.normal, fragment.front_facing, fragment.world_position, fragment.color);
+    return vec4<f32>(gamma_encode(rgb), min(fragment.color.a, GHOST_ALPHA));
 }
 
 struct LineOut {

@@ -12,4 +12,5 @@ workspace = true
 furnicraft-geom = { workspace = true }
 furnicraft-mesh = { workspace = true }
 furnicraft-model = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }

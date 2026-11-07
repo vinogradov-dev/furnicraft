@@ -1,69 +1,43 @@
 //! Display choices that belong to the workspace, not to the document.
 //!
 //! These values describe how a viewport draws and which way it faces when it opens. The renderer
-//! interprets them in U43; until then they are the single vocabulary the floating cluster and the
-//! settings window share, so the two surfaces cannot offer different names for one choice.
+//! interprets them; this module only names them for the cluster and the settings window, so the two
+//! surfaces cannot offer different words for one choice.
 
 use crate::icons;
 
-/// A display style the viewport offers.
-///
-/// The value is view state: it belongs to the frame the renderer draws, not to the document. The
-/// renderer interprets it when the edge and transparency passes land (U43); until then the buttons
-/// only remember the choice, which is why the value lives in the settings and the shell rather than
-/// in the scene file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ShadingStyle {
-    /// Shaded faces with the silhouette and panel edges drawn over them.
-    #[default]
-    ShadedWithEdges,
-    /// Shaded faces with no edge pass.
-    Shaded,
-    /// The edge pass alone.
-    Wireframe,
-    /// Edges drawn through the faces, so hidden geometry stays visible.
-    ShadedWithHiddenEdges,
-    /// Blended faces with no depth write.
-    Translucent,
+pub use furnicraft_scene::ShadingStyle;
+
+/// The short face of a style, used while the toolbar icon is still a placeholder.
+pub const fn shading_caption(style: ShadingStyle) -> &'static str {
+    match style {
+        ShadingStyle::ShadedWithEdges => "Edges",
+        ShadingStyle::Shaded => "Shaded",
+        ShadingStyle::Wireframe => "Wire",
+        ShadingStyle::ShadedWithHiddenEdges => "Hidden",
+        ShadingStyle::Translucent => "Ghost",
+    }
 }
 
-impl ShadingStyle {
-    /// Every style in the order the cluster draws them.
-    pub const ALL: [Self; 5] =
-        [Self::ShadedWithEdges, Self::Shaded, Self::Wireframe, Self::ShadedWithHiddenEdges, Self::Translucent];
-
-    /// The short face used while the icon is still a placeholder.
-    pub const fn caption(self) -> &'static str {
-        match self {
-            Self::ShadedWithEdges => "Edges",
-            Self::Shaded => "Shaded",
-            Self::Wireframe => "Wire",
-            Self::ShadedWithHiddenEdges => "Hidden",
-            Self::Translucent => "Ghost",
-        }
+/// The full name, used as the tooltip and the accessible name.
+pub const fn shading_label(style: ShadingStyle) -> &'static str {
+    match style {
+        ShadingStyle::ShadedWithEdges => "Shaded with edges",
+        ShadingStyle::Shaded => "Shaded",
+        ShadingStyle::Wireframe => "Wireframe",
+        ShadingStyle::ShadedWithHiddenEdges => "Shaded with hidden edges",
+        ShadingStyle::Translucent => "Translucent",
     }
+}
 
-    /// The full name, used as the tooltip and the accessible name.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::ShadedWithEdges => "Shaded with edges",
-            Self::Shaded => "Shaded",
-            Self::Wireframe => "Wireframe",
-            Self::ShadedWithHiddenEdges => "Shaded with hidden edges",
-            Self::Translucent => "Translucent",
-        }
-    }
-
-    /// The icon asset that will name the style once it is drawn.
-    pub const fn icon(self) -> icons::Icon {
-        match self {
-            Self::ShadedWithEdges => icons::view::SHADED_EDGES,
-            Self::Shaded => icons::view::SHADED,
-            Self::Wireframe => icons::view::WIREFRAME,
-            Self::ShadedWithHiddenEdges => icons::view::XRAY,
-            Self::Translucent => icons::view::TRANSLUCENT,
-        }
+/// The icon asset that names the style once it is drawn.
+pub const fn shading_icon(style: ShadingStyle) -> icons::Icon {
+    match style {
+        ShadingStyle::ShadedWithEdges => icons::view::SHADED_EDGES,
+        ShadingStyle::Shaded => icons::view::SHADED,
+        ShadingStyle::Wireframe => icons::view::WIREFRAME,
+        ShadingStyle::ShadedWithHiddenEdges => icons::view::XRAY,
+        ShadingStyle::Translucent => icons::view::TRANSLUCENT,
     }
 }
 

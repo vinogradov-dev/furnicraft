@@ -13,6 +13,7 @@ egui = { workspace = true }
 egui_extras = { workspace = true }
 furnicraft-engine = { workspace = true }
 furnicraft-model = { workspace = true }
+furnicraft-scene = { workspace = true }
 furnicraft-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
