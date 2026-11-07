@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
-  listing a command's label, its id and whether it is enabled for the current session; the chosen
-  entry dispatches it with parameters built from the current selection, and an entry that cannot run
-  says why instead of failing silently. The palette is the reference's "command search" and it costs
-  no new command: the registry already carries 48 specs with a stable id, a label and a pure
-  `enabled` check, so the work is a fuzzy filter, a keyboard loop (`↑`/`↓`/`Enter`/`Esc`) and one
-  parameter builder per command family — node deletion, duplication, renaming and the view actions
-  first, with the rest reported as "needs a selection" until a builder exists. Command history and
-  the last-used list are session state, never document data. Tests: a prefix and a substring both
-  find `node.delete`; a disabled command is listed but not runnable and explains itself; `Esc`
-  closes without dispatching; a chosen entry dispatches exactly one command and one undo entry.
-  Session notes: `CommandRegistry::specs()` returns `&'static [CommandSpec]`, `spec.id()` and
-  `spec.label()` are the search fields and `spec.enabled(session, &params)` is the pure check;
-  `crate::command::dispatch` in `crates/ui` is the one dispatch path. `Ctrl+K` is free — `F`, `O`,
-  `G` and the drawing letters are taken, and `ui.input(|i| i.modifiers.command)` must not fire while
-  a text field has focus.
-  `files: apps/furnicraft/src, crates/ui/src`
-
 - `[ ]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
   splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
   any border between two views is draggable with a minimum size of 120 pt per side and a ratio
@@ -244,6 +226,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
+  listing a command's label, its id and whether it is enabled for the current session; the chosen
+  entry dispatches it with parameters built from the current selection, and an entry that cannot run
+  says why instead of failing silently. The palette is the reference's "command search" and it costs
+  no new command: the registry already carries 48 specs with a stable id, a label and a pure
+  `enabled` check, so the work is a fuzzy filter, a keyboard loop (`↑`/`↓`/`Enter`/`Esc`) and one
+  parameter builder per command family — node deletion, duplication, renaming and the view actions
+  first, with the rest reported as "needs a selection" until a builder exists. Command history and
+  the last-used list are session state, never document data. Tests: a prefix and a substring both
+  find `node.delete`; a disabled command is listed but not runnable and explains itself; `Esc`
+  closes without dispatching; a chosen entry dispatches exactly one command and one undo entry.
+  Session notes: `CommandRegistry::specs()` returns `&'static [CommandSpec]`, `spec.id()` and
+  `spec.label()` are the search fields and `spec.enabled(session, &params)` is the pure check;
+  `crate::command::dispatch` in `crates/ui` is the one dispatch path. `Ctrl+K` is free — `F`, `O`,
+  `G` and the drawing letters are taken, and `ui.input(|i| i.modifiers.command)` must not fire while
+  a text field has focus.
+  `8066ec8`
+  `files: apps/furnicraft/src, crates/ui/src`
 
 - `[x]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
   modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the control U40

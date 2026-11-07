@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U47 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U42 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -42,22 +42,22 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   the viewport's bottom centre, leaving the bar only the armed tool or gesture, its counts, the
   creation chip and the last error. U41 added the *Settings* modal (appearance, viewport, ribbon,
   shortcuts), the versioned `settings.json` in the OS config directory written atomically (ADR 0068)
-  and the *Home* start surface; a change applies at once and a `.fcs` carries none of it. U42–U48
-  queue the rest of the owner's design, and ADR 0065 fixes visibility and lock as session state.
+  and the *Home* start surface; a change applies at once and a `.fcs` carries none of it. U47 added the
+  `Ctrl+K` palette over the registry; U42–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U47 is next: a command palette on `Ctrl+K`, one search field over `CommandRegistry::specs()` listing
-a command's label, its id and whether it is enabled for the current session. The chosen entry
-dispatches it with parameters built from the current selection; an entry that cannot run says why
-instead of failing silently. The registry already carries 48 specs with a stable id, a label and a
-pure `enabled` check, so the work is a filter, a keyboard loop and a parameter builder per family.
+U42 is next: the workspace divides into views. A layout tree of leaves and splits holds one view by
+default, then two vertical, two horizontal and four from the bar, with draggable borders clamped to
+0.15–0.85 and 120 pt per side. Each leaf owns its camera and preset; *Home* and *Frame all* act on
+the view under the pointer or the active one, and the renderer uses one target with a scissored pass
+per leaf. The layout and cameras are shell view state, never document data.
 
-Order: U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U47 entry, the registry in
-`crates/engine`, ADRs 0028 and 0064, and `handle_header_action`.
+Order: U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U42 entry, `viewport()` and
+`ViewportRenderer::render_with_lighting`.
 
 ## Index
 
