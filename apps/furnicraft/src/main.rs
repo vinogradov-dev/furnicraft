@@ -1681,6 +1681,30 @@ fn apply_viewport_defaults(grid: &mut furnicraft_scene::Grid, viewport: &Viewpor
     grid.spacing_mm = f64::from(viewport.grid_step_mm.max(1));
 }
 
+/// The global shortcuts, read in one pass and consumed so one key does one thing.
+///
+/// The list is the one the Settings window draws; a key added there has to be added here, and a key
+/// removed here must leave the table. The drawing tools read their own keys, so only the modified
+/// pair and the two view keys live at this level.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Shortcuts {
+    save: bool,
+    undo: bool,
+    redo: bool,
+    frame: bool,
+    projection: bool,
+}
+
+fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
+    ctx.input_mut(|input| Shortcuts {
+        save: input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
+        undo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Z),
+        redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
+        frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),
+        projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
+    })
+}
+
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Err(error) = self.sync_scene() {
@@ -1763,6 +1787,32 @@ impl eframe::App for FurniCraftApp {
             && let Err(error) = self.upload_scene()
         {
             self.last_error = Some(error);
+        }
+        // The keys the header and the Settings page advertise. They are read only outside a text
+        // field and a modal, so typing a file path or a name never saves, undoes or reframes.
+        if !ui.ctx().text_edit_focused() && !self.settings_open && !self.home_open {
+            let shortcuts = take_shortcuts(ui.ctx());
+            if shortcuts.save
+                && let Some(action) = self.files.save(self.session.is_dirty())
+            {
+                self.handle_file_action(action);
+            }
+            if shortcuts.undo
+                && let Err(error) = self.session.undo()
+            {
+                self.last_error = Some(error.to_string());
+            }
+            if shortcuts.redo
+                && let Err(error) = self.session.redo()
+            {
+                self.last_error = Some(error.to_string());
+            }
+            if shortcuts.frame {
+                self.reset_view();
+            }
+            if shortcuts.projection {
+                self.view_camera.toggle_projection();
+            }
         }
         let dirty = self.session.is_dirty();
         let header = HeaderState {
@@ -2238,5 +2288,38 @@ mod tests {
             width_again.get(),
             width_open.get()
         );
+    }
+
+    /// One key press, as the platform would hand it to `egui`.
+    fn key_input(key: egui::Key, modifiers: egui::Modifiers) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_advertised_shortcuts_are_consumed() {
+        let ctx = egui::Context::default();
+        let mut read = Shortcuts::default();
+        let output = ctx.run_ui(key_input(egui::Key::Z, egui::Modifiers::CTRL), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { undo: true, ..Shortcuts::default() });
+
+        let output = ctx.run_ui(key_input(egui::Key::F, egui::Modifiers::NONE), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { frame: true, ..Shortcuts::default() });
+
+        // `F` with a modifier is a different shortcut and must not reframe.
+        let output = ctx.run_ui(key_input(egui::Key::F, egui::Modifiers::CTRL), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts::default());
     }
 }
