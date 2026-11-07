@@ -256,7 +256,9 @@ impl FurniCraftApp {
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
 
         // A new document keeps the split the user arranged: only the cameras are refitted, so a
-        // four-view workspace opens the new scene framed in every view.
+        // four-view workspace opens the new scene framed in every view. The active view takes the
+        // workspace's opening preset, and the others show the same scene from the axonometric home,
+        // so opening a file never leaves a view pointing at where the old model was.
         self.layout.reset_cameras(home_camera);
         if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
             leaf.apply_preset(self.settings.viewport.opening_view);
@@ -567,11 +569,14 @@ impl FurniCraftApp {
         self.sync_scene()
     }
 
-    /// Refits every view on the scene, keeping the split.
+    /// Refits every view on the scene, keeping the split and each view's direction.
+    ///
+    /// *Frame all* fits the workspace: with one view it is the only fit there is, and with several
+    /// it is the one command that puts the whole scene in front of the user in every view.
     fn reset_view(&mut self) {
-        self.layout.reset_cameras(self.home_camera);
-        if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
-            leaf.apply_preset(self.settings.viewport.opening_view);
+        let home = self.home_camera;
+        for leaf in self.layout.leaves_mut() {
+            leaf.frame(home);
         }
         self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }

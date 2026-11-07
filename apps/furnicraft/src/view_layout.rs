@@ -238,6 +238,21 @@ impl Leaf {
         self.preset = Some(preset);
     }
 
+    /// Fits the leaf on the whole scene, keeping the direction it was looking from.
+    ///
+    /// A leaf that still sits in a preset keeps that preset's direction; a leaf the user has orbited
+    /// keeps its own. The projection is untouched, so framing never changes the mode (ADR 0049).
+    pub(crate) fn frame(&mut self, home: Camera) {
+        let Some(preset) = self.preset else {
+            let direction = self.camera.eye() - self.camera.target();
+            self.camera = home;
+            self.camera.look_from(direction);
+            return;
+        };
+        self.camera = home;
+        self.apply_preset(preset);
+    }
+
     /// Returns the leaf to *Axonometric* without refitting the scene.
     pub(crate) fn home(&mut self) {
         self.apply_preset(OpeningView::Axonometric);
@@ -389,6 +404,11 @@ impl Layout {
     /// One leaf by id, for navigation.
     pub(crate) fn leaf_mut(&mut self, id: LeafId) -> Option<&mut Leaf> {
         self.leaves.iter_mut().find(|leaf| leaf.id == id)
+    }
+
+    /// Every leaf, for an action that fits the whole workspace.
+    pub(crate) fn leaves_mut(&mut self) -> &mut [Leaf] {
+        &mut self.leaves
     }
 
     /// The active leaf, which is always present.
@@ -581,6 +601,34 @@ mod tests {
 
         let quad = layout(LayoutKind::Quad);
         assert_eq!(quad.dividers(area).len(), 3, "a four-view tree has three borders");
+    }
+
+    #[test]
+    fn a_fit_moves_every_view_close_and_keeps_its_direction() {
+        let home = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
+        let mut layout = Layout::new(home);
+        layout.set_kind(LayoutKind::TwoColumns);
+        let ids: Vec<LeafId> = layout.leaves.iter().map(|leaf| leaf.id).collect();
+        let first = layout.leaf_mut(ids[0]).expect("first");
+        first.apply_preset(OpeningView::Front);
+        let second = layout.leaf_mut(ids[1]).expect("second");
+        second.look_from(furnicraft_geom::DVec3::new(1.0, 1.0, 1.0));
+
+        for leaf in layout.leaves_mut() {
+            leaf.frame(home);
+        }
+
+        let first = layout.leaf(ids[0]).expect("first");
+        assert_eq!(first.camera.target(), home.target(), "the fit puts every view on the scene");
+        assert!((first.camera.distance() - home.distance()).abs() < 1.0e-9);
+        assert_eq!(first.preset, Some(OpeningView::Front), "a view in a preset keeps it");
+        assert!(first.camera.forward().dot(furnicraft_geom::DVec3::Y) > 0.999);
+
+        let second = layout.leaf(ids[1]).expect("second");
+        assert_eq!(second.camera.target(), home.target());
+        assert_eq!(second.preset, None, "an orbited view stays off every preset");
+        let direction = furnicraft_geom::DVec3::new(1.0, 1.0, 1.0).normalize();
+        assert!(second.camera.eye().dot(direction) > 0.0, "and keeps the direction it looked from");
     }
 
     #[test]
