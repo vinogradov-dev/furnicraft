@@ -65,6 +65,6 @@ Order: U44 → U45 → U48 → U46 (icons last) → U49. Read the U44 entry, `cr
 |---|---|---|
 | `plan/BACKLOG.md` | one line per task, ids, order, file hints | always |
 | `plan/SESSION.md` | the live task: steps, blocker, next command | only while `state=doing` |
-| `plan/debt.md` | accepted gaps, tagged by area | a task touches that area |
-| `plan/questions.md` | decisions waiting for the owner | a task touches the question |
+| `plan/debt.md`, `plan/questions.md` | accepted gaps; decisions waiting for the owner | a task touches that area |
+| `plan/rename.md` | the pre-release rename: inventory, procedure, gotchas | task R1, or a change that adds another place the product name appears |
 | `plan/archive/done.md` | history up to schema 11 | never, `git log` replaces it |
