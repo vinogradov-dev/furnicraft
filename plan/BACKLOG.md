@@ -169,7 +169,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Bugs
 
-- `[ ]` **X10** every triangle edge is drawn, and far edges show through near panels: a flat panel
+- `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
+  still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
+  frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
+  background, the grid and the non-material lines to the active variant at once, leaving the
+  furniture's own material colours untouched, and switching back restores the dark values.
+  Suspected cause: the frame background and the grid line colours are literals in `crates/scene`,
+  and the shipped frame never gets them from the active `egui::Visuals` when `theme::install_with`
+  changes. Tests: a light frame carries the light background and grid; switching variant changes the
+  uploaded scene without touching the document revision.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
+
+## Next
+
+## Done
+
+- `[x]` **X10** every triangle edge is drawn, and far edges show through near panels: a flat panel
   draws the diagonals of its triangulation instead of its outline, and a panel a metre behind another
   shows its edges through it in *shaded with edges* and *wireframe*. A dark viewport draws dark ink,
   so edges vanish on the default background. Expectation: the default edge pass draws form edges only
@@ -186,23 +201,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   shared edge; a cube yields twelve edges and eighteen in the diagnostic list; a triangular prism
   yields nine; an occluded drawable's edge slice is separate from the near one and carries its own
   stencil slot; the face pass owns the depth bias and stamps the slot; the hidden pass accepts only
-  its own slot; the ink follows the background.
+  its own slot; the ink follows the background. ADR 0070 — `afeba77`
   `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
-
-- `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
-  still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
-  frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
-  background, the grid and the non-material lines to the active variant at once, leaving the
-  furniture's own material colours untouched, and switching back restores the dark values.
-  Suspected cause: the frame background and the grid line colours are literals in `crates/scene`,
-  and the shipped frame never gets them from the active `egui::Visuals` when `theme::install_with`
-  changes. Tests: a light frame carries the light background and grid; switching variant changes the
-  uploaded scene without touching the document revision.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
-
-## Next
-
-## Done
 
 - `[x]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
   *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
