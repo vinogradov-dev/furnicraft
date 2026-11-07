@@ -25,36 +25,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
-  the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
-  and folding them leaves a 26 pt vertical strip with the icon and the rotated title, which a click,
-  a double-click on its edge or a drag outward restores. The tree keeps only the tree — no tools, no
-  heading of its own — and still supports selection and the context menu. The view controls become a
-  translucent cluster floating over the centre of the viewport, anchored `CENTER_BOTTOM` with a small
-  offset: *orbit / pan / zoom* · *frame all / home* · the display-style buttons · the layout entry and
-  the three-slider display settings popover, which also carries the *show projection and angles*
-  switch that draws the pitch/yaw/roll and the projection word under the orientation cube (U42). The
-  bottom status bar stays thin and holds only the armed tool, the gesture it expects, the counts and
-  the last error, so the viewport starts at the scene and not at a wall of labels. A row of buttons is
-  not foldable; only a panel with content is. Tests: folding and restoring a panel keeps its width;
-  an armed container still names itself in the bar and clears from it; a closed panel draws no body;
-  the status line names the armed tool and its gesture; the cluster is anchored to the bottom centre
-  and does not move when the side panels resize; the settings popover toggles the angle readout.
-  Session notes: `egui::Panel::show_collapsible` (with `is_expanded: &mut bool`) folds a panel and
-  keeps a grab handle; `theme::COLLAPSED_PANEL_WIDTH` is the 26 pt strip. `scene_tree()` and
-  `panel_card()` draw the two side panels; `status_bar()` already uses `egui::Sides` with
-  `status_info()` and `StatusOut`. Two `Sides` closures cannot both borrow `&mut self`: draw from the
-  snapshot and apply one action afterwards, as `apply_status` does. The floating cluster is an
-  `egui::Area` anchored `Align2::CENTER_BOTTOM` inside the central panel's rect, with a `Frame` whose
-  fill is `theme::SURFACE` at about 88 % alpha and `CornerRadius::same(theme::RADIUS)`; it must be
-  `Order::Middle` so a menu or a modal still paints over it. The owner's reference has exactly this:
-  navigation and display styles float over the scene, the thin history/filter strip sits at the
-  window edge (we have no timeline yet).
-  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
-  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the slider
-  currently in the viewport strip moves here), *Viewport* (default display style, grid on and its
+  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the control U40
+  left without a surface moves here), *Viewport* (default display style, grid on and its
   step, edges, the view a new viewport opens with), *Ribbon* (background opacity) and *Shortcuts*
   (the existing table). The window is a view, not a document surface: a change applies at once and
   never touches the `.fcs`, and a scene saved by another machine carries none of it. The state is
@@ -66,8 +39,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
   truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the settings never appear in a serialised document.
   Session notes: the gear is `HeaderAction::Settings` and currently reports "not built yet"; the
-  house button reports "The start surface is not built yet". `ui_scale::show` moves here from the
-  status bar. `furnicraft-project` already writes atomically — copy that shape. No new dependency:
+  house button reports "The start surface is not built yet". `ui_scale::show` has no surface since
+  U40 and moves here. `furnicraft-project` already writes atomically — copy that shape. No new dependency:
   `serde_json` is present, and `XDG_CONFIG_HOME` / `APPDATA` / `HOME` cover the three targets.
   `files: apps/furnicraft/src, crates/ui/src`
 
@@ -238,6 +211,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
+  the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
+  and folding them leaves a 26 pt vertical strip with the icon and the rotated title, which a click,
+  a double-click on its edge or a drag outward restores. The tree keeps only the tree — no tools, no
+  heading of its own — and still supports selection and the context menu. The view controls become a
+  translucent cluster floating over the centre of the viewport, anchored `CENTER_BOTTOM` with a small
+  offset: *orbit / pan / zoom* · *frame all / home* · the display-style buttons · the layout entry and
+  the three-slider display settings popover, which also carries the *show projection and angles*
+  switch that draws the pitch/yaw/roll and the projection word under the orientation cube (U42). The
+  bottom status bar stays thin and holds only the armed tool, the gesture it expects, the counts and
+  the last error, so the viewport starts at the scene and not at a wall of labels. A row of buttons is
+  not foldable; only a panel with content is. Tests: folding and restoring a panel keeps its width;
+  an armed container still names itself in the bar and clears from it; a closed panel draws no body;
+  the status line names the armed tool and its gesture; the cluster is anchored to the bottom centre
+  and does not move when the side panels resize; the settings popover toggles the angle readout —
+  `4934ebf`
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **X7** a ribbon button is one measured cell, so a caption never sizes it: the tool row of
   every tab draws buttons of one width and one height, whatever their caption and whatever the

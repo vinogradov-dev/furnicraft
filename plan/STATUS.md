@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U40 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U41 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -33,31 +33,31 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   U27 rasterises each white master at `pt × pixels_per_point`, bakes the widget colour into the pixels
   and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 gives a passive face 12–18 %
   fill, the result 45–60 % under its outline, one axonometry, and ink inside `3..21` at 20–45 %
-  coverage (ADR 0066 adds a 22 pt ribbon button). 37 placeholders are in `plan/debt.md`.
-- U38 landed the visual pass: `theme.rs` owns the palette, the 4 pt step, the row heights and the type
-  scale (ADR 0063); `header.rs` draws one row and returns a `HeaderAction` (ADR 0064); the view
-  controls left the viewport's first row for a bottom status bar. U39 landed the ribbon: one row of
-  tabs — *Furniture, Hardware, Model, Sketch, Scene, View* — over the tool groups of the active tab,
-  each tool a 22 pt icon over a 10.5 pt caption (ADR 0066). U40–U48 queue the rest of the owner's
-  design with a session note each, and ADR 0065 fixes visibility and lock as session state.
+  coverage (ADR 0066 adds a 22 pt ribbon button). 47 placeholders are in `plan/debt.md`.
+- U38–U40 landed the visual pass: `theme.rs` owns the palette, the 4 pt step, the row heights and the
+  type scale (ADR 0063); `header.rs` draws one row and returns a `HeaderAction` (ADR 0064); U39
+  landed the ribbon (one row of tabs over the tool groups of the active tab, each tool a 22 pt icon
+  over a 10.5 pt caption, ADR 0066); U40 made the side panels fold over one header row and moved the
+  view controls into a translucent `Order::Middle` cluster at the viewport's bottom centre, leaving
+  the bar only the armed tool or gesture, its counts, the creation chip and the last error. U41–U48
+  queue the rest of the owner's design, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U40 is next: the side panels become windows that fold, and the viewport gets its floating cluster.
-The scene tree and the inspector each get a header row (title, count chip, fold chevron); folding
-leaves a 26 pt strip with the icon and the rotated title, and a click, a double-click on its edge or a
-drag outward restores it. The tree keeps only the tree, and the view controls leave the status bar for
-a translucent cluster anchored `CENTER_BOTTOM` over the viewport: orbit/pan/zoom, frame all/home, the
-display styles, the layout entry and the three-slider display settings popover, which also carries the
-projection-and-angles switch U42 draws under the orientation cube. The bar keeps the armed tool, its
-gesture, the counts and the last error — and now also the creation chip U39 moved out of the ribbon.
+U41 is next: the settings window and the one place the workspace is remembered. A *Settings* modal
+carries *Appearance* (theme, accent, the UI scale control U40 left without a surface), *Viewport*
+(default display style, grid, edges, the opening view), *Ribbon* (opacity) and *Shortcuts*. It is a
+view, not a document surface: a change applies at once and never reaches the `.fcs`. The state is
+JSON under the OS config directory, written atomically through a small `settings` module, with a
+missing, truncated or older file falling back to defaults and the reason in the status bar. The same
+module gains the *Home* surface behind the house button: new, open, recent files and the empty
+template, dismissed by Escape.
 
-Order after U40: U41 → U47 (palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49
-(English and Russian behind one typed message table). Read `plan/SESSION.template.md`, ADRs 0063–0067,
-then `apps/furnicraft/src/main.rs` (`scene_tree`, `panel_card`, `status_bar`) and `crates/ui/src/lib.rs`.
+Order: U47 (palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U41 entry,
+ADRs 0063–0067, `handle_header_action`, `status_bar` and `crates/ui/src/ui_scale.rs`.
 
 ## Index
 
