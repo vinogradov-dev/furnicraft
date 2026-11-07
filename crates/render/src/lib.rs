@@ -164,9 +164,10 @@ impl RenderTargets {
 
 /// One view's rectangle inside the shared offscreen target, in physical pixels.
 ///
-/// `x` and `y` are the top-left corner counted from the target's top-left; the renderer flips `y`
-/// for wgpu's bottom-left origin. Every view is drawn with its own scissor and clears only its own
-/// region, so several views share one texture and one egui texture id.
+/// `x` and `y` are the top-left corner counted from the target's top-left, which is also the
+/// framebuffer origin wgpu uses: a scissor and a viewport share it, so no axis is flipped. Every
+/// view is drawn with its own scissor into the one texture, so several views share one egui texture
+/// id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewRegion {
     /// Left edge, in pixels.
@@ -180,17 +181,16 @@ pub struct ViewRegion {
 }
 
 impl ViewRegion {
-    /// The wgpu scissor rectangle for this region, in bottom-left origin.
+    /// The wgpu scissor and viewport rectangle for this region.
     ///
     /// The rectangle is clamped to the target, so a rounding edge at the workspace boundary can
     /// never ask for an out-of-range scissor, which wgpu would reject.
     fn scissor(self, target_width: u32, target_height: u32) -> (u32, u32, u32, u32) {
-        let x = self.x.min(target_width);
-        let y = self.y.min(target_height);
+        let x = self.x.min(target_width.saturating_sub(1));
+        let y = self.y.min(target_height.saturating_sub(1));
         let width = self.width.min(target_width.saturating_sub(x)).max(1);
         let height = self.height.min(target_height.saturating_sub(y)).max(1);
-        let bottom = target_height.saturating_sub(y.saturating_add(height));
-        (x, bottom, width, height)
+        (x, y, width, height)
     }
 }
 
@@ -967,8 +967,10 @@ mod tests {
     }
 
     #[test]
-    fn four_view_regions_tile_the_target_in_bottom_left_coordinates() {
-        // The shell gives top-left origin rectangles; wgpu scissors from the bottom-left.
+    fn four_view_regions_tile_the_target_in_framebuffer_coordinates() {
+        // A view rect and a scissor share the framebuffer origin, which is the top-left corner, so
+        // the region is used unchanged. Flipping it would draw the top view's camera in the bottom
+        // half of the texture while the shell still reads the pointer against the top rect.
         let target_height = 600;
         let regions = [
             ViewRegion { x: 0, y: 0, width: 400, height: 300 },
@@ -977,14 +979,15 @@ mod tests {
             ViewRegion { x: 400, y: 300, width: 400, height: 300 },
         ];
         let scissors: Vec<_> = regions.iter().map(|region| region.scissor(800, target_height)).collect();
-        assert_eq!(scissors, vec![(0, 300, 400, 300), (400, 300, 400, 300), (0, 0, 400, 300), (400, 0, 400, 300)]);
+        assert_eq!(scissors, vec![(0, 0, 400, 300), (400, 0, 400, 300), (0, 300, 400, 300), (400, 300, 400, 300)]);
+        for (region, scissor) in regions.iter().zip(&scissors) {
+            assert_eq!((scissor.0, scissor.1), (region.x, region.y), "the scissor keeps the top-left origin");
+        }
 
-        // A top-left region sits at the top of the texture: its bottom edge is high.
-        assert_eq!(ViewRegion { x: 0, y: 0, width: 10, height: 10 }.scissor(100, 100), (0, 90, 10, 10));
         // A region reaching past the target clamps to it rather than making an invalid scissor.
         assert_eq!(ViewRegion { x: 0, y: 0, width: 10, height: 10 }.scissor(5, 5), (0, 0, 5, 5));
         // An offset past the far edge still yields a drawable one-pixel scissor inside the target.
-        assert_eq!(ViewRegion { x: 900, y: 700, width: 10, height: 10 }.scissor(800, 600), (800, 0, 1, 1));
+        assert_eq!(ViewRegion { x: 900, y: 700, width: 10, height: 10 }.scissor(800, 600), (799, 599, 1, 1));
     }
 
     #[test]
