@@ -65,8 +65,9 @@ pub(crate) enum GizmoAction {
 /// passive label painted below it and is deliberately outside, so it neither blocks a click on the
 /// scene nor widens the area that stops the transform gizmo.
 pub(crate) fn widget_rect(viewport: Rect) -> Option<Rect> {
-    let height = SIZE + GAP + HOME_SIZE;
-    if viewport.width() < SIZE + 2.0 * MARGIN || viewport.height() < height + 2.0 * MARGIN {
+    let width = SIZE + GAP + HOME_SIZE;
+    let height = SIZE;
+    if viewport.width() < width + 2.0 * MARGIN || viewport.height() < height + 2.0 * MARGIN {
         return None;
     }
     let min = egui::pos2(viewport.right() - SIZE - MARGIN, viewport.top() + MARGIN);
@@ -75,7 +76,10 @@ pub(crate) fn widget_rect(viewport: Rect) -> Option<Rect> {
 
 /// The home button's rectangle inside the widget.
 fn home_rect(widget: Rect) -> Rect {
-    Rect::from_center_size(egui::pos2(widget.center().x, widget.bottom() - HOME_SIZE / 2.0), Vec2::splat(HOME_SIZE))
+    Rect::from_center_size(
+        egui::pos2(widget.right() - HOME_SIZE / 2.0, widget.top() + HOME_SIZE / 2.0),
+        Vec2::splat(HOME_SIZE),
+    )
 }
 
 /// Draws the widget and returns the one action a click asked for.
@@ -95,7 +99,11 @@ pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera, readout: bool) -> Op
 
     let pointer_over_widget = ui.input(|input| input.pointer.hover_pos().is_some_and(|pointer| rect.contains(pointer)));
     if pointer_over_widget {
-        painter.circle_filled(center, SIZE * 0.42, Color32::from_rgba_unmultiplied(30, 32, 38, 96));
+        painter.circle_stroke(
+            center,
+            SIZE * 0.48,
+            Stroke::new(1.5, Color32::from_rgba_unmultiplied(220, 224, 232, 140)),
+        );
     }
 
     let directions = [
