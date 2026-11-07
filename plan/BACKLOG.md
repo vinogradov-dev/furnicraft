@@ -187,15 +187,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Bugs
 
-- `[ ]` **X9** a split viewport draws each camera in the wrong half: with two views stacked or four in
-  a grid, orbiting, panning or picking in the top view moved the bottom one, and clicking an axis on
-  the orientation widget in one view snapped its neighbour. Expectation: a view draws the camera its
-  own rectangle belongs to, so a gesture and a widget click act on the view under the pointer, in
-  both directions and in all four quadrants. Suspected cause: `ViewRegion::scissor` flipped the
-  region's `y` as though the framebuffer grew upwards, while the pointer was tested against the
-  top-left rectangles the shell paints; a one-view workspace hid it because the whole target is one
-  region and a flip of it is the identity.
-  `files: crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
   frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
@@ -210,6 +201,16 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **X9** a split viewport draws each camera in the wrong half: with two views stacked or four in
+  a grid, orbiting, panning or picking in the top view moved the bottom one, and clicking an axis on
+  the orientation widget in one view snapped its neighbour. Expectation: a view draws the camera its
+  own rectangle belongs to, so a gesture and a widget click act on the view under the pointer, in
+  both directions and in all four quadrants. Suspected cause: `ViewRegion::scissor` flipped the
+  region's `y` as though the framebuffer grew upwards, while the pointer was tested against the
+  top-left rectangles the shell paints; a one-view workspace hid it because the whole target is one
+  region and a flip of it is the identity — `6690ae6`
+  `files: crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
   splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
