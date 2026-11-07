@@ -537,6 +537,8 @@ impl Ray {
 /// The renderer derives line geometry from these values; the document knows nothing about it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grid {
+    /// Whether the grid is drawn at all. A hidden grid costs no vertices.
+    pub visible: bool,
     /// Distance between adjacent minor lines, in millimetres.
     pub spacing_mm: f64,
     /// Half-size of the square grid around the world origin, in millimetres.
@@ -556,6 +558,7 @@ pub struct Grid {
 impl Default for Grid {
     fn default() -> Self {
         Self {
+            visible: true,
             spacing_mm: 100.0,
             extent_mm: 5000.0,
             major_every: 5,

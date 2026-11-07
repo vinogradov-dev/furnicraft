@@ -9,67 +9,8 @@
 
 use eframe::egui;
 use furnicraft_scene::Projection;
+use furnicraft_ui::display::ShadingStyle;
 use furnicraft_ui::{icons, theme};
-
-/// A display style the cluster offers.
-///
-/// The value is view state: it belongs to the frame the renderer draws, not to the document. The
-/// renderer interprets it when the edge and transparency passes land (U43); until then the buttons
-/// only remember the choice, which is why the value lives next to [`ViewCluster`] rather than in
-/// the scene file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ShadingStyle {
-    /// Shaded faces with the silhouette and panel edges drawn over them.
-    #[default]
-    ShadedWithEdges,
-    /// Shaded faces with no edge pass.
-    Shaded,
-    /// The edge pass alone.
-    Wireframe,
-    /// Edges drawn through the faces, so hidden geometry stays visible.
-    ShadedWithHiddenEdges,
-    /// Blended faces with no depth write.
-    Translucent,
-}
-
-impl ShadingStyle {
-    /// Every style in the order the cluster draws them.
-    pub(crate) const ALL: [Self; 5] =
-        [Self::ShadedWithEdges, Self::Shaded, Self::Wireframe, Self::ShadedWithHiddenEdges, Self::Translucent];
-
-    /// The short face used while the icon is still a placeholder.
-    pub(crate) const fn caption(self) -> &'static str {
-        match self {
-            Self::ShadedWithEdges => "Edges",
-            Self::Shaded => "Shaded",
-            Self::Wireframe => "Wire",
-            Self::ShadedWithHiddenEdges => "Hidden",
-            Self::Translucent => "Ghost",
-        }
-    }
-
-    /// The full name, used as the tooltip and the accessible name.
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::ShadedWithEdges => "Shaded with edges",
-            Self::Shaded => "Shaded",
-            Self::Wireframe => "Wireframe",
-            Self::ShadedWithHiddenEdges => "Shaded with hidden edges",
-            Self::Translucent => "Translucent",
-        }
-    }
-
-    /// The icon asset that will name the style once it is drawn.
-    pub(crate) const fn icon(self) -> icons::Icon {
-        match self {
-            Self::ShadedWithEdges => icons::view::SHADED_EDGES,
-            Self::Shaded => icons::view::SHADED,
-            Self::Wireframe => icons::view::WIREFRAME,
-            Self::ShadedWithHiddenEdges => icons::view::XRAY,
-            Self::Translucent => icons::view::TRANSLUCENT,
-        }
-    }
-}
 
 /// The navigation gesture a primary-button drag performs while it is armed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +75,8 @@ pub(crate) struct ViewCluster {
     pub(crate) navigation: Option<NavigationMode>,
     /// The display style the viewport draws with.
     pub(crate) style: ShadingStyle,
+    /// Whether panel and silhouette edges are drawn (U43 uses the value).
+    pub(crate) edges: bool,
     /// Whether the display-settings popover is open.
     pub(crate) settings_open: bool,
     /// Whether the orientation widget draws the pitch/yaw/roll and projection readout (U42).
@@ -151,6 +94,7 @@ impl Default for ViewCluster {
         Self {
             navigation: None,
             style: ShadingStyle::default(),
+            edges: true,
             settings_open: false,
             show_angles: false,
             grid_strength: 60.0,
@@ -215,8 +159,8 @@ pub(crate) fn show(
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::FLOATING)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .fill(theme::floating(ui))
+                .stroke(egui::Stroke::new(1.0, theme::line(ui)))
                 .corner_radius(egui::CornerRadius::same(theme::RADIUS))
                 .inner_margin(egui::Margin::symmetric(6, 4));
             frame.show(ui, |ui| {
@@ -305,8 +249,8 @@ fn settings_popover(
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::FLOATING)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .fill(theme::floating(ui))
+                .stroke(egui::Stroke::new(1.0, theme::line(ui)))
                 .corner_radius(egui::CornerRadius::same(theme::RADIUS))
                 .inner_margin(egui::Margin::same(10));
             frame.show(ui, |ui| {
@@ -333,7 +277,7 @@ fn settings_popover(
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("Work plane · {}", view.work_plane)).small().color(theme::TEXT_DIM),
+                    egui::RichText::new(format!("Work plane · {}", view.work_plane)).small().color(theme::text_dim(ui)),
                 );
             });
         });

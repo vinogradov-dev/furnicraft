@@ -617,6 +617,9 @@ fn position_at(mesh: &MeshData, index: u32) -> Option<DVec3> {
 }
 
 fn grid_vertices(grid: &Grid) -> Vec<MeshVertex> {
+    if !grid.visible {
+        return Vec::new();
+    }
     let spacing = if grid.spacing_mm.is_finite() && grid.spacing_mm >= 1.0 {
         grid.spacing_mm.min(furnicraft_scene::MAX_DISTANCE_MM)
     } else {
@@ -817,6 +820,12 @@ mod tests {
         let grid = Grid { spacing_mm: 1.0, extent_mm: f64::MAX, major_every: 1, ..Grid::default() };
         let vertices = grid_vertices(&grid);
         assert_eq!(vertices.len(), (2 * MAX_GRID_DIVISIONS as usize + 1) * 4);
+    }
+
+    #[test]
+    fn a_hidden_grid_costs_no_vertices() {
+        let grid = Grid { visible: false, ..Grid::default() };
+        assert!(grid_vertices(&grid).is_empty(), "a hidden grid must not build line geometry");
     }
 
     #[test]

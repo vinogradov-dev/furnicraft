@@ -24,6 +24,7 @@ mod mesh_pick;
 mod rotate_gizmo;
 mod scene_build;
 mod scene_gizmo;
+mod settings_store;
 mod translate_gizmo;
 mod vertex_gizmo;
 mod view_cluster;
@@ -44,6 +45,9 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
+use furnicraft_ui::display::OpeningView;
+use furnicraft_ui::settings::{Settings, SettingsSection, ViewportSettings};
+use furnicraft_ui::ui_scale;
 use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, icons, theme};
 use furnicraft_units::Length;
 
@@ -54,6 +58,7 @@ use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::header::{HeaderAction, HeaderState};
 use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
+use crate::settings_store::SettingsStore;
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
 use crate::view_cluster::{ClusterAction, ClusterView, NavigationMode, ViewCluster};
@@ -139,19 +144,36 @@ struct FurniCraftApp {
     /// Nodes below the root, cached with the evaluated scene so the tree's count chip costs no
     /// document scan on the frame path.
     node_count: usize,
+    /// The workspace remembered between runs: chrome, viewport defaults and recent files.
+    settings: Settings,
+    /// Where [`Settings`] is read from and written to.
+    settings_store: SettingsStore,
+    /// The section the Settings window was last left on.
+    settings_section: SettingsSection,
+    /// Whether the Settings window is open.
+    settings_open: bool,
+    /// Whether the Home surface is open.
+    home_open: bool,
+    /// Why the defaults were used instead of the saved workspace, shown in the status bar.
+    settings_notice: Option<String>,
 }
 
 impl FurniCraftApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
-        theme::install(&cc.egui_ctx);
+        let settings_store = SettingsStore::for_workspace();
+        let loaded = settings_store.load();
+        let settings = loaded.settings;
+        theme::install_with(&cc.egui_ctx, settings.appearance.theme.preference(), settings.appearance.accent);
+        cc.egui_ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
         let session = sample_session()?;
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let node_count = session.project().query(&NodeQuery::any()).len();
-        let home_camera = home_camera(evaluated.bounds)?;
+        let home_camera = opening_camera(evaluated.bounds, settings.viewport.opening_view)?;
         let view_camera = home_camera;
         let mut scene = evaluated.frame;
+        apply_viewport_defaults(&mut scene.grid, &settings.viewport);
         scene.camera = scene_build::scene_camera(session.project(), view_camera);
 
         let render_state =
@@ -162,6 +184,9 @@ impl FurniCraftApp {
             egui_renderer.register_native_texture(&render_state.device, renderer.color_view(), wgpu::FilterMode::Linear)
         };
         renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
+
+        let cluster =
+            ViewCluster { style: settings.viewport.style, edges: settings.viewport.edges, ..ViewCluster::default() };
 
         Ok(Self {
             scene_revision: session.project().revision(),
@@ -189,8 +214,14 @@ impl FurniCraftApp {
             last_error: None,
             tree_open: true,
             card_open: true,
-            cluster: ViewCluster::default(),
+            cluster,
             node_count,
+            settings,
+            settings_store,
+            settings_section: SettingsSection::default(),
+            settings_open: false,
+            home_open: false,
+            settings_notice: loaded.notice,
         })
     }
 
@@ -203,9 +234,10 @@ impl FurniCraftApp {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
-        let home_camera = home_camera(evaluated.bounds)?;
+        let home_camera = opening_camera(evaluated.bounds, self.settings.viewport.opening_view)?;
         let view_camera = home_camera;
         let mut scene = evaluated.frame;
+        apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
         scene.camera = scene_build::scene_camera(session.project(), view_camera);
 
         self.session = session;
@@ -218,6 +250,8 @@ impl FurniCraftApp {
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
         self.cluster = ViewCluster::default();
+        self.cluster.style = self.settings.viewport.style;
+        self.cluster.edges = self.settings.viewport.edges;
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
@@ -259,7 +293,10 @@ impl FurniCraftApp {
     /// header adds a place to click, not a second code path into the document.
     fn handle_header_action(&mut self, action: HeaderAction) {
         match action {
-            HeaderAction::Home => self.last_error = Some("The start surface is not built yet.".to_owned()),
+            HeaderAction::Home => {
+                self.home_open = true;
+                self.settings_notice = None;
+            }
             HeaderAction::Undo => {
                 if let Err(error) = self.session.undo() {
                     self.last_error = Some(error.to_string());
@@ -275,7 +312,10 @@ impl FurniCraftApp {
                     self.handle_file_action(action);
                 }
             }
-            HeaderAction::Settings => self.last_error = Some("Settings are not built yet.".to_owned()),
+            HeaderAction::Settings => {
+                self.settings_open = true;
+                self.settings_notice = None;
+            }
             HeaderAction::CloseTab => {}
         }
     }
@@ -283,6 +323,10 @@ impl FurniCraftApp {
     /// Performs the operation the File menu returned and reports a failure in the toolbar.
     fn handle_file_action(&mut self, action: FileAction) {
         self.last_error = None;
+        let recorded = match &action {
+            FileAction::Open(path) | FileAction::Save(path) => Some(path.clone()),
+            FileAction::New => None,
+        };
         let result = match action {
             FileAction::New => {
                 let adopted = empty_session().and_then(|session| self.adopt(session, PreservedSections::new()));
@@ -296,8 +340,26 @@ impl FurniCraftApp {
             FileAction::Open(path) => self.open_scene(&path),
             FileAction::Save(path) => self.save_scene(&path),
         };
-        if let Err(error) = result {
-            self.last_error = Some(error);
+        match result {
+            Ok(()) => {
+                if let Some(path) = recorded {
+                    self.settings.remember(&path);
+                    self.persist_settings();
+                }
+            }
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    /// Writes the workspace settings and reports a failure in the status bar.
+    ///
+    /// The write is cheap and rare — a settings close, an opened or saved scene — so it happens at
+    /// the moment the state changes instead of waiting for a shutdown hook a killed process can
+    /// skip.
+    fn persist_settings(&mut self) {
+        match self.settings_store.save(&self.settings) {
+            Ok(()) => self.settings_notice = None,
+            Err(error) => self.last_error = Some(error),
         }
     }
 
@@ -309,6 +371,7 @@ impl FurniCraftApp {
         self.node_count = self.session.project().query(&NodeQuery::any()).len();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
+        apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
         scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
         self.scene = scene;
         self.scene_revision = revision;
@@ -1015,8 +1078,11 @@ impl FurniCraftApp {
         };
         let mut outcome = None;
         // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
-        // one that the side panels use behind their content.
-        let frame = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(6, 2));
+        // one that the side panels use behind their content. The settings slider scales that fill's
+        // alpha, letting the window chrome show through without changing any other surface.
+        let frame = egui::Frame::new()
+            .fill(theme::surface(ui).gamma_multiply(self.settings.ribbon.opacity))
+            .inner_margin(egui::Margin::symmetric(6, 2));
         egui::Panel::top("ribbon").frame(frame).show(ui, |ui| {
             ui.add_space(theme::STEP);
             match self.editor.show_ribbon(ui, &mut self.session, view) {
@@ -1086,6 +1152,7 @@ impl FurniCraftApp {
     fn status_info(&self) -> StatusInfo {
         StatusInfo {
             error: self.last_error.clone(),
+            notice: self.settings_notice.clone(),
             mode: self.mode,
             contour: self.editor.contour_edit().map(|edit| (edit.draft().segment_count(), edit.is_dirty())),
             drawing: self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed())),
@@ -1136,11 +1203,82 @@ impl FurniCraftApp {
             None => {}
         }
     }
+
+    /// Draws the Settings window and applies what it changed.
+    ///
+    /// The window edits a copy-free `&mut Settings`; a change is applied to the running application
+    /// at once and written to the config file when the window closes. The document never sees any of
+    /// it, which is the point of keeping the workspace in its own file.
+    fn settings_window(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let before = self.settings.clone();
+        let outcome = furnicraft_ui::settings::show(ctx, &mut self.settings, &mut self.settings_section);
+        if outcome.changed {
+            self.apply_settings(&before, ctx);
+        }
+        if outcome.close {
+            self.settings_open = false;
+            self.settings.sanitize();
+            self.persist_settings();
+        }
+    }
+
+    /// Applies the changed sections of the workspace settings.
+    ///
+    /// Appearance and viewport are compared section by section: changing the accent must not reset
+    /// the display style to the stored default, and a change to the default opening view must not
+    /// turn the camera the user is navigating.
+    fn apply_settings(&mut self, before: &Settings, ctx: &egui::Context) {
+        self.settings.sanitize();
+        if self.settings.appearance != before.appearance {
+            theme::install_with(ctx, self.settings.appearance.theme.preference(), self.settings.appearance.accent);
+            ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
+        }
+        if self.settings.viewport != before.viewport {
+            self.cluster.style = self.settings.viewport.style;
+            self.cluster.edges = self.settings.viewport.edges;
+            apply_viewport_defaults(&mut self.scene.grid, &self.settings.viewport);
+            if let Err(error) = self.upload_scene() {
+                self.last_error = Some(error);
+            }
+        }
+    }
+
+    /// Draws the Home surface and performs the one action it asked for.
+    ///
+    /// Home goes through the same File menu path as the header, so a scene with unsaved changes still
+    /// asks before New discards it and Open still warns in its dialog.
+    fn home_surface(&mut self, ctx: &egui::Context) {
+        if !self.home_open {
+            return;
+        }
+        let Some(action) = furnicraft_ui::home::show(ctx, &self.settings.recent) else {
+            return;
+        };
+        self.home_open = false;
+        match action {
+            furnicraft_ui::home::HomeAction::New | furnicraft_ui::home::HomeAction::EmptyTemplate => {
+                let dirty = self.session.is_dirty();
+                if let Some(action) = self.files.new_scene(dirty) {
+                    self.handle_file_action(action);
+                }
+            }
+            furnicraft_ui::home::HomeAction::Open => self.files.request_open(),
+            furnicraft_ui::home::HomeAction::OpenRecent(path) => {
+                self.handle_file_action(FileAction::Open(path));
+            }
+            furnicraft_ui::home::HomeAction::Close => {}
+        }
+    }
 }
 
 /// The status text and controls, read once per frame so both sides of the bar draw from data.
 struct StatusInfo {
     error: Option<String>,
+    /// Why the workspace defaults were used instead of the saved settings, if they were.
+    notice: Option<String>,
     mode: TransformMode,
     contour: Option<(usize, bool)>,
     drawing: Option<(DrawTool, usize, bool)>,
@@ -1176,13 +1314,18 @@ enum StatusAction {
 
 /// A quiet hint that truncates instead of running under the right-hand view controls.
 fn hint(ui: &mut egui::Ui, text: &str) {
-    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT_DIM)).truncate());
+    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::text_dim(ui))).truncate());
 }
 
 /// The armed tool, the gesture it expects and the counts it would affect.
 fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction>, Option<TransformMode>) {
     if let Some(error) = &info.error {
-        ui.colored_label(theme::DANGER, error);
+        ui.colored_label(theme::danger(ui), error);
+        theme::divider(ui);
+    } else if let Some(notice) = &info.notice {
+        // A workspace that fell back to its defaults is a fact, not a failure: it uses the quiet
+        // text colour and keeps the rest of the bar usable.
+        hint(ui, notice);
         theme::divider(ui);
     }
     // The arm is sticky across creations, so the bar names the container the next node lands in;
@@ -1249,7 +1392,7 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         hint(ui, mode.gesture());
         return (done.then_some(StatusAction::EndNavigation), None);
     }
-    ui.label(egui::RichText::new("Gizmo").color(theme::TEXT_DIM));
+    ui.label(egui::RichText::new("Gizmo").color(theme::text_dim(ui)));
     let mut mode = info.mode;
     let moved = ui.selectable_value(&mut mode, TransformMode::Move, "Move").clicked()
         | ui.selectable_value(&mut mode, TransformMode::Rotate, "Rotate").clicked();
@@ -1257,7 +1400,7 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
     if let Some((element, count)) = info.mesh {
         ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
         ui.label(
-            egui::RichText::new("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit").color(theme::TEXT_DIM),
+            egui::RichText::new("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit").color(theme::text_dim(ui)),
         );
     } else {
         hint(ui, "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB zoom");
@@ -1268,7 +1411,7 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
 /// A hairline across the panel, quieter than `ui.separator()` and on the spacing grid.
 fn rule(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::LINE));
+    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::line(ui)));
 }
 
 /// Which edge a folding side panel sits on.
@@ -1311,16 +1454,18 @@ fn side_panel(
         PanelSide::Left => egui::Panel::left(id),
         PanelSide::Right => egui::Panel::right(id),
     };
+    let collapsed_fill = theme::surface(ui);
+    let expanded_fill = theme::panel(ui);
     let collapsed = panel(format!("{id}_collapsed"))
         .resizable(true)
         .exact_size(theme::COLLAPSED_PANEL_WIDTH)
         .show_separator_line(false)
-        .frame(egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::ZERO));
+        .frame(egui::Frame::new().fill(collapsed_fill).inner_margin(egui::Margin::ZERO));
     let expanded_panel = panel(id.to_owned())
         .resizable(true)
         .default_size(head.default_width)
         .min_size(head.min_width)
-        .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::ZERO));
+        .frame(egui::Frame::new().fill(expanded_fill).inner_margin(egui::Margin::ZERO));
 
     egui::Panel::show_switched(ui, &mut expanded, collapsed, expanded_panel, |ui, unfolded| {
         if unfolded {
@@ -1350,7 +1495,7 @@ fn side_panel(
 /// Returns whether the chevron was clicked.
 fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
     let mut fold = false;
-    egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(theme::STEP as i8, 0)).show(
+    egui::Frame::new().fill(theme::surface(ui)).inner_margin(egui::Margin::symmetric(theme::STEP as i8, 0)).show(
         ui,
         |ui| {
             ui.set_height(theme::PANEL_HEADER_HEIGHT);
@@ -1371,11 +1516,11 @@ fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
 /// A small count chip beside a panel title.
 fn count_chip(ui: &mut egui::Ui, count: usize) {
     egui::Frame::new()
-        .fill(theme::CONTROL)
+        .fill(theme::control(ui))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS))
         .inner_margin(egui::Margin::symmetric(6, 1))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(count.to_string()).small().color(theme::TEXT_DIM));
+            ui.label(egui::RichText::new(count.to_string()).small().color(theme::text_dim(ui)));
         });
 }
 
@@ -1387,23 +1532,23 @@ fn collapsed_strip(ui: &mut egui::Ui, head: &PanelHead, restore: &mut bool) {
     if response.clicked() {
         *restore = true;
     }
-    let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::SURFACE };
+    let fill = if response.hovered() { theme::control_hover(ui) } else { theme::surface(ui) };
     ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, fill);
 
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(rect.center().x, rect.top() + theme::PANEL_HEADER_HEIGHT / 2.0),
         egui::Vec2::splat(14.0),
     );
-    icons::draw_icon(ui, head.icon, icon_rect, 14.0, theme::TEXT_DIM);
+    icons::draw_icon(ui, head.icon, icon_rect, 14.0, theme::text_dim(ui));
 
     // The title is turned so it reads bottom to top. `with_angle` turns about the galley's top-left
     // corner, so the corner is offset by the rotated half-size to centre the turned text.
-    let galley = ui.painter().layout_no_wrap(head.title.to_owned(), egui::FontId::proportional(12.0), theme::TEXT_DIM);
+    let dim = theme::text_dim(ui);
+    let galley = ui.painter().layout_no_wrap(head.title.to_owned(), egui::FontId::proportional(12.0), dim);
     let size = galley.size();
     let center = egui::pos2(rect.center().x, rect.center().y + theme::PANEL_HEADER_HEIGHT / 2.0);
     let pos = egui::pos2(center.x - size.y / 2.0, center.y + size.x / 2.0);
-    ui.painter()
-        .add(egui::epaint::TextShape::new(pos, galley, theme::TEXT_DIM).with_angle(-std::f32::consts::FRAC_PI_2));
+    ui.painter().add(egui::epaint::TextShape::new(pos, galley, dim).with_angle(-std::f32::consts::FRAC_PI_2));
     response.on_hover_text(format!("Open the {} panel", head.title));
 }
 
@@ -1516,6 +1661,26 @@ fn preview_vertex_mesh(frame: SceneFrame, project: &Project, preview: VertexPrev
     Ok(frame.with_drawable_mesh(preview.object, Arc::new(data)))
 }
 
+/// The camera a fresh viewport opens with: framed on the scene from the chosen direction.
+///
+/// The fit distance and the projection stay what [`home_camera`] computed, so choosing *Top* never
+/// moves the model or changes its size; only the eye direction follows the setting.
+fn opening_camera(bounds: crate::scene_build::Bounds, view: OpeningView) -> Result<Camera, String> {
+    let mut camera = home_camera(bounds)?;
+    let [x, y, z] = view.direction();
+    camera.look_from(furnicraft_geom::DVec3::new(x, y, z));
+    Ok(camera)
+}
+
+/// Copies the workspace viewport defaults into a frame's floor grid.
+///
+/// The grid is view state, not document data, so the shell writes it here after every evaluation
+/// instead of letting `furnicraft_scene` read the settings.
+fn apply_viewport_defaults(grid: &mut furnicraft_scene::Grid, viewport: &ViewportSettings) {
+    grid.visible = viewport.grid;
+    grid.spacing_mm = f64::from(viewport.grid_step_mm.max(1));
+}
+
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Err(error) = self.sync_scene() {
@@ -1556,7 +1721,9 @@ impl eframe::App for FurniCraftApp {
             && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
-            if self.cluster.settings_open {
+            if self.settings_open || self.home_open {
+                // The modal owns Escape for this frame and closes itself.
+            } else if self.cluster.settings_open {
                 // The popover owns Escape for this frame and closes itself.
             } else if self.cluster.navigation.is_some() {
                 self.cluster.navigation = None;
@@ -1625,6 +1792,12 @@ impl eframe::App for FurniCraftApp {
         self.panel_card(ui);
         self.status_bar(ui);
         self.workspace(ui);
+        self.settings_window(ui.ctx());
+        self.home_surface(ui.ctx());
+    }
+
+    fn on_exit(&mut self) {
+        self.persist_settings();
     }
 }
 
@@ -1895,6 +2068,7 @@ mod tests {
     fn idle_status() -> StatusInfo {
         StatusInfo {
             error: None,
+            notice: None,
             mode: TransformMode::Move,
             contour: None,
             drawing: None,
