@@ -27,9 +27,11 @@ could only be tested by looking at a window.
   quantised vertex position so a flat-shaded mesh still yields one edge per geometric edge, and
   caches it in `NodeGeometry` beside the mesh under the same derivation inputs (ADR 0053). `Drawable`
   carries the shared `Arc<[u32]>`; the renderer transforms and flattens it, never searches.
-- The edge pass is a `LineList` draw after the face pass, with a negative depth bias so a line on a
-  face wins without z-fighting. *Shaded with hidden edges* uses the same geometry with
-  `CompareFunction::Always`. *Wireframe* skips the face pass and draws the edge pass alone.
+- The edge pass is a `LineList` draw after the face pass. wgpu rejects `DepthBiasState` on a line
+  topology, so the edge vertex shader nudges the clip-space depth toward the camera by a constant;
+  that wins against the face the line lies on without z-fighting. *Shaded with hidden edges* uses
+  the same geometry with `CompareFunction::Always`. *Wireframe* skips the face pass and draws the
+  edge pass alone.
 - *Translucent* uses an alpha-blended face pipeline with no depth write and a shader entry that caps
   opacity, so the blend reveals what lies behind. Objects are ordered back to front by their
   world-space bounds centre, per view, in a reusable index list. Edges are off in this style.
