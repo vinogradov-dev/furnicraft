@@ -188,6 +188,16 @@ icons!(View, "view", view {
     FRAME_ALL => "frame-all",
     HOME => "home",
     GRID_SNAP => "grid-snap",
+    ORBIT => "orbit",
+    PAN => "pan",
+    ZOOM => "zoom",
+    LAYOUT => "layout",
+    SHADED => "shaded",
+    SHADED_EDGES => "shaded-edges",
+    WIREFRAME => "wireframe",
+    XRAY => "xray",
+    TRANSLUCENT => "translucent",
+    SLIDERS => "sliders",
 });
 
 icons!(Actions, "actions", actions {
@@ -338,6 +348,17 @@ pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>,
     icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, &hint, enabled, on).on_hover_text(hint)
 }
 
+/// A tool button with a short face and a longer hint.
+///
+/// A floating cluster has to stay narrow, so its placeholder face uses the short `caption` while the
+/// tooltip keeps the full name. A drawn icon ignores the caption for its face and uses `hint` only.
+pub fn tool_button_labelled(ui: &mut Ui, icon: Icon, caption: &str, hint: &str, enabled: bool, on: bool) -> Response {
+    if !icon.is_drawn() {
+        return ui.add_enabled(enabled, Button::new(caption).selected(on)).on_hover_text(hint);
+    }
+    icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, hint, enabled, on).on_hover_text(hint)
+}
+
 /// The readable hint of a tool button: the label and, when it has one, its shortcut.
 pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
     match shortcut {
@@ -458,6 +479,17 @@ fn ribbon_face(ui: &Ui, response: &Response, on: bool) -> (Color32, Stroke, Colo
         return (crate::theme::CONTROL_HOVER, Stroke::NONE, crate::theme::TEXT);
     }
     (Color32::TRANSPARENT, Stroke::NONE, crate::theme::TEXT)
+}
+
+/// Paints `icon` inside `rect` at `point_size`, tinted with `color`, without a button frame.
+///
+/// A folded side panel draws its icon in the middle of a 26 pt strip where a button would not fit;
+/// the raster path is the same one the buttons use, so the asset, the cache and the theme colour are
+/// shared. A placeholder asset draws nothing.
+pub fn draw_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
+    if icon.is_drawn() {
+        paint_icon(ui, icon, rect, point_size, color);
+    }
 }
 
 /// Paints `icon` inside `rect` at `point_size`, tinted with `color`.
@@ -670,7 +702,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 57);
+        assert_eq!(seen.len(), 67);
     }
 
     #[test]

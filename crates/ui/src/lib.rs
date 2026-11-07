@@ -47,8 +47,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize, Path, PathCorner,
-    Placement, Project,
+    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, PanelNominalSize, Path, PathCorner, Placement,
+    Project,
 };
 use furnicraft_units::Length;
 
@@ -103,7 +103,6 @@ pub struct Editor {
     placement_card: PlacementCard,
     pivot_card: PivotCard,
     properties_card: PropertiesCard,
-    type_filter: String,
     error: Option<String>,
     initialized: bool,
 }
@@ -764,7 +763,7 @@ impl Editor {
             ui.colored_label(Color32::LIGHT_RED, error);
             ui.separator();
         }
-        let actions = scene_tree::show(ui, session, &mut self.selection, &mut self.type_filter);
+        let actions = scene_tree::show(ui, session, &mut self.selection);
         if actions.is_empty() {
             return;
         }
@@ -878,25 +877,6 @@ impl Editor {
                 dispatch(session, NODE_COMPONENT_CONVERT_TO_GROUP_ID, &params)?;
                 self.after_node_removed(session, parent);
             }
-            TreeAction::SelectUnderType { furntype } => {
-                let ids = session.project().query(&NodeQuery::any().with_furntype_under(furntype));
-                if ids.is_empty() {
-                    return Err(format!("No node has furniture type {furntype} or a sub-type."));
-                }
-                self.selection.replace_all(ids);
-            }
-            TreeAction::Undo => {
-                session.undo().map_err(|error| error.to_string())?;
-                self.selection.retain_existing(session.project());
-                self.retain_open(session.project());
-                self.retain_creation_parent(session.project());
-            }
-            TreeAction::Redo => {
-                session.redo().map_err(|error| error.to_string())?;
-                self.selection.retain_existing(session.project());
-                self.retain_open(session.project());
-                self.retain_creation_parent(session.project());
-            }
         }
         Ok(())
     }
@@ -979,12 +959,11 @@ mod tests {
     use super::*;
 
     use crate::toolbars::RibbonView;
-    use furnicraft_engine::NodePropertySet;
-    use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
+
     use furnicraft_model::Contour;
     use furnicraft_model::{
-        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, FurnType, Geometry,
-        MachiningAnchor, MachiningParams, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE,
+        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, Geometry,
+        MachiningAnchor, MachiningParams, Mesh, Panel, Placement,
     };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
@@ -1608,7 +1587,7 @@ mod tests {
             .expect("extrude the path");
         let body = editor.selected_node().expect("the new body is selected");
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert!(session.project().object(body).is_none(), "undo removes the body");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object_path(path).is_ok(), "the drawing the body came from stays");
@@ -1818,41 +1797,15 @@ mod tests {
         assert!(editor.selected_nodes().is_empty());
     }
 
-    #[test]
-    fn selecting_a_furniture_type_subtree_replaces_the_selection() {
-        let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
-        set_furntype(&mut session, drawer, "12.03.02");
-        set_furntype(&mut session, front, "12.03.01");
-
-        let mut editor = Editor::new();
-        editor
-            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12.03".parse().expect("type") })
-            .expect("select subtree");
-        assert_eq!(editor.selected_nodes(), [drawer, front]);
-        assert_eq!(editor.selected_node(), Some(front), "the last match is primary");
-
-        assert!(
-            editor
-                .run_action(&mut session, TreeAction::SelectUnderType { furntype: "13".parse().expect("type") })
-                .is_err()
-        );
-        assert_eq!(editor.selected_nodes(), [drawer, front], "a miss leaves the selection alone");
-
-        editor.selection.clear();
-        editor
-            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12".parse().expect("type") })
-            .expect("select group");
-        assert_eq!(editor.selected_nodes(), [drawer, front]);
-    }
-
-    fn set_furntype(session: &mut Session, node: Id, furntype: &str) {
-        let furntype: FurnType = furntype.parse().expect("valid furntype");
-        let params =
-            json(&NodePropertySet { node, key: SYSTEM_FURNTYPE.to_owned(), value: PropertyValue::furn_type(furntype) })
-                .expect("params");
-        dispatch(session, NODE_PROPERTY_SET_ID, &params).expect("set furntype");
+    /// The shell's undo, with the editor's view state pruned the way a frame prunes it.
+    ///
+    /// The tree toolbar no longer carries undo; the header and the palette do, so a test that used
+    /// the tree action calls the session directly and keeps the selection consistent.
+    fn undo(session: &mut Session, editor: &mut Editor) {
+        session.undo().expect("undo");
+        editor.selection.retain_existing(session.project());
+        editor.retain_open(session.project());
+        editor.retain_creation_parent(session.project());
     }
 
     fn grouped_project() -> (Project, Id, Id, Id) {
@@ -1950,7 +1903,7 @@ mod tests {
         assert_eq!(primitive.mesh_counts(), (8, 6), "a cube keeps six faces");
         assert_eq!(session.project().revision().get(), 1, "one command is one revision");
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object(id).is_none());
     }
@@ -2041,7 +1994,7 @@ mod tests {
         assert_eq!(session.project().light(light).expect("light").name(), "Light");
         assert_eq!(session.project().revision().get(), 2);
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert!(session.project().light(light).is_none());
         assert!(editor.selected_node().is_none());
     }

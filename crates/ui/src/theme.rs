@@ -29,6 +29,13 @@ pub const CONTROL_HOVER: Color32 = Color32::from_rgb(0x39, 0x3d, 0x44);
 /// A pressed control.
 pub const CONTROL_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x24);
 
+/// The translucent fill of a floating cluster over the viewport: [`SURFACE`] at about 88 %.
+///
+/// A floating cluster sits over the drawn scene, so it has to keep the scene readable behind it
+/// without losing the contrast of its own controls. The alpha is premultiplied, which is what
+/// `egui` expects from a `Color32`.
+pub const FLOATING: Color32 = Color32::from_rgba_premultiplied(0x1e, 0x21, 0x26, 224);
+
 /// Primary text.
 pub const TEXT: Color32 = Color32::from_rgb(0xdd, 0xdf, 0xe2);
 
@@ -142,8 +149,17 @@ pub const RIBBON_CAPTION_HEIGHT: f32 = 14.0;
 /// The height of the viewport bar at the bottom of the window, in points.
 pub const STATUS_HEIGHT: f32 = 28.0;
 
+/// The height of a side panel's header row, in points.
+///
+/// One control tall, like a header chip, so the title, the count chip and the fold chevron sit on
+/// the same line the header uses for its own buttons.
+pub const PANEL_HEADER_HEIGHT: f32 = 26.0;
+
 /// The width of a collapsed side panel's strip, in points.
 pub const COLLAPSED_PANEL_WIDTH: f32 = 26.0;
+
+/// The air between a floating cluster and the edge of the surface it floats over, in points.
+pub const FLOATING_OFFSET: f32 = 12.0;
 
 /// The rounding of a control, in pixels.
 pub const RADIUS: u8 = 4;

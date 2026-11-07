@@ -8,7 +8,7 @@
 use egui::collapsing_header::CollapsingState;
 use egui::{RichText, Ui};
 use furnicraft_engine::Session;
-use furnicraft_model::{Container, FurnType, Id, Node, Panel, Project};
+use furnicraft_model::{Container, Id, Node, Panel, Project};
 
 /// The selected document nodes, in click order. The last one is the primary selection.
 #[derive(Debug, Default)]
@@ -38,14 +38,15 @@ impl Selection {
         self.ids.push(id);
     }
 
+    /// Replaces the selection with several nodes, in the given order.
+    #[cfg(test)]
+    pub(crate) fn replace_all(&mut self, ids: Vec<Id>) {
+        self.ids = ids;
+    }
+
     /// Empties the selection.
     pub(crate) fn clear(&mut self) {
         self.ids.clear();
-    }
-
-    /// Replaces the selection with a query result, or clears it when nothing matched.
-    pub(crate) fn replace_all(&mut self, ids: Vec<Id>) {
-        self.ids = ids;
     }
 
     /// Adds the node to the selection, or removes it when it is already selected.
@@ -73,8 +74,8 @@ impl Selection {
 /// One structural action the tree asks the editor to run.
 ///
 /// The tree shows and restructures nodes; it never creates one. Creation is a `ToolAction` from the
-/// toolbar strip, so there is exactly one place a new node starts. `AddChild` only arms a container
-/// for the next creation, which is a view-state decision, not a second creation path (ADR 0056).
+/// ribbon, so there is exactly one place a new node starts. `AddChild` only arms a container for the
+/// next creation, which is a view-state decision, not a second creation path (ADR 0056).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeAction {
     AddChild { parent: Id },
@@ -83,91 +84,21 @@ pub(crate) enum TreeAction {
     Group { nodes: Vec<Id> },
     Ungroup { node: Id },
     ConvertToGroup { node: Id },
-    SelectUnderType { furntype: FurnType },
-    Undo,
-    Redo,
 }
 
-/// Draws the toolbar and the container tree, returning the actions the user requested.
-pub(crate) fn show(
-    ui: &mut Ui,
-    session: &Session,
-    selection: &mut Selection,
-    type_filter: &mut String,
-) -> Vec<TreeAction> {
+/// Draws the container tree, returning the actions the user requested.
+///
+/// The tree owns no toolbar and no heading: the surface it sits on draws its own header, and every
+/// node action is reached from the row's context menu. The one multi-node action, grouping, is
+/// offered there while two or more nodes are selected.
+pub(crate) fn show(ui: &mut Ui, session: &Session, selection: &mut Selection) -> Vec<TreeAction> {
     let project = session.project();
     let mut actions = Vec::new();
-    show_toolbar(ui, session, selection, type_filter, &mut actions);
-    ui.separator();
-    show_container(ui, project, project.root(), selection, &mut actions, 0);
+    let group = (selection.ids().len() >= 2 && project.validate_group(selection.ids()).is_ok())
+        .then(|| selection.ids().to_vec());
+    let group = group.as_deref().unwrap_or(&[]);
+    show_container(ui, project, project.root(), selection, &mut actions, group, 0);
     actions
-}
-
-fn show_toolbar(
-    ui: &mut Ui,
-    session: &Session,
-    selection: &Selection,
-    type_filter: &mut String,
-    actions: &mut Vec<TreeAction>,
-) {
-    let project = session.project();
-    let primary = selection.primary();
-    let primary_node = primary.and_then(|id| project.node(id));
-    let can_ungroup = primary.is_some_and(|id| {
-        id != project.root().id() && project.container(id).is_some_and(|container| !container.is_component())
-    });
-    let can_convert = primary.is_some_and(|id| project.is_component(id));
-    let can_group = selection.ids().len() >= 2 && project.validate_group(selection.ids()).is_ok();
-
-    ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(can_group, egui::Button::new("Group")).clicked() {
-            actions.push(TreeAction::Group { nodes: selection.ids().to_vec() });
-        }
-        if ui.add_enabled(can_ungroup, egui::Button::new("Ungroup")).clicked()
-            && let Some(node) = primary
-        {
-            actions.push(TreeAction::Ungroup { node });
-        }
-        if ui.add_enabled(can_convert, egui::Button::new("Convert to group")).clicked()
-            && let Some(node) = primary
-        {
-            actions.push(TreeAction::ConvertToGroup { node });
-        }
-        if ui.add_enabled(primary_node.is_some(), egui::Button::new("Duplicate")).clicked()
-            && let Some(node) = primary
-        {
-            actions.push(TreeAction::Duplicate { node });
-        }
-        if ui.add_enabled(primary_node.is_some(), egui::Button::new("Delete")).clicked()
-            && let Some(node) = primary
-        {
-            actions.push(TreeAction::Delete { node });
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(session.can_undo(), egui::Button::new("Undo")).clicked() {
-            actions.push(TreeAction::Undo);
-        }
-        if ui.add_enabled(session.can_redo(), egui::Button::new("Redo")).clicked() {
-            actions.push(TreeAction::Redo);
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Type");
-        ui.add(egui::TextEdit::singleline(type_filter).hint_text("12.03").desired_width(90.0));
-        let parsed = type_filter.trim().parse::<FurnType>().ok();
-        if ui
-            .add_enabled(parsed.is_some(), egui::Button::new("Select subtree"))
-            .on_hover_text("Select every node of this furniture type and its sub-types")
-            .clicked()
-            && let Some(furntype) = parsed
-        {
-            actions.push(TreeAction::SelectUnderType { furntype });
-        }
-        if ui.add_enabled(!type_filter.is_empty(), egui::Button::new("Clear")).clicked() {
-            type_filter.clear();
-        }
-    });
 }
 
 fn container_label(project: &Project, container: &Container) -> RichText {
@@ -192,6 +123,7 @@ fn show_container(
     container: &Container,
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
+    group: &[Id],
     depth: u32,
 ) {
     let id = container.id();
@@ -203,44 +135,54 @@ fn show_container(
     let (_toggle, header, _) =
         state.show_header(ui, |ui| ui.selectable_label(selection.contains(id), label)).body(|ui| {
             for child in container.children() {
-                show_node(ui, project, child, selection, actions, depth.saturating_add(1));
+                show_node(ui, project, child, selection, actions, group, depth.saturating_add(1));
             }
         });
     if header.inner.clicked() {
         select(ui, selection, id);
     }
     header.inner.context_menu(|ui| {
-        container_menu(ui, id, is_root, is_component, actions);
+        container_menu(ui, id, is_root, is_component, group, actions);
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_node(
     ui: &mut Ui,
     project: &Project,
     node: &Node,
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
+    group: &[Id],
     depth: u32,
 ) {
     match node {
         Node::Container(container) => {
-            show_container(ui, project, container, selection, actions, depth);
+            show_container(ui, project, container, selection, actions, group, depth);
         }
-        Node::Panel(panel) => show_panel(ui, panel, selection, actions),
-        Node::Object(object) => show_object(ui, object, selection, actions),
-        Node::Camera(camera) => show_leaf(ui, camera.id(), camera.name(), "camera", selection, actions),
-        Node::Light(light) => show_leaf(ui, light.id(), light.name(), "light", selection, actions),
+        Node::Panel(panel) => show_panel(ui, panel, selection, actions, group),
+        Node::Object(object) => show_object(ui, object, selection, actions, group),
+        Node::Camera(camera) => show_leaf(ui, camera.id(), camera.name(), "camera", selection, actions, group),
+        Node::Light(light) => show_leaf(ui, light.id(), light.name(), "light", selection, actions, group),
     }
 }
 
 /// A camera or a light row: a named leaf with a kind tag and the usual duplicate/delete actions.
-fn show_leaf(ui: &mut Ui, id: Id, name: &str, kind: &str, selection: &mut Selection, actions: &mut Vec<TreeAction>) {
+fn show_leaf(
+    ui: &mut Ui,
+    id: Id,
+    name: &str,
+    kind: &str,
+    selection: &mut Selection,
+    actions: &mut Vec<TreeAction>,
+    group: &[Id],
+) {
     let label = RichText::new(format!("{name}  [{kind}]"));
     let response = ui.selectable_label(selection.contains(id), label);
     if response.clicked() {
         select(ui, selection, id);
     }
-    response.context_menu(|ui| object_menu(ui, id, actions));
+    response.context_menu(|ui| object_menu(ui, id, group, actions));
 }
 
 fn show_object(
@@ -248,6 +190,7 @@ fn show_object(
     object: &furnicraft_model::Object,
     selection: &mut Selection,
     actions: &mut Vec<TreeAction>,
+    group: &[Id],
 ) {
     let id = object.id();
     let kind = match object.geometry() {
@@ -261,10 +204,11 @@ fn show_object(
     if response.clicked() {
         select(ui, selection, id);
     }
-    response.context_menu(|ui| object_menu(ui, id, actions));
+    response.context_menu(|ui| object_menu(ui, id, group, actions));
 }
 
-fn object_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
+fn object_menu(ui: &mut Ui, id: Id, group: &[Id], actions: &mut Vec<TreeAction>) {
+    group_entry(ui, group, actions);
     if ui.button("Duplicate").clicked() {
         actions.push(TreeAction::Duplicate { node: id });
         ui.close();
@@ -275,13 +219,28 @@ fn object_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
     }
 }
 
-fn show_panel(ui: &mut Ui, panel: &Panel, selection: &mut Selection, actions: &mut Vec<TreeAction>) {
+fn show_panel(ui: &mut Ui, panel: &Panel, selection: &mut Selection, actions: &mut Vec<TreeAction>, group: &[Id]) {
     let id = panel.id();
     let response = ui.selectable_label(selection.contains(id), panel.name());
     if response.clicked() {
         select(ui, selection, id);
     }
-    response.context_menu(|ui| panel_menu(ui, id, actions));
+    response.context_menu(|ui| panel_menu(ui, id, group, actions));
+}
+
+/// The one multi-node entry: grouping the current selection.
+///
+/// The tree toolbar that used to carry it is gone, so a group is created from any row's context
+/// menu while two or more nodes are selected. The menu only offers it when the selection is valid.
+fn group_entry(ui: &mut Ui, group: &[Id], actions: &mut Vec<TreeAction>) {
+    if group.is_empty() {
+        return;
+    }
+    if ui.button("Group selection").clicked() {
+        actions.push(TreeAction::Group { nodes: group.to_vec() });
+        ui.close();
+    }
+    ui.separator();
 }
 
 fn select(ui: &Ui, selection: &mut Selection, id: Id) {
@@ -293,7 +252,8 @@ fn select(ui: &Ui, selection: &mut Selection, id: Id) {
     }
 }
 
-fn container_menu(ui: &mut Ui, id: Id, is_root: bool, is_component: bool, actions: &mut Vec<TreeAction>) {
+fn container_menu(ui: &mut Ui, id: Id, is_root: bool, is_component: bool, group: &[Id], actions: &mut Vec<TreeAction>) {
+    group_entry(ui, group, actions);
     if !is_root {
         if ui.button("Add child").on_hover_text("Create the next node inside this container").clicked() {
             actions.push(TreeAction::AddChild { parent: id });
@@ -320,7 +280,8 @@ fn container_menu(ui: &mut Ui, id: Id, is_root: bool, is_component: bool, action
     }
 }
 
-fn panel_menu(ui: &mut Ui, id: Id, actions: &mut Vec<TreeAction>) {
+fn panel_menu(ui: &mut Ui, id: Id, group: &[Id], actions: &mut Vec<TreeAction>) {
+    group_entry(ui, group, actions);
     if ui.button("Duplicate").clicked() {
         actions.push(TreeAction::Duplicate { node: id });
         ui.close();
@@ -423,22 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn selection_replaces_all_matches() {
-        let first = Id::new(2).expect("id");
-        let second = Id::new(3).expect("id");
-        let mut selection = Selection::default();
-        selection.replace(Id::new(4).expect("id"));
-
-        selection.replace_all(vec![first, second]);
-        assert_eq!(selection.ids(), &[first, second]);
-        assert_eq!(selection.primary(), Some(second));
-
-        selection.replace_all(Vec::new());
-        assert!(selection.ids().is_empty());
-        assert_eq!(selection.primary(), None);
-    }
-
-    #[test]
     fn selection_drops_removed_nodes() {
         let project = sample_project();
         let mut selection = Selection::default();
@@ -465,9 +410,6 @@ mod tests {
             TreeAction::Group { nodes: Vec::new() },
             TreeAction::Ungroup { node: Id::new(2).expect("id") },
             TreeAction::ConvertToGroup { node: Id::new(2).expect("id") },
-            TreeAction::SelectUnderType { furntype: "12".parse().expect("type") },
-            TreeAction::Undo,
-            TreeAction::Redo,
         ];
         for action in kinds {
             let debug = format!("{action:?}");
