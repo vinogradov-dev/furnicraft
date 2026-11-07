@@ -115,6 +115,22 @@ impl FileMenu {
         self.command(MenuCommand::Save, dirty)
     }
 
+    /// The New entry of the Home surface.
+    ///
+    /// It takes the same path as the menu: without unsaved changes it returns [`FileAction::New`],
+    /// and with them it opens the confirmation dialog instead of discarding the scene.
+    pub(crate) fn new_scene(&mut self, dirty: bool) -> Option<FileAction> {
+        self.command(MenuCommand::New, dirty)
+    }
+
+    /// Opens the path dialog from the Home surface.
+    ///
+    /// Home has no menu of its own, so it asks for the same dialog the File menu opens; the dialog
+    /// already warns when the current scene has unsaved changes.
+    pub(crate) fn request_open(&mut self) {
+        self.open_dialog();
+    }
+
     /// The bare file name the header's tab draws; the dirty marker is its own glyph there.
     pub(crate) fn file_name(&self) -> String {
         self.current

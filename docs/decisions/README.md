@@ -67,11 +67,13 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0060](0060-an-open-path-is-edited-by-its-corners.md) | An open path is edited by its corners | Accepted |
 | [0061](0061-a-rectangle-outline-bakes-into-a-ring.md) | A rectangle outline bakes into a ring | Accepted |
 | [0062](0062-a-large-ring-samples-to-fit-its-cap.md) | A large ring samples to fit its cap | Accepted |
-| [0063](0063-one-theme-owns-the-window.md) | One theme owns the window's colour and rhythm | Accepted |
+| [0063](0063-one-theme-owns-the-window.md) | One theme owns the window's colour and rhythm | Accepted; light variant superseded by 0069 |
 | [0064](0064-the-header-is-chrome-that-returns-an-action.md) | The header is chrome that returns an action | Accepted |
 | [0065](0065-visibility-and-lock-are-session-state.md) | Visibility and lock are session state | Accepted |
 | [0066](0066-the-ribbon-owns-the-tabs-and-a-tool-is-a-labelled-button.md) | The ribbon owns the tabs, and a tool is a labelled button | Accepted |
 | [0067](0067-a-ribbon-tool-is-one-measured-cell.md) | A ribbon tool is one measured cell, and a caption never sizes it | Accepted |
+| [0068](0068-the-workspace-lives-outside-the-document.md) | The workspace lives outside the document | Accepted |
+| [0069](0069-the-light-variant-is-a-second-palette.md) | The light variant is a second palette | Accepted |
 
 ## Format
 

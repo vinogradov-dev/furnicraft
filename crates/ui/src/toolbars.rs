@@ -550,16 +550,20 @@ fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32) -> egui:
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         if selected {
-            ui.painter().rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), crate::theme::CONTROL);
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), crate::theme::control(ui));
             let underline = egui::Rect::from_min_max(
                 egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
                 egui::pos2(rect.right() - 2.0, rect.bottom()),
             );
-            ui.painter().rect_filled(underline, egui::CornerRadius::ZERO, crate::theme::ACCENT);
+            ui.painter().rect_filled(underline, egui::CornerRadius::ZERO, crate::theme::accent(ui));
         } else if response.hovered() {
-            ui.painter().rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), crate::theme::CONTROL_HOVER);
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(crate::theme::RADIUS),
+                crate::theme::control_hover(ui),
+            );
         }
-        let color = if selected { crate::theme::TEXT } else { crate::theme::TEXT_DIM };
+        let color = if selected { crate::theme::text(ui) } else { crate::theme::text_dim(ui) };
         let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(pos, galley, color);
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tab.label()));
@@ -628,7 +632,7 @@ fn show_group(
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(width, crate::theme::RIBBON_CAPTION_HEIGHT), egui::Sense::hover());
         let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
-        ui.painter().galley(pos, galley, crate::theme::TEXT_DIM);
+        ui.painter().galley(pos, galley, crate::theme::text_dim(ui));
     });
 }
 
@@ -785,7 +789,7 @@ fn projection_button(perspective: bool) -> (Icon, &'static str) {
 fn labelled_field(ui: &mut Ui, label: &str, text: &mut String) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        ui.label(egui::RichText::new(label).size(10.5).color(crate::theme::TEXT_DIM));
+        ui.label(egui::RichText::new(label).size(10.5).color(crate::theme::text_dim(ui)));
         ui.add(TextEdit::singleline(text).desired_width(64.0).hint_text("mm"));
     });
 }

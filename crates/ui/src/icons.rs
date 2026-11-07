@@ -473,12 +473,12 @@ fn ribbon_face(ui: &Ui, response: &Response, on: bool) -> (Color32, Stroke, Colo
         return (visuals.bg_fill, visuals.stroke, Color32::WHITE);
     }
     if response.is_pointer_button_down_on() {
-        return (crate::theme::CONTROL_ACTIVE, Stroke::NONE, crate::theme::TEXT);
+        return (crate::theme::control_active(ui), Stroke::NONE, crate::theme::text(ui));
     }
     if response.hovered() {
-        return (crate::theme::CONTROL_HOVER, Stroke::NONE, crate::theme::TEXT);
+        return (crate::theme::control_hover(ui), Stroke::NONE, crate::theme::text(ui));
     }
-    (Color32::TRANSPARENT, Stroke::NONE, crate::theme::TEXT)
+    (Color32::TRANSPARENT, Stroke::NONE, crate::theme::text(ui))
 }
 
 /// Paints `icon` inside `rect` at `point_size`, tinted with `color`, without a button frame.

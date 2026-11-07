@@ -167,14 +167,178 @@ pub const RADIUS: u8 = 4;
 /// The title of the window, and the word the header draws.
 pub const PRODUCT_NAME: &str = "FurniCraft";
 
-/// Applies the FurniCraft visuals and spacing to `style`.
+/// One theme variant: every chrome and text colour the window draws with.
 ///
-/// The same function serves both theme variants of `egui`: the editor is dark, so the light variant
-/// takes the same colours rather than a second palette nobody asked for. Text sizes come from the
-/// desktop convention: 12 pt body, 11 pt secondary, 13 pt headings, so a 150 % display does not turn
-/// the ribbon into a paragraph.
+/// The palette is the source of truth for both variants. [`DARK`] holds the values the consts above
+/// name, so a widget never has to know which variant is active: the accessors below read the
+/// [`egui::Visuals`] that [`apply_with`] installed, and the same call site draws correctly in dark
+/// and light mode. The accent is data, so the settings window can replace it without a second
+/// palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    /// Whether this is a dark variant, as `egui` records it.
+    pub dark: bool,
+    /// The window frame behind the panels.
+    pub chrome: Color32,
+    /// The header, the ribbon body and the panel headers.
+    pub surface: Color32,
+    /// The panel background where content sits.
+    pub panel: Color32,
+    /// A control at rest, hovered and pressed.
+    pub control: Color32,
+    /// A hovered control.
+    pub control_hover: Color32,
+    /// A pressed control.
+    pub control_active: Color32,
+    /// A translucent cluster over the viewport.
+    pub floating: Color32,
+    /// Primary text.
+    pub text: Color32,
+    /// Secondary text: hints, units and group captions.
+    pub text_dim: Color32,
+    /// Text that cannot be acted on.
+    pub text_disabled: Color32,
+    /// A hairline between sections.
+    pub line: Color32,
+    /// The action accent.
+    pub accent: Color32,
+    /// The accent used as a filled background.
+    pub accent_fill: Color32,
+    /// A destructive action's text.
+    pub danger: Color32,
+    /// A warning text.
+    pub warn: Color32,
+}
+
+impl Palette {
+    /// The same palette with the user's accent.
+    ///
+    /// The filled accent is derived from the chosen colour, so a pale accent still carries white
+    /// text: it is folded towards the dark end while the accent line itself stays as picked.
+    pub fn with_accent(self, accent: Color32) -> Self {
+        let fold = |channel: u8| ((u16::from(channel) * 2) / 3).min(255) as u8;
+        Self { accent, accent_fill: Color32::from_rgb(fold(accent.r()), fold(accent.g()), fold(accent.b())), ..self }
+    }
+}
+
+/// The dark palette the editor has drawn with since U38.
+pub const DARK: Palette = Palette {
+    dark: true,
+    chrome: CHROME,
+    surface: SURFACE,
+    panel: PANEL,
+    control: CONTROL,
+    control_hover: CONTROL_HOVER,
+    control_active: CONTROL_ACTIVE,
+    floating: FLOATING,
+    text: TEXT,
+    text_dim: TEXT_DIM,
+    text_disabled: TEXT_DISABLED,
+    line: LINE,
+    accent: ACCENT,
+    accent_fill: ACCENT_FILL,
+    danger: DANGER,
+    warn: WARN,
+};
+
+/// The light palette: the same rhythm on paper instead of slate.
+pub const LIGHT: Palette = Palette {
+    dark: false,
+    chrome: Color32::from_rgb(0xe6, 0xe9, 0xed),
+    surface: Color32::from_rgb(0xf1, 0xf3, 0xf5),
+    panel: Color32::from_rgb(0xfa, 0xfb, 0xfc),
+    control: Color32::from_rgb(0xe2, 0xe6, 0xea),
+    control_hover: Color32::from_rgb(0xd5, 0xda, 0xdf),
+    control_active: Color32::from_rgb(0xc6, 0xcc, 0xd2),
+    floating: Color32::from_rgba_premultiplied(0xf1, 0xf3, 0xf5, 224),
+    text: Color32::from_rgb(0x1f, 0x23, 0x28),
+    text_dim: Color32::from_rgb(0x5c, 0x63, 0x6b),
+    text_disabled: Color32::from_rgb(0xa0, 0xa6, 0xad),
+    line: Color32::from_rgb(0xcd, 0xd2, 0xd8),
+    accent: ACCENT,
+    accent_fill: ACCENT_FILL,
+    danger: Color32::from_rgb(0xc0, 0x39, 0x2b),
+    warn: Color32::from_rgb(0x8a, 0x62, 0x00),
+};
+
+/// The primary text colour of the active theme.
+pub fn text(ui: &egui::Ui) -> Color32 {
+    ui.visuals().override_text_color.unwrap_or(DARK.text)
+}
+
+/// The secondary text colour of the active theme.
+pub fn text_dim(ui: &egui::Ui) -> Color32 {
+    ui.visuals().weak_text_color.unwrap_or(DARK.text_dim)
+}
+
+/// The raised surface fill of the active theme.
+pub fn surface(ui: &egui::Ui) -> Color32 {
+    ui.visuals().window_fill
+}
+
+/// The panel fill of the active theme.
+pub fn panel(ui: &egui::Ui) -> Color32 {
+    ui.visuals().panel_fill
+}
+
+/// The darkest chrome of the active theme.
+pub fn chrome(ui: &egui::Ui) -> Color32 {
+    ui.visuals().extreme_bg_color
+}
+
+/// A control's resting fill.
+pub fn control(ui: &egui::Ui) -> Color32 {
+    ui.visuals().widgets.inactive.bg_fill
+}
+
+/// A hovered control's fill.
+pub fn control_hover(ui: &egui::Ui) -> Color32 {
+    ui.visuals().widgets.hovered.bg_fill
+}
+
+/// A pressed control's fill.
+pub fn control_active(ui: &egui::Ui) -> Color32 {
+    ui.visuals().widgets.active.bg_fill
+}
+
+/// The translucent fill of a floating cluster.
+pub fn floating(ui: &egui::Ui) -> Color32 {
+    ui.visuals().faint_bg_color
+}
+
+/// A hairline between sections.
+pub fn line(ui: &egui::Ui) -> Color32 {
+    ui.visuals().widgets.noninteractive.bg_stroke.color
+}
+
+/// The action accent.
+pub fn accent(ui: &egui::Ui) -> Color32 {
+    ui.visuals().hyperlink_color
+}
+
+/// The accent as a filled background.
+pub fn accent_fill(ui: &egui::Ui) -> Color32 {
+    ui.visuals().selection.bg_fill
+}
+
+/// A destructive action's text.
+pub fn danger(ui: &egui::Ui) -> Color32 {
+    ui.visuals().error_fg_color
+}
+
+/// A warning text.
+pub fn warn(ui: &egui::Ui) -> Color32 {
+    ui.visuals().warn_fg_color
+}
+
+/// Applies the dark FurniCraft visuals and spacing to `style`.
 pub fn apply(style: &mut egui::Style) {
-    style.visuals = visuals();
+    apply_with(style, DARK);
+}
+
+/// Applies one palette and the shared spacing and type scale to `style`.
+pub fn apply_with(style: &mut egui::Style, palette: Palette) {
+    style.visuals = visuals(palette);
     style.spacing.item_spacing = vec2(STEP * 1.5, STEP);
     style.spacing.button_padding = vec2(STEP * 2.0, STEP);
     style.spacing.window_margin = egui::Margin::same(8);
@@ -209,85 +373,99 @@ fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
 }
 
 /// The palette as `egui` expects it: one widget visual per interaction state.
-fn visuals() -> Visuals {
-    let mut visuals = Visuals::dark();
-    visuals.dark_mode = true;
-    visuals.panel_fill = PANEL;
-    visuals.window_fill = SURFACE;
-    visuals.window_stroke = Stroke::new(1.0, LINE);
+fn visuals(palette: Palette) -> Visuals {
+    let mut visuals = if palette.dark { Visuals::dark() } else { Visuals::light() };
+    visuals.dark_mode = palette.dark;
+    visuals.panel_fill = palette.panel;
+    visuals.window_fill = palette.surface;
+    visuals.window_stroke = Stroke::new(1.0, palette.line);
     visuals.window_corner_radius = CornerRadius::same(RADIUS);
     visuals.menu_corner_radius = CornerRadius::same(RADIUS);
-    visuals.faint_bg_color = Color32::from_rgb(0x2b, 0x2f, 0x36);
-    visuals.extreme_bg_color = CHROME;
-    visuals.code_bg_color = CHROME;
-    visuals.override_text_color = Some(TEXT);
-    visuals.weak_text_color = Some(TEXT_DIM);
-    visuals.hyperlink_color = ACCENT;
-    visuals.warn_fg_color = WARN;
-    visuals.error_fg_color = DANGER;
-    visuals.selection = egui::style::Selection { bg_fill: ACCENT_FILL, stroke: Stroke::new(1.0, TEXT) };
+    visuals.faint_bg_color = palette.floating;
+    visuals.extreme_bg_color = palette.chrome;
+    visuals.code_bg_color = palette.chrome;
+    visuals.override_text_color = Some(palette.text);
+    visuals.weak_text_color = Some(palette.text_dim);
+    visuals.hyperlink_color = palette.accent;
+    visuals.warn_fg_color = palette.warn;
+    visuals.error_fg_color = palette.danger;
+    visuals.selection = egui::style::Selection { bg_fill: palette.accent_fill, stroke: Stroke::new(1.0, palette.text) };
     // A dense editor draws its own separators; the default indent vline doubles them.
     visuals.indent_has_left_vline = false;
     visuals.striped = false;
     visuals.slider_trailing_fill = true;
-    visuals.text_cursor = egui::style::TextCursorStyle { stroke: Stroke::new(1.0, TEXT), ..Default::default() };
-    visuals.widgets = widgets();
+    visuals.text_cursor = egui::style::TextCursorStyle { stroke: Stroke::new(1.0, palette.text), ..Default::default() };
+    visuals.widgets = widgets(palette);
     visuals
 }
 
 /// The five widget states every control shares.
-fn widgets() -> Widgets {
+fn widgets(palette: Palette) -> Widgets {
     Widgets {
         noninteractive: WidgetVisuals {
-            bg_fill: PANEL,
-            weak_bg_fill: PANEL,
-            bg_stroke: Stroke::new(1.0, LINE),
+            bg_fill: palette.panel,
+            weak_bg_fill: palette.panel,
+            bg_stroke: Stroke::new(1.0, palette.line),
             corner_radius: CornerRadius::same(RADIUS),
-            fg_stroke: Stroke::new(1.0, TEXT),
+            fg_stroke: Stroke::new(1.0, palette.text),
             expansion: 0.0,
         },
         inactive: WidgetVisuals {
-            bg_fill: CONTROL,
-            weak_bg_fill: CONTROL,
+            bg_fill: palette.control,
+            weak_bg_fill: palette.control,
             bg_stroke: Stroke::NONE,
             corner_radius: CornerRadius::same(RADIUS),
-            fg_stroke: Stroke::new(1.0, TEXT),
+            fg_stroke: Stroke::new(1.0, palette.text),
             expansion: 0.0,
         },
         hovered: WidgetVisuals {
-            bg_fill: CONTROL_HOVER,
-            weak_bg_fill: CONTROL_HOVER,
-            bg_stroke: Stroke::new(1.0, LINE),
+            bg_fill: palette.control_hover,
+            weak_bg_fill: palette.control_hover,
+            bg_stroke: Stroke::new(1.0, palette.line),
             corner_radius: CornerRadius::same(RADIUS),
-            fg_stroke: Stroke::new(1.0, TEXT),
+            fg_stroke: Stroke::new(1.0, palette.text),
             expansion: 0.0,
         },
         active: WidgetVisuals {
-            bg_fill: CONTROL_ACTIVE,
-            weak_bg_fill: CONTROL_ACTIVE,
-            bg_stroke: Stroke::new(1.0, ACCENT),
+            bg_fill: palette.control_active,
+            weak_bg_fill: palette.control_active,
+            bg_stroke: Stroke::new(1.0, palette.accent),
             corner_radius: CornerRadius::same(RADIUS),
-            fg_stroke: Stroke::new(1.0, TEXT),
+            fg_stroke: Stroke::new(1.0, palette.text),
             expansion: 0.0,
         },
         open: WidgetVisuals {
-            bg_fill: CONTROL_ACTIVE,
-            weak_bg_fill: CONTROL_ACTIVE,
-            bg_stroke: Stroke::new(1.0, LINE),
+            bg_fill: palette.control_active,
+            weak_bg_fill: palette.control_active,
+            bg_stroke: Stroke::new(1.0, palette.line),
             corner_radius: CornerRadius::same(RADIUS),
-            fg_stroke: Stroke::new(1.0, TEXT),
+            fg_stroke: Stroke::new(1.0, palette.text),
             expansion: 0.0,
         },
     }
 }
 
-/// Installs the theme on `ctx` for both variants and returns nothing a caller must keep.
+/// Installs the dark theme on `ctx` for both variants and returns nothing a caller must keep.
 ///
-/// `egui` keeps a dark and a light style; the system preference decides which one is active, so the
-/// programme applies the palette to both and the operating system cannot leave half a window with
-/// default colours.
+/// `egui` keeps a dark and a light style; the application installs both so a later theme switch
+/// never finds half a window on the default colours. [`install_with`] is the settings-aware entry
+/// point; this one keeps the pre-U41 behaviour for tests and the first frame.
 pub fn install(ctx: &egui::Context) {
     ctx.all_styles_mut(apply);
+}
+
+/// Installs both variants from the chosen theme preference and accent.
+///
+/// The active variant is `egui`'s business: it keeps the two styles apart and swaps them when the
+/// preference changes, so the settings window only has to call this once per change. An accent is
+/// applied to both palettes so a switch from dark to light keeps the same action colour.
+pub fn install_with(ctx: &egui::Context, preference: egui::ThemePreference, accent: [u8; 3]) {
+    let accent = Color32::from_rgb(accent[0], accent[1], accent[2]);
+    let dark = DARK.with_accent(accent);
+    let light = LIGHT.with_accent(accent);
+    ctx.style_mut_of(egui::Theme::Dark, |style| apply_with(style, dark));
+    ctx.style_mut_of(egui::Theme::Light, |style| apply_with(style, light));
+    ctx.set_theme(preference);
 }
 
 /// A frame for one chrome surface: the fill and the hairline that closes it.
@@ -311,7 +489,7 @@ pub fn divider(ui: &mut egui::Ui) {
 pub fn divider_of_height(ui: &mut egui::Ui, height: f32) {
     ui.add_space(STEP);
     let (rect, _) = ui.allocate_exact_size(vec2(1.0, height), egui::Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, LINE));
+    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, line(ui)));
     ui.add_space(STEP);
 }
 

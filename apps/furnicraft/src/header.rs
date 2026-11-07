@@ -53,14 +53,14 @@ pub struct HeaderState {
 pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -> Option<HeaderAction> {
     let height = theme::HEADER_HEIGHT;
     let mut action = None;
-    egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
+    egui::Frame::new().fill(theme::surface(ui)).inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
         // `Sides` gives the left group the row and pins the right group to its far edge; two nested
         // layouts would leave the gear wherever the tab strip happened to end.
         let (left, right) = egui::Sides::new().height(height).shrink_right().show(
             ui,
             |ui| {
                 let mut action = None;
-                icons::mark(ui, 18.0, theme::ACCENT);
+                icons::mark(ui, 18.0, theme::accent(ui));
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(theme::PRODUCT_NAME).strong().size(13.5));
                 theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
@@ -114,14 +114,15 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
 fn tab(ui: &mut Ui, state: &HeaderState) -> Option<bool> {
     let mut close = false;
     egui::Frame::new()
-        .fill(theme::PANEL)
+        .fill(theme::panel(ui))
         .inner_margin(egui::Margin::symmetric(10, 3))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&state.title).size(12.0));
                 if state.dirty {
-                    ui.label(egui::RichText::new("●").size(9.0).color(theme::WARN)).on_hover_text("Unsaved changes");
+                    ui.label(egui::RichText::new("●").size(9.0).color(theme::warn(ui)))
+                        .on_hover_text("Unsaved changes");
                 }
                 close = icons::icon_button_at(ui, icons::window::CLOSE, 11.0, "Close the file", true, false).clicked();
             });

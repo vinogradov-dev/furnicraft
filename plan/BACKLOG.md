@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
-  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the control U40
-  left without a surface moves here), *Viewport* (default display style, grid on and its
-  step, edges, the view a new viewport opens with), *Ribbon* (background opacity) and *Shortcuts*
-  (the existing table). The window is a view, not a document surface: a change applies at once and
-  never touches the `.fcs`, and a scene saved by another machine carries none of it. The state is
-  written as JSON under the operating system's config directory through a small `settings` module
-  with an atomic write, the same shape `furnicraft-project` uses, so a crash during a save cannot
-  leave a half-written file; a missing, unreadable or older file falls back to the defaults with the
-  reason in the status bar instead of a panic. The same module gains the *Home* surface that the
-  header's house button opens: new, open, the recent files and the empty template, drawn over the
-  workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
-  truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the settings never appear in a serialised document.
-  Session notes: the gear is `HeaderAction::Settings` and currently reports "not built yet"; the
-  house button reports "The start surface is not built yet". `ui_scale::show` has no surface since
-  U40 and moves here. `furnicraft-project` already writes atomically — copy that shape. No new dependency:
-  `serde_json` is present, and `XDG_CONFIG_HOME` / `APPDATA` / `HOME` cover the three targets.
-  `files: apps/furnicraft/src, crates/ui/src`
-
 - `[ ]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
   listing a command's label, its id and whether it is enabled for the current session; the chosen
   entry dispatches it with parameters built from the current selection, and an entry that cannot run
@@ -211,6 +192,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
+  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the control U40
+  left without a surface moves here), *Viewport* (default display style, grid on and its
+  step, edges, the view a new viewport opens with), *Ribbon* (background opacity) and *Shortcuts*
+  (the existing table). The window is a view, not a document surface: a change applies at once and
+  never touches the `.fcs`, and a scene saved by another machine carries none of it. The state is
+  written as JSON under the operating system's config directory through a small `settings` module
+  with an atomic write, the same shape `furnicraft-project` uses, so a crash during a save cannot
+  leave a half-written file; a missing, unreadable or older file falls back to the defaults with the
+  reason in the status bar instead of a panic. The same module gains the *Home* surface that the
+  header's house button opens: new, open, the recent files and the empty template, drawn over the
+  workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
+  truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the settings never appear in a serialised document.
+  `c83ace5`
+  `files: apps/furnicraft/src, crates/ui/src`
 
 - `[x]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
   the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
