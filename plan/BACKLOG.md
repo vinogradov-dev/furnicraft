@@ -206,7 +206,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   header's house button opens: new, open, the recent files and the empty template, drawn over the
   workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
   truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the settings never appear in a serialised document.
-  `c83ace5`
+  `c83ace5`, `bbef3e2`
   `files: apps/furnicraft/src, crates/ui/src`
 
 - `[x]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
