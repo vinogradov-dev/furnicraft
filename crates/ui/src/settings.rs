@@ -447,6 +447,7 @@ pub fn shortcut_table() -> Vec<(String, String)> {
         ("Ctrl+S".to_owned(), "Save the scene".to_owned()),
         ("Ctrl+Z".to_owned(), "Undo".to_owned()),
         ("Ctrl+Y".to_owned(), "Redo".to_owned()),
+        ("Ctrl+K".to_owned(), "Command palette".to_owned()),
         ("F".to_owned(), "Frame all".to_owned()),
         ("O".to_owned(), "Perspective / orthographic".to_owned()),
         ("G".to_owned(), "Toggle the drawing grid".to_owned()),

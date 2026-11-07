@@ -24,6 +24,7 @@ mod light_card;
 mod machining;
 mod mesh_edit;
 mod object_card;
+mod palette;
 mod panel_card;
 mod pivot_card;
 mod placement_card;
@@ -70,6 +71,7 @@ use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
+pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
 
 /// Default length of a newly created panel, in millimetres.

@@ -48,7 +48,7 @@ use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, Scene
 use furnicraft_ui::display::OpeningView;
 use furnicraft_ui::settings::{Settings, SettingsSection, ViewportSettings};
 use furnicraft_ui::ui_scale;
-use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, icons, theme};
+use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, Palette, PaletteContext, icons, theme};
 use furnicraft_units::Length;
 
 use crate::contour_gizmo::ContourGizmo;
@@ -154,6 +154,8 @@ struct FurniCraftApp {
     settings_open: bool,
     /// Whether the Home surface is open.
     home_open: bool,
+    /// The command palette and its last-used order; session state, never document data.
+    palette: Palette,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
     settings_notice: Option<String>,
 }
@@ -221,6 +223,7 @@ impl FurniCraftApp {
             settings_section: SettingsSection::default(),
             settings_open: false,
             home_open: false,
+            palette: Palette::new(),
             settings_notice: loaded.notice,
         })
     }
@@ -1204,6 +1207,31 @@ impl FurniCraftApp {
         }
     }
 
+    /// Draws the command palette and runs the one command it returned.
+    ///
+    /// The palette lists engine specs and builds their parameters from the current selection; it
+    /// never mutates the document itself. A successful dispatch selects a node the command created
+    /// and lets the next frame rebuild the scene from the new revision.
+    fn command_palette(&mut self, ui: &mut egui::Ui) {
+        let context = self.palette_context();
+        let Some(id) = self.palette.show(ui.ctx(), &self.session, &context) else {
+            return;
+        };
+        match self.palette.activate(&mut self.session, &context, &id) {
+            Ok(outcome) => {
+                if let Some(created) = outcome.created_id() {
+                    self.editor.select_node(Some(created));
+                }
+            }
+            Err(error) => self.last_error = Some(error),
+        }
+    }
+
+    /// The selection and creation target the palette's parameter builders read.
+    fn palette_context(&self) -> PaletteContext {
+        PaletteContext::new(self.editor.selected_nodes().to_vec(), self.editor.creation_target(self.session.project()))
+    }
+
     /// Draws the Settings window and applies what it changed.
     ///
     /// The window edits a copy-free `&mut Settings`; a change is applied to the running application
@@ -1693,6 +1721,7 @@ struct Shortcuts {
     redo: bool,
     frame: bool,
     projection: bool,
+    palette: bool,
 }
 
 fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
@@ -1702,6 +1731,7 @@ fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
         redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
         frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),
         projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
+        palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
     })
 }
 
@@ -1745,7 +1775,7 @@ impl eframe::App for FurniCraftApp {
             && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
-            if self.settings_open || self.home_open {
+            if self.settings_open || self.home_open || self.palette.is_open() {
                 // The modal owns Escape for this frame and closes itself.
             } else if self.cluster.settings_open {
                 // The popover owns Escape for this frame and closes itself.
@@ -1790,8 +1820,11 @@ impl eframe::App for FurniCraftApp {
         }
         // The keys the header and the Settings page advertise. They are read only outside a text
         // field and a modal, so typing a file path or a name never saves, undoes or reframes.
-        if !ui.ctx().text_edit_focused() && !self.settings_open && !self.home_open {
+        if !ui.ctx().text_edit_focused() && !self.settings_open && !self.home_open && !self.palette.is_open() {
             let shortcuts = take_shortcuts(ui.ctx());
+            if shortcuts.palette {
+                self.palette.open();
+            }
             if shortcuts.save
                 && let Some(action) = self.files.save(self.session.is_dirty())
             {
@@ -1842,6 +1875,7 @@ impl eframe::App for FurniCraftApp {
         self.panel_card(ui);
         self.status_bar(ui);
         self.workspace(ui);
+        self.command_palette(ui);
         self.settings_window(ui.ctx());
         self.home_surface(ui.ctx());
     }
@@ -2321,5 +2355,11 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         assert_eq!(read, Shortcuts::default());
+
+        let output = ctx.run_ui(key_input(egui::Key::K, egui::Modifiers::COMMAND), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { palette: true, ..Shortcuts::default() });
     }
 }
