@@ -130,20 +130,6 @@ fn vs_line(vertex: VertexIn) -> LineOut {
     return out;
 }
 
-// A constant offset in normalized device depth pulls the edge pass toward the camera so a line
-// wins against the face it lies on instead of z-fighting. wgpu rejects DepthBiasState on a line
-// topology, so the edge pass applies the bias here rather than on the pipeline.
-const EDGE_DEPTH_NUDGE: f32 = 1.0e-4;
-
-@vertex
-fn vs_edge(vertex: VertexIn) -> LineOut {
-    var out: LineOut;
-    out.clip_position = camera.view_projection * vec4<f32>(vertex.position, 1.0);
-    out.clip_position.z = out.clip_position.z - EDGE_DEPTH_NUDGE * out.clip_position.w;
-    out.color = vertex.color;
-    return out;
-}
-
 struct LineIn {
     @location(0) color: vec4<f32>,
 };

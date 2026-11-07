@@ -169,6 +169,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Bugs
 
+- `[ ]` **X10** every triangle edge is drawn, and far edges show through near panels: a flat panel
+  draws the diagonals of its triangulation instead of its outline, and a panel a metre behind another
+  shows its edges through it in *shaded with edges* and *wireframe*. A dark viewport draws dark ink,
+  so edges vanish on the default background. Expectation: the default edge pass draws form edges only
+  — a boundary or a real crease, so a box shows twelve, not eighteen, and a triangular body nine —
+  the full triangulation is a switch in the display settings, the ink is light on a dark viewport,
+  and an edge behind a face is not drawn unless the *hidden edges* style is on, which shows one
+  object's own inside but never the object behind it.
+  Suspected cause: `crates/mesh` deduplicated edges by position but kept every one, so coplanar
+  diagonals survived; the `vs_edge` shader moved clip-space depth by a constant, which is ~90 mm of
+  world offset at one metre and >1 m at five, so a far line overtook the near face in front of it;
+  `edge_color` was a single dark constant; and the hidden pass compared depth with `Always` and
+  nothing else, so it drew through every object.
+  Tests: a coplanar quad drops its diagonal and keeps four boundary edges; a 90° fold keeps its
+  shared edge; a cube yields twelve edges and eighteen in the diagnostic list; a triangular prism
+  yields nine; an occluded drawable's edge slice is separate from the near one and carries its own
+  stencil slot; the face pass owns the depth bias and stamps the slot; the hidden pass accepts only
+  its own slot; the ink follows the background.
+  `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
+
 - `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
   frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene

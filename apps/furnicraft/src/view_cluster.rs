@@ -84,6 +84,11 @@ pub(crate) struct ViewCluster {
     pub(crate) layout_open: bool,
     /// Whether the orientation widget draws the pitch/yaw/roll and projection readout (U42).
     pub(crate) show_angles: bool,
+    /// Whether the edge pass draws every triangle edge instead of only the form edges.
+    ///
+    /// A diagnostic view state beside the style: it changes which cached edge list the renderer
+    /// reads, so a switch re-uploads the edge buffer but never touches the document.
+    pub(crate) all_edges: bool,
     /// Grid strength, 0–100.
     pub(crate) grid_strength: f32,
     /// Edge strength, 0–100.
@@ -100,6 +105,7 @@ impl Default for ViewCluster {
             settings_open: false,
             layout_open: false,
             show_angles: false,
+            all_edges: false,
             grid_strength: 60.0,
             edge_strength: 70.0,
             shadow_strength: 40.0,
@@ -344,6 +350,8 @@ fn settings_popover(
                 if toggle.on_disabled_hover_text("An authored camera owns the projection").clicked() {
                     action = Some(ClusterAction::ToggleProjection);
                 }
+                ui.checkbox(&mut state.all_edges, "Show every triangle edge")
+                    .on_hover_text("Diagnostic: keeps the triangulation diagonals the form-edge view hides.");
                 ui.separator();
                 for (value, label) in [
                     (&mut state.grid_strength, "Grid"),

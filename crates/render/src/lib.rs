@@ -23,7 +23,12 @@ use wgpu::util::DeviceExt as _;
 /// The offscreen colour format. `egui_wgpu::Renderer::register_native_texture` requires this
 /// exact format, and it is not an sRGB format, so the shader writes gamma-corrected values.
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The depth and stencil attachment of the offscreen target.
+///
+/// Depth chooses between the surfaces the frame draws. The stencil value records which drawable owns
+/// each pixel, which is what keeps the *hidden edges* style honest: a line shows through its own
+/// object and never through the object in front of it.
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 /// Largest vertex count the renderer accepts for one uploaded primitive: a drawable's mesh or the
 /// whole frame's line list.
@@ -35,11 +40,20 @@ const MAX_GRID_DIVISIONS: i64 = 512;
 /// The most views one frame may split into; the camera uniform holds one slot per view.
 pub const MAX_VIEWS: usize = 4;
 
-/// Gamma-space colour of the mesh edge pass.
+/// The stencil value an opaque face stamps so the *hidden edges* pass can recognise its own surface.
 ///
-/// The line pipeline is unlit and the colour is already in gamma space, like a grid or path colour.
-/// A dark ink reads over an oak panel and a white one without changing the shaded faces.
-const EDGE_COLOR: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
+/// Zero is the cleared value and therefore means "no surface here". A drawable's slot counts from
+/// one, so a scene with more drawables than slots makes the nearest ones share a slot; that can
+/// only make one object's inside visible through another at a pixel both own, never a wrong object
+/// appearing out of nothing.
+const STENCIL_MASK: u32 = 0xff;
+const MAX_STENCIL_OWNERS: usize = STENCIL_MASK as usize;
+
+/// Gamma-space ink for a light viewport.
+const EDGE_COLOR_DARK: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
+
+/// Gamma-space ink for a dark viewport: the dark ink disappears on the default background.
+const EDGE_COLOR_LIGHT: [f32; 4] = [0.86, 0.88, 0.91, 1.0];
 
 /// The passes one display style turns on, derived without a GPU.
 ///
@@ -154,12 +168,27 @@ struct GpuMesh {
     index_count: u32,
     /// World-space centre, used to order translucent objects back to front.
     centre: DVec3,
+    /// The stencil value an opaque face of this drawable stamps, and the only value its hidden
+    /// edges accept, so a node's inside never shows through the node in front of it.
+    stencil_reference: u32,
 }
 
 /// One line-list vertex buffer: the grid and the frame's polylines each own one.
 struct GpuLineList {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
+}
+
+/// One drawable's contiguous run inside the flattened edge buffer.
+///
+/// `stencil_reference` is the value its opaque faces wrote, so the hidden-edge pass can tell its own
+/// inside from the object in front of it. A drawable whose slot is zero owns no pixels and its
+/// hidden edges draw only over the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EdgeSlice {
+    first_vertex: u32,
+    vertex_count: u32,
+    stencil_reference: u32,
 }
 
 struct RenderTargets {
@@ -251,6 +280,12 @@ pub struct ViewportRenderer {
     draw_order: Vec<usize>,
     /// The edges of every solid drawable, flattened into one line list.
     edges: Option<GpuLineList>,
+    /// One slice of [`Self::edges`] per drawable, parallel to `drawables`, in upload order.
+    ///
+    /// The visible-edge style draws the whole buffer at once. The hidden-edge style needs each
+    /// drawable's own slice, because its stencil reference is what limits an inside edge to the
+    /// object it belongs to.
+    edge_slices: Vec<EdgeSlice>,
     grid: Option<GpuLineList>,
     polylines: Option<GpuLineList>,
     targets: RenderTargets,
@@ -326,20 +361,13 @@ impl ViewportRenderer {
             "fs_mesh_translucent",
             ShadingStyle::Translucent,
         );
-        let line_pipeline = create_line_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            "FurniCraft line pipeline",
-            "vs_line",
-            line_depth_state(),
-        );
+        let line_pipeline =
+            create_line_pipeline(device, &pipeline_layout, &shader, "FurniCraft line pipeline", line_depth_state());
         let edge_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
             "FurniCraft edge pipeline",
-            "vs_edge",
             edge_depth_state(false),
         );
         let hidden_edge_pipeline = create_line_pipeline(
@@ -347,7 +375,6 @@ impl ViewportRenderer {
             &pipeline_layout,
             &shader,
             "FurniCraft hidden edge pipeline",
-            "vs_edge",
             edge_depth_state(true),
         );
 
@@ -364,6 +391,7 @@ impl ViewportRenderer {
             centres: Vec::new(),
             draw_order: Vec::new(),
             edges: None,
+            edge_slices: Vec::new(),
             grid: None,
             polylines: None,
             targets,
@@ -417,18 +445,26 @@ impl ViewportRenderer {
                 usage: wgpu::BufferUsages::INDEX,
             });
             let centre = mesh_centre(&drawable.mesh, drawable.world_transform);
-            drawables.push(GpuMesh { vertex_buffer, index_buffer, index_count, centre });
+            drawables.push(GpuMesh {
+                vertex_buffer,
+                index_buffer,
+                index_count,
+                centre,
+                stencil_reference: stencil_slot(index),
+            });
         }
 
         let grid = line_list(device, "FurniCraft grid vertices", grid_vertices(&frame.grid))?;
         let polylines = line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines())?)?;
-        let edges = line_list(device, "FurniCraft edge vertices", edge_vertices(frame.drawables()))?;
+        let (edge_vertices, edge_slices) = edge_geometry(frame.drawables(), frame.all_edges, frame.background);
+        let edges = line_list(device, "FurniCraft edge vertices", edge_vertices)?;
 
         let draw_order: Vec<usize> = (0..drawables.len()).collect();
         self.drawables = drawables;
         self.centres = self.drawables.iter().map(|mesh| mesh.centre).collect();
         self.draw_order = draw_order;
         self.edges = edges;
+        self.edge_slices = edge_slices;
         self.grid = grid;
         self.polylines = polylines;
         Ok(())
@@ -510,7 +546,7 @@ impl ViewportRenderer {
             let depth_attachment = wgpu::RenderPassDepthStencilAttachment {
                 view: &self.targets.depth_view,
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
-                stencil_ops: None,
+                stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
             };
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FurniCraft clear pass"),
@@ -523,6 +559,8 @@ impl ViewportRenderer {
         }
 
         let passes = StylePasses::new(frame.shading);
+        // The shared clear resets depth and stencil together. The stencil slot is what tells the
+        // hidden-edge pass whose inside it is looking at.
         for ((camera, region), offset) in views.iter().zip(offsets) {
             let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
@@ -534,7 +572,9 @@ impl ViewportRenderer {
             let depth_attachment = wgpu::RenderPassDepthStencilAttachment {
                 view: &self.targets.depth_view,
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
-                stencil_ops: None,
+                // Each view owns its own rectangle but shares the stencil buffer, so the slots a
+                // neighbour stamped are reset before this view stamps its own.
+                stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
             };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FurniCraft view pass"),
@@ -551,6 +591,9 @@ impl ViewportRenderer {
             if passes.opaque_faces && !self.drawables.is_empty() {
                 pass.set_pipeline(&self.mesh_pipeline);
                 for mesh in &self.drawables {
+                    // The reference is the slot this drawable stamps; the hidden-edge pass reads it
+                    // back before drawing the same drawable's lines.
+                    pass.set_stencil_reference(mesh.stencil_reference);
                     pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                     pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
@@ -586,13 +629,29 @@ impl ViewportRenderer {
             }
 
             // Edges last, so a line sits on top of the faces it belongs to. *Shaded with hidden
-            // edges* uses the always pass, *wireframe* reaches here with no faces before it.
-            if (passes.visible_edges || passes.through_edges)
+            // edges* uses the stencil-gated pass, *wireframe* reaches here with no faces before it.
+            //
+            // A single flattened list is drawn once for the visible style. The hidden style needs
+            // the drawable's stencil slot as the reference value, so it walks the drawables and
+            // draws each drawable's own slice of the same buffer.
+            if passes.visible_edges
                 && let Some(edges) = &self.edges
             {
-                pass.set_pipeline(if passes.through_edges { &self.hidden_edge_pipeline } else { &self.edge_pipeline });
+                pass.set_pipeline(&self.edge_pipeline);
                 pass.set_vertex_buffer(0, edges.vertex_buffer.slice(..));
                 pass.draw(0..edges.vertex_count, 0..1);
+            } else if passes.through_edges
+                && let Some(edges) = &self.edges
+            {
+                pass.set_pipeline(&self.hidden_edge_pipeline);
+                pass.set_vertex_buffer(0, edges.vertex_buffer.slice(..));
+                for slice in &self.edge_slices {
+                    if slice.vertex_count == 0 {
+                        continue;
+                    }
+                    pass.set_stencil_reference(slice.stencil_reference);
+                    pass.draw(slice.first_vertex..slice.first_vertex + slice.vertex_count, 0..1);
+                }
             }
         }
         queue.submit(Some(encoder.finish()));
@@ -667,7 +726,25 @@ fn create_triangle_pipeline(
     })
 }
 
+/// The depth bias that lets an edge pass win against the face it lies on.
+///
+/// A line is one pixel wide and lies exactly on the surface it outlines, so without a bias the two
+/// fight for the pixel and the outline breaks up. A `LineList` pipeline cannot carry a depth bias at
+/// all — wgpu rejects it, because the slope term is undefined for a line — so the bias is applied
+/// where it belongs instead: the *faces* are pushed away from the camera by this much, and the
+/// unbias lines then win the comparison. A constant term in depth units is distance-independent,
+/// which is what a clip-space nudge is not: shifting NDC depth by a constant moves a far surface
+/// hundreds of millimetres and a near one barely at all.
+///
+/// At 24-bit depth one unit is about 6e-8 of the depth range, so `2` is far below any visible offset
+/// and far above the rounding error of the transform.
+const FACE_DEPTH_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 };
+
 /// The depth state of the face pass: opaque faces write depth, translucent faces do not.
+///
+/// An opaque face also stamps the stencil buffer with the drawable's slot, because that stamp is
+/// what the *hidden edges* pass tests against. A translucent face stamps nothing: it never claims
+/// to occlude anything, so it cannot own a pixel either.
 fn face_depth_state(style: ShadingStyle) -> wgpu::DepthStencilState {
     let translucent = style.is_translucent();
     wgpu::DepthStencilState {
@@ -676,8 +753,21 @@ fn face_depth_state(style: ShadingStyle) -> wgpu::DepthStencilState {
         // object, so it writes no depth.
         depth_write_enabled: Some(!translucent),
         depth_compare: Some(if translucent { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less }),
-        stencil: wgpu::StencilState::default(),
-        bias: wgpu::DepthBiasState::default(),
+        stencil: if translucent {
+            wgpu::StencilState::default()
+        } else {
+            // Every fragment that reaches this point has already won the depth test, so the nearest
+            // surface owns the pixel: write the drawable's slot.
+            let stamp = wgpu::StencilFaceState {
+                compare: wgpu::CompareFunction::Always,
+                fail_op: wgpu::StencilOperation::Keep,
+                depth_fail_op: wgpu::StencilOperation::Keep,
+                pass_op: wgpu::StencilOperation::Replace,
+            };
+            wgpu::StencilState { front: stamp, back: stamp, read_mask: STENCIL_MASK, write_mask: STENCIL_MASK }
+        },
+        // Only the opaque pass competes with the edge pass for a pixel, so only it is pushed away.
+        bias: if translucent { wgpu::DepthBiasState::default() } else { FACE_DEPTH_BIAS },
     }
 }
 
@@ -686,16 +776,16 @@ fn face_target(blend: Option<wgpu::BlendState>) -> Option<wgpu::ColorTargetState
     Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })
 }
 
-/// One line pipeline with the given vertex entry and depth state.
+/// One line pipeline with the given depth state.
 ///
-/// The grid and paths use `vs_line`; the edge pass uses `vs_edge`, whose clip-space nudge replaces
-/// the depth bias wgpu cannot apply to a line topology.
+/// The grid, the paths and both edge passes share `vs_line`; only the depth and stencil state
+/// differs. Nothing nudges a line toward the camera here: the faces are biased instead, so a line
+/// wins against its own surface at any distance.
 fn create_line_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     label: &str,
-    vertex_entry: &str,
     depth: wgpu::DepthStencilState,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -703,7 +793,7 @@ fn create_line_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(vertex_entry),
+            entry_point: Some("vs_line"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[Some(vertex_layout())],
         },
@@ -730,6 +820,9 @@ fn create_line_pipeline(
 }
 
 /// The depth state of the grid and path lines: tested against the scene, writing nothing.
+///
+/// The visible-edge style uses the same depth comparison; it is a separate pipeline only because its
+/// stencil state may differ.
 fn line_depth_state() -> wgpu::DepthStencilState {
     wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
@@ -740,19 +833,39 @@ fn line_depth_state() -> wgpu::DepthStencilState {
     }
 }
 
-/// Depth comparison of the edge pass.
+/// The depth and stencil state of the edge pass.
 ///
-/// wgpu rejects `DepthBiasState` on a line topology, so the nudge toward the camera lives in the
-/// edge vertex shader (`vs_edge` in `scene.wgsl`) and this state only chooses the comparison.
+/// The pass draws after the faces, so the depth buffer already holds the nearest surface of every
+/// object. Two things decide what a line may show:
 ///
-/// `through` is *shaded with hidden edges*: the comparison is always satisfied, so every edge shows
-/// regardless of the faces in front of it.
+/// - *visible edges* (`through == false`) test depth with `LessEqual`, so a line behind a face
+///   disappears. The face pass carries [`FACE_DEPTH_BIAS`], so the line that lies on its own face
+///   still wins the pixel without the line being moved.
+/// - *hidden edges* (`through == true`) ignore depth, so the inside of an object stays visible.
+///   The stencil test stops that from leaking to the rest of the scene: an opaque face stamps its
+///   drawable's slot, and a hidden line is drawn only where the pixel is still uncovered
+///   (`stencil = 0`) or stamped with the line's own slot. A node behind the frontmost one carries a
+///   different slot, so its edges stay hidden exactly as in a visible-edge pass.
+///
+/// The reference value is the drawable's slot, set per drawable before its slice is drawn.
 fn edge_depth_state(through: bool) -> wgpu::DepthStencilState {
+    let stencil = if through {
+        // Keep the buffer untouched; only the comparison and the reference decide what shows.
+        let accept = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        };
+        wgpu::StencilState { front: accept, back: accept, read_mask: STENCIL_MASK, write_mask: 0 }
+    } else {
+        wgpu::StencilState::default()
+    };
     wgpu::DepthStencilState {
         format: DEPTH_FORMAT,
         depth_write_enabled: Some(false),
         depth_compare: Some(if through { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
-        stencil: wgpu::StencilState::default(),
+        stencil,
         bias: wgpu::DepthBiasState::default(),
     }
 }
@@ -776,37 +889,69 @@ fn mesh_centre(mesh: &MeshData, transform: DMat4) -> DVec3 {
     if seen { (min + max) * 0.5 } else { DVec3::ZERO }
 }
 
-/// Flattens the edge list of every drawable into one line list in world space.
+/// Flattens the edge list of every drawable into one line list in world space, and records where
+/// each drawable's run begins so the hidden-edge pass can address it by stencil reference.
 ///
 /// The edge list is derived data that `crates/mesh` cached beside the mesh (ADR 0053), so this is a
-/// transform and a copy, never a search. A malformed edge or a non-finite vertex is skipped: an
-/// edge is decoration and must never turn a whole frame into an error.
-fn edge_vertices(drawables: &[Drawable]) -> Vec<MeshVertex> {
+/// transform and a copy, never a search. `all_edges` selects the full triangulation instead of the
+/// form edges, for the diagnostic style. A malformed edge or a non-finite vertex is skipped: an edge
+/// is decoration and must never turn a whole frame into an error.
+///
+/// The colour follows the background: light ink on the dark viewport, dark ink when a light theme
+/// brings a light clear colour, so the form stays readable in both palettes. The slice list is
+/// parallel to `drawables`, so a drawable with no lines still gets its own (empty) entry.
+fn edge_geometry(drawables: &[Drawable], all_edges: bool, background: [f32; 4]) -> (Vec<MeshVertex>, Vec<EdgeSlice>) {
+    let color = edge_color(background);
     let mut vertices = Vec::new();
-    for drawable in drawables {
-        let Some(edges) = drawable.edges.as_deref() else {
-            continue;
-        };
-        if !drawable.world_transform.is_finite() {
-            continue;
-        }
-        for edge in edges.as_chunks::<2>().0 {
-            let (Some(a), Some(b)) = (position_at(&drawable.mesh, edge[0]), position_at(&drawable.mesh, edge[1]))
-            else {
-                continue;
-            };
-            let a = drawable.world_transform.transform_point3(a);
-            let b = drawable.world_transform.transform_point3(b);
-            if !a.is_finite() || !b.is_finite() {
-                continue;
+    let mut slices = Vec::with_capacity(drawables.len());
+    for (index, drawable) in drawables.iter().enumerate() {
+        let first_vertex = vertices.len();
+        let edges = if all_edges { drawable.all_edges.as_deref() } else { drawable.edges.as_deref() };
+        if let Some(edges) = edges
+            && drawable.world_transform.is_finite()
+        {
+            for edge in edges.as_chunks::<2>().0 {
+                let (Some(a), Some(b)) = (position_at(&drawable.mesh, edge[0]), position_at(&drawable.mesh, edge[1]))
+                else {
+                    continue;
+                };
+                let a = drawable.world_transform.transform_point3(a);
+                let b = drawable.world_transform.transform_point3(b);
+                if !a.is_finite() || !b.is_finite() {
+                    continue;
+                }
+                if vertices.len().saturating_add(2) > MAX_VERTICES {
+                    break;
+                }
+                push_line(&mut vertices, [a.x, a.y, a.z], [b.x, b.y, b.z], color);
             }
-            if vertices.len().saturating_add(2) > MAX_VERTICES {
-                return vertices;
-            }
-            push_line(&mut vertices, [a.x, a.y, a.z], [b.x, b.y, b.z], EDGE_COLOR);
         }
+        let added = vertices.len().saturating_sub(first_vertex);
+        slices.push(EdgeSlice {
+            // A saturating cast keeps a hostile count from wrapping; the buffer budget already
+            // caps the real value.
+            first_vertex: u32::try_from(first_vertex).unwrap_or(u32::MAX),
+            vertex_count: u32::try_from(added).unwrap_or(u32::MAX),
+            stencil_reference: stencil_slot(index),
+        });
     }
-    vertices
+    (vertices, slices)
+}
+
+/// The stencil value one drawable stamps, counted from one so zero keeps meaning "no surface".
+///
+/// The count wraps at [`MAX_STENCIL_OWNERS`], so a scene with more drawables than slots reuses the
+/// low values. Two objects sharing a slot can show one inside the other at a pixel; no object can
+/// appear where it is not, which is the property that matters.
+fn stencil_slot(index: usize) -> u32 {
+    (index % MAX_STENCIL_OWNERS) as u32 + 1
+}
+
+/// Light ink for a dark viewport and dark ink for a light one.
+fn edge_color(background: [f32; 4]) -> [f32; 4] {
+    let background = sanitize_color(background);
+    let luminance = 0.2126 * background[0] + 0.7152 * background[1] + 0.0722 * background[2];
+    if luminance < 0.45 { EDGE_COLOR_LIGHT } else { EDGE_COLOR_DARK }
 }
 
 /// Rewrites `order` so far objects come first, which is the order a blended pass needs.
@@ -1252,8 +1397,44 @@ mod tests {
         assert_eq!(edge_depth_state(false).depth_compare, Some(wgpu::CompareFunction::LessEqual));
         assert_eq!(edge_depth_state(true).depth_write_enabled, Some(false));
         assert_eq!(edge_depth_state(false).depth_write_enabled, Some(false));
-        // wgpu rejects DepthBiasState on a line topology; the shader nudges the edge instead.
+        // wgpu rejects DepthBiasState on a line topology, so the unfavourable comparison is the whole
+        // mechanism on the edge side; the bias lives on the faces instead.
         assert_eq!(edge_depth_state(false).bias, wgpu::DepthBiasState::default());
+        assert_eq!(edge_depth_state(true).bias, wgpu::DepthBiasState::default());
+    }
+
+    #[test]
+    fn the_face_pass_owns_the_depth_bias_and_stamps_its_drawable() {
+        let opaque = face_depth_state(ShadingStyle::ShadedWithEdges);
+        assert_eq!(opaque.bias, FACE_DEPTH_BIAS, "the faces are pushed back so an unbias line wins");
+        assert_ne!(opaque.bias, wgpu::DepthBiasState::default());
+        assert_eq!(opaque.stencil.front.pass_op, wgpu::StencilOperation::Replace, "an opaque face claims the pixel");
+        assert_eq!(opaque.stencil.write_mask, STENCIL_MASK);
+
+        let ghost = face_depth_state(ShadingStyle::Translucent);
+        assert_eq!(ghost.bias, wgpu::DepthBiasState::default(), "a blended face competes with nothing");
+        assert_eq!(ghost.stencil, wgpu::StencilState::default(), "a blended face owns no pixel");
+    }
+
+    #[test]
+    fn the_hidden_edge_pass_only_accepts_its_own_stencil_slot() {
+        let hidden = edge_depth_state(true);
+        assert_eq!(hidden.stencil.front.compare, wgpu::CompareFunction::Equal);
+        assert_eq!(hidden.stencil.front.pass_op, wgpu::StencilOperation::Keep);
+        assert_eq!(hidden.stencil.write_mask, 0, "the pass never rewrites the ownership it tests");
+        assert_eq!(hidden.stencil.read_mask, STENCIL_MASK);
+
+        // The visible pass tests nothing in the stencil buffer; the depth test is its only filter.
+        assert_eq!(edge_depth_state(false).stencil, wgpu::StencilState::default());
+    }
+
+    #[test]
+    fn a_stencil_slot_is_one_based_and_never_zero() {
+        assert_eq!(stencil_slot(0), 1, "zero is reserved for 'no surface here'");
+        assert_eq!(stencil_slot(4), 5);
+        // The count wraps instead of overflowing past the byte the buffer stores.
+        assert_eq!(stencil_slot(MAX_STENCIL_OWNERS), 1);
+        assert_eq!(stencil_slot(MAX_STENCIL_OWNERS * 2 + 3), 4);
     }
 
     #[test]
@@ -1283,11 +1464,63 @@ mod tests {
         let transform = DMat4::from_translation(DVec3::new(100.0, 20.0, 5.0));
         let drawable = Drawable::new(Id::new(1).expect("id"), Arc::new(mesh), transform, [1.0; 4]).with_edges(edges);
 
-        let vertices = edge_vertices(&[drawable]);
+        let (vertices, slices) = edge_geometry(&[drawable], false, SceneFrame::default().background);
         assert_eq!(vertices.len(), 2, "the edge naming a missing vertex is skipped");
         assert_eq!(vertices[0].position, [100.0, 20.0, 5.0]);
         assert_eq!(vertices[1].position, [110.0, 20.0, 5.0]);
-        assert_eq!(vertices[0].color, EDGE_COLOR);
+        assert_eq!(vertices[0].color, EDGE_COLOR_LIGHT, "the default viewport is dark, so the ink is light");
+        assert_eq!(slices, vec![EdgeSlice { first_vertex: 0, vertex_count: 2, stencil_reference: 1 }]);
+    }
+
+    #[test]
+    fn every_drawable_gets_a_slice_and_its_own_stencil_slot() {
+        let id = |value| Id::new(value).expect("id");
+        let with_edges = |value, edges: &[u32]| {
+            Drawable::new(id(value), Arc::new(triangle()), DMat4::IDENTITY, [1.0; 4])
+                .with_edges(Arc::from(edges.to_vec()))
+        };
+        // The middle drawable has no lines at all; the third and fourth do. The slice list must stay
+        // parallel to the drawables so a stencil reference never lands on a neighbour's lines.
+        let drawables = [
+            with_edges(1, &[0, 1, 1, 2]),
+            Drawable::new(id(2), Arc::new(triangle()), DMat4::IDENTITY, [1.0; 4]),
+            with_edges(3, &[2, 0]),
+        ];
+        let (vertices, slices) = edge_geometry(&drawables, false, SceneFrame::default().background);
+
+        assert_eq!(vertices.len(), 6, "two lines plus one line, the empty drawable adds none");
+        assert_eq!(slices.len(), 3);
+        assert_eq!(
+            slices,
+            vec![
+                EdgeSlice { first_vertex: 0, vertex_count: 4, stencil_reference: 1 },
+                EdgeSlice { first_vertex: 4, vertex_count: 0, stencil_reference: 2 },
+                EdgeSlice { first_vertex: 4, vertex_count: 2, stencil_reference: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_all_edges_style_reads_the_full_triangulation_list() {
+        let mesh = triangle();
+        let feature: Arc<[u32]> = Arc::from(vec![0, 1]);
+        let all: Arc<[u32]> = Arc::from(vec![0, 1, 1, 2, 2, 0]);
+        let id = Id::new(1).expect("id");
+        let drawable =
+            Drawable::new(id, Arc::new(mesh), DMat4::IDENTITY, [1.0; 4]).with_edges(feature).with_all_edges(all);
+        let background = SceneFrame::default().background;
+
+        let form = edge_geometry(std::slice::from_ref(&drawable), false, background).0;
+        let every = edge_geometry(std::slice::from_ref(&drawable), true, background).0;
+        assert_eq!(form.len(), 2);
+        assert_eq!(every.len(), 6);
+    }
+
+    #[test]
+    fn edge_ink_follows_the_background() {
+        assert_eq!(edge_color([0.10, 0.11, 0.13, 1.0]), EDGE_COLOR_LIGHT, "a dark viewport needs light edges");
+        assert_eq!(edge_color([0.92, 0.92, 0.94, 1.0]), EDGE_COLOR_DARK, "a light viewport needs dark edges");
+        assert_eq!(edge_color([f32::NAN; 4]), EDGE_COLOR_DARK, "a hostile colour falls back to the light ink");
     }
 
     #[test]

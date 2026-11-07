@@ -150,16 +150,90 @@ pub fn object_mesh(mesh: &Mesh) -> Result<MeshData, MeshError> {
     Ok(data)
 }
 
-/// The unique triangle edges of a mesh, as pairs of vertex indices.
+/// Two triangles sharing an edge lie on one surface when their normals differ by less than about
+/// 2.6 degrees. A quad's diagonal is exactly coplanar; a cube's edge turns by 90 degrees.
+///
+/// The comparison is on the absolute dot product: a tessellator may emit a coplanar pair with
+/// opposite winding, and a fold of 180 degrees has no thickness to draw an edge on either.
+const COPLANAR_COS: f64 = 0.999;
+
+/// The display edges of a mesh: boundary and crease edges, two vertex indices per edge.
 ///
 /// Vertices are matched by their position quantised to one micrometre, so a flat-shaded mesh that
-/// stores one vertex per face still yields one edge per geometric edge. An edge shared by two
-/// triangles appears once, and a boundary edge appears once; a degenerate edge, a missing index and
-/// a non-finite position are skipped. The result is therefore always safe to draw as a line list.
+/// stores one vertex per face still finds the edge a neighbouring triangle shares. An edge used by
+/// one triangle is a boundary and is kept. An edge shared by two triangles is kept only when the
+/// surface turns across it: a quad's diagonal and every other coplanar triangulation edge is
+/// dropped, while a cube's twelve edges survive. A degenerate triangle, a missing index and a
+/// non-finite position contribute nothing, so the list is always safe to draw as a line list.
 ///
 /// The list is derived beside the mesh and cached with it under the same inputs (ADR 0053), so the
-/// edge pass never searches the mesh per frame.
+/// edge pass never searches the mesh per frame. [`mesh_all_edges`] keeps the full triangulation for
+/// the optional diagnostic style.
 pub fn mesh_edges(mesh: &MeshData) -> Vec<u32> {
+    struct Use {
+        a: u32,
+        b: u32,
+        normal: DVec3,
+        shared: bool,
+        crease: bool,
+    }
+
+    let mut uses: Vec<Use> = Vec::with_capacity(mesh.indices.len());
+    let mut lookup: HashMap<([i64; 3], [i64; 3]), usize> = HashMap::new();
+    for triangle in mesh.indices.as_chunks::<3>().0 {
+        let (Some(a), Some(b), Some(c)) = (
+            vertex_position(mesh, triangle[0]),
+            vertex_position(mesh, triangle[1]),
+            vertex_position(mesh, triangle[2]),
+        ) else {
+            continue;
+        };
+        let Some(normal) = (b - a).cross(c - a).try_normalize() else {
+            continue;
+        };
+        for (start, end) in [(triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0])] {
+            if start == end {
+                continue;
+            }
+            let (Some(first), Some(second)) = (edge_key(mesh, start), edge_key(mesh, end)) else {
+                continue;
+            };
+            if first == second {
+                continue;
+            }
+            let key = if first <= second { (first, second) } else { (second, first) };
+            match lookup.get(&key) {
+                Some(index) => {
+                    if let Some(record) = uses.get_mut(*index) {
+                        record.shared = true;
+                        if record.normal.dot(normal).abs() < COPLANAR_COS {
+                            record.crease = true;
+                        }
+                    }
+                }
+                None => {
+                    lookup.insert(key, uses.len());
+                    uses.push(Use { a: start, b: end, normal, shared: false, crease: false });
+                }
+            }
+        }
+    }
+
+    let mut edges = Vec::with_capacity(uses.len() * 2);
+    for record in &uses {
+        if !record.shared || record.crease {
+            edges.extend_from_slice(&[record.a, record.b]);
+        }
+    }
+    edges
+}
+
+/// Every unique triangle edge of a mesh, triangulation diagonals included.
+///
+/// This is the raw wireframe list behind the optional *all surface edges* setting. The default
+/// [`mesh_edges`] is what a shaded view wants; this one is honest about the triangles the mesher
+/// produced. It follows the same deduplication, skip and budget rules.
+pub fn mesh_all_edges(mesh: &MeshData) -> Vec<u32> {
     let mut edges = Vec::with_capacity(mesh.indices.len());
     let mut seen = HashSet::new();
     for triangle in mesh.indices.as_chunks::<3>().0 {
@@ -182,6 +256,13 @@ pub fn mesh_edges(mesh: &MeshData) -> Vec<u32> {
     edges
 }
 
+/// The finite local position of one vertex, or `None` for a missing or hostile one.
+fn vertex_position(mesh: &MeshData, index: u32) -> Option<DVec3> {
+    let position = mesh.positions.get(index as usize)?;
+    let value = DVec3::new(f64::from(position[0]), f64::from(position[1]), f64::from(position[2]));
+    value.is_finite().then_some(value)
+}
+
 /// The quantised position of one vertex, or `None` for a missing or non-finite one.
 fn edge_key(mesh: &MeshData, index: u32) -> Option<[i64; 3]> {
     let position = mesh.positions.get(index as usize)?;
@@ -196,7 +277,8 @@ fn edge_key(mesh: &MeshData, index: u32) -> Option<[i64; 3]> {
     Some(key)
 }
 
-/// Samples a stored path into the local points the viewport draws as a line chain.///
+/// Samples a stored path into the local points the viewport draws as a line chain.
+///
 /// The chain is sampled as an open contour even when the path is closed, so the closing segment is
 /// drawn; the one-micrometre joint tolerance is the document's own.
 pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
@@ -220,8 +302,10 @@ pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
 pub struct NodeGeometry {
     body: Option<Arc<MeshData>>,
     body_edges: Option<Arc<[u32]>>,
+    body_all_edges: Option<Arc<[u32]>>,
     bands: Vec<Arc<MeshData>>,
     band_edges: Vec<Arc<[u32]>>,
+    band_all_edges: Vec<Arc<[u32]>>,
     polyline: Option<Arc<[DVec3]>>,
 }
 
@@ -231,9 +315,14 @@ impl NodeGeometry {
         self.body.as_ref()
     }
 
-    /// The deduplicated edges of [`NodeGeometry::body`], two vertex indices per edge.
+    /// The display edges of [`NodeGeometry::body`]: boundary and crease edges, two indices per edge.
     pub const fn body_edges(&self) -> Option<&Arc<[u32]>> {
         self.body_edges.as_ref()
+    }
+
+    /// Every triangle edge of [`NodeGeometry::body`], diagonals included.
+    pub const fn body_all_edges(&self) -> Option<&Arc<[u32]>> {
+        self.body_all_edges.as_ref()
     }
 
     /// One mesh per evaluated band, in application order.
@@ -241,9 +330,14 @@ impl NodeGeometry {
         &self.bands
     }
 
-    /// The edges of each evaluated band, in the same order as [`NodeGeometry::bands`].
+    /// The display edges of each evaluated band, in the same order as [`NodeGeometry::bands`].
     pub fn band_edges(&self) -> &[Arc<[u32]>] {
         &self.band_edges
+    }
+
+    /// Every triangle edge of each evaluated band, in the same order as [`NodeGeometry::bands`].
+    pub fn band_all_edges(&self) -> &[Arc<[u32]>] {
+        &self.band_all_edges
     }
 
     /// The line chain of a path object, when the node has no solid.
@@ -434,19 +528,24 @@ impl EvaluationCache {
         let parts = build_panel_parts_with(kernel, panel, geometry, profile)?;
         let body = tessellate_panel(&*kernel, parts.body(), options)?;
         let body_edges: Arc<[u32]> = mesh_edges(&body).into();
+        let body_all_edges: Arc<[u32]> = mesh_all_edges(&body).into();
         let mut bands = Vec::with_capacity(parts.bands().len());
         let mut band_edges = Vec::with_capacity(parts.bands().len());
+        let mut band_all_edges = Vec::with_capacity(parts.bands().len());
         for part in parts.bands() {
             let mesh = tessellate_panel(&*kernel, part.body(), options)?;
             band_edges.push(Arc::from(mesh_edges(&mesh)));
+            band_all_edges.push(Arc::from(mesh_all_edges(&mesh)));
             bands.push(Arc::new(mesh));
         }
         kernel.clear();
         let geometry = NodeGeometry {
             body: Some(Arc::new(body)),
             body_edges: Some(body_edges),
+            body_all_edges: Some(body_all_edges),
             bands,
             band_edges,
+            band_all_edges,
             polyline: None,
         };
         self.store(id, revision, Payload::Panel(inputs), geometry.clone());
@@ -507,10 +606,16 @@ impl EvaluationCache {
     }
 }
 
-/// The derived geometry of one solid: the render mesh and its deduplicated edge list.
+/// The derived geometry of one solid: the render mesh and its feature and full edge lists.
 fn solid_geometry(data: MeshData) -> NodeGeometry {
     let edges: Arc<[u32]> = mesh_edges(&data).into();
-    NodeGeometry { body: Some(Arc::new(data)), body_edges: Some(edges), ..NodeGeometry::default() }
+    let all_edges: Arc<[u32]> = mesh_all_edges(&data).into();
+    NodeGeometry {
+        body: Some(Arc::new(data)),
+        body_edges: Some(edges),
+        body_all_edges: Some(all_edges),
+        ..NodeGeometry::default()
+    }
 }
 
 /// The face's vertices in local millimetres, in face order.
@@ -767,10 +872,9 @@ mod tests {
     }
 
     #[test]
-    fn an_edge_list_deduplicates_a_shared_edge_and_keeps_a_boundary_edge() {
+    fn a_coplanar_quad_drops_its_diagonal_and_keeps_the_boundary() {
         // Two triangles of a square, each with its own copy of the shared corners, exactly as a
-        // flat-shaded mesh stores them. The diagonal must survive once, not twice, and each
-        // boundary edge must be there.
+        // flat-shaded mesh stores them. The diagonal is a triangulation artefact, not a form edge.
         let mesh = MeshData {
             positions: vec![
                 [0.0, 0.0, 0.0],
@@ -784,7 +888,7 @@ mod tests {
             indices: vec![0, 1, 2, 3, 4, 5],
         };
         let edges = mesh_edges(&mesh);
-        assert_eq!(edges.len() / 2, 5, "six triangle edges share one diagonal");
+        assert_eq!(edges.len() / 2, 4, "a flat quad shows four boundary edges");
         assert!(edges.len().is_multiple_of(2));
 
         let pairs = edges.as_chunks::<2>().0;
@@ -794,9 +898,82 @@ mod tests {
             (first == a && second == b) || (first == b && second == a)
         };
         let diagonal = pairs.iter().filter(|pair| same(pair, [0.0, 0.0, 0.0], [10.0, 10.0, 0.0])).count();
-        assert_eq!(diagonal, 1, "the shared diagonal is recorded once");
+        assert_eq!(diagonal, 0, "the coplanar diagonal is not a display edge");
         let boundary = pairs.iter().filter(|pair| same(pair, [0.0, 0.0, 0.0], [10.0, 0.0, 0.0])).count();
         assert_eq!(boundary, 1, "a boundary edge is kept");
+
+        let all = mesh_all_edges(&mesh);
+        assert_eq!(all.len() / 2, 5, "the diagnostic list still carries the diagonal");
+    }
+
+    #[test]
+    fn a_crease_edge_survives_between_two_faces() {
+        // Two triangles folded by 90 degrees around the edge (0,0,0)-(10,0,0). The shared edge is
+        // a real form edge and must survive, unlike a coplanar diagonal.
+        let mesh = MeshData {
+            positions: vec![
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [0.0, 10.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [0.0, 0.0, 10.0],
+            ],
+            normals: Vec::new(),
+            indices: vec![0, 1, 2, 3, 4, 5],
+        };
+        let edges = mesh_edges(&mesh);
+        assert_eq!(edges.len() / 2, 5, "four boundary edges and the crease");
+        let pairs = edges.as_chunks::<2>().0;
+        let shared = pairs
+            .iter()
+            .filter(|pair| {
+                let first = mesh.positions[pair[0] as usize];
+                let second = mesh.positions[pair[1] as usize];
+                (first == [0.0, 0.0, 0.0] && second == [10.0, 0.0, 0.0])
+                    || (first == [10.0, 0.0, 0.0] && second == [0.0, 0.0, 0.0])
+            })
+            .count();
+        assert_eq!(shared, 1, "the fold edge is drawn once");
+    }
+
+    #[test]
+    fn a_cube_edge_list_is_the_twelve_box_edges_without_diagonals() {
+        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let mesh = object_mesh(&cube).expect("render mesh");
+        assert_eq!(mesh_edges(&mesh).len() / 2, 12, "a cube shows its twelve box edges");
+        assert_eq!(mesh_all_edges(&mesh).len() / 2, 18, "the diagnostic list adds six face diagonals");
+    }
+
+    #[test]
+    fn a_triangular_prism_keeps_its_three_cap_edges_and_side_seams() {
+        // A three-sided prism: two triangular caps and three rectangular sides. Every cap edge is a
+        // real form edge, and each short side face shares one with the next, so a triangular body
+        // shows nine edges — not the triangulation of its caps.
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [5.0, 8.0, 0.0],
+            [0.0, 0.0, 10.0],
+            [10.0, 0.0, 10.0],
+            [5.0, 8.0, 10.0],
+        ];
+        let mesh = MeshData {
+            positions,
+            normals: Vec::new(),
+            // Two caps and three sides, each quad split into two coplanar triangles.
+            indices: vec![
+                0, 2, 1, // bottom cap (one triangle, no diagonal)
+                3, 4, 5, // top cap
+                0, 1, 4, 0, 4, 3, // front side
+                1, 2, 5, 1, 5, 4, // right side
+                2, 0, 3, 2, 3, 5, // left side
+            ],
+        };
+        let edges = mesh_edges(&mesh);
+        assert_eq!(edges.len() / 2, 9, "three cap edges on each cap and three vertical seams");
+        let all = mesh_all_edges(&mesh);
+        assert_eq!(all.len() / 2, 9 + 3, "the diagnostic list adds one diagonal per quad side");
     }
 
     #[test]
@@ -806,8 +983,8 @@ mod tests {
             normals: Vec::new(),
             indices: vec![0, 1, 1, 0, 2, 9],
         };
-        let edges = mesh_edges(&mesh);
-        assert_eq!(edges, vec![0, 1, 0, 2], "a repeated vertex and a missing one produce no edge");
+        assert!(mesh_edges(&mesh).is_empty(), "a degenerate and a missing triangle produce no form edge");
+        assert_eq!(mesh_all_edges(&mesh), vec![0, 1, 0, 2], "a repeated vertex and a missing one produce no line");
     }
 
     #[test]

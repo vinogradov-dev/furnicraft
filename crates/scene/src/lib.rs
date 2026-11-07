@@ -679,11 +679,15 @@ pub struct Drawable {
     pub id: Id,
     /// Local-space triangles.
     pub mesh: Arc<MeshData>,
-    /// Deduplicated local-space edges of `mesh`, two vertex indices per edge.
+    /// Boundary and crease edges of `mesh`, two vertex indices per edge.
     ///
     /// The list is derived beside the mesh and cached with it (ADR 0053), so the edge pass costs no
     /// search per frame. `None` means the drawable has no edge pass.
     pub edges: Option<Arc<[u32]>>,
+    /// Every triangle edge of `mesh`, triangulation diagonals included.
+    ///
+    /// Only the optional *all surface edges* style reads it; the default edge pass uses [`Self::edges`].
+    pub all_edges: Option<Arc<[u32]>>,
     /// Rigid local-to-world transform.
     pub world_transform: DMat4,
     /// Linear RGB colour and opacity.
@@ -693,14 +697,21 @@ pub struct Drawable {
 impl Drawable {
     /// Creates a drawable from a document id, a mesh, a rigid world transform and a colour.
     ///
-    /// The drawable starts with no edge list; [`Drawable::with_edges`] adds one.
+    /// The drawable starts with no edge lists; [`Drawable::with_edges`] and
+    /// [`Drawable::with_all_edges`] add them.
     pub fn new(id: Id, mesh: Arc<MeshData>, world_transform: DMat4, color: [f32; 4]) -> Self {
-        Self { id, mesh, edges: None, world_transform, color }
+        Self { id, mesh, edges: None, all_edges: None, world_transform, color }
     }
 
-    /// Attaches the deduplicated edge list derived from `mesh`.
+    /// Attaches the boundary and crease edge list derived from `mesh`.
     pub fn with_edges(mut self, edges: Arc<[u32]>) -> Self {
         self.edges = Some(edges);
+        self
+    }
+
+    /// Attaches the full triangulation edge list derived from `mesh`.
+    pub fn with_all_edges(mut self, all_edges: Arc<[u32]>) -> Self {
+        self.all_edges = Some(all_edges);
         self
     }
 }
@@ -737,6 +748,10 @@ pub struct SceneFrame {
     pub camera: Camera,
     /// How the drawables are shaded.
     pub shading: ShadingStyle,
+    /// Whether the edge pass draws every triangle edge instead of only the form edges.
+    ///
+    /// A diagnostic view state beside [`SceneFrame::shading`], never document data.
+    pub all_edges: bool,
     /// The floor grid.
     pub grid: Grid,
     /// The key light.
@@ -754,6 +769,7 @@ impl Default for SceneFrame {
         Self {
             camera: Camera::default(),
             shading: ShadingStyle::default(),
+            all_edges: false,
             grid: Grid::default(),
             lighting: Lighting::default(),
             background: [0.10, 0.11, 0.13, 1.0],

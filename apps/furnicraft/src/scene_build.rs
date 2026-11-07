@@ -332,18 +332,16 @@ impl<'a> Evaluation<'a> {
         if let Some(body) = evaluated.body() {
             self.bounds.include_mesh(body, transform);
             let drawable = Drawable::new(panel.id(), Arc::clone(body), transform, color);
-            self.frame.push(match evaluated.body_edges() {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
+            self.frame.push(with_cached_edges(drawable, evaluated.body_edges(), evaluated.body_all_edges()));
         }
         for (index, mesh) in evaluated.bands().iter().enumerate() {
             self.bounds.include_mesh(mesh, transform);
             let drawable = Drawable::new(panel.id(), Arc::clone(mesh), transform, EDGE_BAND_COLOR);
-            self.frame.push(match evaluated.band_edges().get(index) {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
+            self.frame.push(with_cached_edges(
+                drawable,
+                evaluated.band_edges().get(index),
+                evaluated.band_all_edges().get(index),
+            ));
         }
         Ok(())
     }
@@ -370,13 +368,25 @@ impl<'a> Evaluation<'a> {
         if let Some(mesh) = evaluated.body() {
             self.bounds.include_mesh(mesh, transform);
             let drawable = Drawable::new(object.id(), Arc::clone(mesh), transform, OBJECT_COLOR);
-            self.frame.push(match evaluated.body_edges() {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
+            self.frame.push(with_cached_edges(drawable, evaluated.body_edges(), evaluated.body_all_edges()));
             return Ok(());
         }
         Err(format!("{}: the object has no drawable geometry", object.name()))
+    }
+}
+
+/// Attaches the cached form edges and the full triangulation edges to a drawable.
+///
+/// The two lists come from the same cached mesh, so this copies two `Arc`s and never searches the
+/// mesh. The renderer picks one from the frame's style; the other is shared with the cache.
+fn with_cached_edges(drawable: Drawable, edges: Option<&Arc<[u32]>>, all_edges: Option<&Arc<[u32]>>) -> Drawable {
+    let drawable = match edges {
+        Some(edges) => drawable.with_edges(Arc::clone(edges)),
+        None => drawable,
+    };
+    match all_edges {
+        Some(all_edges) => drawable.with_all_edges(Arc::clone(all_edges)),
+        None => drawable,
     }
 }
 
