@@ -101,8 +101,13 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[ui]` A creation tool lands at the scene root since X4; a node inside a container needs the
   explicit *Add child* arm of U31. Until then the only way is to create at the root and move the row
   in the tree.
-- `[ui]` 33 of the 51 declared icons are zero-byte placeholders: the whole `actions` theme (30,
-  including undo, redo, delete, save, warning) plus `primitives/cone`, `bodies/revolve` and
-  `bodies/sweep`. The empty-file fallback keeps every surface usable with its text label, but no
-  service action has a glyph yet and no icon set has been drawn past the first 18. See
-  `assets/icons/AUDIT.md` §5 and ADR 0055.
+- `[ui]` The ribbon's *Model* tab wants a cone beside the cube, cylinder and sphere, but
+  `PrimitiveKind` has no `Cone` and `crates/param` builds no cone solid, so the tab draws the three
+  primitives the document really has. A cone needs the model variant, the kernel plan and the drawn
+  `primitives/cone` asset in one change; drawing the icon alone would offer a tool that cannot build.
+- `[ui]` 47 of the 67 declared icons are zero-byte placeholders: the whole `actions` theme (30,
+  including undo, redo, delete, save, warning), `primitives/cone`, `bodies/revolve` and
+  `bodies/sweep`, and the ten view glyphs U40 added for the floating cluster (orbit, pan, zoom,
+  layout, sliders and the five shading styles). The empty-file fallback keeps every surface usable
+  with its text label, but the cluster wraps onto several rows in a narrow viewport until U46 draws
+  them. See `assets/icons/AUDIT.md` §5 and ADR 0055.

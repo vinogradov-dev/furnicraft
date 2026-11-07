@@ -70,16 +70,25 @@ If an element cannot be labelled with its role (guide §3), remove it.
 
 ## 4. Draw inside the contract
 
-- `viewBox="0 0 24 24"`, ink inside `2..22`; centre near `(12, 12)`; coordinates on half units.
-- One ink, and it is white: `stroke="#fff"`, `fill="none"`, round caps and joins. A solid silhouette
-  may use `fill="#fff"`. The UI multiplies the master by the theme colour; no colour, no class, no
-  CSS variable, no theme token in the file.
-- Weights: guide 1.5, main contour 1.6–1.8, result 2.2–2.6, service 2.0–2.4 or solid. Nothing below
-  1.5 units, because the icon may be drawn at 16 px.
+- `viewBox="0 0 24 24"`, ink inside `3..21`; centre near `(12, 12)`; coordinates on half units.
+- Footprint and mass: the ink stays inside the fixed 18 × 18 footprint and covers 20–45 % of it,
+  measured as alpha-weighted ink (sum of alpha / 255). Below 20 % reads as a sketch, above 45 % as a
+  blob. `crates/ui/src/icons.rs` asserts both from the raster.
+- One ink, and it is white: `stroke="#fff"`, round caps and joins, `stroke-width` `1.5–2.6`. A
+  stroke-only shape keeps `fill="none"`.
+- Tone is alpha: a passive face is `fill="#fff"` with `fill-opacity="0.12–0.18"` under a
+  full-strength `1.6–1.8` outline; the result or changed geometry is `0.45–0.60` under a `2.2–2.6`
+  outline. A dot, an arrowhead or a solid silhouette may be solid `#fff` with no stroke. Never a
+  third tone, never a fill without an outline, never `opacity`.
+- The UI multiplies the master by the theme colour; no colour, no class, no CSS variable, no theme
+  token in the file.
+- Weight by role: guide 1.5, main contour 1.6–1.8, result 2.2–2.6, view/service 2.0–2.4 or solid.
+  Nothing below 1.5 units, because the icon may be drawn at 16 px.
 - Allowed elements: `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `g`,
   `transform`. No `defs`, `mask`, `clipPath`, `style`, filter, gradient, pattern, image, font or text.
 - Gaps are real path breaks, never a background-coloured patch or a mask.
-- 3D uses the canonical isometric axonometry of guide §9; a panel is a plate, not a cube.
+- 3D uses the one canonical isometry of guide §9.1: `x = 0.866 (u − v)`, `y = 0.5 (u + v) − w`; a
+  face circle is a `0.577` ellipse; a plate is a plate, not a cube. 2D icons stay flat (§8.1).
 - Similar actions share a pattern; opposite actions share a grammar and differ in the distinguishing
   element, not in style.
 
@@ -99,7 +108,9 @@ If an element cannot be labelled with its role (guide §3), remove it.
 - no decorative lines, no random detail, no white patch;
 - the metaphor matches the operation, not a neighbouring command;
 - a service icon uses the same glyph on every surface and distinguishes status by enclosure;
-- the SVG parses and rasterises at the size the button draws.
+- the SVG parses and rasterises at the size the button draws;
+- `cargo test -p furnicraft-ui --lib icons` passes: footprint inside `3..21`, coverage 20–45 %,
+  non-empty at 16 and 20 px.
 
 ## 7. Register and close
 

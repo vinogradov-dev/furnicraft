@@ -72,6 +72,51 @@ impl ContourSegment {
         Ok(segment)
     }
 
+    /// One open arc from `start` to `end` that passes through `through`.
+    ///
+    /// The arc is the way round from `start` to `end` that contains the middle point, so its sweep
+    /// is negative when that way is clockwise. The three points must be distinct and must not lie on
+    /// one line, and the stored centre, radius and angle are whole document units, so the stored end
+    /// can miss `end` by a micrometre or two. A drawing follows the stored end rather than the click
+    /// (ADR 0048).
+    pub fn arc_through(
+        start: [Length; 2],
+        through: [Length; 2],
+        end: [Length; 2],
+    ) -> Result<Self, ContourSegmentError> {
+        if start == through || through == end || start == end {
+            return Err(ContourSegmentError::DegenerateArc);
+        }
+        let a = point_to_geometry(start)?;
+        let b = point_to_geometry(through)?;
+        let c = point_to_geometry(end)?;
+        // Twice the signed area of the triangle; zero means the points share one line.
+        let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        let span = (b - a).length_squared().max((c - a).length_squared());
+        if !area.is_finite() || area.abs() <= 1.0e-9 * span {
+            return Err(ContourSegmentError::DegenerateArc);
+        }
+        let u = b - a;
+        let v = c - a;
+        let denominator = 2.0 * area;
+        let u2 = u.length_squared();
+        let v2 = v.length_squared();
+        let center = a + DVec2::new((u2 * v.y - v2 * u.y) / denominator, (u.x * v2 - v.x * u2) / denominator);
+        let radius = (a - center).length();
+        let angle_to = |point: DVec2| (point.y - center.y).atan2(point.x - center.x);
+        let start_angle = angle_to(a);
+        let end_angle = angle_to(c);
+        let through_angle = angle_to(b);
+        let counter_clockwise = (end_angle - start_angle).rem_euclid(TAU);
+        let through_turn = (through_angle - start_angle).rem_euclid(TAU);
+        let sweep = if through_turn < counter_clockwise { counter_clockwise } else { counter_clockwise - TAU };
+        let center = point_to_document(center)?;
+        let radius = length_to_document(radius)?;
+        let start_angle = degrees_to_document(start_angle)?;
+        let sweep = degrees_to_document(sweep)?;
+        Self::arc(center, radius, start_angle, sweep)
+    }
+
     /// Whether this segment is a circular arc.
     pub const fn is_arc(self) -> bool {
         matches!(self, Self::Arc { .. })
@@ -218,6 +263,9 @@ pub enum ContourSegmentError {
     /// A line has coincident endpoints.
     #[error("a contour line needs two distinct endpoints")]
     ZeroLength,
+    /// The three points of an arc are distinct but share one line, so no circle passes through them.
+    #[error("an arc needs three points that do not lie on one line")]
+    DegenerateArc,
     /// An arc radius is zero, negative or too large.
     #[error("arc radius {radius} must be positive and at most {max}")]
     InvalidRadius {
@@ -1951,37 +1999,11 @@ impl Path {
     /// on one line; a stored centre, radius and angle are whole document units, so a stored endpoint
     /// can miss its input point by a micrometre or two.
     pub fn arc_through(start: [Length; 2], through: [Length; 2], end: [Length; 2]) -> Result<Self, PathError> {
-        if start == through || through == end || start == end {
-            return Err(PathError::DegenerateArc);
-        }
-        let a = point_to_geometry(start)?;
-        let b = point_to_geometry(through)?;
-        let c = point_to_geometry(end)?;
-        // Twice the signed area of the triangle; zero means the points share one line.
-        let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-        let span = (b - a).length_squared().max((c - a).length_squared());
-        if !area.is_finite() || area.abs() <= 1.0e-9 * span {
-            return Err(PathError::DegenerateArc);
-        }
-        let u = b - a;
-        let v = c - a;
-        let denominator = 2.0 * area;
-        let u2 = u.length_squared();
-        let v2 = v.length_squared();
-        let center = a + DVec2::new((u2 * v.y - v2 * u.y) / denominator, (u.x * v2 - v.x * u2) / denominator);
-        let radius = (a - center).length();
-        let angle_to = |point: DVec2| (point.y - center.y).atan2(point.x - center.x);
-        let start_angle = angle_to(a);
-        let end_angle = angle_to(c);
-        let through_angle = angle_to(b);
-        let counter_clockwise = (end_angle - start_angle).rem_euclid(TAU);
-        let through_turn = (through_angle - start_angle).rem_euclid(TAU);
-        let sweep = if through_turn < counter_clockwise { counter_clockwise } else { counter_clockwise - TAU };
-        let center = point_to_document(center)?;
-        let radius = length_to_document(radius)?;
-        let start_angle = degrees_to_document(start_angle)?;
-        let sweep = degrees_to_document(sweep)?;
-        Self::new(vec![ContourSegment::arc(center, radius, start_angle, sweep)?], false)
+        let segment = ContourSegment::arc_through(start, through, end).map_err(|error| match error {
+            ContourSegmentError::DegenerateArc => PathError::DegenerateArc,
+            other => PathError::Segment(other),
+        })?;
+        Self::new(vec![segment], false)
     }
 
     /// Validates a chain of entries, its counter and its joints, then stores it.

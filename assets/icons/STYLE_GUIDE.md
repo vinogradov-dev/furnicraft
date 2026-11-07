@@ -126,10 +126,11 @@ master serves every theme.
 The emphasis ladder, strongest first:
 
 ```text
-solid shape  >  heavy line (2.2–2.6)  >  main line (1.6–1.8)  >  thin guide (1.5)
+solid shape  >  result fill (0.45–0.60) + heavy line  >  heavy line (2.2–2.6)
+             >  passive fill (0.12–0.18) + main line  >  main line (1.6–1.8)  >  thin guide (1.5)
 ```
 
-A result can also be separated from its source by a real gap, by size, or by being the only solid
+A result can also be separated from its source by a real gap, by size, or by being the only filled
 form. Two elements that differ only in colour do not differ at all.
 
 ### 5.2. What colour belongs to
@@ -156,6 +157,24 @@ source contour is thinner; result is heavier; a real gap and an arrow show the c
 
 The action result gets the single strongest treatment in the icon. Everything else steps back.
 "One operation, one emphasis" (§13.2) is the practical form of this rule.
+
+### 5.4. Tone is alpha, not colour
+
+Mass comes from one of exactly two fills, both white ink at reduced opacity:
+
+| Role | Fill | Outline |
+|---|---|---|
+| passive face | `fill-opacity` `0.12–0.18` | full-strength main line, `1.6–1.8` |
+| result or changed geometry | `fill-opacity` `0.45–0.60` | heavy line, `2.2–2.6` |
+
+The tone is alpha on the same white ink, so one master still serves every theme and the icon still
+reads with no colour at all. A fill never replaces an outline and never carries meaning alone: the
+shape must say the same thing at zero fill. There is no third tone, no decorative wash, no shadow,
+and no per-theme fill. A solid `fill="#fff"` is the top of the ladder and belongs to a mark — a dot,
+an arrowhead, a service glyph — not to a face.
+
+A flat 2D figure may take the passive tone inside its outline. That is still a flat sign: it gets no
+modelled side face, no thickness and no isometric hint (§8.1).
 
 ---
 
@@ -186,7 +205,8 @@ All icons are drawn in:
 viewBox="0 0 24 24"
 ```
 
-Working area: `2..22` on both axes. The icon must have breathing room; do not fill the canvas.
+Working area: `3..21` on both axes — an 18 × 18 footprint. The icon must have breathing room; do not
+fill the canvas. The footprint and its 20–45 % coverage band are in §7.4.
 
 The numbers that the loader needs (viewBox, width, height, allowed elements) are the README's. This
 section describes how to compose inside that grid.
@@ -199,7 +219,7 @@ asymmetric form demands it.
 Put coordinates on half-unit steps where possible, so a stroke lands cleanly at 16, 24 and 32 px.
 Never rely on a detail smaller than one unit.
 
-### 7.3. Weights
+### 7.3. Weights and tones
 
 | Role | Weight on the 24 grid |
 |---|---|
@@ -207,11 +227,24 @@ Never rely on a detail smaller than one unit.
 | main object contour | `1.6–1.8` |
 | action result | `2.2–2.6` |
 | view or service icon | `2.0–2.4`, or a solid silhouette |
+| passive face | `fill-opacity` `0.12–0.18`, under a full-strength main outline |
+| result or changed geometry | `fill-opacity` `0.45–0.60`, under the heavy outline |
 
 All lines use round caps and round joins. Moderate rounding: not sharp as a razor, not a soft toy.
 Nothing thinner than `1.5` units, because the loader may draw the icon at 16 px.
 
 A thin plate reads as a line if its thickness is under `1.5` units; give every panel a visible edge.
+
+### 7.4. Footprint and coverage
+
+Every drawn icon keeps its ink inside `3..21` on both axes, and covers **20–45 %** of that fixed
+18 × 18 footprint. Coverage is alpha-weighted ink — the sum of the rasterised alpha divided by 255,
+against the footprint's area — so a passive 15 % face counts as its tone, not as a solid block.
+
+The band is what makes a set read as one family: below 20 % an icon is a sketch, above 45 % it is a
+blob. The optical size of the inked silhouette should sit near the footprint, roughly `15..18` units
+across, so sibling icons line up. The UI test in `crates/ui/src/icons.rs` measures both numbers from
+the raster and fails outside them.
 
 ---
 
@@ -290,15 +323,38 @@ For 3D icons, one technical axonometry is used. It is isometric:
   top face and at 60° on the side faces;
 - holes are drawn in the plane of their face, never as circles pasted on top of the object.
 
-For furniture CAD the base form is not a cube but a **panel / plate**.
+### 9.1. The projection
 
-Therefore the visual language is built around:
+With object axes `u` (right-rear), `v` (left-rear) and `w` (up), a point lands at this offset from
+the drawing centre (screen `x` right, `y` down):
 
-- thin rectangular plate;
-- frame parallelepiped;
-- cabinet module;
-- section / shelf / upright;
-- fastener connection.
+```text
+x = 0.866 · (u − v)
+y = 0.5 · (u + v) − w
+```
+
+A cube of edge `s` is a hexagon `1.732 · s` wide and `2 · s` tall, with its three visible faces
+meeting at the near vertical edge; the silhouette is one closed path and the three inner edges are
+one `M`/`L` run. A horizontal circle of diameter `d` is an ellipse with `rx = d / 2` and
+`ry = 0.289 · d`; on the top face the major axis is horizontal, on a side face it is at 60°. There is
+no perspective, no second vanishing direction and no hand-picked skew: two icons built on this basis
+line up because they were built on the same basis.
+
+### 9.2. The base vocabulary
+
+For furniture CAD the base form is not a cube but a **panel / plate**, so the language is built
+around:
+
+- thin rectangular plate: one face `u × v` with `1.2–2` units of visible side;
+- upright: the same plate standing on `w`, its thickness in `v`;
+- cabinet module: two or three plates sharing an edge;
+- cylinder: one top ellipse, two vertical sides, one bottom arc; the side wall is one face;
+- sphere: one circle plus its equator ellipse, never shading;
+- connection: a solid dot at the joint, never a second fastener.
+
+The same basis serves `cube`, `cylinder`, `panel`, `assembly` and `extrude`: the source profile is a
+passive face (`0.12–0.18`) and the geometry the action creates takes the result tone (`0.45–0.60`)
+with the heavy outline. A plate stays a plate at every size.
 
 ---
 
@@ -618,7 +674,11 @@ Forbidden:
 
 Drawing rules:
 
-- `fill="none"`, `stroke="#fff"`, one ink; a solid silhouette may use `fill="#fff"` with no stroke;
+- `stroke="#fff"`, one ink; a stroke-only shape keeps `fill="none"`;
+- a face takes `fill="#fff"` with `fill-opacity` `0.12–0.18` (passive) or `0.45–0.60` (result or
+  changed geometry) and keeps its full-strength `stroke="#fff"` outline;
+- a solid silhouette, a dot or an arrowhead may use `fill="#fff"` with no stroke — that is the top of
+  the emphasis ladder, not a face;
 - round caps and round joins;
 - no `scale` transform to fake another size: the loader rasterises at the size it draws;
 - at most two decimal places;

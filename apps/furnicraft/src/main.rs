@@ -19,12 +19,14 @@ mod draw_gizmo;
 mod file_menu;
 mod gizmo;
 mod gizmo_math;
+mod header;
 mod mesh_pick;
 mod rotate_gizmo;
 mod scene_build;
 mod scene_gizmo;
 mod translate_gizmo;
 mod vertex_gizmo;
+mod view_cluster;
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -42,16 +44,19 @@ use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKi
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
-use furnicraft_ui::{DrawDraft, Editor, MeshElement, icons, ui_scale};
+use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, icons, theme};
+use furnicraft_units::Length;
 
 use crate::contour_gizmo::ContourGizmo;
-use crate::draw_gizmo::DrawGizmo;
+use crate::draw_gizmo::{DrawGizmo, DrawModifiers};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
+use crate::header::{HeaderAction, HeaderState};
 use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
+use crate::view_cluster::{ClusterAction, ClusterView, NavigationMode, ViewCluster};
 
 /// Orbit sensitivity in radians per point dragged.
 const ORBIT_RADIANS_PER_POINT: f64 = 0.008;
@@ -125,14 +130,25 @@ struct FurniCraftApp {
     /// save so an older build never silently destroys a newer build's data.
     extra: PreservedSections,
     last_error: Option<String>,
+    /// Whether the scene tree is unfolded.
+    tree_open: bool,
+    /// Whether the inspector is unfolded.
+    card_open: bool,
+    /// The floating viewport cluster: navigation, display style and settings.
+    cluster: ViewCluster,
+    /// Nodes below the root, cached with the evaluated scene so the tree's count chip costs no
+    /// document scan on the frame path.
+    node_count: usize,
 }
 
 impl FurniCraftApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
+        theme::install(&cc.egui_ctx);
         let session = sample_session()?;
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
+        let node_count = session.project().query(&NodeQuery::any()).len();
         let home_camera = home_camera(evaluated.bounds)?;
         let view_camera = home_camera;
         let mut scene = evaluated.frame;
@@ -171,6 +187,10 @@ impl FurniCraftApp {
             files: FileMenu::new(),
             extra: PreservedSections::new(),
             last_error: None,
+            tree_open: true,
+            card_open: true,
+            cluster: ViewCluster::default(),
+            node_count,
         })
     }
 
@@ -189,6 +209,7 @@ impl FurniCraftApp {
         scene.camera = scene_build::scene_camera(session.project(), view_camera);
 
         self.session = session;
+        self.node_count = self.session.project().query(&NodeQuery::any()).len();
         self.kernel = kernel;
         self.cache = cache;
         self.scene = scene;
@@ -196,6 +217,7 @@ impl FurniCraftApp {
         self.home_camera = home_camera;
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
+        self.cluster = ViewCluster::default();
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
@@ -231,6 +253,33 @@ impl FurniCraftApp {
         Ok(())
     }
 
+    /// Performs the header action the row returned.
+    ///
+    /// Undo, redo and save are the same operations the menu and the keyboard already take, so the
+    /// header adds a place to click, not a second code path into the document.
+    fn handle_header_action(&mut self, action: HeaderAction) {
+        match action {
+            HeaderAction::Home => self.last_error = Some("The start surface is not built yet.".to_owned()),
+            HeaderAction::Undo => {
+                if let Err(error) = self.session.undo() {
+                    self.last_error = Some(error.to_string());
+                }
+            }
+            HeaderAction::Redo => {
+                if let Err(error) = self.session.redo() {
+                    self.last_error = Some(error.to_string());
+                }
+            }
+            HeaderAction::Save => {
+                if let Some(action) = self.files.save(self.session.is_dirty()) {
+                    self.handle_file_action(action);
+                }
+            }
+            HeaderAction::Settings => self.last_error = Some("Settings are not built yet.".to_owned()),
+            HeaderAction::CloseTab => {}
+        }
+    }
+
     /// Performs the operation the File menu returned and reports a failure in the toolbar.
     fn handle_file_action(&mut self, action: FileAction) {
         self.last_error = None;
@@ -257,6 +306,7 @@ impl FurniCraftApp {
         if revision == self.scene_revision {
             return Ok(());
         }
+        self.node_count = self.session.project().query(&NodeQuery::any()).len();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
@@ -472,11 +522,16 @@ impl FurniCraftApp {
         let drawing = self.editor.drawing().is_some();
         // An armed primitive owns the next click: it places a cube, it does not select.
         let placing = self.editor.pending_primitive().is_some();
+        // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
+        // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
+        let navigation = self.cluster.navigation;
+        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing;
         let mesh_object = if contour_editing || drawing || placing {
             None
         } else {
             self.editor.mesh_edit().map(|edit| edit.object())
         };
+        let navigating = navigating && mesh_object.is_none();
         // Face mode moves the union of the selected faces, so both sub-object modes feed the same
         // vertex gizmo and dispatch the same vertex command.
         let mesh_vertices = mesh_object.map(|object| self.mesh_selection_vertices(object)).unwrap_or_default();
@@ -521,14 +576,19 @@ impl FurniCraftApp {
         }
 
         if drawing {
-            let axis_lock = ui.input(|input| input.modifiers.shift);
+            // Shift locks the next segment to an axis; Alt turns a click into an arc through that
+            // point, and the click after it ends the arc. One modifier, one job.
+            let modifiers = DrawModifiers {
+                axis_lock: ui.input(|input| input.modifiers.shift),
+                arc: ui.input(|input| input.modifiers.alt),
+            };
             let finished = match self.draw_gizmo.update(
                 &response,
                 rect,
                 self.scene.camera,
                 &mut self.editor,
                 pointer_over_widget,
-                axis_lock,
+                modifiers,
             ) {
                 Ok(true) => {
                     ui.ctx().request_repaint();
@@ -577,7 +637,7 @@ impl FurniCraftApp {
             selection: self.editor.selected_nodes(),
         };
         let update: Result<Option<PlacementCommit>, String> =
-            if contour_editing || drawing || placing || mesh_object.is_some() {
+            if contour_editing || drawing || placing || navigating || mesh_object.is_some() {
                 Ok(None)
             } else {
                 match self.mode {
@@ -631,6 +691,22 @@ impl FurniCraftApp {
         }
 
         let drag = response.drag_delta();
+        // An armed navigation mode turns the primary button into the camera gesture; the gizmo is
+        // neither updated nor painted then, so the drag cannot move an axis under the user's hand.
+        if navigable && !dragging && navigating && response.dragged_by(egui::PointerButton::Primary) {
+            match navigation {
+                Some(NavigationMode::Orbit) => self
+                    .view_camera
+                    .orbit(-f64::from(drag.x) * ORBIT_RADIANS_PER_POINT, -f64::from(drag.y) * ORBIT_RADIANS_PER_POINT),
+                Some(NavigationMode::Pan) => {
+                    self.view_camera.pan_pixels(f64::from(drag.x), f64::from(drag.y), f64::from(rect.height()))
+                }
+                Some(NavigationMode::Zoom) => {
+                    self.view_camera.zoom((-f64::from(drag.y) * ZOOM_PER_SCROLL_POINT).exp());
+                }
+                None => {}
+            }
+        }
         // An axis drag owns the pointer; rotating the camera mid-drag would move the axis under the
         // pointer and change the drag parameter under the user's hand.
         if navigable && !dragging && response.dragged_by(egui::PointerButton::Middle) {
@@ -656,6 +732,8 @@ impl FurniCraftApp {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
         } else if placing {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+        } else if navigating {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         } else if dragging || response.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else {
@@ -776,6 +854,9 @@ impl FurniCraftApp {
                 vertices: &mesh_vertices,
             };
             self.vertex_gizmo.paint(ui, rect, target);
+        } else if navigating {
+            // The navigation gesture owns the viewport; an axis under the pointer would compete
+            // with the camera drag, so the transform gizmo stays hidden until the mode is disarmed.
         } else {
             match self.mode {
                 TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
@@ -787,6 +868,19 @@ impl FurniCraftApp {
         {
             self.view_camera.look_from(direction);
             self.scene.camera = scene_build::scene_camera(self.session.project(), self.view_camera);
+        }
+
+        // The cluster floats over the drawn viewport, so it is the last thing painted inside it.
+        let view = ClusterView {
+            owns_view: viewport_owns_view(self.session.project()),
+            projection: self.scene.camera.projection(),
+            work_plane: WorkPlane::from_camera(self.view_camera).label(),
+        };
+        match view_cluster::show(ui, rect, &mut self.cluster, view) {
+            Some(ClusterAction::FrameAll | ClusterAction::Home) => self.reset_view(),
+            Some(ClusterAction::ToggleProjection) => self.view_camera.toggle_projection(),
+            Some(ClusterAction::Layout) => self.last_error = Some("Split views are not built yet.".to_owned()),
+            None => {}
         }
     }
 
@@ -889,26 +983,74 @@ impl FurniCraftApp {
         }
     }
 
+    /// The scene tree, as a folding window.
+    ///
+    /// The panel owns no heading and no tools of its own: the header row names it, counts its nodes
+    /// and folds it, and the body is only the tree. Grouping survives in the row context menu.
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("scene_tree").resizable(true).default_size(240.0).min_size(180.0).show(ui, |ui| {
+        let head = PanelHead {
+            title: "Scene",
+            count: self.node_count,
+            icon: icons::scene::ASSEMBLY,
+            default_width: 240.0,
+            min_width: 180.0,
+        };
+        side_panel(ui, PanelSide::Left, "scene_tree", &mut self.tree_open, head, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                match self.editor.show_toolbars(ui, &mut self.session) {
-                    Ok(true) => self.draw_gizmo.reset(),
-                    Ok(false) => {}
-                    Err(error) => self.last_error = Some(error),
-                }
-                ui.separator();
-                ui.heading("Scene");
-                ui.separator();
                 self.editor.show_scene_tree(ui, &mut self.session);
             });
         });
     }
 
+    /// The ribbon under the header: the tabs and the tool groups of the active tab.
+    ///
+    /// The ribbon owns no document state and no viewport state: it returns whether a drawing tool
+    /// started and at most one view action, which the shell performs with the same methods the
+    /// status bar uses. It sits between the header and the side panels, so it spans the window.
+    fn ribbon(&mut self, ui: &mut egui::Ui) {
+        let view = furnicraft_ui::RibbonView {
+            perspective: matches!(self.view_camera.projection(), Projection::Perspective { .. }),
+            owns_view: viewport_owns_view(self.session.project()),
+            grid: self.draw_gizmo.grid(),
+        };
+        let mut outcome = None;
+        // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
+        // one that the side panels use behind their content.
+        let frame = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(6, 2));
+        egui::Panel::top("ribbon").frame(frame).show(ui, |ui| {
+            ui.add_space(theme::STEP);
+            match self.editor.show_ribbon(ui, &mut self.session, view) {
+                Ok(result) => outcome = Some(result),
+                Err(error) => self.last_error = Some(error),
+            }
+            ui.add_space(theme::STEP);
+        });
+        if let Some(outcome) = outcome {
+            if outcome.started_drawing {
+                self.draw_gizmo.reset();
+                // Starting a drawing tool is a deliberate change of gesture: an armed navigation
+                // mode must not take the primary button back when the draft ends.
+                self.cluster.navigation = None;
+            }
+            match outcome.view {
+                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
+                Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => self.view_camera.toggle_projection(),
+                Some(furnicraft_ui::RibbonViewAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
+                None => {}
+            }
+        }
+    }
+
+    /// The inspector, as a folding window over the same header row.
     fn panel_card(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::right("panel_card").resizable(true).default_size(300.0).min_size(260.0).show(ui, |ui| {
-            ui.heading("Inspector");
-            ui.separator();
+        let head = PanelHead {
+            title: "Inspector",
+            count: self.editor.selected_nodes().len(),
+            icon: icons::actions::SETTINGS,
+            default_width: 300.0,
+            min_width: 260.0,
+        };
+        side_panel(ui, PanelSide::Right, "panel_card", &mut self.card_open, head, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.editor.show_card(ui, &mut self.session);
             });
@@ -917,145 +1059,352 @@ impl FurniCraftApp {
 
     fn workspace(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
-            let mut reset = false;
-            let mut toggle_projection = false;
-            let mut apply_contour = false;
-            let mut cancel_contour = false;
-            let mut toggle_grid = false;
-            let mut close_drawing = false;
-            let mut finish_drawing = false;
-            let mut cancel_drawing = false;
-            let owns_view = viewport_owns_view(self.session.project());
-            let mesh_selection = self.editor.mesh_edit().map(|edit| {
+            self.viewport(ui);
+        });
+    }
+
+    /// The thin bar at the bottom of the window: the armed tool, the gesture it expects, the counts
+    /// it would affect and the last error.
+    ///
+    /// View controls no longer live here: they float over the viewport in [`ViewCluster`], so the
+    /// scene starts at the model instead of at a wall of labels. The bar is chrome and carries no
+    /// document state; everything it shows is read from the session or the editor.
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let info = self.status_info();
+        let mut out = StatusOut::default();
+        egui::Panel::bottom("status_bar").show(ui, |ui| {
+            ui.set_height(theme::STATUS_HEIGHT);
+            // One thin row, left to right: the bar is chrome, not a second sidebar.
+            ui.horizontal_centered(|ui| {
+                (out.state, out.mode) = status_state_ui(ui, &info);
+            });
+        });
+        self.apply_status(out);
+    }
+
+    /// Everything the bar reads from the session, the editor and the view camera.
+    fn status_info(&self) -> StatusInfo {
+        StatusInfo {
+            error: self.last_error.clone(),
+            mode: self.mode,
+            contour: self.editor.contour_edit().map(|edit| (edit.draft().segment_count(), edit.is_dirty())),
+            drawing: self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed())),
+            primitive: self.editor.pending_primitive(),
+            grid: self.draw_gizmo.grid(),
+            mesh: self.editor.mesh_edit().map(|edit| {
                 let count = match edit.element() {
                     MeshElement::Vertex => edit.vertices().len(),
                     MeshElement::Face => edit.faces().len(),
                 };
                 (edit.element(), count)
-            });
-            let contour_edit = self
-                .editor
-                .contour_edit()
-                .map(|edit| (edit.draft().segment_count(), edit.is_dirty()));
-            let drawing = self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
-            let placing = self.editor.pending_primitive();
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("FurniCraft");
-                ui.separator();
-                reset = icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true, false).clicked();
-                reset |= ui.input(|input| input.key_pressed(egui::Key::F));
-                ui.separator();
-                let (projection_icon, projection_hint) = projection_button(self.scene.camera.projection());
-                let projection_response = ui
-                    .add_enabled_ui(owns_view, |ui| icons::icon_button(ui, projection_icon, projection_hint))
-                    .inner
-                    .on_disabled_hover_text("An authored camera owns the projection");
-                toggle_projection = projection_response.clicked();
-                toggle_projection |= owns_view && ui.input(|input| input.key_pressed(egui::Key::O));
-                ui.separator();
-                if owns_view {
-                    ui.label(format!("Work plane · {}", WorkPlane::from_camera(self.view_camera).label()));
-                    ui.separator();
+            }),
+            navigation: self.cluster.navigation,
+            creation_parent: self.editor.creation_parent_name(self.session.project()).map(str::to_owned),
+        }
+    }
+
+    /// Runs the one action each side of the bar asked for.
+    fn apply_status(&mut self, out: StatusOut) {
+        if let Some(mode) = out.mode {
+            self.mode = mode;
+        }
+        match out.state {
+            Some(StatusAction::ApplyContour) => {
+                if let Err(error) = self.apply_contour_edit() {
+                    self.last_error = Some(error);
                 }
-                ui_scale::show(ui);
-                ui.separator();
-                if let Some((segments, dirty)) = contour_edit {
-                    ui.label(format!(
-                        "Contour edit · {segments} segments{}",
-                        if dirty { " · modified" } else { "" }
-                    ));
-                    apply_contour = ui.button("Apply").clicked();
-                    cancel_contour = ui.button("Cancel").clicked();
-                    ui.separator();
-                    ui.label("Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
-                } else if let Some((tool, points, closed)) = drawing {
-                    ui.label(format!(
-                        "Draw · {}{}",
-                        tool.label(),
-                        if points == 0 { String::new() } else { format!(" · {points} points") }
-                    ));
-                    ui.separator();
-                    toggle_grid |= ui.selectable_label(self.draw_gizmo.grid(), "Grid 10 mm  (G)").clicked();
-                    ui.separator();
-                    close_drawing |=
-                        ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
-                    finish_drawing |=
-                        ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
-                    cancel_drawing |= ui.button("Cancel  (Esc)").clicked();
-                    ui.separator();
-                    ui.label("LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
-                } else if let Some((kind, size)) = placing {
-                    let name = match kind {
-                        furnicraft_engine::PrimitiveKind::Cube => "Cube",
-                        furnicraft_engine::PrimitiveKind::Cylinder => "Cylinder",
-                        furnicraft_engine::PrimitiveKind::Sphere => "Sphere",
-                    };
-                    ui.label(format!("Primitive · {name} {size}"));
-                    ui.separator();
-                    ui.label("LMB place on the work plane  ·  Esc cancel");
-                } else {
-                    ui.label("Gizmo");
-                    ui.selectable_value(&mut self.mode, TransformMode::Move, "Move");
-                    ui.selectable_value(&mut self.mode, TransformMode::Rotate, "Rotate");
-                    ui.separator();
-                    if let Some((element, count)) = mesh_selection {
-                        ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
-                        ui.separator();
-                        ui.label("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit");
-                    } else {
-                        ui.label(
-                            "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB/wheel zoom",
-                        );
+            }
+            Some(StatusAction::CancelContour) => self.cancel_contour_edit(),
+            Some(StatusAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
+            Some(StatusAction::CloseDraft) => match self.editor.close_drawing() {
+                Ok(()) => {
+                    if let Err(error) = self.commit_drawing() {
+                        self.last_error = Some(error);
                     }
                 }
-                if let Some(camera) = self
-                    .session
-                    .project()
-                    .active_camera()
-                    .and_then(|id| self.session.project().camera(id))
-                {
-                    ui.separator();
-                    ui.label(format!("Camera · {}", camera.name()));
-                }
-                if let Some(error) = &self.last_error {
-                    ui.separator();
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-            });
-            if toggle_grid {
-                self.draw_gizmo.toggle_grid();
-            }
-            let mut closed = false;
-            if close_drawing {
-                match self.editor.close_drawing() {
-                    Ok(()) => closed = true,
-                    Err(error) => self.last_error = Some(error.to_string()),
+                Err(error) => self.last_error = Some(error.to_string()),
+            },
+            Some(StatusAction::FinishDraft) => {
+                if let Err(error) = self.commit_drawing() {
+                    self.last_error = Some(error);
                 }
             }
-            if (finish_drawing || closed) && let Err(error) = self.commit_drawing() {
-                self.last_error = Some(error);
-            }
-            if cancel_drawing {
-                self.cancel_drawing();
-            }
-            if apply_contour
-                && let Err(error) = self.apply_contour_edit()
-            {
-                self.last_error = Some(error);
-            }
-            if cancel_contour {
-                self.cancel_contour_edit();
-            }
-            if reset {
-                self.reset_view();
-            }
-            if toggle_projection && owns_view {
-                self.view_camera.toggle_projection();
-            }
-            ui.separator();
-            self.viewport(ui);
-        });
+            Some(StatusAction::CancelDraft) => self.cancel_drawing(),
+            Some(StatusAction::CancelPrimitive) => self.editor.cancel_primitive(),
+            Some(StatusAction::ClearCreationParent) => self.editor.clear_creation_parent(),
+            Some(StatusAction::EndNavigation) => self.cluster.navigation = None,
+            None => {}
+        }
     }
+}
+
+/// The status text and controls, read once per frame so both sides of the bar draw from data.
+struct StatusInfo {
+    error: Option<String>,
+    mode: TransformMode,
+    contour: Option<(usize, bool)>,
+    drawing: Option<(DrawTool, usize, bool)>,
+    primitive: Option<(furnicraft_engine::PrimitiveKind, Length)>,
+    grid: bool,
+    mesh: Option<(MeshElement, usize)>,
+    /// The navigation mode armed in the floating cluster, if any.
+    navigation: Option<NavigationMode>,
+    /// The container armed to receive the next creation, if any.
+    creation_parent: Option<String>,
+}
+
+/// What the bar asked for, after the row has drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StatusOut {
+    state: Option<StatusAction>,
+    mode: Option<TransformMode>,
+}
+
+/// What the status text asked the shell to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatusAction {
+    ApplyContour,
+    CancelContour,
+    ToggleGrid,
+    CloseDraft,
+    FinishDraft,
+    CancelDraft,
+    CancelPrimitive,
+    ClearCreationParent,
+    EndNavigation,
+}
+
+/// A quiet hint that truncates instead of running under the right-hand view controls.
+fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::TEXT_DIM)).truncate());
+}
+
+/// The armed tool, the gesture it expects and the counts it would affect.
+fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction>, Option<TransformMode>) {
+    if let Some(error) = &info.error {
+        ui.colored_label(theme::DANGER, error);
+        theme::divider(ui);
+    }
+    // The arm is sticky across creations, so the bar names the container the next node lands in;
+    // without the chip a pressed tool would create in a container armed much earlier (ADR 0056).
+    if let Some(name) = &info.creation_parent {
+        ui.label(format!("Adding to: {name}"));
+        if ui.button("✕").on_hover_text("Create at the scene root again").clicked() {
+            return (Some(StatusAction::ClearCreationParent), None);
+        }
+        theme::divider(ui);
+    }
+    if let Some((segments, dirty)) = info.contour {
+        ui.label(format!("Contour edit · {segments} segments{}", if dirty { " · modified" } else { "" }));
+        let apply = ui.button("Apply").clicked();
+        let cancel = ui.button("Cancel").clicked();
+        hint(ui, "Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
+        let action = if apply {
+            Some(StatusAction::ApplyContour)
+        } else if cancel {
+            Some(StatusAction::CancelContour)
+        } else {
+            None
+        };
+        return (action, None);
+    }
+    if let Some((tool, points, closed)) = info.drawing {
+        ui.label(format!(
+            "Draw · {}{}",
+            tool.label(),
+            if points == 0 { String::new() } else { format!(" · {points} points") }
+        ));
+        let grid = ui.selectable_label(info.grid, "Grid 10 mm  (G)").clicked();
+        let close = ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
+        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
+        let cancel = ui.button("Cancel  (Esc)").clicked();
+        hint(ui, "LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
+        let action = if grid {
+            Some(StatusAction::ToggleGrid)
+        } else if close {
+            Some(StatusAction::CloseDraft)
+        } else if finish {
+            Some(StatusAction::FinishDraft)
+        } else if cancel {
+            Some(StatusAction::CancelDraft)
+        } else {
+            None
+        };
+        return (action, None);
+    }
+    if let Some((kind, size)) = info.primitive {
+        let name = match kind {
+            furnicraft_engine::PrimitiveKind::Cube => "Cube",
+            furnicraft_engine::PrimitiveKind::Cylinder => "Cylinder",
+            furnicraft_engine::PrimitiveKind::Sphere => "Sphere",
+        };
+        ui.label(format!("Primitive · {name} {size}"));
+        let cancel = ui.button("Cancel  (Esc)").clicked();
+        hint(ui, "LMB place on the work plane  ·  Esc cancel");
+        return (cancel.then_some(StatusAction::CancelPrimitive), None);
+    }
+    if let Some(mode) = info.navigation {
+        ui.label(format!("Navigation · {}", mode.name()));
+        let done = ui.button("Done  (Esc)").clicked();
+        hint(ui, mode.gesture());
+        return (done.then_some(StatusAction::EndNavigation), None);
+    }
+    ui.label(egui::RichText::new("Gizmo").color(theme::TEXT_DIM));
+    let mut mode = info.mode;
+    let moved = ui.selectable_value(&mut mode, TransformMode::Move, "Move").clicked()
+        | ui.selectable_value(&mut mode, TransformMode::Rotate, "Rotate").clicked();
+    theme::divider(ui);
+    if let Some((element, count)) = info.mesh {
+        ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
+        ui.label(
+            egui::RichText::new("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit").color(theme::TEXT_DIM),
+        );
+    } else {
+        hint(ui, "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB zoom");
+    }
+    (None, moved.then_some(mode))
+}
+
+/// A hairline across the panel, quieter than `ui.separator()` and on the spacing grid.
+fn rule(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::LINE));
+}
+
+/// Which edge a folding side panel sits on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelSide {
+    Left,
+    Right,
+}
+
+/// What a folding side panel's header row draws: the title, the count chip and the icon the folded
+/// strip keeps.
+#[derive(Clone, Copy, Debug)]
+struct PanelHead {
+    title: &'static str,
+    count: usize,
+    icon: icons::Icon,
+    default_width: f32,
+    min_width: f32,
+}
+
+/// Draws a side panel that folds to [`theme::COLLAPSED_PANEL_WIDTH`] and keeps its width.
+///
+/// The expanded and collapsed views are two panels with distinct ids, switched by
+/// [`egui::Panel::show_switched`], so the collapsed view's 26 pt state never overwrites the width the
+/// user dragged the expanded view to. A click on the strip, a double-click on its edge or a drag
+/// outward restores the panel; the chevron in the header folds it.
+fn side_panel(
+    ui: &mut egui::Ui,
+    side: PanelSide,
+    id: &str,
+    open: &mut bool,
+    head: PanelHead,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let mut expanded = *open;
+    let mut fold_requested = false;
+    let mut restore_requested = false;
+
+    let panel = |id: String| match side {
+        PanelSide::Left => egui::Panel::left(id),
+        PanelSide::Right => egui::Panel::right(id),
+    };
+    let collapsed = panel(format!("{id}_collapsed"))
+        .resizable(true)
+        .exact_size(theme::COLLAPSED_PANEL_WIDTH)
+        .show_separator_line(false)
+        .frame(egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::ZERO));
+    let expanded_panel = panel(id.to_owned())
+        .resizable(true)
+        .default_size(head.default_width)
+        .min_size(head.min_width)
+        .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::ZERO));
+
+    egui::Panel::show_switched(ui, &mut expanded, collapsed, expanded_panel, |ui, unfolded| {
+        if unfolded {
+            if panel_header(ui, &head) {
+                fold_requested = true;
+            }
+            rule(ui);
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(6, theme::STEP as i8)).show(ui, |ui| {
+                body(ui);
+            });
+        } else {
+            collapsed_strip(ui, &head, &mut restore_requested);
+        }
+    });
+
+    if fold_requested {
+        expanded = false;
+    }
+    if restore_requested {
+        expanded = true;
+    }
+    *open = expanded;
+}
+
+/// The header of an unfolded side panel: the title, a count chip and the fold chevron.
+///
+/// Returns whether the chevron was clicked.
+fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
+    let mut fold = false;
+    egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(theme::STEP as i8, 0)).show(
+        ui,
+        |ui| {
+            ui.set_height(theme::PANEL_HEADER_HEIGHT);
+            ui.horizontal_centered(|ui| {
+                ui.label(egui::RichText::new(head.title).strong());
+                count_chip(ui, head.count);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::icon_button_at(ui, icons::actions::COLLAPSE, 12.0, "Fold panel", true, false).clicked() {
+                        fold = true;
+                    }
+                });
+            });
+        },
+    );
+    fold
+}
+
+/// A small count chip beside a panel title.
+fn count_chip(ui: &mut egui::Ui, count: usize) {
+    egui::Frame::new()
+        .fill(theme::CONTROL)
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS))
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(count.to_string()).small().color(theme::TEXT_DIM));
+        });
+}
+
+/// The folded panel: a 26 pt strip with the panel's icon and its title turned to read along the
+/// strip. A click anywhere on the strip restores the panel.
+fn collapsed_strip(ui: &mut egui::Ui, head: &PanelHead, restore: &mut bool) {
+    let size = egui::vec2(ui.available_width(), ui.available_height());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *restore = true;
+    }
+    let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::SURFACE };
+    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, fill);
+
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + theme::PANEL_HEADER_HEIGHT / 2.0),
+        egui::Vec2::splat(14.0),
+    );
+    icons::draw_icon(ui, head.icon, icon_rect, 14.0, theme::TEXT_DIM);
+
+    // The title is turned so it reads bottom to top. `with_angle` turns about the galley's top-left
+    // corner, so the corner is offset by the rotated half-size to centre the turned text.
+    let galley = ui.painter().layout_no_wrap(head.title.to_owned(), egui::FontId::proportional(12.0), theme::TEXT_DIM);
+    let size = galley.size();
+    let center = egui::pos2(rect.center().x, rect.center().y + theme::PANEL_HEADER_HEIGHT / 2.0);
+    let pos = egui::pos2(center.x - size.y / 2.0, center.y + size.x / 2.0);
+    ui.painter()
+        .add(egui::epaint::TextShape::new(pos, galley, theme::TEXT_DIM).with_angle(-std::f32::consts::FRAC_PI_2));
+    response.on_hover_text(format!("Open the {} panel", head.title));
 }
 
 /// Whether the viewport owns its view.
@@ -1064,18 +1413,6 @@ impl FurniCraftApp {
 /// pins both navigation and the projection toggle; a command is the only way to change either.
 fn viewport_owns_view(project: &Project) -> bool {
     project.active_camera().is_none()
-}
-
-/// The icon and the hint of the projection toggle.
-///
-/// The icon draws the mode the view is *in*, and the hint names the switch, so the strip never
-/// claims a state the camera has not reached. The two travel together, because taking one without
-/// the other is what made the button read as the future state.
-fn projection_button(projection: Projection) -> (icons::Icon, &'static str) {
-    match projection {
-        Projection::Perspective { .. } => (icons::view::PERSPECTIVE, "Perspective view; switch to orthographic  (O)"),
-        Projection::Orthographic { .. } => (icons::view::ORTHOGRAPHIC, "Orthographic view; switch to perspective  (O)"),
-    }
 }
 
 /// World placements a drag previews for cameras and lights.
@@ -1219,7 +1556,11 @@ impl eframe::App for FurniCraftApp {
             && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
         {
-            if self.editor.mesh_edit().is_some() {
+            if self.cluster.settings_open {
+                // The popover owns Escape for this frame and closes itself.
+            } else if self.cluster.navigation.is_some() {
+                self.cluster.navigation = None;
+            } else if self.editor.mesh_edit().is_some() {
                 self.editor.end_mesh_edit();
             } else if self.editor.creation_parent().is_some() {
                 // The arm outranks leaving a container level: it is the mode the next creation uses,
@@ -1257,11 +1598,32 @@ impl eframe::App for FurniCraftApp {
             self.last_error = Some(error);
         }
         let dirty = self.session.is_dirty();
-        if let Some(action) = self.files.show(ui, dirty) {
+        let header = HeaderState {
+            title: self.files.file_name(),
+            dirty,
+            can_undo: self.session.can_undo(),
+            can_redo: self.session.can_redo(),
+        };
+        let mut header_action = None;
+        let mut file_action = None;
+        egui::Panel::top("header").show(ui, |ui| {
+            header_action = header::show(ui, &header, |ui| {
+                file_action = self.files.show(ui, dirty);
+            });
+        });
+        if let Some(action) = file_action {
             self.handle_file_action(action);
         }
+        if let Some(action) = self.files.show_dialogs(ui.ctx(), dirty) {
+            self.handle_file_action(action);
+        }
+        if let Some(action) = header_action {
+            self.handle_header_action(action);
+        }
+        self.ribbon(ui);
         self.scene_tree(ui);
         self.panel_card(ui);
+        self.status_bar(ui);
         self.workspace(ui);
     }
 }
@@ -1295,6 +1657,27 @@ mod tests {
     use furnicraft_units::Length;
 
     use super::*;
+    use crate::view_cluster::{cluster_anchor, projection_button};
+
+    /// Collects the text of every text shape, including nested ones.
+    fn drawn_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
 
     /// Root (1): shelf (2), drawer (3) with front (4), rig (5) carrying a camera and a light.
     struct Fixture {
@@ -1507,5 +1890,179 @@ mod tests {
         assert_eq!(outlines.len(), 2, "the segment through the viewer is dropped");
         assert_eq!(outlines[0].len(), 2);
         assert_eq!(outlines[1].len(), 2);
+    }
+
+    fn idle_status() -> StatusInfo {
+        StatusInfo {
+            error: None,
+            mode: TransformMode::Move,
+            contour: None,
+            drawing: None,
+            primitive: None,
+            grid: true,
+            mesh: None,
+            navigation: None,
+            creation_parent: None,
+        }
+    }
+
+    #[test]
+    fn the_status_bar_draws_one_thin_row() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = idle_status();
+        let mut out = StatusOut::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 400.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            ui.set_height(theme::STATUS_HEIGHT);
+            ui.horizontal_centered(|ui| {
+                (out.state, out.mode) = status_state_ui(ui, &info);
+            });
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(out.state, None, "drawing the idle bar asks for nothing");
+        assert_eq!(out.mode, None);
+    }
+
+    #[test]
+    fn the_status_bar_names_the_armed_drawing_tool() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = StatusInfo { drawing: Some((DrawTool::Rectangle, 3, false)), ..idle_status() };
+        let mut out = StatusOut::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            out.state = status_state_ui(ui, &info).0;
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text.contains("Draw")), "the armed tool is named: {texts:?}");
+        assert!(texts.iter().any(|text| text.contains('3')), "the draft's point count is shown: {texts:?}");
+        assert_eq!(out.state, None, "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn the_status_bar_names_the_armed_container_and_offers_to_clear_it() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = StatusInfo { creation_parent: Some("Carcass".to_owned()), ..idle_status() };
+        let mut out = StatusOut::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            out.state = status_state_ui(ui, &info).0;
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(
+            texts.iter().any(|text| text.contains("Adding to: Carcass")),
+            "the armed container names itself: {texts:?}"
+        );
+        assert!(texts.iter().any(|text| text.contains('✕')), "the bar offers to clear the arm: {texts:?}");
+    }
+
+    #[test]
+    fn the_status_bar_names_the_armed_navigation_gesture() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = StatusInfo { navigation: Some(NavigationMode::Orbit), ..idle_status() };
+        let mut out = StatusOut::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            out.state = status_state_ui(ui, &info).0;
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text.contains("Navigation · Orbit")), "the armed mode is named: {texts:?}");
+        assert!(
+            texts.iter().any(|text| text.contains("Drag in the viewport to orbit")),
+            "the bar names the gesture the mode expects: {texts:?}"
+        );
+        assert_eq!(out.state, None, "an idle armed mode runs nothing until its button is clicked");
+    }
+
+    #[test]
+    fn the_cluster_is_anchored_to_the_bottom_centre_of_the_viewport() {
+        let wide = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0));
+        let narrow = egui::Rect::from_min_size(egui::pos2(240.0, 0.0), egui::vec2(460.0, 600.0));
+        let offset = theme::FLOATING_OFFSET;
+        for viewport in [wide, narrow] {
+            let anchor = cluster_anchor(viewport, offset);
+            assert!((anchor.x - viewport.center().x).abs() < f32::EPSILON, "the cluster is centred on x");
+            assert!((anchor.y - (viewport.bottom() - offset)).abs() < f32::EPSILON, "and lifted off the bottom");
+        }
+        assert_ne!(
+            cluster_anchor(wide, offset).x,
+            cluster_anchor(narrow, offset).x,
+            "folding a side panel moves the cluster with the surface it floats over"
+        );
+    }
+
+    #[test]
+    fn the_angle_switch_controls_the_readout() {
+        let mut cluster = ViewCluster::default();
+        assert!(!cluster.angles_visible(), "the readout is off until the switch is turned on (U42)");
+        cluster.show_angles = true;
+        assert!(cluster.angles_visible(), "the switch controls the orientation readout");
+    }
+
+    #[test]
+    fn a_folded_panel_keeps_its_expanded_width_and_draws_no_body() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let head = PanelHead {
+            title: "Scene",
+            count: 4,
+            icon: icons::scene::ASSEMBLY,
+            default_width: 240.0,
+            min_width: 180.0,
+        };
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 600.0))),
+            ..Default::default()
+        };
+        let mut open = true;
+        let width_open = std::cell::Cell::new(0.0);
+        let output = ctx.run_ui(input(), |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+                width_open.set(ui.max_rect().width());
+                ui.label("BODY-CONTENT");
+            });
+        });
+        output.drop_without_applying_deltas();
+        assert!(open, "the panel starts unfolded");
+        assert!(width_open.get() > theme::COLLAPSED_PANEL_WIDTH, "an unfolded panel has its content width");
+
+        open = false;
+        let folded = ctx.run_ui(input(), |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+                ui.label("BODY-CONTENT");
+            });
+        });
+        let folded_text = drawn_text(&folded.shapes);
+        folded.drop_without_applying_deltas();
+        assert!(!open, "the panel stays folded");
+        assert!(
+            !folded_text.iter().any(|text| text.contains("BODY-CONTENT")),
+            "a folded panel draws no body: {folded_text:?}"
+        );
+        assert!(folded_text.iter().any(|text| text.contains("Scene")), "the strip keeps the turned title");
+
+        open = true;
+        let width_again = std::cell::Cell::new(0.0);
+        let output = ctx.run_ui(input(), |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+                width_again.set(ui.max_rect().width());
+                ui.label("BODY-CONTENT");
+            });
+        });
+        output.drop_without_applying_deltas();
+        assert!(open, "the panel is unfolded again");
+        assert!(
+            (width_again.get() - width_open.get()).abs() < 1.0,
+            "the expanded width survives the fold: {} vs {}",
+            width_again.get(),
+            width_open.get()
+        );
     }
 }

@@ -30,6 +30,15 @@ A path also needs a payload of its own: `Mesh` is baked and editable but has no 
   each, like the contour commands. They share their `enabled` check with `run`.
 - A path object cannot be collapsed: there is no solid to bake, and `object.extrude.create` takes the
   contour the user derives from it, not the path itself.
+- A drawn vertex follows the stored segment end, not the raw click. A polyline therefore keeps the
+  segments it has built instead of a point list: `arc_through` rounds the centre, radius and angle to
+  whole document units, so the stored end of an arc can miss the clicked point by a micrometre. A
+  chain that started its next segment at the click would draw in the viewport and then be refused by
+  `to_contour`, because the ring assembler wants exactly equal joints. Holding the segments makes the
+  drawing and the ring come from the same rounded geometry.
+- The Polyline tool appends either a straight segment or an arc: Alt+click passes a point the arc goes
+  through and the next click ends it. The gesture lives in the draft, so the whole mixed chain is still
+  one `object.path.create` and one undo entry.
 
 ## Consequences
 

@@ -28,6 +28,7 @@ mod placement_card;
 mod properties_card;
 mod scene_tree;
 mod section;
+pub mod theme;
 pub mod toolbars;
 pub mod ui_scale;
 
@@ -46,8 +47,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, NodeQuery, PanelNominalSize, Path, PathCorner,
-    Placement, Project,
+    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, PanelNominalSize, Path, PathCorner, Placement,
+    Project,
 };
 use furnicraft_units::Length;
 
@@ -66,7 +67,7 @@ use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use mesh_edit::{MeshEdit, MeshElement};
-pub use toolbars::ToolPanel;
+pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
 
 /// Default length of a newly created panel, in millimetres.
 const NEW_PANEL_LENGTH_MM: i64 = 600;
@@ -102,7 +103,6 @@ pub struct Editor {
     placement_card: PlacementCard,
     pivot_card: PivotCard,
     properties_card: PropertiesCard,
-    type_filter: String,
     error: Option<String>,
     initialized: bool,
 }
@@ -345,9 +345,17 @@ impl Editor {
         true
     }
 
-    /// Appends a work-plane point to the running draft.
+    /// Appends a work-plane point to the running draft as a straight segment.
     pub fn drawing_point(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
         self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.push(point)
+    }
+
+    /// Starts an arc at the running draft's last end through `point`.
+    ///
+    /// The next [`Editor::drawing_point`] ends the arc and the segment after it starts at the stored
+    /// arc end, so a chain that mixes both kinds still closes (ADR 0048).
+    pub fn drawing_arc_through(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
+        self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.push_arc_through(point)
     }
 
     /// Undoes the last drawing action: a close first, then the last point.
@@ -517,14 +525,20 @@ impl Editor {
         project.container(armed).map(|container| container.name())
     }
 
-    /// Draws the themed toolbar strip: one collapsible panel per tool theme.
+    /// Draws the ribbon: the row of tabs and the tool groups of the active tab.
     ///
-    /// The open panels are view state owned by the editor, so they survive a selection change and a
-    /// document command and never reach the scene file. A creation tool lands at the scene root
-    /// unless a container was armed through an explicit entry (ADR 0056). The tool that owns the
-    /// next click draws pressed, so the strip never hides what the pointer will do. Returns whether a
-    /// drawing tool started, so the shell can reset its own pointer state.
-    pub fn show_toolbars(&mut self, ui: &mut Ui, session: &mut Session) -> Result<bool, String> {
+    /// The open body, the active tab and the numeric fields are view state owned by the editor, so
+    /// they survive a selection change and a document command and never reach the scene file. A
+    /// creation tool lands at the scene root unless a container was armed through an explicit entry
+    /// (ADR 0056). The tool that owns the next click draws pressed, so the ribbon never hides what
+    /// the pointer will do. The view actions it returns — frame all, the projection, the grid snap —
+    /// belong to the shell, which owns the view camera and the drawing gizmo.
+    pub fn show_ribbon(
+        &mut self,
+        ui: &mut Ui,
+        session: &mut Session,
+        view: toolbars::RibbonView,
+    ) -> Result<toolbars::RibbonOutcome, String> {
         self.retain_creation_parent(session.project());
         let target = self.creation_target(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
@@ -534,26 +548,27 @@ impl Editor {
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
         );
-        let creation_parent = self.creation_parent_name(session.project());
-        let mut actions = Vec::new();
-        toolbars::show(
-            ui,
-            &mut self.toolbars,
+        let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
+        let context = toolbars::RibbonContext {
             has_panel_material,
             selected,
             selected_path,
             active,
-            creation_parent,
-            &mut actions,
-        );
-        let mut started_drawing = false;
+            perspective: view.perspective,
+            owns_view: view.owns_view,
+            grid: view.grid,
+            draft,
+        };
+        let mut actions = Vec::new();
+        toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
                 ToolAction::Draw(tool) => {
                     if !self.start_drawing(tool) {
                         return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
                     }
-                    started_drawing = true;
+                    outcome.started_drawing = true;
                 }
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,
@@ -562,9 +577,16 @@ impl Editor {
                 ToolAction::CreateLight => self.create_light(session, target)?,
                 ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
+                ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
+                ToolAction::CancelDrawing => self.cancel_drawing(),
+                ToolAction::FrameAll => outcome.view = Some(toolbars::RibbonViewAction::FrameAll),
+                ToolAction::ToggleProjection => {
+                    outcome.view = Some(toolbars::RibbonViewAction::ToggleProjection);
+                }
+                ToolAction::ToggleGrid => outcome.view = Some(toolbars::RibbonViewAction::ToggleGrid),
             }
         }
-        Ok(started_drawing)
+        Ok(outcome)
     }
 
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
@@ -708,14 +730,24 @@ impl Editor {
         self.initialized = true;
     }
 
-    /// Whether the panel of the toolbar strip is open.
-    pub fn toolbar_open(&self, panel: ToolPanel) -> bool {
-        self.toolbars.is_open(panel)
+    /// Whether the ribbon's body is open.
+    pub fn ribbon_open(&self) -> bool {
+        self.toolbars.is_open()
     }
 
-    /// Opens or closes one panel of the toolbar strip.
-    pub fn set_toolbar_open(&mut self, panel: ToolPanel, open: bool) -> bool {
-        self.toolbars.set_open(panel, open)
+    /// Opens or closes the ribbon's body and returns its new state.
+    pub fn set_ribbon_open(&mut self, open: bool) -> bool {
+        self.toolbars.set_open(open)
+    }
+
+    /// The tab whose groups the ribbon draws.
+    pub fn ribbon_tab(&self) -> toolbars::RibbonTab {
+        self.toolbars.tab()
+    }
+
+    /// Opens one ribbon tab.
+    pub fn set_ribbon_tab(&mut self, tab: toolbars::RibbonTab) -> toolbars::RibbonTab {
+        self.toolbars.set_tab(tab)
     }
 
     /// Draws the scene tree and dispatches the tree actions.
@@ -731,7 +763,7 @@ impl Editor {
             ui.colored_label(Color32::LIGHT_RED, error);
             ui.separator();
         }
-        let actions = scene_tree::show(ui, session, &mut self.selection, &mut self.type_filter);
+        let actions = scene_tree::show(ui, session, &mut self.selection);
         if actions.is_empty() {
             return;
         }
@@ -845,25 +877,6 @@ impl Editor {
                 dispatch(session, NODE_COMPONENT_CONVERT_TO_GROUP_ID, &params)?;
                 self.after_node_removed(session, parent);
             }
-            TreeAction::SelectUnderType { furntype } => {
-                let ids = session.project().query(&NodeQuery::any().with_furntype_under(furntype));
-                if ids.is_empty() {
-                    return Err(format!("No node has furniture type {furntype} or a sub-type."));
-                }
-                self.selection.replace_all(ids);
-            }
-            TreeAction::Undo => {
-                session.undo().map_err(|error| error.to_string())?;
-                self.selection.retain_existing(session.project());
-                self.retain_open(session.project());
-                self.retain_creation_parent(session.project());
-            }
-            TreeAction::Redo => {
-                session.redo().map_err(|error| error.to_string())?;
-                self.selection.retain_existing(session.project());
-                self.retain_open(session.project());
-                self.retain_creation_parent(session.project());
-            }
         }
         Ok(())
     }
@@ -945,12 +958,12 @@ mod tests {
 
     use super::*;
 
-    use furnicraft_engine::NodePropertySet;
-    use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
+    use crate::toolbars::RibbonView;
+
     use furnicraft_model::Contour;
     use furnicraft_model::{
-        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, FurnType, Geometry,
-        MachiningAnchor, MachiningParams, Mesh, Panel, Placement, PropertyValue, SYSTEM_FURNTYPE,
+        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, Geometry,
+        MachiningAnchor, MachiningParams, Mesh, Panel, Placement,
     };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
 
@@ -1223,13 +1236,13 @@ mod tests {
         assert!(!editor.start_drawing(DrawTool::Polyline), "a running draft is not replaced");
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first point");
         editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("second point");
-        assert_eq!(editor.drawing().map(DrawDraft::len), Some(2));
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1), "one straight segment");
         assert_eq!(session.project().revision(), revision, "the draft changes no document");
         assert!(!session.can_undo(), "the draft leaves no undo entry behind");
 
         assert!(editor.undo_drawing());
-        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1));
-        assert!(editor.close_drawing().is_err(), "two points enclose nothing");
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(0));
+        assert!(editor.close_drawing().is_err(), "one click encloses nothing");
 
         editor.cancel_drawing();
         assert!(editor.drawing().is_none());
@@ -1574,7 +1587,7 @@ mod tests {
             .expect("extrude the path");
         let body = editor.selected_node().expect("the new body is selected");
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert!(session.project().object(body).is_none(), "undo removes the body");
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object_path(path).is_ok(), "the drawing the body came from stays");
@@ -1784,41 +1797,15 @@ mod tests {
         assert!(editor.selected_nodes().is_empty());
     }
 
-    #[test]
-    fn selecting_a_furniture_type_subtree_replaces_the_selection() {
-        let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let drawer = Id::new(3).expect("drawer id");
-        let front = Id::new(4).expect("front id");
-        set_furntype(&mut session, drawer, "12.03.02");
-        set_furntype(&mut session, front, "12.03.01");
-
-        let mut editor = Editor::new();
-        editor
-            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12.03".parse().expect("type") })
-            .expect("select subtree");
-        assert_eq!(editor.selected_nodes(), [drawer, front]);
-        assert_eq!(editor.selected_node(), Some(front), "the last match is primary");
-
-        assert!(
-            editor
-                .run_action(&mut session, TreeAction::SelectUnderType { furntype: "13".parse().expect("type") })
-                .is_err()
-        );
-        assert_eq!(editor.selected_nodes(), [drawer, front], "a miss leaves the selection alone");
-
-        editor.selection.clear();
-        editor
-            .run_action(&mut session, TreeAction::SelectUnderType { furntype: "12".parse().expect("type") })
-            .expect("select group");
-        assert_eq!(editor.selected_nodes(), [drawer, front]);
-    }
-
-    fn set_furntype(session: &mut Session, node: Id, furntype: &str) {
-        let furntype: FurnType = furntype.parse().expect("valid furntype");
-        let params =
-            json(&NodePropertySet { node, key: SYSTEM_FURNTYPE.to_owned(), value: PropertyValue::furn_type(furntype) })
-                .expect("params");
-        dispatch(session, NODE_PROPERTY_SET_ID, &params).expect("set furntype");
+    /// The shell's undo, with the editor's view state pruned the way a frame prunes it.
+    ///
+    /// The tree toolbar no longer carries undo; the header and the palette do, so a test that used
+    /// the tree action calls the session directly and keeps the selection consistent.
+    fn undo(session: &mut Session, editor: &mut Editor) {
+        session.undo().expect("undo");
+        editor.selection.retain_existing(session.project());
+        editor.retain_open(session.project());
+        editor.retain_creation_parent(session.project());
     }
 
     fn grouped_project() -> (Project, Id, Id, Id) {
@@ -1916,30 +1903,31 @@ mod tests {
         assert_eq!(primitive.mesh_counts(), (8, 6), "a cube keeps six faces");
         assert_eq!(session.project().revision().get(), 1, "one command is one revision");
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
         assert!(session.project().object(id).is_none());
     }
 
     #[test]
-    fn the_toolbar_marks_the_tool_that_owns_the_next_click() {
+    fn the_ribbon_marks_the_tool_that_owns_the_next_click() {
         let (project, _panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         let ctx = egui::Context::default();
+        let view = RibbonView { perspective: true, owns_view: true, grid: true };
 
         let mut fill = None;
         let idle = ctx.run_ui(Default::default(), |ui| {
             fill = Some(ui.visuals().selection.bg_fill);
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
-        let fill = fill.expect("the strip ran");
+        let fill = fill.expect("the ribbon ran");
         assert_eq!(pressed_fill(&idle.shapes, fill), 0, "an idle editor presses no tool");
         idle.drop_without_applying_deltas();
 
         assert!(editor.start_drawing(DrawTool::Line));
         let drawing = ctx.run_ui(Default::default(), |ui| {
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
         assert_eq!(pressed_fill(&drawing.shapes, fill), 1, "the running draft presses its own tool");
         drawing.drop_without_applying_deltas();
@@ -1947,11 +1935,26 @@ mod tests {
         editor.cancel_drawing();
         let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
         editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm");
+        editor.set_ribbon_tab(RibbonTab::Model);
         let primitive = ctx.run_ui(Default::default(), |ui| {
-            editor.show_toolbars(ui, &mut session).expect("toolbars");
+            editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });
         assert_eq!(pressed_fill(&primitive.shapes, fill), 1, "the waiting primitive presses its own button");
         primitive.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_ribbon_returns_the_view_action_it_was_asked_for() {
+        // The ribbon draws the view buttons but never moves the camera: the action comes back and
+        // the shell performs it with the same method the status bar calls.
+        let mut editor = Editor::new();
+        editor.set_ribbon_tab(RibbonTab::View);
+        assert_eq!(editor.ribbon_tab(), RibbonTab::View);
+        assert!(editor.ribbon_open());
+        assert!(!editor.set_ribbon_open(false), "the body closes");
+        assert!(!editor.ribbon_open());
+        assert!(editor.set_ribbon_open(true), "the body opens again");
+        assert!(editor.ribbon_open());
     }
 
     /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.
@@ -1991,7 +1994,7 @@ mod tests {
         assert_eq!(session.project().light(light).expect("light").name(), "Light");
         assert_eq!(session.project().revision().get(), 2);
 
-        editor.run_action(&mut session, TreeAction::Undo).expect("undo");
+        undo(&mut session, &mut editor);
         assert!(session.project().light(light).is_none());
         assert!(editor.selected_node().is_none());
     }

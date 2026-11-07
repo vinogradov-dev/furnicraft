@@ -2,9 +2,10 @@
 //!
 //! While a drawing draft is live the gizmo owns the pointer: it maps the cursor onto the work
 //! plane, snaps it to a draft end, an axis or the 10 mm grid, appends a point on a click and closes
-//! a polyline through its first point. Painting shows the placed chain, the shape the next click
-//! would make, the snap marker and a live size. The dummy document is never touched here; the
-//! commit is a separate step, so Escape costs nothing.
+//! a polyline through its first point. Alt turns a click into an arc through that point, so one
+//! chain carries both kinds. Painting shows the placed chain, the shape the next click would make,
+//! the snap marker and a live size. The dummy document is never touched here; the commit is a
+//! separate step, so Escape costs nothing.
 
 use eframe::egui::{self, Color32, FontId, Pos2, Shape, Stroke, Ui};
 use furnicraft_geom::DVec2;
@@ -37,11 +38,22 @@ const SIZE_BACKGROUND: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 19
 /// Colour of a draft end that would close the chain.
 const CLOSE_COLOR: Color32 = Color32::from_rgb(120, 230, 140);
 
+/// The keyboard state a click carries while a drawing tool runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawModifiers {
+    /// Shift locks the next segment to the nearest axis.
+    pub axis_lock: bool,
+    /// Alt starts an arc through the clicked point instead of a straight segment.
+    pub arc: bool,
+}
+
 /// What a click on the snapped point does to the live draft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawClick {
-    /// Append the point to the chain.
+    /// Append the point to the chain as a straight segment.
     Append([Length; 2]),
+    /// Append the point as an arc through it, waiting for the next click.
+    StartArc([Length; 2]),
     /// Close the chain through its first point.
     Close,
     /// The click cannot change the draft.
@@ -120,7 +132,7 @@ impl DrawGizmo {
         camera: Camera,
         editor: &mut Editor,
         pointer_over_widget: bool,
-        axis_lock: bool,
+        modifiers: DrawModifiers,
     ) -> Result<bool, String> {
         let Some(draft) = editor.drawing().cloned() else {
             self.reset();
@@ -132,7 +144,7 @@ impl DrawGizmo {
             self.hover = None;
             return Ok(false);
         };
-        let Some(outcome) = snap_cursor(&draft, plane, camera, rect, pointer, self.grid, axis_lock) else {
+        let Some(outcome) = snap_cursor(&draft, plane, camera, rect, pointer, self.grid, modifiers.axis_lock) else {
             self.hover = None;
             return Ok(false);
         };
@@ -142,9 +154,13 @@ impl DrawGizmo {
         if pointer_over_widget || !response.clicked_by(egui::PointerButton::Primary) {
             return Ok(false);
         }
-        match click_action(&draft, outcome.point) {
+        match click_action(&draft, outcome.point, modifiers.arc) {
             DrawClick::Append(point) => {
                 editor.drawing_point(point).map_err(|error| error.to_string())?;
+                Ok(true)
+            }
+            DrawClick::StartArc(point) => {
+                editor.drawing_arc_through(point).map_err(|error| error.to_string())?;
                 Ok(true)
             }
             DrawClick::Close => {
@@ -200,7 +216,9 @@ fn snap_cursor(
     let depth = (world - camera.eye()).dot(camera.forward());
     let radius = camera.world_per_point(depth, f64::from(rect.height())) * f64::from(SNAP_RADIUS_POINTS);
     let raw = plane.local(world);
-    let anchor = draft.points().last().map(|point| plane_point(*point));
+    // The next segment starts where the last stored segment ended, so the axis and end snap use the
+    // stored joint rather than the click that began it.
+    let anchor = draft.last_end().map(plane_point);
     // The last point is the segment start, so it is not offered as a place to join.
     let ends = draft
         .points()
@@ -225,7 +243,10 @@ fn snap_cursor(
 }
 
 /// What the click does, given the live draft and the snapped point.
-fn click_action(draft: &DrawDraft, point: [Length; 2]) -> DrawClick {
+///
+/// While an arc waits for its end, every click ends it, whatever the modifier: the gesture is
+/// already chosen and a second one would be ambiguous.
+fn click_action(draft: &DrawDraft, point: [Length; 2], arc: bool) -> DrawClick {
     if draft.is_closed() {
         return DrawClick::Ignore;
     }
@@ -233,32 +254,35 @@ fn click_action(draft: &DrawDraft, point: [Length; 2]) -> DrawClick {
         return if draft.can_close() { DrawClick::Close } else { DrawClick::Ignore };
     }
     if let Some(need) = draft.tool().points()
-        && draft.len() >= need
+        && draft.points().len() >= need
     {
         return DrawClick::Ignore;
     }
-    if draft.points().last() == Some(&point) {
+    if draft.last_end() == Some(point) {
         return DrawClick::Ignore;
+    }
+    if arc && draft.tool().closes() && !draft.is_empty() {
+        return DrawClick::StartArc(point);
     }
     DrawClick::Append(point)
 }
 
 /// The live size next to the cursor, or `None` while the tool has nothing to measure.
 fn size_label(draft: &DrawDraft, next: [Length; 2]) -> Option<String> {
-    let last = draft.points().last()?;
-    let anchor = plane_point(*last);
+    let last = draft.last_end()?;
+    let anchor = plane_point(last);
     let point = plane_point(next);
     match draft.tool() {
-        DrawTool::Rectangle if draft.len() == 1 => {
+        DrawTool::Rectangle if draft.points().len() == 1 => {
             let width = length_from_millimetres((point.x - anchor.x).abs())?;
             let height = length_from_millimetres((point.y - anchor.y).abs())?;
             Some(format!("{width} × {height}"))
         }
-        DrawTool::Circle if draft.len() == 1 => {
+        DrawTool::Circle if draft.points().len() == 1 => {
             let radius = length_from_millimetres((point - anchor).length())?;
             Some(format!("R {radius}"))
         }
-        DrawTool::Arc if draft.len() == 2 => {
+        DrawTool::Arc if draft.points().len() == 2 => {
             let path = draft.preview_path(next)?;
             let radius = path.entries().first().and_then(|entry| match entry.segment() {
                 ContourSegment::Arc { radius, .. } => Some(radius),
@@ -376,22 +400,36 @@ mod tests {
     fn a_polyline_closes_through_its_first_point_only() {
         let polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
         let first = [millimetres(0), millimetres(0)];
-        assert_eq!(click_action(&polyline, first), DrawClick::Close);
+        assert_eq!(click_action(&polyline, first, false), DrawClick::Close);
         assert_eq!(
-            click_action(&polyline, [millimetres(300), millimetres(200)]),
+            click_action(&polyline, [millimetres(300), millimetres(200)], false),
             DrawClick::Append([millimetres(300), millimetres(200)])
         );
 
         let short = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
-        assert_eq!(click_action(&short, first), DrawClick::Ignore, "two points cannot close a ring");
+        assert_eq!(click_action(&short, first, false), DrawClick::Ignore, "two points cannot close a ring");
+    }
+
+    #[test]
+    fn alt_starts_an_arc_only_inside_a_running_chain() {
+        let polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
+        let through = [millimetres(650), millimetres(50)];
+        assert_eq!(click_action(&polyline, through, true), DrawClick::StartArc(through));
+        assert_eq!(click_action(&polyline, through, false), DrawClick::Append(through));
+
+        // A chain needs an anchor before an arc can leave it.
+        assert_eq!(click_action(&DrawDraft::new(DrawTool::Polyline), through, true), DrawClick::Append(through));
+        // A fixed tool keeps its own gesture and never mixes.
+        let line = draft(DrawTool::Line, &[(0, 0)]);
+        assert_eq!(click_action(&line, through, true), DrawClick::Append(through));
     }
 
     #[test]
     fn a_fixed_tool_ignores_a_click_after_its_last_point() {
         let line = draft(DrawTool::Line, &[(0, 0), (600, 0)]);
-        assert_eq!(click_action(&line, [millimetres(600), millimetres(400)]), DrawClick::Ignore);
+        assert_eq!(click_action(&line, [millimetres(600), millimetres(400)], false), DrawClick::Ignore);
         assert_eq!(
-            click_action(&draft(DrawTool::Circle, &[(100, 100)]), [millimetres(0), millimetres(0)]),
+            click_action(&draft(DrawTool::Circle, &[(100, 100)]), [millimetres(0), millimetres(0)], false),
             DrawClick::Append([millimetres(0), millimetres(0)])
         );
     }
@@ -400,11 +438,11 @@ mod tests {
     fn a_click_on_the_previous_point_or_a_closed_chain_does_nothing() {
         let line = draft(DrawTool::Line, &[(0, 0)]);
         let same = [millimetres(0), millimetres(0)];
-        assert_eq!(click_action(&line, same), DrawClick::Ignore);
+        assert_eq!(click_action(&line, same, false), DrawClick::Ignore);
 
         let mut closed = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
         closed.close().expect("close the triangle");
-        assert_eq!(click_action(&closed, [millimetres(10), millimetres(10)]), DrawClick::Ignore);
+        assert_eq!(click_action(&closed, [millimetres(10), millimetres(10)], false), DrawClick::Ignore);
     }
 
     #[test]

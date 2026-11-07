@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn a_contour_the_cap_cannot_hold_is_refused_before_the_mesh_is_built() {
+    fn a_large_legal_ring_becomes_a_drawable_mesh() {
         use furnicraft_model::ContourSegment;
         use furnicraft_units::Degrees;
 
@@ -234,11 +234,19 @@ mod tests {
         ])
         .expect("a simple band");
         let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
-        let result = build_constructive_mesh(&constructive);
+        // X2: the band is legal and its cap is one face; the shape-relative chord keeps the face
+        // inside `MAX_FACE_VERTICES`, so the object draws instead of being refused.
+        let mesh = build_constructive_mesh(&constructive).expect("the band becomes a mesh");
+        let cap = mesh.faces().first().expect("a bottom cap");
+        assert!(cap.len() > 3, "the cap follows the contour");
+        assert!(cap.len() <= furnicraft_model::MAX_FACE_VERTICES, "one cap holds {} points", cap.len());
+        assert_eq!(mesh.faces().len(), cap.len().saturating_add(2), "two caps and one quad per profile edge");
+        // The band is 350 degrees of an annulus 4 m to 5 m wide, 18 mm thick.
+        let expected = 350.0_f64.to_radians() * (5_000.0_f64.powi(2) - 4_000.0_f64.powi(2)) / 2.0 * 18.0;
         assert!(
-            matches!(result, Err(ParamError::ContourTooDetailed { .. })),
-            "expected a cap refusal, got {:?}",
-            result.as_ref().err()
+            (signed_volume(&mesh) - expected).abs() < expected * 1.0e-3,
+            "volume was {}, expected about {expected}",
+            signed_volume(&mesh)
         );
     }
 

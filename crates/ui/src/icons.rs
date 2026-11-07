@@ -1,13 +1,16 @@
-//! Themed icon assets and the icon button.
+//! Themed icon assets and the two icon buttons.
 //!
 //! `assets/icons/**` is embedded at compile time, one module per theme. A zero-byte file is a
 //! documented placeholder, so an icon button whose artwork has not been drawn yet falls back to its
 //! text label and the surface stays usable. A drawn icon is rasterised by the `egui_extras` SVG
 //! loader at `pt × pixels_per_point`, tinted with the widget's foreground colour and uploaded as a
-//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055).
+//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055). Its ink
+//! stays inside the fixed `3..21` footprint and covers 20–45 % of it; the tests below read both off
+//! the raster (`assets/icons/STYLE_GUIDE.md` §7.4).
 
 use egui::{
-    Button, Color32, Response, Role, Sense, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, WidgetInfo, pos2,
+    Button, Color32, CornerRadius, FontFamily, FontId, Response, Role, Sense, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, Ui, Vec2, WidgetInfo, pos2,
 };
 
 /// Point size of an inline or menu icon, before the UI scale turns it into pixels.
@@ -16,26 +19,42 @@ pub const ICON_POINT_SIZE: f32 = 16.0;
 /// Point size of a toolbar tool icon, before the UI scale turns it into pixels.
 pub const TOOL_ICON_POINT_SIZE: f32 = 20.0;
 
+/// Point size of a ribbon button's icon, before the UI scale turns it into pixels.
+pub const RIBBON_ICON_POINT_SIZE: f32 = 22.0;
+
+/// Point size of a ribbon button's caption, before the UI scale turns it into pixels.
+pub const RIBBON_CAPTION_POINT_SIZE: f32 = 10.5;
+
+/// The most rows a ribbon caption may take before it elides.
+///
+/// One: the owner's rule is that a caption which does not fit is cut with `…`, never wrapped into a
+/// second line that would make one cell taller than its neighbours. The reference does wrap one long
+/// tool name, but it also pays for that with its own row height; ours stays one line and one cell.
+pub const RIBBON_CAPTION_ROWS: usize = 1;
+
 /// The directory that owns an icon: the surface that shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Theme {
-    /// The Contour toolbar.
+    /// The ribbon's *Sketch* tab.
     Contour,
-    /// The Primitives toolbar.
+    /// The ribbon's *Model* tab, primitives group.
     Primitives,
-    /// The Bodies toolbar.
+    /// The ribbon's *Model* tab, bodies group.
     Bodies,
-    /// The Scene toolbar.
+    /// The ribbon's *Scene* tab.
     Scene,
-    /// The viewport strip.
+    /// The ribbon's *View* tab and the viewport strip.
     View,
-    /// Menus, dialogs, strips and the shortcut reference.
+    /// Menus, dialogs, the header and the shortcut reference.
     Actions,
+    /// The window row of the header: minimize, maximize, restore, close.
+    Window,
 }
 
 impl Theme {
     /// Every theme, in the order of the asset tree.
-    pub const ALL: [Self; 6] = [Self::Contour, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Actions];
+    pub const ALL: [Self; 7] =
+        [Self::Contour, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Actions, Self::Window];
 
     /// The directory name of this theme, which is also the first URI segment of its icons.
     pub const fn as_str(self) -> &'static str {
@@ -46,6 +65,7 @@ impl Theme {
             Self::Scene => "scene",
             Self::View => "view",
             Self::Actions => "actions",
+            Self::Window => "window",
         }
     }
 
@@ -58,6 +78,7 @@ impl Theme {
             Self::Scene => scene::ALL,
             Self::View => view::ALL,
             Self::Actions => actions::ALL,
+            Self::Window => window::ALL,
         }
     }
 }
@@ -165,6 +186,18 @@ icons!(View, "view", view {
     ORTHOGRAPHIC => "orthographic",
     PERSPECTIVE => "perspective",
     FRAME_ALL => "frame-all",
+    HOME => "home",
+    GRID_SNAP => "grid-snap",
+    ORBIT => "orbit",
+    PAN => "pan",
+    ZOOM => "zoom",
+    LAYOUT => "layout",
+    SHADED => "shaded",
+    SHADED_EDGES => "shaded-edges",
+    WIREFRAME => "wireframe",
+    XRAY => "xray",
+    TRANSLUCENT => "translucent",
+    SLIDERS => "sliders",
 });
 
 icons!(Actions, "actions", actions {
@@ -200,6 +233,94 @@ icons!(Actions, "actions", actions {
     HELP => "help",
 });
 
+icons!(Window, "window", window {
+    MINIMIZE => "minimize",
+    MAXIMIZE => "maximize",
+    RESTORE => "restore",
+    CLOSE => "close",
+});
+
+/// The product mark, drawn by the header next to the product name.
+///
+/// It lives in `assets/logo.svg`, not in a theme: a mark is not an icon of a surface, and it keeps
+/// its own drawing even when a theme is renamed. Like an icon it is a white master that the theme
+/// multiplies, so one file serves every variant.
+pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.svg");
+
+/// The stable texture URI of [`LOGO`].
+pub const LOGO_URI: &str = "bytes://logo.svg";
+
+/// A square icon button at an explicit point size, for the header's own rhythm.
+///
+/// The tool strip and the menus keep [`ICON_POINT_SIZE`]; a header row is taller, so its buttons ask
+/// for their size instead of inheriting the inline one.
+pub fn icon_button_at(
+    ui: &mut Ui,
+    icon: Icon,
+    point_size: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+) -> Response {
+    icon_button_sized(ui, icon, point_size + 2.0 * ui.spacing().button_padding.y, point_size, label, enabled, selected)
+}
+
+/// A square icon button of a given `cell` size, with the glyph at `point_size` inside it.
+///
+/// A header row is laid out on its own rhythm: the text button and the icon buttons beside it have to
+/// be one height, so the caller names the cell and the glyph separately instead of letting the icon
+/// decide the cell. A placeholder asset takes the same cell and draws its label.
+pub fn icon_button_sized(
+    ui: &mut Ui,
+    icon: Icon,
+    cell: f32,
+    point_size: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+) -> Response {
+    if !icon.is_drawn() {
+        return ui
+            .add_enabled(enabled, Button::new(label).min_size(Vec2::splat(cell)).selected(selected))
+            .on_hover_text(label);
+    }
+    let response = icon_widget_sized(ui, icon, cell, point_size, label, enabled, selected);
+    if label.is_empty() { response } else { response.on_hover_text(label) }
+}
+
+/// Paints the product mark as a square image in `color`.
+///
+/// The mark is not a button: it carries no action and takes no focus. It is rasterised through the
+/// same cache as an icon so a theme change re-tints it instead of loading a second file.
+pub fn mark(ui: &mut Ui, size: f32, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
+    if ui.is_rect_visible(rect)
+        && let Some(texture) = logo_texture(ui.ctx(), size, color)
+    {
+        let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+    }
+    response
+}
+
+/// The rasterised mark at `size` points and `color`, cached like an icon.
+fn logo_texture(ctx: &egui::Context, point_size: f32, color: Color32) -> Option<TextureHandle> {
+    let px = pixel_size(point_size, ctx.pixels_per_point());
+    let id = egui::Id::unique(("furnicraft.logo", px, color.to_array()));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let image = egui_extras::image::load_svg_bytes_with_size(
+        LOGO,
+        egui::load::SizeHint::Size { width: px, height: px, maintain_aspect_ratio: false },
+        &Default::default(),
+    )
+    .ok()?;
+    let texture = ctx.load_texture(LOGO_URI, tint(image, color), TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
 /// Draws `icon` as a square button of [`ICON_POINT_SIZE`] in the widget's foreground colour.
 ///
 /// An empty placeholder asset draws `label` as the button text instead, so a surface whose artwork
@@ -227,6 +348,17 @@ pub fn tool_button(ui: &mut Ui, icon: Icon, label: &str, shortcut: Option<&str>,
     icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, &hint, enabled, on).on_hover_text(hint)
 }
 
+/// A tool button with a short face and a longer hint.
+///
+/// A floating cluster has to stay narrow, so its placeholder face uses the short `caption` while the
+/// tooltip keeps the full name. A drawn icon ignores the caption for its face and uses `hint` only.
+pub fn tool_button_labelled(ui: &mut Ui, icon: Icon, caption: &str, hint: &str, enabled: bool, on: bool) -> Response {
+    if !icon.is_drawn() {
+        return ui.add_enabled(enabled, Button::new(caption).selected(on)).on_hover_text(hint);
+    }
+    icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, hint, enabled, on).on_hover_text(hint)
+}
+
 /// The readable hint of a tool button: the label and, when it has one, its shortcut.
 pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
     match shortcut {
@@ -235,29 +367,170 @@ pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
     }
 }
 
+/// A ribbon button: a [`RIBBON_ICON_POINT_SIZE`] icon over a [`RIBBON_CAPTION_POINT_SIZE`] caption.
+///
+/// The ribbon is the one surface with a row tall enough to name a tool under its glyph, so a tool
+/// reads without a hover and a group reads without a heading above it. `caption` is the word painted
+/// under the icon and `hint` is the tooltip and the accessible name, which can be longer than the
+/// caption — the polyline's caption is its name while its hint also names the arc gesture. `on` marks
+/// the tool that owns the next click, and `enabled` keeps the face while a tool is unavailable.
+///
+/// The cell is `width` wide and [`theme::RIBBON_ROW_HEIGHT`] tall and comes from the row's one
+/// measurement (ADR 0067), so every tool of the ribbon shares it however long its caption is. A
+/// caption wider than the cell's inner width is elided with `…` rather than allowed to widen the
+/// button. An empty placeholder asset draws the caption as the button's text in the same cell, so a
+/// half-drawn icon set keeps the rhythm instead of leaving a ragged row.
+pub fn ribbon_button(
+    ui: &mut Ui,
+    width: f32,
+    icon: Icon,
+    caption: &str,
+    hint: &str,
+    enabled: bool,
+    on: bool,
+) -> Response {
+    let inner_width = (width - 2.0 * crate::theme::RIBBON_BUTTON_PADDING).max(0.0);
+    let galley = caption_galley(ui, caption, inner_width);
+    let size = Vec2::new(width, crate::theme::RIBBON_ROW_HEIGHT);
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+            if ui.is_rect_visible(rect) {
+                let (fill, stroke, color) = ribbon_face(ui, &response, on);
+                ui.painter().rect(rect, CornerRadius::same(crate::theme::RADIUS), fill, stroke, StrokeKind::Inside);
+                // The glyph and its caption are one block, centred in the cell, so a cell never looks
+                // top-heavy and a one-line caption and a two-line one share their optical centre.
+                let block = if icon.is_drawn() {
+                    RIBBON_ICON_POINT_SIZE + crate::theme::RIBBON_CAPTION_GAP + galley.size().y
+                } else {
+                    galley.size().y
+                };
+                let top = rect.center().y - block / 2.0;
+                if icon.is_drawn() {
+                    let icon_rect = egui::Rect::from_min_size(
+                        pos2(rect.center().x - RIBBON_ICON_POINT_SIZE / 2.0, top),
+                        Vec2::splat(RIBBON_ICON_POINT_SIZE),
+                    );
+                    paint_icon(ui, icon, icon_rect, RIBBON_ICON_POINT_SIZE, color);
+                    let caption_pos = pos2(
+                        rect.center().x - galley.size().x / 2.0,
+                        icon_rect.bottom() + crate::theme::RIBBON_CAPTION_GAP,
+                    );
+                    ui.painter().galley(caption_pos, galley, color);
+                } else {
+                    // A placeholder asset has no glyph, so its caption takes the centre the glyph
+                    // would have had and the cell stays the shape the drawn buttons give it.
+                    let caption_pos = pos2(rect.center().x - galley.size().x / 2.0, top);
+                    ui.painter().galley(caption_pos, galley, color);
+                }
+            }
+            response.widget_info(|| WidgetInfo::selected(Role::Button, ui.is_enabled(), on, hint));
+            response
+        })
+        .inner;
+    if hint.is_empty() { response } else { response.on_hover_text(hint) }
+}
+
+/// The caption of a ribbon cell, laid out for the fixed inner width.
+///
+/// The layout is built once for the resting face and painted in the state's foreground, so a hover
+/// or a press recolours it instead of re-rounding the words. A caption that does not fit its cell is
+/// elided with `…` — the owner's rule — rather than widening the button or leaving the row.
+fn caption_galley(ui: &mut Ui, caption: &str, max_width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(
+        caption.to_owned(),
+        FontId::new(RIBBON_CAPTION_POINT_SIZE, FontFamily::Proportional),
+        Color32::PLACEHOLDER,
+        max_width,
+    );
+    job.wrap.max_rows = RIBBON_CAPTION_ROWS;
+    job.wrap.break_anywhere = true;
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
+/// Paints one cell's frame and fill for its state.
+///
+/// The ribbon's button, the icon-only tool button and a labelled button share this, so a hover or a
+/// press cannot look like three different controls depending on which surface drew it.
+fn paint_cell(ui: &Ui, rect: egui::Rect, visuals: &egui::style::WidgetVisuals) {
+    ui.painter().rect(
+        rect.expand(visuals.expansion),
+        visuals.corner_radius,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        StrokeKind::Inside,
+    );
+}
+
+/// The face of a ribbon button: a quiet cell at rest, a hover fill, and the accent once armed.
+///
+/// The reference keeps its tool row calm — the panel's own fill, with a plinth only under the pointer
+/// or under the armed tool — so a row of eight tools reads as one surface instead of a keyboard. The
+/// cell's size is fixed either way, so a tool that is not hovered does not move its neighbours.
+fn ribbon_face(ui: &Ui, response: &Response, on: bool) -> (Color32, Stroke, Color32) {
+    if on {
+        let visuals = ui.visuals().selection;
+        return (visuals.bg_fill, visuals.stroke, Color32::WHITE);
+    }
+    if response.is_pointer_button_down_on() {
+        return (crate::theme::CONTROL_ACTIVE, Stroke::NONE, crate::theme::TEXT);
+    }
+    if response.hovered() {
+        return (crate::theme::CONTROL_HOVER, Stroke::NONE, crate::theme::TEXT);
+    }
+    (Color32::TRANSPARENT, Stroke::NONE, crate::theme::TEXT)
+}
+
+/// Paints `icon` inside `rect` at `point_size`, tinted with `color`, without a button frame.
+///
+/// A folded side panel draws its icon in the middle of a 26 pt strip where a button would not fit;
+/// the raster path is the same one the buttons use, so the asset, the cache and the theme colour are
+/// shared. A placeholder asset draws nothing.
+pub fn draw_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
+    if icon.is_drawn() {
+        paint_icon(ui, icon, rect, point_size, color);
+    }
+}
+
+/// Paints `icon` inside `rect` at `point_size`, tinted with `color`.
+fn paint_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
+    let px = pixel_size(point_size, ui.pixels_per_point());
+    if let Some(texture) = icon_texture(ui.ctx(), icon, px, color) {
+        let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+    }
+}
+
 /// One square button that paints a rasterised icon, its frame following the widget state.
 ///
 /// The frame and the foreground colour come from the same [`egui::WidgetVisuals`] a text button
 /// would use, so hover, press, selection and the disabled opacity need no second styling path.
 fn icon_widget(ui: &mut Ui, icon: Icon, point_size: f32, label: &str, enabled: bool, selected: bool) -> Response {
+    let cell = point_size + 2.0 * ui.spacing().button_padding.y;
+    icon_widget_sized(ui, icon, cell, point_size, label, enabled, selected)
+}
+
+/// One cell of `cell` points that paints a rasterised `point_size` icon, its frame following the state.
+///
+/// The cell and the glyph are separate because a header row and a tool strip disagree about how much
+/// air a button carries: the header wants one height for a text button and an icon button, the strip
+/// lets the glyph decide.
+fn icon_widget_sized(
+    ui: &mut Ui,
+    icon: Icon,
+    cell: f32,
+    point_size: f32,
+    label: &str,
+    enabled: bool,
+    selected: bool,
+) -> Response {
     ui.add_enabled_ui(enabled, |ui| {
-        let size = Vec2::splat(point_size + 2.0 * ui.spacing().button_padding.y);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
         if ui.is_rect_visible(rect) {
             let visuals = ui.style().interact_selectable(&response, selected);
-            ui.painter().rect(
-                rect.expand(visuals.expansion),
-                visuals.corner_radius,
-                visuals.weak_bg_fill,
-                visuals.bg_stroke,
-                StrokeKind::Inside,
-            );
-            let px = pixel_size(point_size, ui.pixels_per_point());
-            if let Some(texture) = icon_texture(ui.ctx(), icon, px, visuals.fg_stroke.color) {
-                let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
-                let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                ui.painter().image(texture.id(), icon_rect, uv, Color32::WHITE);
-            }
+            paint_cell(ui, rect, &visuals);
+            let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
+            paint_icon(ui, icon, icon_rect, point_size, visuals.fg_stroke.color);
         }
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), label));
         response
@@ -325,6 +598,70 @@ mod tests {
     /// A minimal valid white-ink drawing, used where the real files are still placeholders.
     const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="#fff"/></svg>"##;
 
+    /// The 24-unit design grid.
+    const GRID: f32 = 24.0;
+
+    /// The fixed footprint of the style guide, in grid units: `3..21` on both axes.
+    const FOOTPRINT_MIN: f32 = 3.0;
+    const FOOTPRINT_MAX: f32 = 21.0;
+
+    /// The raster size the footprint and coverage are measured at.
+    const AUDIT_PX: usize = 64;
+
+    /// What one drawn icon measures on the grid.
+    struct Footprint {
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+        /// Alpha-weighted ink as a fraction of the fixed 18 × 18 footprint.
+        coverage: f32,
+    }
+
+    /// Rasterises `icon` and measures its ink bounds and tone against the fixed footprint.
+    ///
+    /// A pixel is ink above alpha 16, the threshold `assets/icons/AUDIT.md` used. Coverage is
+    /// alpha-weighted, so a passive face at 15 % adds a sixth of its area rather than a solid block.
+    fn footprint(icon: Icon) -> Footprint {
+        let image = egui_extras::image::load_svg_bytes_with_size(
+            icon.asset(),
+            egui::load::SizeHint::Size {
+                width: AUDIT_PX as u32,
+                height: AUDIT_PX as u32,
+                maintain_aspect_ratio: false,
+            },
+            &Default::default(),
+        )
+        .expect("a drawn icon rasterises");
+        assert_eq!(image.size, [AUDIT_PX, AUDIT_PX], "the audit raster is square");
+        let unit = GRID / AUDIT_PX as f32;
+        let mut ink = 0.0_f64;
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (AUDIT_PX, AUDIT_PX, 0_usize, 0_usize);
+        for (index, pixel) in image.pixels.iter().enumerate() {
+            ink += f64::from(pixel.a()) / 255.0 * f64::from(unit) * f64::from(unit);
+            if pixel.a() <= 16 {
+                continue;
+            }
+            let x = index % AUDIT_PX;
+            let y = index / AUDIT_PX;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        if max_x < min_x {
+            return Footprint { min_x: 0.0, max_x: 0.0, min_y: 0.0, max_y: 0.0, coverage: 0.0 };
+        }
+        let footprint = f64::from(FOOTPRINT_MAX - FOOTPRINT_MIN).powi(2);
+        Footprint {
+            min_x: min_x as f32 * unit,
+            max_x: (max_x + 1) as f32 * unit,
+            min_y: min_y as f32 * unit,
+            max_y: (max_y + 1) as f32 * unit,
+            coverage: (ink / footprint) as f32,
+        }
+    }
+
     /// An icon whose asset is empty, like every placeholder in the tree today.
     fn placeholder() -> Icon {
         Icon::new(Theme::Actions, "confirm", "bytes://icons/actions/confirm.svg", &[])
@@ -365,7 +702,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 51);
+        assert_eq!(seen.len(), 67);
     }
 
     #[test]
@@ -380,8 +717,31 @@ mod tests {
                 assert!(svg.starts_with("<svg"), "{name} does not start with an SVG root");
                 assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name} is not drawn on the 24 grid");
                 assert!(svg.contains("#fff"), "{name} carries no white ink");
-                for forbidden in ["<text", "<image", "<style", "<defs", "<mask", "<clipPath"] {
+                for forbidden in [
+                    "<text",
+                    "<image",
+                    "<style",
+                    "<defs",
+                    "<mask",
+                    "<clipPath",
+                    "<filter",
+                    "<linearGradient",
+                    "<radialGradient",
+                    " opacity=\"",
+                ] {
                     assert!(!svg.contains(forbidden), "{name} contains {forbidden}");
+                }
+                let mut at = 0;
+                while let Some(found) = svg[at..].find("fill-opacity=\"") {
+                    let start = at + found + "fill-opacity=\"".len();
+                    let rest = &svg[start..];
+                    let end = rest.find('"').expect("a fill-opacity attribute is quoted");
+                    let value: f32 = rest[..end].parse().expect("fill-opacity is a number");
+                    assert!(
+                        (0.12..=0.18).contains(&value) || (0.45..=0.60).contains(&value),
+                        "{name} paints a fill at {value}, outside the passive and result bands"
+                    );
+                    at = start + end;
                 }
                 let raster = egui_extras::image::load_svg_bytes_with_size(
                     icon.asset(),
@@ -391,6 +751,145 @@ mod tests {
                 assert!(raster.is_ok(), "{name} does not rasterise: {:?}", raster.err());
             }
         }
+    }
+
+    #[test]
+    fn every_drawn_icon_holds_its_footprint_and_coverage() {
+        for theme in Theme::ALL {
+            for icon in theme.icons() {
+                if !icon.is_drawn() {
+                    continue;
+                }
+                let name = format!("{}/{}", icon.theme().as_str(), icon.name());
+                let ink = footprint(*icon);
+                assert!(
+                    ink.min_x >= FOOTPRINT_MIN
+                        && ink.max_x <= FOOTPRINT_MAX
+                        && ink.min_y >= FOOTPRINT_MIN
+                        && ink.max_y <= FOOTPRINT_MAX,
+                    "{name} leaves the 3..21 footprint: {:.2}..{:.2} x {:.2}..{:.2}",
+                    ink.min_x,
+                    ink.max_x,
+                    ink.min_y,
+                    ink.max_y
+                );
+                assert!(
+                    (0.20..=0.45).contains(&ink.coverage),
+                    "{name} covers {:.1}% of the footprint, outside 20..45%",
+                    ink.coverage * 100.0
+                );
+                for px in [16, 20] {
+                    let raster = egui_extras::image::load_svg_bytes_with_size(
+                        icon.asset(),
+                        egui::load::SizeHint::Width(px),
+                        &Default::default(),
+                    )
+                    .expect("a drawn icon rasterises small");
+                    assert!(raster.pixels.iter().any(|pixel| pixel.a() > 0), "{name} is empty at {px} px");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ribbon_cell_is_one_size_for_every_caption() {
+        // The owner's complaint: the cell grew with its caption. One cell for a short caption, a long
+        // one and an elided one, so a row of tools is one pitch.
+        const { assert!(RIBBON_CAPTION_ROWS == 1) };
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let cell = crate::theme::RIBBON_BUTTON_MAX_WIDTH;
+        let mut sizes = Vec::new();
+        for caption in ["Arc", "Polyline", "Rectangle", "Orthographic", "Прямоугольник"] {
+            let mut size = Vec2::ZERO;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                let response = ribbon_button(ui, cell, drawn(), caption, caption, true, false);
+                size = response.rect.size();
+            });
+            output.drop_without_applying_deltas();
+            sizes.push((caption, size));
+        }
+        let expected = Vec2::new(cell, crate::theme::RIBBON_ROW_HEIGHT);
+        for (caption, size) in sizes {
+            assert_eq!(size, expected, "{caption} draws a {size:?} cell, not the shared {expected:?}");
+        }
+    }
+
+    #[test]
+    fn a_caption_that_does_not_fit_is_elided() {
+        // The cell's inner width is the only width a caption gets; a word past it is cut with `…`
+        // instead of widening the button, which is what makes the row one pitch.
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let inner = crate::theme::RIBBON_BUTTON_MIN_WIDTH - 2.0 * crate::theme::RIBBON_BUTTON_PADDING;
+        let mut elided = true;
+        let output = ctx.run_ui(Default::default(), |ui| {
+            elided = caption_galley(ui, "Прямоугольник и ещё одно длинное слово", inner).elided;
+        });
+        output.drop_without_applying_deltas();
+        assert!(elided, "a caption wider than the cell is elided");
+    }
+
+    #[test]
+    fn every_ribbon_caption_of_the_interface_fits_its_cell() {
+        // Russian is the language that decides the cell's width (U49), so the longest caption of the
+        // ribbon tools has to fit without elision or the fixed cell would be a regression. The list is
+        // the present ribbon, captioned in Russian: the drawing tools, the draft pair, the primitives,
+        // the extrusion, the scene creators and the three view tools.
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let inner = crate::theme::RIBBON_BUTTON_MIN_WIDTH - 2.0 * crate::theme::RIBBON_BUTTON_PADDING;
+        let captions = [
+            "Линия",
+            "Полилиния",
+            "Дуга",
+            "Прямоугольник",
+            "Окружность",
+            "Замкнуть",
+            "Отмена",
+            "Куб",
+            "Цилиндр",
+            "Сфера",
+            "Выдавить",
+            "Панель",
+            "Сборка",
+            "Камера",
+            "Свет",
+            "Вписать",
+            "Ортогональная",
+            "Перспективная",
+            "Сетка",
+        ];
+        for caption in captions {
+            let mut galley = None;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                galley = Some(caption_galley(ui, caption, inner));
+            });
+            output.drop_without_applying_deltas();
+            let galley = galley.expect("the caption was laid out");
+            assert!(!galley.elided, "{caption} does not fit the narrowest cell; raise RIBBON_BUTTON_MIN_WIDTH");
+            assert!(
+                galley.size().x <= inner + 0.5,
+                "{caption} is {} pt wide, the cell allows {inner}",
+                galley.size().x
+            );
+        }
+    }
+
+    #[test]
+    fn a_placeholder_keeps_the_cell_of_a_drawn_button() {
+        // A half-drawn icon set must not leave a ragged row: the text fallback takes the same cell.
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sizes = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let cell = crate::theme::RIBBON_BUTTON_MAX_WIDTH;
+            sizes.push(ribbon_button(ui, cell, drawn(), "Line", "Line  (L)", true, false).rect.size());
+            sizes.push(ribbon_button(ui, cell, placeholder(), "Line", "Line  (L)", true, false).rect.size());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(sizes[0], sizes[1], "the placeholder and the drawing share one cell");
+        assert_eq!(sizes[0].x, crate::theme::RIBBON_BUTTON_MAX_WIDTH);
     }
 
     #[test]

@@ -631,8 +631,8 @@ mod tests {
 
     /// A "C" band: an outer and an inner arc joined by two radial lines.
     ///
-    /// The ring is valid and simple, but at the mesh sampling tolerance it holds more than
-    /// [`furnicraft_model::MAX_FACE_VERTICES`] points, so one extrusion cap cannot store it.
+    /// The ring is valid and simple and its arcs are metres long, which is the shape that used to
+    /// sample past one extrusion cap (X2).
     fn band_contour() -> Contour {
         let centre = [Length::ZERO, Length::ZERO];
         let start = Degrees::from_millidegrees(0);
@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn a_contour_the_cap_cannot_hold_is_refused_without_mutating() {
+    fn a_large_legal_ring_is_created_replaced_and_drawn() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let registry = CommandRegistry::new();
         let height = Length::from_millimetres(18).expect("height");
@@ -667,43 +667,22 @@ mod tests {
         })
         .expect("params serialize");
         let create = registry.get(OBJECT_EXTRUDE_CREATE_ID).expect("registered");
-        assert!(!create.enabled(&session, &value), "a ring the cap cannot hold is not creatable");
-        let error = session.dispatch(OBJECT_EXTRUDE_CREATE_ID, &value).expect_err("the cap cannot hold it");
-        assert!(error.to_string().contains("extrusion cap"), "the error names the limit: {error}");
-        assert_eq!(session.project().revision(), Revision::ZERO);
-        assert!(!session.can_undo(), "a refused create leaves no undo entry");
+        assert!(create.enabled(&session, &value), "a legal ring is creatable whatever its radius");
+        let id = session.dispatch(OBJECT_EXTRUDE_CREATE_ID, &value).expect("create the band").created_id().expect("id");
 
-        let id = session
-            .dispatch(OBJECT_EXTRUDE_CREATE_ID, &extrude_params(&session, "Top", height))
-            .expect("create extrusion")
-            .created_id()
-            .expect("a new object id");
-        let original = session
-            .project()
-            .object(id)
-            .and_then(|object| object.geometry().as_constructive())
-            .and_then(Constructive::contour)
-            .cloned()
-            .expect("the stored ring");
-        let before = session.project().revision();
         let replace = serde_json::to_value(ObjectContourReplace { object: id, contour: band_contour() })
             .expect("params serialize");
         let spec = registry.get(OBJECT_CONTOUR_REPLACE_ID).expect("registered");
-        assert!(!spec.enabled(&session, &replace), "the replacement ring is not buildable either");
-        assert!(session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &replace).is_err());
-        assert_eq!(session.project().revision(), before);
-        assert_eq!(
-            session
-                .project()
-                .object(id)
-                .and_then(|object| object.geometry().as_constructive())
-                .and_then(Constructive::contour),
-            Some(&original),
-            "the stored ring is untouched"
-        );
-        session.undo().expect("the refused command left no entry");
-        assert!(session.project().object(id).is_none(), "undo removes the creation, nothing was recorded between");
-        assert!(!session.can_undo());
+        assert!(spec.enabled(&session, &replace), "the replacement ring is buildable too");
+        session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &replace).expect("replace the contour");
+
+        // The object draws: the viewport evaluator builds it and the cap is one face inside the
+        // document limit.
+        let object = session.project().object(id).expect("the band exists");
+        let constructive = object.geometry().as_constructive().expect("a constructive object");
+        let mesh = furnicraft_param::build_constructive_mesh(constructive).expect("the band draws");
+        let cap = mesh.faces().first().expect("a cap");
+        assert!(cap.len() > 3 && cap.len() <= furnicraft_model::MAX_FACE_VERTICES, "cap holds {}", cap.len());
     }
 
     #[test]

@@ -1,10 +1,15 @@
-//! Themed toolbars: the strip of panels that own the tools.
+//! The ribbon: one row of tabs over the tool groups of the active tab.
 //!
-//! Four panels group the tools by the theme of the assets they draw: Contour, Scene, Primitives and
-//! Bodies. A panel is a collapsible section; whether it opens, and what the numeric fields remember,
-//! is view state in the editor and never reaches the document. Every button is the hinted tool
-//! button, including the text fallback an undrawn icon needs, and a panel that edits a number keeps
-//! the text until the user commits it.
+//! The surfaces the tools belong to are tabs — *Furniture, Hardware, Model, Sketch, Scene, View* —
+//! and each tab is one row of groups separated by vertical dividers, with the group's own caption
+//! under its row. A tab with no group that holds an action is not drawn at all, so the ribbon never
+//! shows a greyed "coming soon" tab: *Furniture* and *Hardware* appear only when a tool lands there.
+//! Whether the body is open, which tab is active, and what the numeric fields remember is view state
+//! in the editor and never reaches the document.
+//!
+//! Every button is the labelled [`icons::ribbon_button`], because the ribbon row is the one surface
+//! tall enough to name a tool under its glyph; the panel headers and the floating viewport cluster
+//! keep the icon-only [`icons::tool_button`], whose row could not carry a second line.
 
 use egui::{TextEdit, Ui};
 use furnicraft_engine::PrimitiveKind;
@@ -12,7 +17,7 @@ use furnicraft_model::Id;
 use furnicraft_units::Length;
 
 use crate::contour_edit::DrawTool;
-use crate::icons::{self, Icon, Theme};
+use crate::icons::{self, Icon, Theme, tool_hint};
 
 /// Edge length of a new cube, in millimetres; also the value the field starts with.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
@@ -49,6 +54,16 @@ pub enum ToolAction {
     CreateLight,
     /// Drops the armed container, so creation returns to the scene root.
     ClearCreationParent,
+    /// Closes the running drawing into a ring.
+    CloseDrawing,
+    /// Drops the running drawing; the document never changed.
+    CancelDrawing,
+    /// Frames the whole scene in the viewport.
+    FrameAll,
+    /// Switches the viewport between perspective and orthographic.
+    ToggleProjection,
+    /// Turns the work-plane grid snap on or off.
+    ToggleGrid,
 }
 
 /// The drawing tools of the Contour panel, in button order.
@@ -112,6 +127,17 @@ pub fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
     shortcut(tool).map(egui::Key::name)
 }
 
+/// The strip's label for a drawing tool: its name plus the one gesture the tool does not show.
+///
+/// The label is the button's tooltip and the text a placeholder asset falls back to; it is not the
+/// name of the object the tool creates, which stays [`DrawTool::label`].
+pub const fn strip_label(tool: DrawTool) -> &'static str {
+    match tool {
+        DrawTool::Polyline => "Polyline · Alt+click for an arc",
+        _ => tool.label(),
+    }
+}
+
 /// The icon of a drawing tool.
 const fn tool_icon(tool: DrawTool) -> Icon {
     match tool {
@@ -123,86 +149,197 @@ const fn tool_icon(tool: DrawTool) -> Icon {
     }
 }
 
-/// One themed panel of the toolbar strip.
+/// One tab of the ribbon: the surface a group of tools belongs to.
+///
+/// The tabs are the ribbon's top level, so a tool is found by what the user is doing — a drawing, a
+/// solid, the scene — rather than by which theme drew its icon. A tab whose every group is empty is
+/// not drawn, which is what keeps *Furniture* and *Hardware* out of the row until they hold a tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolPanel {
+pub enum RibbonTab {
+    /// Cabinet bodies and fronts.
+    Furniture,
+    /// Hinges, runners and handles.
+    Hardware,
+    /// Solid primitives and the bodies built from a drawing.
+    Model,
     /// Drawing on the work plane.
-    Contour,
-    /// Creating panels, assemblies, cameras and lights.
+    Sketch,
+    /// Panels, assemblies, cameras and lights.
     Scene,
-    /// Solid primitives.
-    Primitives,
-    /// Bodies built from a drawing.
-    Bodies,
+    /// How the viewport draws and where it looks.
+    View,
 }
 
-impl ToolPanel {
-    /// Every panel, in strip order.
-    pub const ALL: [Self; 4] = [Self::Contour, Self::Scene, Self::Primitives, Self::Bodies];
+impl RibbonTab {
+    /// Every tab, in ribbon order.
+    pub const ALL: [Self; 6] = [Self::Furniture, Self::Hardware, Self::Model, Self::Sketch, Self::Scene, Self::View];
 
-    /// The heading the strip shows for this panel.
+    /// The number of tool columns the tab's body draws, so the ribbon can size its cells once.
+    ///
+    /// The count is structural: one per labelled tool and one per numeric field, for the widest state
+    /// of the tab, so the cells do not move as the selection changes. It is the number of cells the tab
+    /// needs, not the number of groups, because a group holds several tools.
+    pub const fn columns(self) -> usize {
+        match self {
+            Self::Furniture | Self::Hardware => 0,
+            Self::Model => 6,
+            Self::Sketch => 7,
+            Self::Scene => 4,
+            Self::View => 3,
+        }
+    }
+
+    /// The tab's name, drawn on its own button.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Contour => "Contour",
+            Self::Furniture => "Furniture",
+            Self::Hardware => "Hardware",
+            Self::Model => "Model",
+            Self::Sketch => "Sketch",
             Self::Scene => "Scene",
-            Self::Primitives => "Primitives",
-            Self::Bodies => "Bodies",
+            Self::View => "View",
         }
     }
 
-    /// The icon theme this panel draws from.
-    pub const fn theme(self) -> Theme {
-        match self {
-            Self::Contour => Theme::Contour,
-            Self::Scene => Theme::Scene,
-            Self::Primitives => Theme::Primitives,
-            Self::Bodies => Theme::Bodies,
-        }
-    }
-
-    /// The stable id `CollapsingState` stores this panel's open state under.
+    /// The stable id the tab's open state and widget name are keyed by.
     pub const fn id(self) -> &'static str {
         match self {
-            Self::Contour => "toolbar_contour",
-            Self::Scene => "toolbar_scene",
-            Self::Primitives => "toolbar_primitives",
-            Self::Bodies => "toolbar_bodies",
+            Self::Furniture => "ribbon_furniture",
+            Self::Hardware => "ribbon_hardware",
+            Self::Model => "ribbon_model",
+            Self::Sketch => "ribbon_sketch",
+            Self::Scene => "ribbon_scene",
+            Self::View => "ribbon_view",
+        }
+    }
+
+    /// The groups this tab draws, in row order.
+    ///
+    /// The tab-to-action rubric of the design: *Sketch* holds the five drawing tools and the close
+    /// and cancel for a running draft, *Model* the three primitives and the extrusion, *Scene* the
+    /// four scene creations, *View* the framing, the projection and the grid. *Furniture* and
+    /// *Hardware* hold no action yet, so they have no group and are never drawn.
+    pub const fn groups(self) -> &'static [ToolGroup] {
+        match self {
+            Self::Furniture | Self::Hardware => &[],
+            Self::Model => &[ToolGroup::Primitives, ToolGroup::Bodies],
+            Self::Sketch => &[ToolGroup::Draw, ToolGroup::Draft],
+            Self::Scene => &[ToolGroup::Scene],
+            Self::View => &[ToolGroup::View, ToolGroup::Display],
         }
     }
 }
 
-/// Whether each panel of the strip is open, plus the numeric fields the panels keep.
+/// One captioned group of tools inside a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ToolGroup {
+    /// The drawing tools.
+    Draw,
+    /// Close and cancel for a running draft.
+    Draft,
+    /// Solid primitives and their size.
+    Primitives,
+    /// Extrusion and its height.
+    Bodies,
+    /// Panels, assemblies, cameras and lights.
+    Scene,
+    /// Frame all and the projection.
+    View,
+    /// The work-plane grid snap.
+    Display,
+}
+
+impl ToolGroup {
+    /// Every group, in the order the asset tree names them.
+    pub const ALL: [Self; 7] =
+        [Self::Draw, Self::Draft, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Display];
+
+    /// The caption drawn under the group's row, in capitals.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Draw => "Draw",
+            Self::Draft => "Draft",
+            Self::Primitives => "Primitives",
+            Self::Bodies => "Bodies",
+            Self::Scene => "Scene",
+            Self::View => "View",
+            Self::Display => "Display",
+        }
+    }
+
+    /// The icon theme this group draws from.
+    pub const fn theme(self) -> Theme {
+        match self {
+            Self::Draw | Self::Draft => Theme::Contour,
+            Self::Primitives => Theme::Primitives,
+            Self::Bodies => Theme::Bodies,
+            Self::Scene => Theme::Scene,
+            Self::View | Self::Display => Theme::View,
+        }
+    }
+}
+
+/// Whether the ribbon's body is open, which tab is active, and the numeric fields it keeps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Toolbars {
-    open: [bool; 4],
+    open: bool,
+    tab: RibbonTab,
     primitive_size: String,
     extrude_height: String,
-    error: Option<String>,
 }
 
 impl Default for Toolbars {
     fn default() -> Self {
         Self {
-            open: [true; 4],
+            open: true,
+            tab: RibbonTab::Sketch,
             primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(),
             extrude_height: DEFAULT_EXTRUDE_HEIGHT_MM.to_string(),
-            error: None,
         }
     }
 }
 
 impl Toolbars {
-    /// Every panel open and the primitive size at its default, the state a fresh editor starts in.
+    /// The body open on the first tab that holds a tool, the state a fresh editor starts in.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// The tab whose groups the ribbon draws.
+    pub const fn tab(&self) -> RibbonTab {
+        self.tab
+    }
+
+    /// Opens a tab's body, making it the active tab; returns the tab that is now active.
+    pub fn set_tab(&mut self, tab: RibbonTab) -> RibbonTab {
+        self.tab = tab;
+        tab
+    }
+
+    /// Whether the body under the tab row is drawn.
+    pub const fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Opens or closes the body and returns its new state.
+    pub fn set_open(&mut self, open: bool) -> bool {
+        self.open = open;
+        self.open
+    }
+
+    /// Flips the body and returns its new state.
+    pub fn toggle(&mut self) -> bool {
+        self.set_open(!self.open)
+    }
+}
+
+impl Toolbars {
     /// The typed full extent of a new primitive: the cube's edge, or a curved shape's diameter.
     pub fn primitive_size_text(&self) -> &str {
         &self.primitive_size
     }
 
-    /// The size field, so the panel can edit the text in place.
+    /// The size field, so the group can edit the text in place.
     pub fn primitive_size_mut(&mut self) -> &mut String {
         &mut self.primitive_size
     }
@@ -210,7 +347,6 @@ impl Toolbars {
     /// Replaces the typed size.
     pub fn set_primitive_size_text(&mut self, text: impl Into<String>) {
         self.primitive_size = text.into();
-        self.error = None;
     }
 
     /// The typed size as a document length, or a readable reason it is not one.
@@ -223,22 +359,12 @@ impl Toolbars {
         Ok(length)
     }
 
-    /// The last reason the size field was refused.
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    /// Records a refused size so the panel can show it under the field.
-    pub fn set_error(&mut self, error: impl Into<String>) {
-        self.error = Some(error.into());
-    }
-
     /// The typed extrusion height.
     pub fn extrude_height_text(&self) -> &str {
         &self.extrude_height
     }
 
-    /// The height field, so the panel can edit the text in place.
+    /// The height field, so the group can edit the text in place.
     pub fn extrude_height_mut(&mut self) -> &mut String {
         &mut self.extrude_height
     }
@@ -246,7 +372,7 @@ impl Toolbars {
     /// The typed extrusion height as a positive document length.
     ///
     /// The upper bound is the document's contour limit, the same one `object.extrude.create`
-    /// applies, so a field the panel accepts is a field the command takes.
+    /// applies, so a field the group accepts is a field the command takes.
     pub fn extrude_height(&self) -> Result<Length, String> {
         let height = Length::parse_millimetres(self.extrude_height.trim())
             .map_err(|error| format!("The extrusion height is not a length: {error}"))?;
@@ -265,174 +391,402 @@ impl Toolbars {
     /// Replaces the typed extrusion height.
     pub fn set_extrude_height_text(&mut self, text: impl Into<String>) {
         self.extrude_height = text.into();
-        self.error = None;
     }
 }
 
-impl Toolbars {
-    /// Whether the panel is open.
-    pub fn is_open(&self, panel: ToolPanel) -> bool {
-        panel_slot(panel).is_some_and(|slot| self.open.get(slot).copied().unwrap_or(false))
-    }
-
-    /// Opens or closes one panel and returns its new state.
-    pub fn set_open(&mut self, panel: ToolPanel, open: bool) -> bool {
-        let Some(slot) = panel_slot(panel) else {
-            return false;
-        };
-        if let Some(value) = self.open.get_mut(slot) {
-            *value = open;
-        }
-        self.is_open(panel)
-    }
-
-    /// Flips one panel and returns its new state.
-    pub fn toggle(&mut self, panel: ToolPanel) -> bool {
-        self.set_open(panel, !self.is_open(panel))
-    }
-}
-
-/// The index of a panel in the fixed strip order.
-fn panel_slot(panel: ToolPanel) -> Option<usize> {
-    ToolPanel::ALL.iter().position(|candidate| *candidate == panel)
-}
-
-/// Draws the chip that names the armed container and reports a click on its ✕.
+/// The view state the ribbon reads from the shell: how the camera and the work plane are set.
 ///
-/// The arm is sticky across creations, so the strip must say where the next node goes; without the
-/// chip a pressed tool would create in a container the user armed much earlier.
-fn creation_chip(ui: &mut Ui, name: &str) -> bool {
-    let mut cleared = false;
-    ui.horizontal(|ui| {
-        ui.label(format!("Adding to: {name}"));
-        cleared = ui.button("✕").on_hover_text("Create at the scene root again").clicked();
-    });
-    cleared
+/// The ribbon is a UI surface in `furnicraft-ui`, but the projection, the grid snap and the framing
+/// belong to the shell that owns the view camera and the drawing gizmo. They arrive as this small
+/// snapshot, and a click comes back as a [`RibbonViewAction`], so the ribbon neither reads nor
+/// writes the viewport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RibbonView {
+    /// The view camera is perspective rather than orthographic.
+    pub perspective: bool,
+    /// The viewport owns its projection; an authored camera pins it.
+    pub owns_view: bool,
+    /// The work-plane grid snap is on.
+    pub grid: bool,
 }
 
-/// Draws the whole strip.
-///
-/// The headings are collapsible sections. A section that is open draws its tools; every button is
-/// the hinted tool button, so a drawn icon is a glyph and an empty asset is a readable label. The
-/// strip itself carries no parent: `creation_parent` names the container armed to receive the next
-/// nodes, and the chip clears that arm. `active` is the tool that owns the next click, and its
-/// button draws pressed.
-#[allow(clippy::too_many_arguments)]
-pub fn show(
-    ui: &mut Ui,
-    state: &mut Toolbars,
-    has_panel_material: bool,
-    selected: Option<Id>,
-    selected_path: Option<bool>,
-    active: Option<ToolActivity>,
-    creation_parent: Option<&str>,
-    actions: &mut Vec<ToolAction>,
-) {
-    let context = StripContext { has_panel_material, selected, selected_path, active };
-    ui.heading("Tools");
-    if let Some(name) = creation_parent
-        && creation_chip(ui, name)
-    {
-        actions.push(ToolAction::ClearCreationParent);
-    }
-    ui.separator();
-    for panel in ToolPanel::ALL {
-        let open = state.is_open(panel);
-        let response = egui::CollapsingHeader::new(panel.label()).id_salt(panel.id()).open(Some(open)).show(ui, |ui| {
-            show_panel(ui, panel, context, state, actions);
-        });
-        if response.header_response.clicked() {
-            state.set_open(panel, !open);
-        }
-    }
+/// What one ribbon click asked the shell's view to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RibbonViewAction {
+    /// Frame the whole scene.
+    FrameAll,
+    /// Switch between perspective and orthographic.
+    ToggleProjection,
+    /// Turn the work-plane grid snap on or off.
+    ToggleGrid,
 }
 
-/// What the strip reads from the scene and the pointer while it draws one panel.
+/// What drawing the ribbon changed: whether a tool started, and the one view action it asked for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RibbonOutcome {
+    /// A drawing tool started, so the shell resets its pointer state.
+    pub started_drawing: bool,
+    /// The view action the ribbon asked for, if any.
+    pub view: Option<RibbonViewAction>,
+}
+
+/// What the ribbon reads from the scene, the pointer and the view camera while it draws.
 ///
-/// The four values travel together because every panel reads the same picture: what the catalogue
-/// offers, what is selected, whether that selection is a closed path, and which tool is armed.
+/// The values travel together because every tab reads the same picture: what the catalogue offers,
+/// what is selected, whether that selection is a closed path, which tool is armed, how the viewport
+/// draws, and what the running draft has built so far.
 #[derive(Clone, Copy, Debug, Default)]
-struct StripContext {
-    has_panel_material: bool,
-    selected: Option<Id>,
-    selected_path: Option<bool>,
-    active: Option<ToolActivity>,
+pub struct RibbonContext {
+    /// The catalogue has at least one panel material.
+    pub has_panel_material: bool,
+    /// The primary selection, if any.
+    pub selected: Option<Id>,
+    /// Whether the selection is a path, and whether that path is closed.
+    pub selected_path: Option<bool>,
+    /// The tool that owns the next click.
+    pub active: Option<ToolActivity>,
+    /// The view is perspective rather than orthographic.
+    pub perspective: bool,
+    /// Whether the viewport owns its projection; an authored camera pins it.
+    pub owns_view: bool,
+    /// Whether the work-plane grid snap is on.
+    pub grid: bool,
+    /// A running draft: its tool, how many points it has, and whether it is closed.
+    pub draft: Option<(DrawTool, usize, bool)>,
 }
 
-/// The body of one open panel.
-fn show_panel(
+/// Whether a tab is drawn at all: a tab is drawn exactly when it owns a group.
+///
+/// The rule is structural, not situational. A group of implemented tools is always drawn and an
+/// unavailable tool is disabled with a hint that names what is missing, which is what keeps the
+/// ribbon's shape steady across a selection; a tab with no group is not drawn, which is what keeps
+/// *Furniture* and *Hardware* out of the row until they own a tool.
+fn tab_is_drawn(tab: RibbonTab) -> bool {
+    !tab.groups().is_empty()
+}
+
+/// Draws the ribbon: one row of tabs and, while it is open, the groups of the active tab.
+///
+/// Every tab that holds a tool is drawn, and the one whose groups are shown carries the accent.
+/// Clicking the active tab, or double-clicking any tab label, toggles the body, so a collapsed ribbon
+/// keeps only its tab row. The armed tool draws pressed and a group whose action needs a draft or a
+/// viewport that owns its projection is drawn only when it can act; the hint says what is missing
+/// when a tool is merely unavailable for the selection.
+pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
+    ui.scope(|ui| {
+        ui.set_width(ui.available_width());
+        retain_tab(state);
+        tab_row(ui, state);
+        if state.is_open() {
+            ribbon_body(ui, state, context, actions);
+        }
+    });
+}
+
+/// Keeps the active tab on a tab that is drawn.
+///
+/// Only `set_tab` can put the ribbon on an empty tab, so this is one guard rather than a per-frame
+/// search: a state that names a tab without a group falls back to the first tab that has one, and a
+/// ribbon whose every tab is empty draws nothing.
+fn retain_tab(state: &mut Toolbars) {
+    if !tab_is_drawn(state.tab())
+        && let Some(tab) = RibbonTab::ALL.into_iter().find(|tab| tab_is_drawn(*tab))
+    {
+        state.set_tab(tab);
+    }
+}
+
+/// The one row of tabs, each drawn in the ribbon's own rhythm.
+fn tab_row(ui: &mut Ui, state: &mut Toolbars) {
+    let height = crate::theme::RIBBON_TAB_HEIGHT;
+    ui.horizontal(|ui| {
+        ui.set_height(height);
+        let active = state.tab();
+        let open = state.is_open();
+        for tab in RibbonTab::ALL {
+            if !tab_is_drawn(tab) {
+                continue;
+            }
+            let selected = tab == active && open;
+            let response = tab_button(ui, tab, selected, height);
+            // A double-click also reports a click in the same frame, so it is tested first: the two
+            // gestures would otherwise cancel each other out and the body would never close.
+            if response.double_clicked() {
+                apply_tab_gesture(state, tab, true);
+            } else if response.clicked() {
+                apply_tab_gesture(state, tab, false);
+            }
+        }
+    });
+}
+
+/// What one gesture on a tab does: open its body, or collapse and restore it.
+///
+/// A single click on another tab opens that tab; a single click on the open tab collapses the body,
+/// because the tab already says where the tools are. A double-click collapses or restores whichever
+/// tab it lands on, which is the office-ribbon habit and works without aiming at the open tab.
+fn apply_tab_gesture(state: &mut Toolbars, tab: RibbonTab, double: bool) {
+    if double {
+        state.set_tab(tab);
+        state.toggle();
+    } else if tab == state.tab() {
+        state.toggle();
+    } else {
+        state.set_tab(tab);
+        state.set_open(true);
+    }
+}
+
+/// One tab: its name in the body type, on a control fill with the accent underline while it is open.
+///
+/// The open tab is marked by the accent, not by a second palette entry: the whole ribbon is chrome,
+/// and one saturated line on the row already says which group row belongs to which tab. Every tab
+/// has the same inner padding and a minimum width, so a four-letter name does not read as a stamp
+/// next to a long one.
+fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32) -> egui::Response {
+    let font = egui::FontId::proportional(12.0);
+    let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(tab.label().to_owned(), font, egui::Color32::PLACEHOLDER));
+    let width = (galley.size().x + 6.0 * crate::theme::STEP).max(crate::theme::RIBBON_TAB_MIN_WIDTH);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        if selected {
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), crate::theme::CONTROL);
+            let underline = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
+                egui::pos2(rect.right() - 2.0, rect.bottom()),
+            );
+            ui.painter().rect_filled(underline, egui::CornerRadius::ZERO, crate::theme::ACCENT);
+        } else if response.hovered() {
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(crate::theme::RADIUS), crate::theme::CONTROL_HOVER);
+        }
+        let color = if selected { crate::theme::TEXT } else { crate::theme::TEXT_DIM };
+        let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley, color);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tab.label()));
+    }
+    response
+}
+
+/// The body under the tab row: the active tab's groups in one row, separated by vertical dividers.
+fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
+    let groups = state.tab().groups();
+    if groups.is_empty() {
+        return;
+    }
+    // One measurement for the whole row, taken before anything is laid out so every cell of every
+    // group shares it (ADR 0067): a caption never sizes its own button. It is measured on the widest
+    // tab, not the active one, so switching tab does not move the cells.
+    let columns = RibbonTab::ALL.into_iter().map(RibbonTab::columns).max().unwrap_or(1);
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
+        let cell = crate::theme::RibbonMetrics::measure(ui, columns).cell;
+        // One row for the tools and the caption band under it; the divider between two groups is
+        // drawn at the height of both, so a group boundary runs the whole body.
+        let body_height = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+        // A cell has a floor, so a tab of seven tools is wider than a small window; the body scrolls
+        // sideways rather than losing its last group to the window edge.
+        egui::ScrollArea::horizontal().id_salt("ribbon_body").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.set_height(body_height);
+                for (index, group) in groups.iter().enumerate() {
+                    if index > 0 {
+                        crate::theme::divider_of_height(ui, body_height);
+                    }
+                    show_group(ui, cell, *group, state, context, actions);
+                }
+            });
+        });
+    });
+}
+
+/// One group: its row of labelled buttons over the caption that names it.
+///
+/// The caption is centred on the group's own width, so a vertical divider separates two groups and
+/// each caption names the tools above it without spanning the whole ribbon.
+fn show_group(
     ui: &mut Ui,
-    panel: ToolPanel,
-    context: StripContext,
+    cell: f32,
+    group: ToolGroup,
     state: &mut Toolbars,
+    context: RibbonContext,
     actions: &mut Vec<ToolAction>,
 ) {
-    let StripContext { has_panel_material, selected, selected_path, active } = context;
-    ui.horizontal_wrapped(|ui| match panel {
-        ToolPanel::Contour => {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let inner = ui.horizontal(|ui| {
+            // Cells sit edge to edge inside a group: the whole cell is the button, and the only air
+            // between two controls is the padding the cell already carries (ADR 0067). A layout gap
+            // on top of that padding is what made the row read as loose plates.
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.set_height(crate::theme::RIBBON_ROW_HEIGHT);
+            show_group_row(ui, cell, group, state, context, actions);
+        });
+        let caption = group.label().to_uppercase();
+        let galley = ui.fonts_mut(|fonts| {
+            fonts.layout_no_wrap(caption, egui::FontId::proportional(10.5), egui::Color32::PLACEHOLDER)
+        });
+        let width = inner.response.rect.width().max(galley.size().x);
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(width, crate::theme::RIBBON_CAPTION_HEIGHT), egui::Sense::hover());
+        let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(pos, galley, crate::theme::TEXT_DIM);
+    });
+}
+
+/// The buttons of one group, before its caption.
+fn show_group_row(
+    ui: &mut Ui,
+    cell: f32,
+    group: ToolGroup,
+    state: &mut Toolbars,
+    context: RibbonContext,
+    actions: &mut Vec<ToolAction>,
+) {
+    let RibbonContext { has_panel_material, selected, selected_path, active, perspective, owns_view, grid, draft } =
+        context;
+    match group {
+        ToolGroup::Draw => {
             for tool in CONTOUR_TOOLS {
                 let action = ToolAction::Draw(tool);
                 let on = is_armed(active, action);
-                if icons::tool_button(ui, tool_icon(tool), tool.label(), shortcut_label(tool), true, on).clicked() {
+                let caption = tool.label();
+                let hint = tool_hint(strip_label(tool), shortcut_label(tool));
+                if icons::ribbon_button(ui, cell, tool_icon(tool), caption, &hint, true, on).clicked() {
                     actions.push(action);
                 }
             }
         }
-        ToolPanel::Scene => {
-            if icons::tool_button(ui, icons::scene::PANEL, "Panel", Some("N"), has_panel_material, false).clicked() {
-                actions.push(ToolAction::CreatePanel);
+        ToolGroup::Draft => {
+            // Close needs a running draft that can close, cancel needs any running draft; both are
+            // drawn so the pair never vanishes between clicks and the hint says why one is off.
+            let (tool, points, closed) = draft.unwrap_or((DrawTool::Line, 0, false));
+            let close = draft_can_close(tool, points, closed);
+            let close_hint = if close {
+                "Close the draft into a ring".to_owned()
+            } else {
+                "A draft needs three points to close".to_owned()
+            };
+            if icons::ribbon_button(ui, cell, icons::contour::CLOSE, "Close", &close_hint, close, false).clicked()
+                && close
+            {
+                actions.push(ToolAction::CloseDrawing);
             }
-            if icons::tool_button(ui, icons::scene::ASSEMBLY, "Assembly", None, true, false).clicked() {
-                actions.push(ToolAction::CreateAssembly);
-            }
-            if icons::tool_button(ui, icons::scene::CAMERA, "Camera", None, true, false).clicked() {
-                actions.push(ToolAction::CreateCamera);
-            }
-            if icons::tool_button(ui, icons::scene::LIGHT, "Light", None, true, false).clicked() {
-                actions.push(ToolAction::CreateLight);
+            let cancel = draft.is_some();
+            let cancel_hint = tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Esc"));
+            if icons::ribbon_button(ui, cell, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
+                && cancel
+            {
+                actions.push(ToolAction::CancelDrawing);
             }
         }
-        ToolPanel::Primitives => {
-            ui.label("Size");
-            ui.add(TextEdit::singleline(state.primitive_size_mut()).desired_width(72.0).hint_text("mm"));
-            ui.label("mm");
-            if let Some(error) = state.error() {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
+        ToolGroup::Primitives => {
+            labelled_field(ui, "Size", state.primitive_size_mut());
             let size = state.primitive_size();
             let enabled = size.is_ok();
             let armed_size = size.as_ref().ok().copied();
+            let refusal = size.as_ref().err().cloned();
             for (kind, icon, label) in [
                 (PrimitiveKind::Cube, icons::primitives::CUBE, "Cube"),
                 (PrimitiveKind::Cylinder, icons::primitives::CYLINDER, "Cylinder"),
                 (PrimitiveKind::Sphere, icons::primitives::SPHERE, "Sphere"),
             ] {
                 let on = armed_size.is_some_and(|size| is_armed(active, ToolAction::CreatePrimitive { kind, size }));
-                if icons::tool_button(ui, icon, &format!("{label}: click the work plane"), None, enabled, on).clicked()
+                // The hint carries the field's refusal, so a bad size disables the tool and says
+                // why instead of leaving the button silently off.
+                let hint = match &refusal {
+                    Some(reason) => reason.clone(),
+                    None => format!("{label}: click the work plane"),
+                };
+                if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, on).clicked()
                     && let Ok(size) = size
                 {
                     actions.push(ToolAction::CreatePrimitive { kind, size });
                 }
             }
         }
-        ToolPanel::Bodies => {
-            ui.label("Height");
-            ui.add(TextEdit::singleline(state.extrude_height_mut()).desired_width(72.0).hint_text("mm"));
-            ui.label("mm");
+        ToolGroup::Bodies => {
+            labelled_field(ui, "Height", state.extrude_height_mut());
             let height = state.extrude_height();
-            if let Err(error) = &height {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
             // Only a closed path encloses a ring, so the button is off for anything else and the
             // hint names what is missing: a selection, a path, a closed chain, or a usable height.
-            let hint = extrude_hint(selected, selected_path);
+            let hint = match &height {
+                Ok(_) => extrude_hint(selected, selected_path).to_owned(),
+                Err(reason) => reason.clone(),
+            };
             let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && height.is_ok();
-            if icons::tool_button(ui, icons::bodies::EXTRUDE, hint, None, enabled, false).clicked()
+            if icons::ribbon_button(ui, cell, icons::bodies::EXTRUDE, "Extrude", &hint, enabled, false).clicked()
                 && let (Some(object), Ok(height)) = (selected, height)
             {
                 actions.push(ToolAction::ExtrudePath { object, height });
             }
         }
+        ToolGroup::Scene => {
+            for (icon, label, shortcut, enabled, action) in [
+                (icons::scene::PANEL, "Panel", Some("N"), has_panel_material, ToolAction::CreatePanel),
+                (icons::scene::ASSEMBLY, "Assembly", None, true, ToolAction::CreateAssembly),
+                (icons::scene::CAMERA, "Camera", None, true, ToolAction::CreateCamera),
+                (icons::scene::LIGHT, "Light", None, true, ToolAction::CreateLight),
+            ] {
+                let hint = tool_hint(label, shortcut);
+                if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, false).clicked() {
+                    actions.push(action);
+                }
+            }
+        }
+        ToolGroup::View => {
+            if icons::ribbon_button(
+                ui,
+                cell,
+                icons::view::FRAME_ALL,
+                "Frame all",
+                &tool_hint("Frame all", Some("F")),
+                true,
+                false,
+            )
+            .clicked()
+            {
+                actions.push(ToolAction::FrameAll);
+            }
+            let (icon, caption) = projection_button(perspective);
+            let hint = tool_hint("Switch the projection", Some("O"));
+            if icons::ribbon_button(ui, cell, icon, caption, &hint, owns_view, false).clicked() && owns_view {
+                actions.push(ToolAction::ToggleProjection);
+            }
+        }
+        ToolGroup::Display => {
+            let hint = tool_hint("Grid snap", Some("G"));
+            if icons::ribbon_button(ui, cell, icons::view::GRID_SNAP, "Grid snap", &hint, owns_view, grid).clicked()
+                && owns_view
+            {
+                actions.push(ToolAction::ToggleGrid);
+            }
+        }
+    }
+}
+
+/// Whether a running draft can be closed into a ring: only a tool that closes, and only once it
+/// has the three points a ring needs, and only while it is still open.
+pub const fn draft_can_close(tool: DrawTool, points: usize, closed: bool) -> bool {
+    tool.closes() && points >= 3 && !closed
+}
+
+/// The icon and the short caption of the projection toggle.
+///
+/// The icon draws the mode the view is *in* and the caption names the switch it would take, so the
+/// ribbon never claims a state the camera has not reached.
+fn projection_button(perspective: bool) -> (Icon, &'static str) {
+    if perspective { (icons::view::PERSPECTIVE, "Orthographic") } else { (icons::view::ORTHOGRAPHIC, "Perspective") }
+}
+
+/// A labelled numeric field inside a group: the small name over the field, with its unit as a hint.
+///
+/// The field is one control in the group's own row, not a separate band: a primitive's size and an
+/// extrusion's height read as part of the tool they configure, which is what the owner's reference
+/// does and the floating row did not.
+fn labelled_field(ui: &mut Ui, label: &str, text: &mut String) {
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.label(egui::RichText::new(label).size(10.5).color(crate::theme::TEXT_DIM));
+        ui.add(TextEdit::singleline(text).desired_width(64.0).hint_text("mm"));
     });
 }
 
@@ -455,97 +809,234 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn every_panel_starts_open_and_keeps_its_own_state() {
-        let mut state = Toolbars::new();
-        for panel in ToolPanel::ALL {
-            assert!(state.is_open(panel), "{} starts open", panel.label());
-            assert!(!panel.id().is_empty());
-        }
-
-        assert!(!state.toggle(ToolPanel::Contour));
-        assert!(!state.is_open(ToolPanel::Contour));
-        assert!(state.is_open(ToolPanel::Scene), "a toggle touches one panel");
-        assert!(state.toggle(ToolPanel::Contour));
-        assert!(state.is_open(ToolPanel::Contour));
-
-        assert!(!state.set_open(ToolPanel::Bodies, false));
-        assert!(!state.is_open(ToolPanel::Bodies));
-    }
-
-    #[test]
-    fn every_panel_names_its_theme_and_label() {
-        let cases = [
-            (ToolPanel::Contour, Theme::Contour, "Contour", "toolbar_contour"),
-            (ToolPanel::Scene, Theme::Scene, "Scene", "toolbar_scene"),
-            (ToolPanel::Primitives, Theme::Primitives, "Primitives", "toolbar_primitives"),
-            (ToolPanel::Bodies, Theme::Bodies, "Bodies", "toolbar_bodies"),
-        ];
-        for (panel, theme, label, id) in cases {
-            assert_eq!(panel.theme(), theme);
-            assert_eq!(panel.label(), label);
-            assert_eq!(panel.id(), id);
+    /// A context where every implemented group holds a tool and the viewport owns its view.
+    fn full_context() -> RibbonContext {
+        RibbonContext {
+            has_panel_material: true,
+            selected: None,
+            selected_path: None,
+            active: None,
+            perspective: true,
+            owns_view: true,
+            grid: true,
+            draft: None,
         }
     }
 
-    #[test]
-    fn the_strip_starts_with_a_contour_toolbar() {
-        assert_eq!(ToolPanel::ALL[0], ToolPanel::Contour);
-        assert_eq!(ToolPanel::ALL.len(), 4);
-    }
-
-    #[test]
-    fn the_strip_draws_every_heading_and_a_readable_body() {
+    /// Runs the ribbon with `context` and returns its text shapes and accessible labels.
+    fn draw(state: &mut Toolbars, context: RibbonContext) -> (Vec<String>, Vec<String>, Vec<ToolAction>) {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
-        let mut state = Toolbars::new();
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
+            show(ui, state, context, &mut actions);
         });
         let texts = drawn_text(&output.shapes);
         let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
-        for panel in ToolPanel::ALL {
-            assert!(texts.iter().any(|text| text == panel.label()), "{} heading is missing", panel.label());
+        (texts, labels, actions)
+    }
+
+    #[test]
+    fn the_ribbon_starts_open_on_a_tab_that_holds_a_tool() {
+        let mut state = Toolbars::new();
+        assert!(state.is_open(), "a fresh ribbon shows its body");
+        assert_eq!(state.tab(), RibbonTab::Sketch, "a fresh ribbon opens on Sketch");
+        assert!(!state.toggle());
+        assert!(!state.is_open());
+        assert!(state.toggle());
+        assert!(state.is_open());
+        assert!(!state.set_open(false));
+        assert!(!state.is_open());
+    }
+
+    #[test]
+    fn every_tab_names_itself_and_its_stable_id() {
+        let cases = [
+            (RibbonTab::Furniture, "Furniture", "ribbon_furniture"),
+            (RibbonTab::Hardware, "Hardware", "ribbon_hardware"),
+            (RibbonTab::Model, "Model", "ribbon_model"),
+            (RibbonTab::Sketch, "Sketch", "ribbon_sketch"),
+            (RibbonTab::Scene, "Scene", "ribbon_scene"),
+            (RibbonTab::View, "View", "ribbon_view"),
+        ];
+        assert_eq!(RibbonTab::ALL.len(), cases.len());
+        for (tab, label, id) in cases {
+            assert_eq!(tab.label(), label);
+            assert_eq!(tab.id(), id);
         }
-        assert!(
-            labels.iter().any(|label| label.contains("Panel  (N)")),
-            "a drawn icon keeps the labelled shortcut as its accessible name: {labels:?}"
-        );
-        assert!(
-            labels.iter().any(|label| label.contains("Cube: click the work plane")),
-            "the primitives panel is filled: {labels:?}"
-        );
-        assert!(actions.is_empty(), "drawing alone runs no tool");
     }
 
     #[test]
-    fn the_strip_names_the_armed_container_and_offers_to_clear_it() {
-        let ctx = egui::Context::default();
-        let mut state = Toolbars::new();
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, Some("Frame"), &mut actions);
-        });
-        let texts = drawn_text(&output.shapes);
-        output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text.contains("Adding to: Frame")), "the chip names the arm: {texts:?}");
-        assert!(texts.iter().any(|text| text.contains('✕')), "the chip carries its clear button: {texts:?}");
-        assert!(actions.is_empty(), "drawing alone clears nothing");
+    fn every_implemented_action_sits_in_exactly_one_group() {
+        // The ribbon's promise: no tool is reachable twice and none is lost in the move. Each tab
+        // is drawn with a draft running and a view that owns its projection, so every group is
+        // present; the hints name the tools, and a tool must appear on exactly one tab.
+        let mut context = full_context();
+        context.draft = Some((DrawTool::Polyline, 3, false));
+        let mut seen: Vec<String> = Vec::new();
+        for tab in RibbonTab::ALL {
+            if tab.groups().is_empty() {
+                continue; // a tab with no group is never drawn, so it owns no tool
+            }
+            let mut state = Toolbars::new();
+            state.set_tab(tab);
+            let (_, labels, _) = draw(&mut state, context);
+            for label in labels {
+                // A tab names itself on the row, so its accessible name is not a tool.
+                if RibbonTab::ALL.iter().any(|tab| tab.label() == label) {
+                    continue;
+                }
+                assert!(seen.iter().all(|tool| tool != &label), "{label} is reachable from two tabs");
+                seen.push(label);
+            }
+        }
+        for tab in RibbonTab::ALL {
+            for group in tab.groups() {
+                assert!(!group.label().is_empty(), "{tab:?} has a nameless group");
+            }
+        }
+        // Every tool of the design, under the caption it draws, on the one tab that owns it. The
+        // `Close` and `Cancel` of a draft are the one pair whose drawing depends on a live draft.
+        let mut expected: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        for tool in CONTOUR_TOOLS {
+            expected.insert(strip_label(tool), "Sketch");
+        }
+        expected.insert("Close the draft into a ring", "Sketch");
+        expected.insert("Cancel the draft", "Sketch");
+        for name in ["Cube", "Cylinder", "Sphere"] {
+            expected.insert(name, "Model");
+        }
+        // With nothing selected the extrude button is drawn but off; its hint is the reason.
+        expected.insert("Select a closed path first", "Model");
+        for name in ["Panel", "Assembly", "Camera", "Light"] {
+            expected.insert(name, "Scene");
+        }
+        expected.insert("Frame all", "View");
+        expected.insert("Switch the projection", "View");
+        expected.insert("Grid snap", "Display");
+        for (tool, tab) in expected {
+            assert!(seen.iter().any(|label| label.starts_with(tool)), "{tool} is drawn nowhere; drawn: {seen:?}");
+            let mut state = Toolbars::new();
+            state.set_tab(match tab {
+                "Sketch" => RibbonTab::Sketch,
+                "Model" => RibbonTab::Model,
+                "Scene" => RibbonTab::Scene,
+                "View" => RibbonTab::View,
+                _ => RibbonTab::View,
+            });
+            let (_, labels, _) = draw(&mut state, context);
+            assert!(labels.iter().any(|label| label.starts_with(tool)), "{tool} is not on the {tab} tab");
+        }
     }
 
     #[test]
-    fn an_idle_strip_shows_no_creation_chip() {
-        let ctx = egui::Context::default();
+    fn the_body_is_one_tool_row_and_one_caption_band() {
+        // The owner's reference is a body of about 90 pt: the tool row, the caption band and the
+        // surface's own margins. A body that grows an extra row of fields is a regression.
         let mut state = Toolbars::new();
-        let mut actions = Vec::new();
+        state.set_tab(RibbonTab::Model);
+        let ctx = egui::Context::default();
+        let mut height = 0.0;
+        let mut body_top = None;
         let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
+            let before = ui.min_rect().bottom();
+            show(ui, &mut state, full_context(), &mut Vec::new());
+            height = ui.min_rect().bottom() - before;
+            body_top = Some(before);
         });
-        let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
-        assert!(!texts.iter().any(|text| text.contains("Adding to")), "nothing is armed: {texts:?}");
+        assert!(body_top.is_some());
+        let one_row = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+        // The tab row, the body row and caption, and the two 4 pt margins at most.
+        let budget = crate::theme::RIBBON_TAB_HEIGHT + one_row + 4.0 * crate::theme::STEP;
+        assert!(height <= budget, "the ribbon body is {height} pt, over its {budget} pt budget");
+    }
+
+    #[test]
+    fn every_group_draws_at_least_one_button() {
+        // One group at a time, on the tab that owns it, so a group whose row is empty fails here
+        // rather than as an empty band in the ribbon.
+        for tab in RibbonTab::ALL {
+            for group in tab.groups() {
+                let mut context = full_context();
+                context.draft = Some((DrawTool::Polyline, 3, false));
+                let mut state = Toolbars::new();
+                state.set_tab(tab);
+                let (_, labels, actions) = draw(&mut state, context);
+                assert!(actions.is_empty(), "drawing alone runs no tool");
+                assert!(labels.iter().any(|label| !label.is_empty()), "{tab:?} / {group:?} drew no control");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_tab_is_not_drawn() {
+        let mut state = Toolbars::new();
+        state.set_open(false);
+        let (texts, _, _) = draw(&mut state, full_context());
+        assert!(!texts.iter().any(|text| text == "Furniture"), "a tab with no tool is not drawn: {texts:?}");
+        assert!(!texts.iter().any(|text| text == "Hardware"), "the empty hardware tab is hidden: {texts:?}");
+        for tab in [RibbonTab::Model, RibbonTab::Sketch, RibbonTab::Scene, RibbonTab::View] {
+            assert!(texts.iter().any(|text| text == tab.label()), "{tab:?} holds a tool and is drawn");
+        }
+    }
+
+    #[test]
+    fn collapsing_keeps_the_tab_row_and_drops_the_body() {
+        let mut state = Toolbars::new();
+        state.set_tab(RibbonTab::Scene);
+        let (open_texts, _, _) = draw(&mut state, full_context());
+        assert!(open_texts.iter().any(|text| text == "SCENE"), "the group caption is drawn: {open_texts:?}");
+        assert!(open_texts.iter().any(|text| text == "Panel"), "the body draws its tools: {open_texts:?}");
+
+        state.set_open(false);
+        let (closed_texts, _, _) = draw(&mut state, full_context());
+        assert!(closed_texts.iter().any(|text| text == "Scene"), "the tab row survives: {closed_texts:?}");
+        assert!(!closed_texts.iter().any(|text| text == "Panel"), "a collapsed ribbon draws no body: {closed_texts:?}");
+        assert!(!closed_texts.iter().any(|text| text == "SCENE"), "no caption without a body: {closed_texts:?}");
+    }
+
+    #[test]
+    fn clicking_the_open_tab_collapses_and_restores_it() {
+        let mut state = Toolbars::new();
+        assert_eq!(state.tab(), RibbonTab::Sketch);
+        apply_tab_gesture(&mut state, RibbonTab::Sketch, false);
+        assert!(!state.is_open(), "a click on the open tab collapses the body");
+        apply_tab_gesture(&mut state, RibbonTab::Sketch, false);
+        assert!(state.is_open(), "the same click restores it");
+    }
+
+    #[test]
+    fn clicking_another_tab_opens_it_and_a_double_click_collapses_it() {
+        let mut state = Toolbars::new();
+        apply_tab_gesture(&mut state, RibbonTab::Model, false);
+        assert_eq!(state.tab(), RibbonTab::Model);
+        assert!(state.is_open(), "switching tabs shows the new body");
+        apply_tab_gesture(&mut state, RibbonTab::Model, true);
+        assert!(!state.is_open(), "a double-click collapses the body");
+        apply_tab_gesture(&mut state, RibbonTab::Model, true);
+        assert!(state.is_open(), "a double-click restores it");
+        apply_tab_gesture(&mut state, RibbonTab::Scene, true);
+        assert_eq!(state.tab(), RibbonTab::Scene, "a double-click also switches tabs");
+        assert!(!state.is_open());
+    }
+
+    #[test]
+    fn an_empty_tab_is_never_the_active_one() {
+        // Only `set_tab` can land on a tab without a group; the ribbon repairs that state instead
+        // of drawing a bodyless accent, and a ribbon whose every tab is empty draws nothing.
+        assert!(!tab_is_drawn(RibbonTab::Furniture));
+        assert!(!tab_is_drawn(RibbonTab::Hardware));
+        for tab in [RibbonTab::Model, RibbonTab::Sketch, RibbonTab::Scene, RibbonTab::View] {
+            assert!(tab_is_drawn(tab), "{tab:?} owns a group");
+        }
+        let mut state = Toolbars::new();
+        state.set_tab(RibbonTab::Hardware);
+        assert_eq!(state.tab(), RibbonTab::Hardware, "the state keeps what it was given");
+        let (texts, _, _) = draw(&mut state, full_context());
+        assert_eq!(state.tab(), RibbonTab::Model, "the ribbon fell back to the first drawn tab");
+        assert!(!texts.iter().any(|text| text == "Hardware"), "an empty tab is not drawn: {texts:?}");
     }
 
     #[test]
@@ -585,22 +1076,29 @@ mod tests {
     }
 
     #[test]
-    fn the_strip_marks_exactly_the_armed_tool() {
+    fn the_ribbon_marks_exactly_the_armed_tool() {
         let cases = [
-            (None, 0, "an idle strip presses nothing"),
-            (Some(ToolActivity::Draw(DrawTool::Line)), 1, "the armed Line button is pressed"),
-            (Some(ToolActivity::Primitive(PrimitiveKind::Sphere)), 1, "the armed Sphere button is pressed"),
+            (None, RibbonTab::Sketch, 0, "an idle ribbon presses nothing"),
+            (Some(ToolActivity::Draw(DrawTool::Line)), RibbonTab::Sketch, 1, "the armed Line button is pressed"),
+            (
+                Some(ToolActivity::Primitive(PrimitiveKind::Sphere)),
+                RibbonTab::Model,
+                1,
+                "the armed Sphere button is pressed",
+            ),
         ];
-        for (activity, expected, reason) in cases {
+        for (activity, tab, expected, reason) in cases {
             let ctx = egui::Context::default();
             let mut state = Toolbars::new();
+            state.set_tab(tab);
             let mut actions = Vec::new();
             let mut pressed_fill = None;
+            let context = RibbonContext { active: activity, ..full_context() };
             let output = ctx.run_ui(Default::default(), |ui| {
                 pressed_fill = Some(ui.visuals().selection.bg_fill);
-                show(ui, &mut state, true, None, None, activity, None, &mut actions);
+                show(ui, &mut state, context, &mut actions);
             });
-            let pressed_fill = pressed_fill.expect("the strip ran");
+            let pressed_fill = pressed_fill.expect("the ribbon ran");
             let pressed = drawn_fill(&output.shapes, pressed_fill);
             output.drop_without_applying_deltas();
             assert_eq!(pressed, expected, "{reason}");
@@ -608,18 +1106,30 @@ mod tests {
     }
 
     #[test]
-    fn the_bodies_panel_only_offers_extrude_for_a_closed_path() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
+    fn the_bodies_group_only_offers_extrude_for_a_closed_path() {
         let mut state = Toolbars::new();
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
-        });
-        let labels = accessible_labels(&output);
-        output.drop_without_applying_deltas();
+        state.set_tab(RibbonTab::Model);
+        let (_, labels, _) = draw(&mut state, full_context());
         assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+    }
+
+    #[test]
+    fn a_labelled_button_paints_both_its_icon_and_its_caption() {
+        // The ribbon's whole reason for a taller row: the glyph and its name travel together. A
+        // placeholder asset has no glyph, so this test draws the real Line asset, which is one of
+        // the drawn icons in the set.
+        let icon = icons::contour::LINE;
+        assert!(icon.is_drawn(), "the Line asset is drawn, so the test exercises the image path");
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            icons::ribbon_button(ui, crate::theme::RIBBON_BUTTON_MAX_WIDTH, icon, "Line", "Line  (L)", true, false);
+        });
+        let texts = drawn_text(&output.shapes);
+        let images = count_images(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text == "Line"), "the caption is painted: {texts:?}");
+        assert_eq!(images, 1, "the icon is painted as one image");
     }
 
     #[test]
@@ -632,45 +1142,40 @@ mod tests {
         assert_eq!(extrude_hint(Some(node), Some(true)), "Extrude the selected path");
     }
 
+    /// The Scene tab, where the Panel, Assembly, Camera and Light buttons live.
+    fn scene_context() -> RibbonContext {
+        RibbonContext { has_panel_material: true, ..full_context() }
+    }
+
     #[test]
     fn an_open_path_leaves_the_extrude_button_off() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
         let mut state = Toolbars::new();
-        let mut actions = Vec::new();
+        state.set_tab(RibbonTab::Model);
         let node = Id::new(7).expect("id");
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(false), None, None, &mut actions);
-        });
-        let labels = accessible_labels(&output);
-        output.drop_without_applying_deltas();
+        let context = RibbonContext { selected: Some(node), selected_path: Some(false), ..full_context() };
+        let (_, labels, actions) = draw(&mut state, context);
         assert!(
             labels.iter().any(|label| label.contains("The selected path is open; close it first")),
-            "the panel says why an open path cannot be extruded: {labels:?}"
+            "the ribbon says why an open path cannot be extruded: {labels:?}"
         );
         assert!(actions.is_empty(), "a disabled button asks for no action");
     }
 
     #[test]
-    fn a_closed_path_asks_for_one_extrusion_at_the_typed_height() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
+    fn a_closed_path_offers_one_extrusion_at_the_typed_height() {
         let mut state = Toolbars::new();
+        state.set_tab(RibbonTab::Model);
         state.set_extrude_height_text("24");
-        let mut actions = Vec::new();
         let node = Id::new(7).expect("id");
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, Some(node), Some(true), None, None, &mut actions);
-        });
-        let labels = accessible_labels(&output);
-        output.drop_without_applying_deltas();
+        let context = RibbonContext { selected: Some(node), selected_path: Some(true), ..full_context() };
+        let (_, labels, actions) = draw(&mut state, context);
         assert!(labels.iter().any(|label| label.contains("Extrude the selected path")));
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(24).expect("height")));
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
 
     #[test]
-    fn a_blank_extrusion_height_is_refused_in_the_panel() {
+    fn a_blank_extrusion_height_is_refused_in_the_group() {
         let mut state = Toolbars::new();
         state.set_extrude_height_text("   ");
         assert!(state.extrude_height().is_err());
@@ -684,7 +1189,7 @@ mod tests {
     fn the_height_field_stops_where_the_command_does() {
         let mut state = Toolbars::new();
         // The document's contour limit is 10 m; the field must not accept a height the command
-        // would refuse, or the panel would offer a tool that always fails.
+        // would refuse, or the group would offer a tool that always fails.
         let max = furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() / 1_000;
         state.set_extrude_height_text(max.to_string());
         assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(max).expect("height")));
@@ -694,29 +1199,21 @@ mod tests {
 
     #[test]
     fn the_three_primitive_buttons_are_filled() {
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
         let mut state = Toolbars::new();
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
-        });
-        let labels = accessible_labels(&output);
-        output.drop_without_applying_deltas();
+        state.set_tab(RibbonTab::Model);
+        let (_, labels, actions) = draw(&mut state, full_context());
         for label in ["Cube: click the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"] {
             assert!(labels.iter().any(|text| text.contains(label)), "{label} is missing: {labels:?}");
         }
+        assert!(actions.is_empty(), "drawing alone runs no tool");
     }
 
     #[test]
     fn a_panel_without_a_catalogue_material_cannot_create_a_panel() {
-        let ctx = egui::Context::default();
         let mut state = Toolbars::new();
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, false, None, None, None, None, &mut actions);
-        });
-        output.drop_without_applying_deltas();
+        state.set_tab(RibbonTab::Scene);
+        let context = RibbonContext { has_panel_material: false, ..scene_context() };
+        let (_, _, actions) = draw(&mut state, context);
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
     }
 
@@ -733,33 +1230,57 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_panel_draws_no_body() {
-        let ctx = egui::Context::default();
+    fn the_draft_group_offers_close_only_for_a_closable_draft() {
+        assert!(draft_can_close(DrawTool::Polyline, 3, false), "a polyline with three points can close");
+        assert!(!draft_can_close(DrawTool::Polyline, 2, false), "a ring needs three points");
+        assert!(!draft_can_close(DrawTool::Polyline, 4, true), "a closed ring cannot close again");
+        assert!(!draft_can_close(DrawTool::Line, 2, false), "a line never closes");
+
         let mut state = Toolbars::new();
-        state.set_open(ToolPanel::Scene, false);
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
-        });
-        let texts = drawn_text(&output.shapes);
-        output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text == "Scene"), "a closed panel keeps its heading");
-        assert!(!texts.iter().any(|text| text == "Panel"), "a closed panel draws no body: {texts:?}");
+        state.set_tab(RibbonTab::Sketch);
+        let context = RibbonContext { draft: Some((DrawTool::Polyline, 3, false)), ..full_context() };
+        let (_, labels, _) = draw(&mut state, context);
+        assert!(labels.iter().any(|label| label.contains("Close")), "the draft group is drawn: {labels:?}");
+        assert!(labels.iter().any(|label| label.contains("Cancel")), "a draft can always cancel: {labels:?}");
     }
 
     #[test]
-    fn a_closed_contour_panel_draws_only_its_heading() {
+    fn the_cell_grows_with_the_window_within_its_band() {
+        // The owner's second observation: on a maximised window the reference's buttons get wider. So
+        // the cell is not one number — it is measured and clamped, and every tab uses the same one.
         let ctx = egui::Context::default();
-        let mut state = Toolbars::new();
-        state.set_open(ToolPanel::Contour, false);
-        let mut actions = Vec::new();
-        let output = ctx.run_ui(Default::default(), |ui| {
-            show(ui, &mut state, true, None, None, None, None, &mut actions);
-        });
-        let texts = drawn_text(&output.shapes);
-        output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text.contains("Contour")), "a closed panel keeps its heading: {texts:?}");
-        assert!(!texts.iter().any(|text| text == "Line  (L)"), "the body is not drawn: {texts:?}");
+        crate::theme::install(&ctx);
+        let cell = |width: f32| {
+            let mut cell = 0.0;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                ui.set_width(width);
+                cell = crate::theme::RibbonMetrics::measure(ui, RibbonTab::Sketch.columns()).cell;
+            });
+            output.drop_without_applying_deltas();
+            cell
+        };
+        let small = cell(640.0);
+        let large = cell(2560.0);
+        assert_eq!(small, crate::theme::RIBBON_BUTTON_MIN_WIDTH, "a narrow window keeps the floor");
+        assert_eq!(large, crate::theme::RIBBON_BUTTON_MAX_WIDTH, "a maximised window stops at the ceiling");
+        assert!(small < large, "the cells grow with the window, within the band");
+        const { assert!(crate::theme::RIBBON_BUTTON_MIN_WIDTH < crate::theme::RIBBON_BUTTON_MAX_WIDTH) };
+    }
+
+    #[test]
+    fn every_tab_of_the_ribbon_is_counted() {
+        // A tab's column count drives the cell, so a tab that undercounts would draw past its share.
+        assert_eq!(RibbonTab::Sketch.columns(), 7, "five drawing tools and the draft pair");
+        assert_eq!(RibbonTab::Model.columns(), 6, "three primitives, the height field and the extrusion");
+        assert_eq!(RibbonTab::Scene.columns(), 4);
+        assert_eq!(RibbonTab::View.columns(), 3);
+        assert_eq!(RibbonTab::Furniture.columns(), 0, "an empty tab never reaches the body");
+        assert_eq!(RibbonTab::Hardware.columns(), 0);
+        assert_eq!(RibbonTab::Sketch.groups().len(), 2, "the Sketch tab draws two groups");
     }
 
     /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.
@@ -781,6 +1302,70 @@ mod tests {
             walk(&clipped.shape, fill, &mut out);
         }
         out
+    }
+
+    /// Counts painted images, the icon half of a labelled button.
+    fn count_images(shapes: &[egui::epaint::ClippedShape]) -> usize {
+        fn walk(shape: &egui::Shape, out: &mut usize) {
+            match shape {
+                egui::Shape::Mesh(_) => *out += 1,
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn a_group_divider_spans_the_whole_body() {
+        // The owner's complaint: the divider stopped in the middle of the tool row, so a group
+        // boundary looked like a stray tick. It is as tall as the tool row plus its caption band.
+        let mut state = Toolbars::new();
+        state.set_tab(RibbonTab::Sketch);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let body = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+        let mut dividers = Vec::new();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &mut state, full_context(), &mut Vec::new());
+        });
+        collect_vertical_lines(&output.shapes, &mut dividers);
+        output.drop_without_applying_deltas();
+        assert!(!dividers.is_empty(), "the Sketch tab separates its two groups");
+        for height in dividers {
+            assert!((height - body).abs() < 0.5, "a group divider is {height} pt tall, the body is {body} pt");
+        }
+    }
+
+    /// Collects the height of every painted vertical line segment, a divider or a `vline`.
+    fn collect_vertical_lines(shapes: &[egui::epaint::ClippedShape], out: &mut Vec<f32>) {
+        fn walk(shape: &egui::Shape, out: &mut Vec<f32>) {
+            match shape {
+                egui::Shape::LineSegment { points, .. } => {
+                    if (points[0].x - points[1].x).abs() < 0.5 {
+                        out.push((points[0].y - points[1].y).abs());
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in shapes {
+            walk(&clipped.shape, out);
+        }
     }
 
     /// The accessible labels this frame published: a drawn icon carries its hint here, not as text.

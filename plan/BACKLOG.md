@@ -25,22 +25,268 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U28** mass and one projection: allow `fill-opacity` (still no `defs`, `mask`, `clipPath`,
-  gradient or CSS) so a passive face fills at 12–18 % and the result or changed geometry at 45–60 %
-  with the heavy outline, then redraw the 18 drawn icons at a fixed footprint (ink `3..21`, coverage
-  20–45 %) on the one axonometry the guide publishes. One change updates `STYLE_GUIDE.md` §5, §7.3 and
-  §9, the draw-icon skill and a coverage test read off the rasterised alpha. ADR 0055;
-  `files: assets/icons/STYLE_GUIDE.md, crates/ui/src/icons.rs`
+- `[ ]` **U41** the settings window and the one place the workspace is remembered: a *Settings*
+  modal with the sections *Appearance* (theme dark/light/system, accent, UI scale — the control U40
+  left without a surface moves here), *Viewport* (default display style, grid on and its
+  step, edges, the view a new viewport opens with), *Ribbon* (background opacity) and *Shortcuts*
+  (the existing table). The window is a view, not a document surface: a change applies at once and
+  never touches the `.fcs`, and a scene saved by another machine carries none of it. The state is
+  written as JSON under the operating system's config directory through a small `settings` module
+  with an atomic write, the same shape `furnicraft-project` uses, so a crash during a save cannot
+  leave a half-written file; a missing, unreadable or older file falls back to the defaults with the
+  reason in the status bar instead of a panic. The same module gains the *Home* surface that the
+  header's house button opens: new, open, the recent files and the empty template, drawn over the
+  workspace and dismissed by Escape. Tests: a round trip through JSON restores every field; a
+  truncated or unknown-version file yields defaults; a value outside a range is clamped on read; the settings never appear in a serialised document.
+  Session notes: the gear is `HeaderAction::Settings` and currently reports "not built yet"; the
+  house button reports "The start surface is not built yet". `ui_scale::show` has no surface since
+  U40 and moves here. `furnicraft-project` already writes atomically — copy that shape. No new dependency:
+  `serde_json` is present, and `XDG_CONFIG_HOME` / `APPDATA` / `HOME` cover the three targets.
+  `files: apps/furnicraft/src, crates/ui/src`
 
-- `[ ]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
-  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
-  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
-  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
-  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
-  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it.
-  `files: crates/param/src/lib.rs, crates/model/src/object.rs`
+- `[ ]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
+  listing a command's label, its id and whether it is enabled for the current session; the chosen
+  entry dispatches it with parameters built from the current selection, and an entry that cannot run
+  says why instead of failing silently. The palette is the reference's "command search" and it costs
+  no new command: the registry already carries 48 specs with a stable id, a label and a pure
+  `enabled` check, so the work is a fuzzy filter, a keyboard loop (`↑`/`↓`/`Enter`/`Esc`) and one
+  parameter builder per command family — node deletion, duplication, renaming and the view actions
+  first, with the rest reported as "needs a selection" until a builder exists. Command history and
+  the last-used list are session state, never document data. Tests: a prefix and a substring both
+  find `node.delete`; a disabled command is listed but not runnable and explains itself; `Esc`
+  closes without dispatching; a chosen entry dispatches exactly one command and one undo entry.
+  Session notes: `CommandRegistry::specs()` returns `&'static [CommandSpec]`, `spec.id()` and
+  `spec.label()` are the search fields and `spec.enabled(session, &params)` is the pure check;
+  `crate::command::dispatch` in `crates/ui` is the one dispatch path. `Ctrl+K` is free — `F`, `O`,
+  `G` and the drawing letters are taken, and `ui.input(|i| i.modifiers.command)` must not fire while
+  a text field has focus.
+  `files: apps/furnicraft/src, crates/ui/src`
 
-- `[ ]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
+- `[ ]` **U42** the workspace divides into views: the central area holds a layout tree of leaves and
+  splits — one view by default, then *two vertical*, *two horizontal* and *four* from the bar, and
+  any border between two views is draggable with a minimum size of 120 pt per side and a ratio
+  clamped to 0.15–0.85. Each leaf owns its camera and its preset (*Front*, *Top*, *Right*,
+  *Axonometric*), *Home* and *Frame all* act on the view under the pointer or on the active one, and
+  the active view carries a thin accent frame. The layout, the cameras and the active leaf are view
+  state in the shell and never reach the document; a preset writes yaw and pitch only, so switching
+  views never moves the model. The orientation widget gains a *home* button that returns the active
+  leaf to *Axonometric*, and an optional readout under it — `Pitch 32.1° · Yaw -51.7° · Roll 0.0° ·
+  Ortho` — drawn only when the switch U40 added to the display-settings popover is on; the numbers
+  come from `Camera::pitch`/`yaw` and `Projection`, formatted through `furnicraft-units`, so no new
+  document data and no second source of truth. The renderer draws one offscreen target and one view
+  per pass with a scissored region and a uniform slot per view, rather than one texture per view, so
+  memory does not grow with the grid and egui keeps a single texture id. Tests: a split and a join
+  round-trip; a drag clamps at both ends and never collapses a view; a preset produces the expected
+  orthographic basis; four views produce four scissor rectangles that tile the area exactly; the home
+  button restores the axonometric preset; the readout is hidden when its switch is off and names
+  `Ortho` or `Persp` in step with the projection.
+  Session notes: `viewport()` owns the single target and calls `resize` +
+  `update_egui_texture_from_wgpu_texture`. A split view needs a scissored pass per leaf into the same
+  target (`set_scissor_rect`), and `ViewportRenderer` writes one `CameraUniform` per
+  `render_with_lighting`, so a slot array with a dynamic offset keeps one buffer. Respect ADR 0049 per
+  leaf: an authored camera pins its own projection. Reuse `scene_build::home_camera` for a leaf's fit.
+  `files: apps/furnicraft/src, crates/render/src/lib.rs, crates/scene/src/lib.rs`
+
+- `[ ]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
+  *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated
+  edge list per mesh, cached in `crates/mesh` against the same derivation inputs as the mesh itself —
+  and drawn as a line pass with a depth bias, because `PolygonMode::Line` is unavailable on Metal and
+  a 1 px line cannot be widened (ADR 0059). *Shaded with hidden edges* draws the edge pass with
+  `CompareFunction::Always`; *translucent* draws with blending and no depth write and orders objects
+  by their centre, which is honest for a cabinet of flat panels; *wireframe* draws the edge pass
+  alone. `ShadingStyle` lives in `crates/scene` as frame data and the renderer interprets it, so a
+  test can build a frame without a GPU. The bar's buttons and the settings default stay in step, and
+  a style change re-uploads nothing but the style. Tests: an edge list deduplicates a shared edge and
+  keeps a boundary edge; each style maps to the pipeline state it promises; a translucent pass writes no depth; a wireframe frame draws no triangle. ADR needed.
+  Session notes: `ShadingStyle` goes into `crates/scene` next to `Grid` and `Lighting`; the renderer
+  reads it. Edges are derived data and belong in `crates/mesh`, cached under the same key as
+  `EvaluationCache` (ADR 0053). An edge pass needs a depth bias and no depth write, like the existing
+  `line_pipeline`; `PolygonMode::Line` is unavailable on Metal and cannot be widened (ADR 0059). Do
+  not collide with `SELECTION_LINE_COLOR`, which the shell paints as an overlay.
+  `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
+
+- `[ ]` **U44** a ground shadow: the scene draws a soft contact shadow under the bounds of every
+  object that touches the floor, so a cabinet reads as standing on something instead of floating in
+  a grid. The first version is a flat ellipse or rounded rectangle derived from the world bound,
+  drawn unlit on the ground plane with a radial falloff — no shadow map, no extra pass, no texture
+  dependency — and it is a toggle in the display settings. A projected shadow map is a later
+  decision with its own ADR, because it is the one feature here that can cost a frame. Tests: a
+  bound with no floor contact draws nothing; the ellipse stays inside the object's footprint; the toggle removes it from the frame.
+  Session notes: derive the contact shadow from `Bounds` in `crates/scene` and draw it unlit on the
+  ground plane (a thick ring on `line_pipeline`, or a transparent triangle pass); no texture. A shadow
+  is view data — a `SceneFrame` field next to `grid`, never a document field.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
+
+- `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
+  each with its own session, undo history, selection, camera and dirty marker, and activating a tab
+  swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
+  the last one leaves an empty *Untitled* scene, and *Save*, *Undo* and *Redo* in the header act on
+  the active tab only. This is the one task in the set that changes an architecture boundary rather
+  than a look: `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo state must move from
+  fields of the application into one `Document` per tab with its own renderer target, so it gets a
+  plan of its own and lands last. Tests: a tab keeps its own undo stack and dirty flag; switching
+  tabs restores the selection and the camera; a close with unsaved changes asks and a discard drops only that tab.
+  Session notes: the move is `Session`, `Editor`, `EvaluationCache`, `FileMenu`,
+  `PreservedSections`, the gizmos, `renderer`, `texture_id`, `scene`, `view_camera` and `home_camera`
+  into a per-tab `Document`. Write a plan and get approval first. `register_native_texture` returns one
+  id per `TextureView`, so a closed tab must `free_texture`. `HeaderAction::CloseTab` already reaches
+  the shell.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
+
+- `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
+  visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
+  and both are session state keyed by node `Id` — no command, no schema, no undo entry (ADR 0065).
+  Hiding a row hides its whole subtree from the viewport: the scene builder skips a hidden node, and
+  picking skips it too, so a hidden node cannot be selected by a click while the tree can still show
+  it as hidden and restore it. Locking a row keeps it drawn and selectable but refuses a gizmo drag
+  and a destructive command, and the status bar says which node is locked; the refusal happens in the
+  shell before a dispatch, because it is a guard on a gesture rather than a document rule. Both sets
+  are pruned like the open containers, so a deleted or undone node never leaves a stale flag, and an
+  *Isolate* / *Show all* pair in the tree's context menu covers the common case of focusing on one
+  assembly. Tests: hiding a container hides its children from the frame but not from the tree;
+  picking returns nothing for a hidden node; a locked node still selects and still resists a drag and
+  a delete; a deleted node's flags are dropped and an undone deletion starts visible and unlocked;
+  the flags survive a selection change and die with the session.
+  Session notes: `Editor` owns `open: HashSet<Id>` in `crates/ui/src/lib.rs` and prunes it in
+  `retain_open`, which is the shape to copy for `hidden` and `locked`; `scene_build::evaluate` in
+  `apps/furnicraft/src/scene_build.rs` is where a skipped subtree disappears, and
+  `mesh_pick::pick_scene` plus `scene_gizmo::pick` are where picking must agree. `icons::actions`
+  already declares `VISIBLE`, `HIDDEN`, `LOCK`, `UNLOCK` as zero-byte placeholders, so the buttons
+  draw their text label until U46 fills them.
+  `files: crates/ui/src/scene_tree.rs, apps/furnicraft/src/scene_build.rs`
+
+- `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
+  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
+  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
+  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
+  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
+  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
+  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
+  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
+  are needed by U48.
+  A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
+  Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
+  `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,
+  footprint and coverage tests; `Theme::ALL` and the uri count (`56`) move together with a new icon.
+  `files: assets/icons, crates/ui/src/icons.rs`
+
+- `[ ]` **U49** the interface speaks English and Russian: one typed message table behind a language
+  switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
+  in the layer map and `PROJECT.md` in the same change) holds `Lang::{En, Ru}` and one `Message`
+  variant per string; `Message::text(self, lang) -> &'static str` reads a `&[&str; Lang::COUNT]`
+  table, so adding a third language changes `Lang` and turns every missing translation into a
+  compile error instead of an English fallback. Every call site in `crates/ui` and
+  `apps/furnicraft` draws through that table: the header, the ribbon tabs, group captions and button
+  captions, the scene tree context menu, all inspector cards and section titles, the status bar,
+  the file and modal dialogs, and the argument messages of `PanelDiagnostic`
+  (`crates/ui/src/panel_card.rs` `diagnostic_message` moves into the table and stops being a
+  `String` builder where the variant carries no argument). `CommandSpec::label` becomes a
+  `Message` too — all 48 specs — so the palette (U47) and any future CLI or assistant print the
+  same words; the `id` stays the identity and is never translated. Russian needs real plurals, so
+  a counting message is a constructor rather than one format string: `Message::more(n)` and the
+  like pick one/few/many themselves. The language is workspace settings, never document data: it is
+  chosen in the U41 *Settings* window, applies at once, and a saved `.fcs` never carries it. A name
+  the editor generates on its own — `{} body`, `{} drawing` — is fixed in the language that created
+  it, and switching the language never renames a node; that rule goes into ADR 0067 with the rest.
+  Not translated: command ids, `FurnType` numbers, material and node names, `mm`, and the
+  `thiserror` messages of `model`, `units` and `project`, which stay English for logs and tests and
+  are mapped to a `Message` at the UI boundary instead of being shown raw. Tests: every `Message`
+  variant is non-empty in both languages; a missing language cannot compile; every command spec
+  label resolves in both languages; switching the language redraws the header, the ribbon and a
+  card without touching the project revision or the undo stack; a scene saved in Russian loads in
+  English with its node names unchanged; the longest Russian ribbon caption fits the 48 pt labelled
+  button of U39 without clipping. Session notes: `Lang` is a plain enum and the table is
+  `const`, so `crates/text` needs no serde, no `egui` and no file I/O — it is data, like
+  `furnicraft-units`. The 48 labels are the `CommandSpec::new` calls in
+  `crates/engine/src/commands.rs`; `label()` is read in `crates/ui/src/toolbars.rs`,
+  `crates/ui/src/lib.rs` and `apps/furnicraft/src/header.rs`. Existing inline strings are ~530 in
+  `crates/ui` and ~200 in `apps/furnicraft`; `theme::PRODUCT_NAME` and the logo stay as they are.
+  Do this after U39–U48 so the labels stop moving, and before M8/M9, which add hardware, cutting
+  lists and CNC text on top of the same surface. A future move to per-language files (a translator
+  working outside the repository) reuses `Message` as the key, so this does not lock the format.
+  `files: crates/ui/src, apps/furnicraft/src, xtask/src/main.rs`
+
+## Bugs
+
+## Next
+
+## Done
+
+- `[x]` **U40** the side panels become windows that fold and the viewport gets its floating cluster:
+  the scene tree and the inspector each get a header row — a title, a count chip and a fold chevron —
+  and folding them leaves a 26 pt vertical strip with the icon and the rotated title, which a click,
+  a double-click on its edge or a drag outward restores. The tree keeps only the tree — no tools, no
+  heading of its own — and still supports selection and the context menu. The view controls become a
+  translucent cluster floating over the centre of the viewport, anchored `CENTER_BOTTOM` with a small
+  offset: *orbit / pan / zoom* · *frame all / home* · the display-style buttons · the layout entry and
+  the three-slider display settings popover, which also carries the *show projection and angles*
+  switch that draws the pitch/yaw/roll and the projection word under the orientation cube (U42). The
+  bottom status bar stays thin and holds only the armed tool, the gesture it expects, the counts and
+  the last error, so the viewport starts at the scene and not at a wall of labels. A row of buttons is
+  not foldable; only a panel with content is. Tests: folding and restoring a panel keeps its width;
+  an armed container still names itself in the bar and clears from it; a closed panel draws no body;
+  the status line names the armed tool and its gesture; the cluster is anchored to the bottom centre
+  and does not move when the side panels resize; the settings popover toggles the angle readout —
+  `4934ebf`
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs`
+
+- `[x]` **X7** a ribbon button is one measured cell, so a caption never sizes it: the tool row of
+  every tab draws buttons of one width and one height, whatever their caption and whatever the
+  window width, and a caption that does not fit is elided with `…` instead of widening the button.
+  A placeholder asset keeps the same cell and draws its caption as the face, so a half-drawn icon
+  set has one rhythm. The vertical divider between two groups spans the whole body — the tool row
+  and the caption band — instead of the 16 pt header hairline, and the header's own row follows the
+  same rule: `File` and the icon buttons are one 26 pt control, and its hairlines are as tall as they
+  are. Observed: the Sketch row had buttons from 41 to 83 pt wide, Rectangle was the widest and the
+  Arc tool the narrowest, the divider stopped in the middle of the row, and a maximised window
+  stretched every caption into its own width. Expected: one cell, one pitch, one divider height, and
+  captions that read as a column. The cell is measured once per row from the window and clamped to
+  a minimum and a maximum — the owner's second observation — and the minimum is what the longest
+  Russian caption needs, which is the U49 requirement. Tests: every caption of the ribbon yields the
+  same cell width and height; a caption past the inner width is elided; the Russian tool captions fit
+  the narrowest cell; a placeholder occupies the same cell as a drawn icon; a narrow window gives the
+  floor and a maximised one the ceiling; the group divider is as tall as the tool row plus its caption
+  band; every tab's column count is right. ADR 0067 — `7d4895c`
+  `files: crates/ui/src/icons.rs, crates/ui/src/theme.rs, crates/ui/src/toolbars.rs`
+
+- `[x]` **U39** the ribbon replaces the strip that lives inside the scene tree: one row of tabs
+  (*Furniture, Hardware, Model, Sketch, Scene, View*) sits under the header, and the body under it
+  draws the tool groups of the active tab separated by vertical dividers, heading each group
+  underneath in 10.5 pt caps. A tab whose every group is empty is not drawn at all, so no greyed
+  "coming soon" tool ever appears; the tab that is open is the accent, a collapsed ribbon keeps only
+  its tab row, and clicking the active tab or double-clicking its label collapses and restores the
+  body. The groups map onto the actions that already exist — Sketch: line, polyline, arc, rectangle,
+  circle, close, cancel; Model: cube, cylinder, sphere, cone, extrude; Scene: panel, assembly,
+  camera, light; View: frame all, projection, grid — and the numeric fields (primitive size,
+  extrusion height) become a labelled field inside their group rather than a floating row. A button
+  in the ribbon is a *labelled* button: a 22 pt icon over a 10.5 pt caption, on a 48 pt row, with the
+  group's own 14 pt caption underneath, so the body is about 90 pt tall like the reference the owner
+  showed. `theme::RIBBON_ROW_HEIGHT` grows to 48, `theme::RIBBON_CAPTION_HEIGHT` is added, and a new
+  `icons::ribbon_button` draws icon-plus-caption; `icons::tool_button` stays the icon-only button for
+  the header, the panel headers and the floating viewport cluster, because a caption there would
+  double a 26 pt row. The armed drawing tool or primitive still draws pressed, and the creation chip
+  moves to the status bar (U40). Everything is view state: no command, no schema, no undo entry.
+  Tests: every implemented action appears in exactly one group and every group has at least one
+  action; an empty tab is not drawn; collapsing keeps the tab row; the pressed tool and the disabled
+  extrude hint survive the move; a labelled button paints both its icon and its caption.
+  — `36a9763`
+
+- `[x]` **U38** the window reads as one frame: one theme owns the colour and the rhythm, and chrome
+  is separated from content. `crates/ui/src/theme.rs` holds the palette (chrome, surface, panel,
+  control, line, text, dim, disabled, one accent, danger, warn), a 4 pt spacing step, row heights, one
+  rounding and one type scale, and `install` applies the same style to both of `egui`'s variants so a
+  system light preference cannot leave half the window in the stock palette. `header.rs` draws one row
+  — mark, *FurniCraft*, *Home*, *File*, *Save*, *Undo*, *Redo*, the open tab with its unsaved dot, and
+  the gear pinned to the far edge with `Sides` — and returns a `HeaderAction` the shell performs, so
+  the row owns no document state; the window keeps its system frame, so no window buttons are drawn.
+  The status text, the view controls, the work plane and the UI scale moved out of the viewport's first
+  row into a bottom `status_bar`, drawn from a snapshot that applies its one action after both sides
+  have drawn. The scene tree and the inspector lost their stock headings for a themed title and
+  hairline. New assets: `assets/logo.svg`, the `window` theme (`minimize`, `maximize`, `restore`,
+  `close`, drawn for a future frameless mode) and `actions/{file-save,undo,redo,settings}`; `view/home`.
+  ADR 0063 (theme) and 0064 (header) — `c7ad880`
+  `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs`
+- `[x]` **U29** an arc inside the polyline: the Polyline tool appends either a straight segment or a
   two-click arc, and a chain that mixes both still closes and extrudes. The arc leaves the last
   vertex: the first click is the point it passes through, the second is its end, and the next
   segment starts where the stored arc actually ended. `DrawDraft` therefore stops holding a point
@@ -58,13 +304,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   path whose arc end misses the next line by one micrometre converts through `to_contour` and by two
   is refused, a draft mixes both kinds and closes, an arc endpoint becomes the next vertex, undo
   cancels a pending arc, and the commit is still one `object.path.create`.
+  Shipped as one draft of segments with Alt+click arcs — `ad95254`
   `files: crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs, crates/model/src/contour.rs`
-
-## Bugs
-
-## Next
-
-## Done
+- `[x]` **X2** a valid contour with more than 1024 sampled points cannot become an extrusion.
+  Observed: the command now refuses it with "one extrusion cap holds at most 1024", where before
+  A6 it was stored and drew nothing. Expected: any simple ring the user can draw becomes a solid.
+  Cause: one extrusion cap is one document face, capped by `MAX_FACE_VERTICES`; the ring samples at
+  50 µm, so a smooth ring of a few turns exceeds it while the ring itself is legal (at most 256
+  segments). `object.collapse` fails on such an object and `object_mesh` cannot draw it. Fixed by ADR
+  0062: the chord is 1e-4 of the shape's diagonal above a 0.05 mm floor, and a ring that still
+  overflows is re-sampled coarser within a bounded search — `cb89f2e`
+  `files: crates/param/src/profile.rs`
+- `[x]` **U28** mass and one projection: `fill-opacity` is allowed (still no `defs`, `mask`,
+  `clipPath`, gradient or CSS), so a passive face fills at 12–18 % and the result or changed geometry
+  at 45–60 % under the heavy outline. The 18 drawn icons were redrawn inside the fixed `3..21`
+  footprint at 20–45 % coverage on the one published axonometry; `STYLE_GUIDE.md` §5, §7.1, §7.3,
+  §7.4, §9 and §15, `README.md`, `AUDIT.md`, the draw-icon skill and `crates/ui/src/icons.rs` carry
+  the numbers, and a test reads footprint and coverage off the rasterised alpha. ADR 0055 — `42f6cde`
+  `files: assets/icons/STYLE_GUIDE.md, crates/ui/src/icons.rs`
 
 - `[x]` **U27** the theme reaches the icon: `icon_widget` rasterises an embedded white master with
   `egui_extras` at `pt × pixels_per_point`, bakes `WidgetVisuals::fg_stroke.color` into the pixels,
