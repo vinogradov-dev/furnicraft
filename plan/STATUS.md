@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U41 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U47 state=idle base=HEAD updated=2026-11-07
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -34,12 +34,15 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 gives a passive face 12–18 %
   fill, the result 45–60 % under its outline, one axonometry, and ink inside `3..21` at 20–45 %
   coverage (ADR 0066 adds a 22 pt ribbon button). 47 placeholders are in `plan/debt.md`.
-- U38–U40 landed the visual pass: `theme.rs` owns the palette, the 4 pt step, the row heights and the
-  type scale (ADR 0063); `header.rs` draws one row and returns a `HeaderAction` (ADR 0064); U39
-  landed the ribbon (one row of tabs over the tool groups of the active tab, each tool a 22 pt icon
-  over a 10.5 pt caption, ADR 0066); U40 made the side panels fold over one header row and moved the
-  view controls into a translucent `Order::Middle` cluster at the viewport's bottom centre, leaving
-  the bar only the armed tool or gesture, its counts, the creation chip and the last error. U41–U48
+- U38–U41 landed the visual pass: `theme.rs` owns two palettes (dark and light, the accent folded in),
+  the 4 pt step, the row heights and the type scale (ADRs 0063, 0069); `header.rs` draws one row and
+  returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (one row of tabs over the tool groups of
+  the active tab, each tool a 22 pt icon over a 10.5 pt caption, ADR 0066); U40 made the side panels
+  fold over one header row and moved the view controls into a translucent `Order::Middle` cluster at
+  the viewport's bottom centre, leaving the bar only the armed tool or gesture, its counts, the
+  creation chip and the last error. U41 added the *Settings* modal (appearance, viewport, ribbon,
+  shortcuts), the versioned `settings.json` in the OS config directory written atomically (ADR 0068)
+  and the *Home* start surface; a change applies at once and a `.fcs` carries none of it. U42–U48
   queue the rest of the owner's design, and ADR 0065 fixes visibility and lock as session state.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
@@ -47,17 +50,14 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U41 is next: the settings window and the one place the workspace is remembered. A *Settings* modal
-carries *Appearance* (theme, accent, the UI scale control U40 left without a surface), *Viewport*
-(default display style, grid, edges, the opening view), *Ribbon* (opacity) and *Shortcuts*. It is a
-view, not a document surface: a change applies at once and never reaches the `.fcs`. The state is
-JSON under the OS config directory, written atomically through a small `settings` module, with a
-missing, truncated or older file falling back to defaults and the reason in the status bar. The same
-module gains the *Home* surface behind the house button: new, open, recent files and the empty
-template, dismissed by Escape.
+U47 is next: a command palette on `Ctrl+K`, one search field over `CommandRegistry::specs()` listing
+a command's label, its id and whether it is enabled for the current session. The chosen entry
+dispatches it with parameters built from the current selection; an entry that cannot run says why
+instead of failing silently. The registry already carries 48 specs with a stable id, a label and a
+pure `enabled` check, so the work is a filter, a keyboard loop and a parameter builder per family.
 
-Order: U47 (palette) → U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U41 entry,
-ADRs 0063–0067, `handle_header_action`, `status_bar` and `crates/ui/src/ui_scale.rs`.
+Order: U42 → U43 → U44 → U45 → U48 → U46 (icons last) → U49. Read the U47 entry, the registry in
+`crates/engine`, ADRs 0028 and 0064, and `handle_header_action`.
 
 ## Index
 
