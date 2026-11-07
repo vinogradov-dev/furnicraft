@@ -225,7 +225,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   target (`set_scissor_rect`), and `ViewportRenderer` writes one `CameraUniform` per
   `render_with_lighting`, so a slot array with a dynamic offset keeps one buffer. Respect ADR 0049 per
   leaf: an authored camera pins its own projection. Reuse `scene_build::home_camera` for a leaf's fit —
-  `e5ca4e6`
+  `502f870`
   `files: apps/furnicraft/src, crates/render/src/lib.rs, crates/scene/src/lib.rs`
 
 - `[x]` **U47** a command palette on `Ctrl+K`: one search field over `CommandRegistry::specs()`,
