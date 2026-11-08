@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U44** a ground shadow: the scene draws a soft contact shadow under the bounds of every
-  object that touches the floor, so a cabinet reads as standing on something instead of floating in
-  a grid. The first version is a flat ellipse or rounded rectangle derived from the world bound,
-  drawn unlit on the ground plane with a radial falloff — no shadow map, no extra pass, no texture
-  dependency — and it is a toggle in the display settings. A projected shadow map is a later
-  decision with its own ADR, because it is the one feature here that can cost a frame. Tests: a
-  bound with no floor contact draws nothing; the ellipse stays inside the object's footprint; the toggle removes it from the frame.
-  Session notes: derive the contact shadow from `Bounds` in `crates/scene` and draw it unlit on the
-  ground plane (a thick ring on `line_pipeline`, or a transparent triangle pass); no texture. A shadow
-  is view data — a `SceneFrame` field next to `grid`, never a document field.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -204,6 +192,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U44** a ground shadow: every object that rests on the floor casts a soft contact shadow, so
+  a cabinet reads as standing on something instead of floating in a grid. `ContactShadow` is frame
+  data in `crates/scene` beside `Grid`: a node `Id`, a centre on the ground plane and two half-axes
+  derived from the object's world bounds, covering 92 % of its footprint so the ellipse stays inside
+  the outline. One shadow per root node whose solid subtree touches the floor, with a 0.5 mm
+  tolerance; a path or drawing on the work plane casts nothing. The renderer draws one unlit
+  transparent triangle fan per shadow with a radial falloff in the shader — no shadow map, no extra
+  pass, no texture — on a plane just below the grid, and the switch and strength travel in the camera
+  uniform, so toggling uploads nothing. A checkbox and the strength slider sit in the display-settings
+  popover. Tests: a bound with no floor contact draws nothing; the ellipse stays inside the footprint;
+  the switch empties the pass; the sample scene emits exactly one shadow. ADR 0071 — `4e0348f`
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
 
 - `[x]` **X10** every triangle edge is drawn, and far edges show through near panels: a flat panel
   draws the diagonals of its triangulation instead of its outline, and a panel a metre behind another

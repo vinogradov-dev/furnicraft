@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U44 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U45 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -45,20 +45,20 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   twelve and a triangular body nine, and the full triangulation is a diagnostic switch beside the
   style. The depth bias moved from the line shader onto the face pipeline, where a constant depth unit
   stays distance-independent; the hidden-edge style is gated by a per-drawable stencil slot, so an
-  object shows its own inside but never the one behind it. U44–U48 queue the rest; ADR 0065 fixes
-  visibility and lock.
+  object shows its own inside but never the one behind it. U44 gives every floor-standing object a
+  soft contact shadow: a transparent ellipse derived from its solid bounds, frame data beside `grid`
+  (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U44 is next: a soft contact shadow under every object that touches the floor. The first version is a
-flat ellipse or rounded rectangle derived from the world bound, drawn unlit on the ground plane with
-a radial falloff — no shadow map, no extra pass, no texture — and a toggle in the display settings.
-It is view data, a `SceneFrame` field next to `grid`; a projected shadow map is a later decision.
-Order: U44 → U45 → U48 → U46 (icons last) → U49. Read the U44 entry, `crates/scene`'s `Grid`, the
-`Bounds` in `scene_build.rs` and the passes in `ViewportRenderer`.
+U45 is next: several scenes open at once. The tab row holds one tab per open file, each with its own
+session, undo history, selection, camera and dirty marker, so activating a tab swaps the workspace
+without touching a `.fcs`. It moves `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo
+state into one `Document` per tab with its own renderer target: write the plan and get the owner's
+approval before code. Order: U45 → U48 → U46 (icons last) → U49.
 ## Index
 
 | File | Holds | Read when |
