@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X14 state=doing base=52f1d0f updated=2026-11-08
+STATE: milestone=M7 phase=A task=X16 state=idle base=916b15e updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,9 +50,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X15 is done: the grip set cursor is always the default arrow and drag resolution
-uses the press origin. X14 is next: a polygon shows no phantom node outside its
-first side, and a circle's rim grip works from any point.
+X14 is done: the polygon grip set has no phantom node outside the figure,
+and a circle's rim grip works from any arc segment and keeps it round.
+X16 is next: a rectangle keeps right angles and its axes at any angle,
+a midpoint drag never yields zero, and a corner drag stays in range.
 
 ## Index
 
