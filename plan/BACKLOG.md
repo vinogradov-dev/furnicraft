@@ -257,6 +257,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   uploaded scene without touching the document revision.
   `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
 
+- `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
+  arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
+  loop whose visible branch reads as a straight line through the joint and across the viewport.
+  Expectation: a corner drag keeps the arc's class — a shallow arc stays shallow, a deliberate major
+  arc stays major — and the draft never draws outside the figure. Suspected cause:
+  `arc_with_radius` hands `arc_between` the side of the old arc's midpoint against the *new* chord,
+  and `arc_between` returns the first candidate whose midpoint is on that side. For a shallow arc a
+  1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
+  test matches the major arc's midpoint and the sweep becomes ~360°. Reproduced with chord 100 mm,
+  sagitta 0.5 mm (R 2500 mm, sweep -2.292°): a 1 mm corner drag yields sweep 357.731° and a sampled
+  chain spanning x -2425..2575, y -4899..101 mm; the joints still meet, so the ring validates and
+  Apply stores it. Introduced by X13 (`64c11d3`). Fix: choose the candidate by its sweep magnitude
+  against the old arc's — nearest |sweep|, tie broken by the old sign — and pass the old sweep into
+  `arc_between`; the centre side stays as it is. Tests: a shallow arc keeps a small sweep and its
+  points stay inside the figure; a major arc stays major; the three existing `a_free_arc_end_*`
+  tests stay green; a grip drag on a shallow arc keeps its class.
+  `files: crates/model/src/contour_edit.rs, crates/ui/src/contour_grips.rs`
+
 ## Next
 
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
