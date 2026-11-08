@@ -88,9 +88,11 @@ primitive is described in section 5.
 - Every segment carries a stable id, unique inside its ring and never reused. An edit keeps the id of
   every segment it does not touch, so a command names a segment instead of an index; a fresh ring
   numbers its segments from one and keeps a counter for the next id.
-- The ring must be closed — each segment's end is the next segment's start, rounded to the
-  micrometre — and must enclose a non-zero area. The constructor stores it counter-clockwise, so the
-  face winding does not depend on how the user drew it.
+- The ring must be closed — each segment's end meets the next segment's start within the joint
+  tolerance: one micrometre plus `radius × 8.73e-6` of rounding slack for every arc at the joint, so
+  a derived arc endpoint inside the document's precision still closes — and must enclose a non-zero
+  area. The constructor stores it counter-clockwise, so the face winding does not depend on how the
+  user drew it ([0072](../decisions/0072-a-contour-joint-is-judged-with-the-drawing-tolerance.md)).
 - A contour that touches or crosses itself is rejected; the test runs on a chord polyline sampled
   from the curve, so an arc that crosses a line or another arc is caught as well. Arcs and lines may
   meet at any angle; a tangent-continuous joint is not required.
@@ -159,8 +161,9 @@ primitive is described in section 5.
 - A committed figure lands as one `object.path.create` and immediately enters its own contour edit
   mode, so the grips are on screen without a second selection.
 - Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
-  meeting within a micrometre, and a closed chain closing its last joint. Self-intersection and
-  enclosed area are ring rules, so they run when the path becomes a ring, not while it is drawn.
+  meeting within the joint tolerance (one micrometre plus the arc rounding slack), and a closed
+  chain closing its last joint. Self-intersection and enclosed area are ring rules, so they run when
+  the path becomes a ring, not while it is drawn.
 - `Path::to_contour` is the only transition. It refuses an open chain, applies the ring rules and
   keeps every id, so the ring is cut from exactly what the user drew.
 - A path is a drawing, not a solid: it has no mesh, no feature list and no evaluation. The viewport

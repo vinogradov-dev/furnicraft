@@ -36,7 +36,12 @@ fn ring_segments(
         segments.push(entry.segment().to_geom()?);
         sources.push(SegmentSource::Ring(entry.id()));
     }
-    Ok((Contour::new_with_tolerance(segments, true, crate::contour::DOCUMENT_JOINT_TOLERANCE_MM)?, sources))
+    Ok((
+        Contour::new_with_joint_tolerance(segments, true, |first, next| {
+            crate::contour::joint_tolerance_mm(*first, *next)
+        })?,
+        sources,
+    ))
 }
 
 /// Why a panel's nominal contour cannot be built.
@@ -319,11 +324,9 @@ impl Panel {
                 }
             }
             paths.push(ContourPath {
-                contour: Contour::new_with_tolerance(
-                    path_segments,
-                    false,
-                    crate::contour::DOCUMENT_JOINT_TOLERANCE_MM,
-                )?,
+                contour: Contour::new_with_joint_tolerance(path_segments, false, |first, next| {
+                    crate::contour::joint_tolerance_mm(*first, *next)
+                })?,
                 sources: path_sources,
             });
         }
@@ -538,8 +541,9 @@ impl Panel {
             pieces.push((piece, *source));
         }
         let nominal_segments = nominal.iter().map(|(segment, _)| *segment).collect();
-        let nominal_contour =
-            Contour::new_with_tolerance(nominal_segments, true, crate::contour::DOCUMENT_JOINT_TOLERANCE_MM)?;
+        let nominal_contour = Contour::new_with_joint_tolerance(nominal_segments, true, |first, next| {
+            crate::contour::joint_tolerance_mm(*first, *next)
+        })?;
         let bounds = if included {
             nominal_contour.bounds().map(Some).ok_or(ContourError::InvalidInput("panel outline bounds"))?
         } else {

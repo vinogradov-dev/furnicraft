@@ -39,12 +39,6 @@ use primitive::build_primitive_mesh;
 /// extrusion is built from.
 pub const PATH_SAMPLE_TOLERANCE_MM: f64 = 0.05;
 
-/// How far two consecutive path joints may miss each other, in millimetres (one micrometre).
-///
-/// The document stores whole micrometres, so an arc endpoint and the next segment's start can
-/// differ by one unit after rounding.
-pub const PATH_JOINT_TOLERANCE_MM: f64 = 0.001;
-
 /// An error raised while building a render mesh.
 #[derive(Debug, Error)]
 pub enum MeshError {
@@ -280,15 +274,18 @@ fn edge_key(mesh: &MeshData, index: u32) -> Option<[i64; 3]> {
 /// Samples a stored path into the local points the viewport draws as a line chain.
 ///
 /// The chain is sampled as an open contour even when the path is closed, so the closing segment is
-/// drawn; the one-micrometre joint tolerance is the document's own.
+/// drawn; the joint rule is the document's own, so a large arc whose rounded end misses the next
+/// point is still one chain (ADR 0072).
 pub fn path_points(path: &Path) -> Result<Vec<DVec3>, MeshError> {
     let segments = path
         .segments()
         .map(|segment| segment.to_geom())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| MeshError::Invalid(error.to_string()))?;
-    let chain = furnicraft_geom::Contour::new_with_tolerance(segments, false, PATH_JOINT_TOLERANCE_MM)
-        .map_err(|error| MeshError::Invalid(error.to_string()))?;
+    let chain = furnicraft_geom::Contour::new_with_joint_tolerance(segments, false, |first, next| {
+        furnicraft_model::joint_tolerance_mm(*first, *next)
+    })
+    .map_err(|error| MeshError::Invalid(error.to_string()))?;
     let samples = chain.sample(PATH_SAMPLE_TOLERANCE_MM).map_err(|error| MeshError::Invalid(error.to_string()))?;
     Ok(samples.into_iter().map(|point| DVec3::new(point.x, point.y, 0.0)).collect())
 }
@@ -1292,6 +1289,35 @@ mod tests {
             vec![furnicraft_model::Node::Panel(first), furnicraft_model::Node::Panel(second)],
         );
         Project::new(root).expect("project")
+    }
+
+    #[test]
+    fn a_path_closed_by_a_rounded_arc_samples_as_one_chain() {
+        // The document accepts a 5 µm miss at a 600 mm arc end (ADR 0072); the preview and the
+        // scene must judge the same joint the document did, or the ring is not drawn at all.
+        use furnicraft_model::{ContourSegment, Path};
+        use furnicraft_units::Degrees;
+
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(600),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(60_000),
+        )
+        .expect("a 60 degree arc of 600 mm");
+        let end = arc.end().expect("a derived end");
+        let start = [Length::from_micrometres(end[0].micrometres() + 5), end[1]];
+        let path = Path::new(
+            vec![
+                arc,
+                ContourSegment::line(start, [Length::ZERO, Length::ZERO]).expect("the chord"),
+                ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(600), Length::ZERO]).expect("the base"),
+            ],
+            true,
+        )
+        .expect("the rounded arc end closes the ring");
+        let points = path_points(&path).expect("one chain despite the rounded end");
+        assert!(points.len() > 3, "the arc is sampled into the chain");
     }
 
     #[test]

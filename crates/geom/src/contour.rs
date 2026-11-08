@@ -799,6 +799,24 @@ impl Contour {
         if !joint_tolerance.is_finite() || joint_tolerance < 0.0 {
             return Err(ContourError::InvalidInput("a joint tolerance must be finite and non-negative"));
         }
+        Self::new_with_joint_tolerance(segments, closed, move |_, _| joint_tolerance)
+    }
+
+    /// Creates a contour whose every joint is judged by its own tolerance in millimetres.
+    ///
+    /// The bound depends on the two segments at a joint: a line is stored exactly, while an arc
+    /// endpoint is derived from a rounded centre, radius and angle, so the joint may miss by more
+    /// the larger the arc is. A caller converting document segments passes a rule rather than one
+    /// number, so a wide arc does not loosen a line-to-line joint on the same ring (ADR 0072). A
+    /// non-finite or negative bound is refused like the constant one.
+    pub fn new_with_joint_tolerance<F>(
+        segments: Vec<Segment>,
+        closed: bool,
+        joint_tolerance: F,
+    ) -> Result<Self, ContourError>
+    where
+        F: Fn(&Segment, &Segment) -> f64,
+    {
         if segments.is_empty() {
             return Err(ContourError::Empty);
         }
@@ -814,10 +832,14 @@ impl Contour {
             } else {
                 None
             };
-            if let Some(next) = next
-                && (segment.end() - next.start()).length() > joint_tolerance
-            {
-                return Err(ContourError::Disconnected { index });
+            if let Some(next) = next {
+                let tolerance = joint_tolerance(segment, next);
+                if !tolerance.is_finite() || tolerance < 0.0 {
+                    return Err(ContourError::InvalidInput("a joint tolerance must be finite and non-negative"));
+                }
+                if (segment.end() - next.start()).length() > tolerance {
+                    return Err(ContourError::Disconnected { index });
+                }
             }
         }
         let contour = Self { segments, closed };
@@ -1186,6 +1208,27 @@ mod tests {
                 1.0e-3
             ),
             Err(ContourError::Disconnected { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn a_joint_rule_judges_each_pair_on_its_own() {
+        // The document hands the geometry layer one bound per pair: an arc endpoint is derived, a
+        // line endpoint is stored exactly, and a wide arc must not loosen a line-to-line joint.
+        let arc = Segment::Arc(Arc::new(DVec2::ZERO, 600.0, 0.0, 1.0).expect("arc"));
+        let end = arc.end();
+        let line = Segment::Line(Line::new(end + DVec2::new(0.005, 0.0), end + DVec2::new(0.005, 10.0)).expect("line"));
+        let rule = |first: &Segment, _next: &Segment| {
+            if matches!(first, Segment::Arc(_)) { 6.0e-3 } else { 1.0e-3 }
+        };
+        assert!(Contour::new_with_joint_tolerance(vec![arc, line], false, rule).is_ok());
+        assert!(matches!(
+            Contour::new_with_tolerance(vec![arc, line], false, 1.0e-3),
+            Err(ContourError::Disconnected { index: 0 })
+        ));
+        assert!(matches!(
+            Contour::new_with_joint_tolerance(vec![arc, line], false, |_, _| f64::NAN),
+            Err(ContourError::InvalidInput(_))
         ));
     }
 

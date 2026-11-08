@@ -154,6 +154,23 @@ impl ContourSegment {
         point_to_document(self.to_geom()?.end())
     }
 
+    /// Whether the end of this segment meets the start of `next` within the drawing joint
+    /// tolerance.
+    ///
+    /// The bound is one document unit plus the rounding slack of either arc endpoint, because an
+    /// arc stores a centre, radius and angle and its endpoint is derived (ADR 0072). A caller that
+    /// decides whether a drawn chain closes uses this rather than exact equality.
+    pub fn end_meets(self, next: Self) -> Result<bool, ContourSegmentError> {
+        let tolerance = i128::from(joint_tolerance_micrometres(self, next));
+        let first = self.end()?;
+        let second = next.start()?;
+        let delta = [
+            i128::from(first[0].micrometres()) - i128::from(second[0].micrometres()),
+            i128::from(first[1].micrometres()) - i128::from(second[1].micrometres()),
+        ];
+        Ok(delta[0] * delta[0] + delta[1] * delta[1] <= tolerance * tolerance)
+    }
+
     /// Converts the segment to the geometry layer, in millimetres.
     ///
     /// This is the boundary conversion: the stored integer values are exact, and the geometry
@@ -560,6 +577,52 @@ mod tests {
         ])
         .expect("the one-micrometre rounding is a joint");
         ring.to_geometry().expect("the geometry layer uses the same tolerance");
+    }
+
+    /// A 600 mm arc can miss the drawn joint by about `radius × 8.73e-6` ≈ 5 µm after its centre,
+    /// radius and angle are rounded; a fixed one-micrometre bound refused the ring (ADR 0072).
+    #[test]
+    fn a_ring_takes_the_rounding_slack_of_a_large_arc() {
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(600),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(60_000),
+        )
+        .expect("a 60 degree arc of 600 mm");
+        let end = arc.end().expect("a derived end");
+        let ring = |gap: i64| {
+            let start = [Length::from_micrometres(end[0].micrometres() + gap), end[1]];
+            Contour::new(vec![
+                arc,
+                ContourSegment::line(start, [Length::ZERO, Length::ZERO]).expect("the chord"),
+                ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(600), Length::ZERO]).expect("the base"),
+            ])
+        };
+        let rounded = ring(5).expect("five micrometres are inside the slack of a 600 mm arc");
+        rounded.to_geometry().expect("the geometry boundary accepts the same joint");
+        assert_eq!(ring(7), Err(ContourError::NotClosed { index: 0 }), "past the slack it is a gap");
+    }
+
+    /// A small arc gets a small slack: 100 mm rounds to less than one micrometre, so the one-unit
+    /// base is the whole bound and a 20 µm gap is still a gap.
+    #[test]
+    fn a_small_arc_still_refuses_a_wide_gap() {
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(100),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(60_000),
+        )
+        .expect("a 60 degree arc of 100 mm");
+        let end = arc.end().expect("a derived end");
+        let gap = [Length::from_micrometres(end[0].micrometres() + 20), end[1]];
+        let ring = Contour::new(vec![
+            arc,
+            ContourSegment::line(gap, [Length::ZERO, Length::ZERO]).expect("the chord"),
+            ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("the base"),
+        ]);
+        assert_eq!(ring, Err(ContourError::NotClosed { index: 0 }));
     }
 
     #[test]
@@ -1469,13 +1532,6 @@ pub const MAX_CONTOUR_SEGMENTS: usize = 256;
 /// Largest accepted contour coordinate and extrusion height: ten metres.
 pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
 
-/// Joint tolerance of a ring converted to geometry, in millimetres.
-///
-/// A stored ring closes exactly in whole micrometres, while an arc endpoint is exact only in
-/// floating point: after rounding, an arc and the next segment can miss by up to one document
-/// unit. The small bound lets the geometry layer accept such a ring without hiding a real gap.
-pub(crate) const DOCUMENT_JOINT_TOLERANCE_MM: f64 = 1.0e-3;
-
 /// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
 ///
 /// A version 10 file stored the ring as a point list and a version 11 file stored segments without
@@ -1553,10 +1609,11 @@ impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
 /// joints, the signed area and the self-intersection test then run on that exact curve. Document
 /// units stay integer: every point that leaves the module is rounded to a whole micrometre.
 ///
-/// A joint is judged with the same [`PATH_JOINT_TOLERANCE_MICROMETRES`] the drawing path uses. An
-/// arc stores its centre, radius and angles, so its endpoints are derived and can miss the point the
-/// user drew by a micrometre after rounding; requiring exact equality would refuse a ring the user
-/// legitimately drew (ADR 0072).
+/// A joint is judged with the same rule the drawing path uses: a base of
+/// [`PATH_JOINT_TOLERANCE_MICROMETRES`] plus the rounding slack of either arc endpoint. An arc
+/// stores its centre, radius and angles, so its endpoints are derived and can miss the point the
+/// user drew by more than a micrometre on a large radius; requiring exact equality would refuse a
+/// ring the user legitimately drew (ADR 0072).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ContourWire", into = "ContourWire")]
 pub struct Contour {
@@ -1667,7 +1724,7 @@ impl Contour {
             let (Some(entry), Some(next)) = (entries.get(index), entries.get((index + 1) % count)) else {
                 continue;
             };
-            if !within_joint_tolerance(entry.segment().end()?, next.segment().start()?) {
+            if !joints_meet(entry.segment(), next.segment())? {
                 return Err(ContourError::NotClosed { index });
             }
         }
@@ -1709,7 +1766,9 @@ impl Contour {
             .iter()
             .map(|entry| entry.segment().to_geom())
             .collect::<Result<Vec<_>, ContourSegmentError>>()?;
-        Ok(furnicraft_geom::Contour::new_with_tolerance(segments, true, DOCUMENT_JOINT_TOLERANCE_MM)?)
+        Ok(furnicraft_geom::Contour::new_with_joint_tolerance(segments, true, |first, next| {
+            joint_tolerance_mm(*first, *next)
+        })?)
     }
 
     /// The segment with this id.
@@ -1990,11 +2049,12 @@ pub const MIN_POLYGON_SIDES: u32 = 3;
 /// limit expresses as a user-visible number.
 pub const MAX_POLYGON_SIDES: u32 = 128;
 
-/// How far two consecutive path joints may miss each other, in micrometres.
+/// Base joint tolerance between two consecutive path segments, in micrometres.
 ///
 /// A drawn arc endpoint is exact only in floating point, so after rounding to whole micrometres it
-/// can differ from the next stored endpoint by one unit. This is the same joint tolerance the
-/// document ring uses when it converts to geometry.
+/// can differ from the next stored endpoint by one unit; an arc adds the radius-dependent rounding
+/// slack of [`arc_slack_micrometres`] on top. This is the same rule the document ring uses when it
+/// assembles and when it converts to geometry (ADR 0072).
 const PATH_JOINT_TOLERANCE_MICROMETRES: i64 = 1;
 
 /// An ordered chain of directed lines and arcs in a local XY plane.
@@ -2002,7 +2062,8 @@ const PATH_JOINT_TOLERANCE_MICROMETRES: i64 = 1;
 /// Unlike [`Contour`], a path may be open and need not be simple: it is what the user draws and
 /// edits before the shape becomes a ring. It has at least one segment and at most
 /// [`MAX_CONTOUR_SEGMENTS`], because a path is what a contour ring is made from. Every segment
-/// carries a stable [`ContourSegmentId`]; consecutive segments meet within one micrometre, and a
+/// carries a stable [`ContourSegmentId`]; consecutive segments meet within the drawing joint
+/// tolerance — a micrometre plus the rounding slack of either arc endpoint (ADR 0072) — and a
 /// closed path also joins its last end to its first start. One path is one chain: it has no
 /// sub-paths.
 ///
@@ -2594,8 +2655,57 @@ impl From<Contour> for Path {
 }
 
 /// Whether the end of `current` meets the start of `next` within the joint tolerance.
-fn joints_meet(current: ContourSegment, next: ContourSegment) -> Result<bool, PathError> {
-    Ok(within_joint_tolerance(current.end()?, next.start()?))
+fn joints_meet(current: ContourSegment, next: ContourSegment) -> Result<bool, ContourSegmentError> {
+    current.end_meets(next)
+}
+
+/// The joint tolerance between two consecutive stored segments, in micrometres.
+///
+/// The one document unit of [`PATH_JOINT_TOLERANCE_MICROMETRES`] covers the rounding of the two
+/// stored points; an arc adds [`arc_slack_micrometres`] because its endpoint is derived from a
+/// rounded centre, radius and angle (ADR 0072).
+fn joint_tolerance_micrometres(first: ContourSegment, next: ContourSegment) -> i64 {
+    let base = PATH_JOINT_TOLERANCE_MICROMETRES;
+    let slack = |segment: ContourSegment| match segment {
+        ContourSegment::Line { .. } => 0,
+        ContourSegment::Arc { radius, .. } => arc_slack_micrometres(i128::from(radius.micrometres())),
+    };
+    base.saturating_add(slack(first)).saturating_add(slack(next))
+}
+
+/// The rounding slack of an arc endpoint of this radius, in micrometres.
+///
+/// An arc stores whole millidegrees, so its derived endpoint can move by
+/// `radius × 8.73e-6` — half a millidegree in radians — plus the radius and centre rounding the
+/// base bound already covers. `873 / 100_000_000` is that factor as an exact decimal. The result
+/// is rounded down, and the one-unit base then covers the remainder, so the document never accepts
+/// a joint the geometry boundary would refuse.
+fn arc_slack_micrometres(radius_micrometres: i128) -> i64 {
+    let product = radius_micrometres.saturating_mul(873);
+    let slack = product / 100_000_000;
+    i64::try_from(slack).unwrap_or(i64::MAX)
+}
+
+/// The joint tolerance between two geometry segments converted from stored ones, in millimetres.
+///
+/// This is the same rule [`Contour::assemble`] and [`Path::assemble`] use, for a caller that hands
+/// a chain to [`furnicraft_geom::Contour::new_with_joint_tolerance`]: one document unit plus the
+/// rounding slack of either arc endpoint. A line contributes nothing, because its endpoints are
+/// stored exactly (ADR 0072).
+pub fn joint_tolerance_mm(first: Segment, second: Segment) -> f64 {
+    let slack = |segment: Segment| match segment {
+        Segment::Line(_) => 0,
+        Segment::Arc(arc) => {
+            let radius = arc.radius() * 1_000.0;
+            if radius.is_finite() && radius > 0.0 {
+                arc_slack_micrometres(i128::from(radius.round() as i64))
+            } else {
+                0
+            }
+        }
+    };
+    let micrometres = 1_i64.saturating_add(slack(first)).saturating_add(slack(second));
+    micrometres as f64 * 1.0e-3
 }
 
 /// `center - offset` in whole micrometres, refusing a value that does not fit.
@@ -2603,16 +2713,6 @@ fn mirrored(center: Length, offset: i128) -> Result<Length, PathError> {
     let value = i128::from(center.micrometres()) - offset;
     let value = i64::try_from(value).map_err(|_| PathError::Segment(ContourSegmentError::NonFinite))?;
     Ok(Length::from_micrometres(value))
-}
-
-/// Whether two whole-micrometre points are at most the joint tolerance apart.
-fn within_joint_tolerance(first: [Length; 2], second: [Length; 2]) -> bool {
-    let delta = [
-        i128::from(first[0].micrometres()) - i128::from(second[0].micrometres()),
-        i128::from(first[1].micrometres()) - i128::from(second[1].micrometres()),
-    ];
-    let tolerance = i128::from(PATH_JOINT_TOLERANCE_MICROMETRES);
-    delta[0] * delta[0] + delta[1] * delta[1] <= tolerance * tolerance
 }
 
 /// Why a path is not usable.
