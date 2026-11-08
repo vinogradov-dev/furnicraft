@@ -267,7 +267,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
   moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
   nodes; a ring of three refuses; the undo entry is one.
-  `c9e3b40`
+  `fc2d1f3`
   `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
 
 - `[x]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
