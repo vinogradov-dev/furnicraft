@@ -1,28 +1,22 @@
 # Session
 
 ```text
-task: U54
-goal: every drawn figure shows its grips, takes a number at the cursor, and moves freely or along
-  its own contour
+task: U55
+goal: a fresh extrusion shows a pull arrow, and dragging it or typing a number sets its height
 
 steps:
-  [ ] read the shape tag, the numeric setters and CornerMove the model already offers
-  [ ] grips: circle quadrant points and centre; arc start, end, centre, a point on the arc and a
-      radius grip on hover; rectangle corners, midpoints and centre; polygon vertices, centre and
-      radius point
-  [ ] a numeric field follows the cursor; its meaning comes from the grip, Enter applies it without
-      leaving the edit, Esc restores the value the drag started from
-  [ ] free/along-contour toggle in the edit HUD, free by default, target resolved at drag start
-  [ ] each figure keeps its identity through a grip drag: a circle stays round, a rectangle keeps
-      right angles, a polygon keeps its sides
-  [ ] ADR 0075, docs, map, tests
+  [x] plan close-out for U54 and U55 opened
+  [ ] ribbon reports the body it just extruded, with the height it used
+  [ ] ExtrudeGizmo: arrow from the top-face centre along local +Z, hit-test and drag to height
+  [ ] commit object.extrude.height.set on release or Enter; a click or Enter finishes
+  [ ] the next body starts at the last height used in the session
 
-now: read crates/model/src/contour_edit.rs (CornerMove, numeric setters) and the shape tag
+now: the ribbon outcome must carry the extruded body so the shell can start the pull
 blocked: nothing
-run: cargo test -p furnicraft-model --lib contour_edit
-resume: list the setters the model has and the grips the gizmo has to add
-map: plan/map.md row for the contour gizmo
-decisions: free movement is the default for every kind; the along-contour target is fixed at drag
-  start; Arc numeric keeps both stored endpoints and moves the centre on the existing bulge side;
-  a degenerate free arc step stays refused.
+run: cargo test -p furnicraft --bin furnicraft
+resume: add RibbonOutcome::extruded and set it in Editor::show_ribbon after extrude_path succeeds
+map: plan/map.md row for the contour edit mode; the extrusion arrow sits beside the other gizmos
+decisions: the default height is last-used session view state (100 mm at first); the pull only
+  previews, and one object.extrude.height.set is the undo entry; Esc drops the pull and leaves the
+  body at the height it was created with.
 ```

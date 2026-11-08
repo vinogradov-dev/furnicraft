@@ -25,19 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U54** every figure exposes its grips with a number at the cursor: circles show four
-  quadrant points and the centre, an arc its start, end, centre, a point on the arc and a radius grip
-  under a hover on the curve, a rectangle four corners, four side midpoints and the centre, a regular
-  polygon its vertices, centre and radius point. A numeric field follows the cursor and its meaning
-  depends on the grip (radius, end angle, width, height, side count); Enter applies it without
-  leaving the edit, Esc restores the value the drag started from. A toggle in the edit HUD switches
-  free and along-contour movement for every kind, free by default, and the target is fixed at the
-  drag start. Tests: a quadrant drag keeps the circle round; an arc centre drag moves the arc; a
-  rectangle midpoint changes one dimension; a polygon vertex keeps the figure regular; Enter commits
-  the number and Esc restores the original path.
-  `files: apps/furnicraft/src/contour_gizmo.rs`
-
-- `[ ]` **U55** the extrusion pulls its height in the viewport: a fresh body is created at the last
+- `[~]` **U55** the extrusion pulls its height in the viewport: a fresh body is created at the last
   height used in the session (100 mm at first) and shows an arrow along its contour normal; dragging
   the arrow or typing a number sets `object.extrude.height.set`, and a click or Enter finishes. The
   height lives in session view state until the command, never as a default in the document. Tests:
@@ -212,6 +200,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U54** every figure exposes its grips: a circle its centre and four quadrants, an arc its
+  centre, a midpoint and a radius grip on a hovered curve, a rectangle its corners, four side
+  midpoints and centre, a regular polygon its vertices, centre and radius point. A number field
+  follows a grip drag and names its own dimension — a radius for a circle, arc or polygon, an angle
+  for an arc end, `W` or `H` for a rectangle side; Enter applies it without leaving the edit and Esc
+  restores the drag-start value. Free movement is the default, an HUD toggle switches to the segment
+  the pointer picked at the drag start, and a tagged figure keeps its constraint through every drag.
+  The polygon side count stays in the object card. Tests: a quadrant drag keeps the circle round; an
+  arc centre moves the arc; a rectangle midpoint changes one extent; a polygon vertex keeps every
+  side; a numeric entry parses its kind and applies it.
+  ADR 0075 — `1321fee`
+  `files: apps/furnicraft/src/contour_gizmo.rs`
 
 - `[x]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
   clicks), circle through three points, rectangle from its centre (two clicks), a directed

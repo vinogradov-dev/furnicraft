@@ -115,3 +115,9 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   clamped and a non-number falls back to six, while the field keeps the typed text. The tool builds
   a valid polygon instead of failing, but a typo is not named. A validated field can land with the
   polygon dialog, if one is ever added.
+- `[ui]` A ring exposes corner grips only: the shape tag lives on `Path`, so a panel outline or a
+  cutout ring has no circle, rectangle or polygon grips and no arc radius handle even when its
+  segments are arcs. Ring-level shape metadata is needed before those handles can exist.
+- `[ui]` The number field opens when a grip drag starts, not when a grip is merely hovered or
+  clicked, so typing a value without moving the pointer first needs a tiny drag. A click-only path
+  would need the field to survive a press that never becomes a drag.

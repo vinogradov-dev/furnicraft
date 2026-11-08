@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U54 state=doing base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=U55 state=doing base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -13,8 +13,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of stable-id segments (ADR 0040,
   schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
   ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an extrusion owns its
-  path (ADR 0074). A primitive stores its parameters (ADR 0054); a corner moves freely or along the
-  segment picked at the drag start, and each figure has numeric radius, width, height and angle setters.
+  path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure shows its grips, a
+  corner moves freely or along the segment picked at the drag start, and a grip keeps its figure (ADR 0075).
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -55,9 +55,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U53 landed: ten drawing tools, Tab between a straight segment and an arc, Alt as the snap override,
-and a commit that opens the contour edit. U54 is in progress: grips, a number at the cursor, and free
-or along-contour drags. U55 adds the pull arrow; U45 → U48 → U46 → U49 resume after them.
+U54 landed: every figure shows its grips, a number follows a grip drag, and movement is free or
+along the contour (ADR 0075). U55 is in progress: a fresh extrusion pulls its height with an arrow;
+U45 → U48 → U46 → U49 resume after it.
 
 ## Index
 
