@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
-  field, the node can pass the opposite node, and a zero-length segment cannot be finished.
-  Expectation: a length field shows the distance from the segment's opposite end and accepts a
-  typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
-  removes the zero-length segment and joins the two nodes; a ring keeps at least three segments.
-  Suspected cause: `numeric_entry` opens only when `grip_number` returns a number, and an untagged
-  polyline corner has none, while an arc corner numbers an angle or a radius; nothing clamps at the
-  opposite node and nothing records a collapse. Fix: build the entry from the drag motion (`Length`,
-  label `L`, value from the other end, Enter moves the corner that far along the support, arc length
-  for an arc); clamp to `0..=segment_length`, record `collapse` on `ContourEdit`, remove collapsed
-  segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
-  moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
-  nodes; a ring of three refuses; the undo entry is one.
-  `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
-
 - `[ ]` **X18** a figure's geometry is editable in its card: the object card has no radius for a
   circle, no width and height for a rectangle and no side count for a polygon, and a constructive
   body's drawn path is not in the summary at all. Expectation: the card shows the fields the figure
@@ -268,6 +253,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
+  field, the node can pass the opposite node, and a zero-length segment cannot be finished.
+  Expectation: a length field shows the distance from the segment's opposite end and accepts a
+  typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
+  removes the zero-length segment and joins the two nodes; a ring keeps at least three segments.
+  Suspected cause: `numeric_entry` opens only when `grip_number` returns a number, and an untagged
+  polyline corner has none, while an arc corner numbers an angle or a radius; nothing clamps at the
+  opposite node and nothing records a collapse. Fix: build the entry from the drag motion (`Length`,
+  label `L`, value from the other end, Enter moves the corner that far along the support, arc length
+  for an arc); clamp to `0..=segment_length`, record `collapse` on `ContourEdit`, remove collapsed
+  segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
+  moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
+  nodes; a ring of three refuses; the undo entry is one.
+  `c9e3b40`
+  `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
 
 - `[x]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
   rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields

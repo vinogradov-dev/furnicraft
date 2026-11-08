@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X17 state=doing base=bf07643 updated=2026-11-08
+STATE: milestone=M7 phase=A task=X18 state=idle base=c9e3b40 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,11 +50,12 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X16 is done: the midpoint clamps at 1 mm instead of mirroring, the axes are
-orthonormalised so a rotated rectangle keeps right angles, the corner drag stays in
-range, an along-contour edit drops the tag, and a mis-tagged file is a load error.
-X17 is next: along-contour movement has a length field, stops at the opposite node,
-and collapses a zero-length segment on Apply.
+X17 is done: an along-contour drag shows a length from the far end (line distance,
+arc length), cannot pass the opposite node, and records a collapse that Apply turns
+into one segment removal and one undo entry; a ring of three refuses.
+X18 is next: a figure's geometry is editable in its card — circle radius, rectangle
+width and height, polygon sides and radius, a single arc's radius and end angle —
+for a `Path` node and for the constructive body that owns a path.
 
 ## Index
 
