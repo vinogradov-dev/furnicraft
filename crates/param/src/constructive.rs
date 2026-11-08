@@ -41,7 +41,8 @@ fn constructive_plan(constructive: &Constructive) -> Result<SolidPlan, ParamErro
     let Some(extrude) = constructive.extrude_feature() else {
         return Err(ParamError::UnsupportedConstructive);
     };
-    let profile = profile::profile_of_document_contour(extrude.contour())?;
+    let contour = constructive.contour()?;
+    let profile = profile::profile_of_document_contour(&contour)?;
     let plan = PlanBuilder::new().extrude(profile, Frame::WORLD, extrude.height().millimetres_f64())?.build()?;
     Ok(plan)
 }
@@ -159,7 +160,7 @@ mod tests {
 
     #[test]
     fn a_single_extrusion_has_two_caps_and_one_quad_per_edge() {
-        let constructive = Constructive::extrude(rectangle(100, 50), millimetres(18)).expect("constructive");
+        let constructive = Constructive::extrude(rectangle(100, 50).into(), millimetres(18)).expect("constructive");
         let mesh = build_constructive_mesh(&constructive).expect("mesh");
         assert_eq!(mesh.positions().len(), 8);
         assert_eq!(mesh.faces().len(), 6);
@@ -169,7 +170,7 @@ mod tests {
 
     #[test]
     fn the_analytic_object_matches_the_kernel_panel_volume() {
-        let constructive = Constructive::extrude(rectangle(700, 500), millimetres(18)).expect("constructive");
+        let constructive = Constructive::extrude(rectangle(700, 500).into(), millimetres(18)).expect("constructive");
         let mesh = build_constructive_mesh(&constructive).expect("mesh");
         let analytic = signed_volume(&mesh);
 
@@ -202,9 +203,12 @@ mod tests {
 
     #[test]
     fn a_history_with_more_than_one_feature_is_not_evaluated_silently() {
-        let extrude = furnicraft_model::Extrude::new(rectangle(10, 10), millimetres(5)).expect("extrude");
-        let constructive = Constructive::new(vec![Feature::Extrude(extrude.clone()), Feature::Extrude(extrude)])
-            .expect("two features are valid data");
+        let extrude = furnicraft_model::Extrude::new(millimetres(5)).expect("extrude");
+        let constructive = Constructive::new(
+            rectangle(10, 10).into(),
+            vec![Feature::Extrude(extrude.clone()), Feature::Extrude(extrude)],
+        )
+        .expect("two features are valid data");
         assert!(matches!(build_constructive_mesh(&constructive), Err(ParamError::UnsupportedConstructive)));
     }
 
@@ -233,7 +237,7 @@ mod tests {
                 .expect("outward line"),
         ])
         .expect("a simple band");
-        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+        let constructive = Constructive::extrude(contour.into(), millimetres(18)).expect("constructive");
         // X2: the band is legal and its cap is one face; the shape-relative chord keeps the face
         // inside `MAX_FACE_VERTICES`, so the object draws instead of being refused.
         let mesh = build_constructive_mesh(&constructive).expect("the band becomes a mesh");

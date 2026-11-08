@@ -73,6 +73,9 @@ pub enum ParamError {
     /// The contour of a constructive object is invalid.
     #[error("a document contour is invalid: {0}")]
     DocumentContour(#[from] furnicraft_model::ContourError),
+    /// The path of a constructive object is not a ring.
+    #[error("a constructive path is not a ring: {0}")]
+    ConstructivePath(#[from] furnicraft_model::PathError),
     /// A rectangle a profile would be built from has no positive extent.
     #[error(transparent)]
     Region(#[from] RegionError),
@@ -1920,9 +1923,11 @@ mod tests {
     #[test]
     fn an_extrusion_builds_two_caps_and_one_quad_per_edge() {
         for clockwise in [false, true] {
-            let constructive =
-                Constructive::extrude(rectangle_contour(millimetres(100), millimetres(50), clockwise), millimetres(18))
-                    .expect("constructive");
+            let constructive = Constructive::extrude(
+                rectangle_contour(millimetres(100), millimetres(50), clockwise).into(),
+                millimetres(18),
+            )
+            .expect("constructive");
             let mesh = build_constructive_mesh(&constructive).expect("mesh");
             assert_eq!(mesh.positions().len(), 8);
             assert_eq!(mesh.faces().len(), 6);
@@ -1954,7 +1959,7 @@ mod tests {
             ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(100), Length::ZERO]).expect("line"),
         ])
         .expect("a quarter disc");
-        let constructive = Constructive::extrude(contour, millimetres(10)).expect("constructive");
+        let constructive = Constructive::extrude(contour.into(), millimetres(10)).expect("constructive");
         let mesh = build_constructive_mesh(&constructive).expect("mesh");
         assert!(mesh.positions().len() > 6, "the arc contributes interior points");
         let expected = std::f64::consts::PI * 100.0 * 100.0 / 4.0 * 10.0;

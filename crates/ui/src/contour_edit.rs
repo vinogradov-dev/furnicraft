@@ -71,7 +71,7 @@ impl ContourTarget {
     pub fn draft(self, project: &Project) -> Option<ContourDraft> {
         match self {
             Self::Panel(id) => project.panel(id)?.outline_contour().cloned().map(ContourDraft::Ring),
-            Self::Object(id) => project.object_contour(id).ok().cloned().map(ContourDraft::Ring),
+            Self::Object(id) => project.object_contour(id).ok().map(ContourDraft::Ring),
             Self::Path(id) => project.object_path(id).ok().cloned().map(ContourDraft::Chain),
             Self::Cutout { .. } => self.cutout_ring(project).cloned().map(ContourDraft::Ring),
         }
@@ -301,7 +301,7 @@ impl ContourEdit {
                 dispatch(session, OUTLINE_SET_ID, &params).map(|_| ())
             }
             (ContourTarget::Object(object), ContourDraft::Ring(contour)) => {
-                let params = json(&ObjectContourReplace { object, contour: contour.clone() })?;
+                let params = json(&ObjectContourReplace { object, path: contour.clone().into() })?;
                 dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
             }
             (ContourTarget::Path(object), ContourDraft::Chain(path)) => {
@@ -914,7 +914,7 @@ mod tests {
         let mut project = sample_project();
         let root = project.root().id();
         let constructive =
-            Constructive::extrude(rectangle(700, 500), sample_panel_thickness()).expect("constructive object");
+            Constructive::extrude(rectangle(700, 500).into(), sample_panel_thickness()).expect("constructive object");
         let id = project
             .add_object(root, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("object");
@@ -1027,7 +1027,7 @@ mod tests {
         edit.apply(&mut session).expect("apply the contour");
         assert_eq!(
             session.project().object_contour(object).expect("contour"),
-            edit.draft().as_ring().expect("ring"),
+            edit.draft().as_ring().expect("ring").clone(),
             "an object contour is stored exactly as edited"
         );
     }

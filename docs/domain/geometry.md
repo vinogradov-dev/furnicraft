@@ -24,18 +24,20 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 
 | | Mesh object | Constructive object |
 |---|---|---|
-| Created from | a primitive, or a collapsed payload | a closed flat contour plus features |
-| Source of truth | the mesh itself | the contour and the feature parameters |
-| Edited by | moving vertices and faces | editing the contour or a feature |
+| Created from | a primitive, or a collapsed payload | a closed path plus features |
+| Source of truth | the mesh itself | the path and the feature parameters |
+| Edited by | moving vertices and faces | editing the path or a feature |
 | Mesh editing | yes | no, until `object.collapse` |
 | History | undo only | the feature list, saved in the file |
 | Mesh in the file | yes | no, it is derived |
 
 The two paths are deliberately separate ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 A mesh has no shape history; a primitive keeps its parameters and a constructive object keeps its
-contour, so both have a source of truth that survives an edit. A constructive object has no direct
-mesh editing, so its contour stays the only way to change it. A path object is a further payload: a
-drawing rather than a solid, described in section 6; a primitive is described in section 5.
+path, so both have a source of truth that survives an edit. A constructive object has no direct
+mesh editing, so its path stays the only way to change it, and extruding a drawing makes that
+drawing the body rather than copying it ([0074](../decisions/0074-an-extrusion-owns-the-path-it-grew-from.md)).
+A path object is a further payload: a drawing rather than a solid, described in section 6; a
+primitive is described in section 5.
 
 ## 2. The object node
 
@@ -70,9 +72,16 @@ drawing rather than a solid, described in section 6; a primitive is described in
 
 ## 4. Constructive payload
 
+- `path`: the closed drawing the body grew from, with its segment ids and its optional shape tag.
 - `features`: an ordered list. The first feature is `Extrude`.
-- `Extrude { contour, height }` takes a closed ring in the object's local XY plane and extrudes it
-  along `+Z` from `z = 0` by `height`.
+- `Extrude { height }` extrudes the body's own path in its local XY plane along `+Z` from `z = 0` by
+  `height`. The path is stored once, at the body; the ring the extrusion sweeps is derived on read
+  (`Constructive::contour`). A body that has a second extrusion feature repeats the same path with
+  its own height.
+- The constructor requires a closed path that passes `Path::to_contour`; an open chain is refused
+  before the document changes. Extruding a path object converts that node into the body in place and
+  keeps its id, name, placement, pivot and properties, so the drawing is not left behind as a
+  separate object ([0074](../decisions/0074-an-extrusion-owns-the-path-it-grew-from.md)).
 - A contour is a ring of directed **segments**, at least three. A segment is a straight line between
   two points or a circular arc with a centre, a positive radius, a start angle and a non-zero sweep
   of at most one turn. Every value is stored in document units: micrometres and millidegrees.
@@ -94,7 +103,9 @@ drawing rather than a solid, described in section 6; a primitive is described in
   None of them may reference a face or an edge of the evaluated result
   ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 - The height is positive and capped by the document's size limit. An empty or negative feature list
-  is invalid.
+  is invalid, and a body that stores no path, or names its path twice, is a readable load error.
+- A version 18 file stored the contour inside its extrusion feature; it loads into the body's path,
+  and every later save writes the path once (schema 19).
 
 ## 5. Primitive payload
 
@@ -140,6 +151,8 @@ drawing rather than a solid, described in section 6; a primitive is described in
 - A path is a drawing, not a solid: it has no mesh, no feature list and no evaluation. The viewport
   draws it as an unlit line chain and picks it within a few screen points
   ([0018](../decisions/0018-picking-ray-casts-the-scene.md)).
+- Extruding a closed path turns that node into a constructive body that stores this same path, so the
+  drawing is not copied and the body can be reshaped through the contour editor.
 - The document stores the drawing as drawn: direction and orientation are kept, and a clockwise
   closed path becomes a counter-clockwise ring only in `to_contour`.
 - An object payload is `Geometry::Path(Path)` (schema 17). It cannot be collapsed: there is no solid
@@ -180,9 +193,9 @@ in one viewport mode. Its state is view state, not document data
   inside the coordinate limit and not self-intersecting. A gesture that would break the ring is
   rejected and leaves the last valid draft in place, so a corner simply stops at the boundary.
 - **Apply** dispatches exactly one command — `panel.outline.set` for a panel outline,
-  `object.contour.replace` for an object, `object.path.replace` for a path and
-  `panel.machining.update` for a cutout ring — and one undo entry is the whole edit. A cutout update
-  keeps the record's anchor and its `CutoutDepth`. Enter applies and Escape cancels. A rejected apply
+  `object.contour.replace` for the path inside a constructive body, `object.path.replace` for a path
+  and `panel.machining.update` for a cutout ring — and one undo entry is the whole edit. A cutout
+  update keeps the record's anchor and its `CutoutDepth`. Enter applies and Escape cancels. A rejected apply
   keeps the draft so the user can fix it or cancel; a successful apply leaves the mode. An untouched
   draft dispatches no command and creates no empty undo entry.
 - A selection change, a deleted target or a target that no longer stores a ring or a chain ends the
@@ -253,8 +266,10 @@ in one viewport mode. Its state is view state, not document data
 |---|---|---|
 | `object.primitive.create` | parent, name, primitive kind, size, placement | creates a parametric primitive with the default tessellation, returns its id |
 | `object.primitive.replace` | object, primitive | replaces the parameters in one revision and keeps the node |
-| `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude` |
-| `object.contour.replace` | object, contour | replaces the contour and rebuilds |
+| `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude`; the contour becomes the body's path |
+| `object.path.extrude` | object, height | turns a path node into the body that owns it, in place |
+| `object.extrude.height.set` | object, height | replaces the first extrusion's height and keeps the path |
+| `object.contour.replace` | object, path | replaces the body's path and rebuilds |
 | `object.path.create` | parent, name, path, placement | creates a path object, returns its id |
 | `object.path.replace` | object, path | replaces the drawing and keeps the node |
 | `object.collapse` | object | replaces the payload with the evaluated mesh |
@@ -280,6 +295,10 @@ At minimum:
 - an open ring, a ring that does not meet its neighbour and a ring that crosses itself are rejected
   on construction and on load;
 - replacing the contour changes the mesh and keeps the id, name and placement;
+- extruding a path replaces the node in place, leaves no sibling, is one undo entry and is refused on
+  an open chain or a second time;
+- replacing the body's path keeps its height, and setting the height keeps its path;
+- a version 18 extrusion contour loads as the body's path and a save writes no contour copy;
 - a path is created open or closed and keeps its segments and ids, and replacing it changes only the
   drawing in one revision;
 - a blank name, an unknown parent or a replace on an object that stores no path is refused without

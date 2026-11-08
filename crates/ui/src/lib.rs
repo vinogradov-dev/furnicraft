@@ -43,12 +43,12 @@ use furnicraft_engine::node_cmds::{
     ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
     NODE_UNGROUP_ID,
 };
-use furnicraft_engine::object_cmds::{OBJECT_EXTRUDE_CREATE_ID, OBJECT_PRIMITIVE_CREATE_ID};
+use furnicraft_engine::object_cmds::{OBJECT_PATH_EXTRUDE_ID, OBJECT_PRIMITIVE_CREATE_ID};
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
-    NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
+    NodeUngroup, ObjectPathExtrude, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
     CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, PanelNominalSize, Path,
@@ -680,22 +680,22 @@ impl Editor {
         Ok(())
     }
 
-    /// Extrudes a selected path into a body in the path's own frame.
+    /// Extrudes a selected path into the body that owns it, in place.
     ///
     /// Only a closed path encloses a ring, so an open one is refused with the reason from
-    /// `Path::to_contour` before a command runs. The body is a sibling of the path with the path's
-    /// placement, because the ring is stored in the path's local XY; the path stays so the user can
-    /// extrude again or edit the drawing.
+    /// `Path::to_contour` before a command runs. The node becomes the body and keeps its id, name,
+    /// placement and pivot: the drawing is not left behind as a second object, and the selection
+    /// stays on the one node the user was editing.
     fn extrude_path(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
-        let project = session.project();
-        let path = project.object_path(object).map_err(|error| error.to_string())?;
-        let contour = path.to_contour().map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
-        let parent = project.parent_of(object).unwrap_or(project.root().id());
-        let placement = project.node(object).map_or(Placement::IDENTITY, |node| node.placement());
-        let name = project.object(object).map_or_else(|| "Body".to_owned(), |object| format!("{} body", object.name()));
-        let params = json(&ObjectExtrudeCreate { parent, name, contour, height, placement })?;
-        let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
-        self.select_created(outcome.created_id());
+        session
+            .project()
+            .object_path(object)
+            .map_err(|error| error.to_string())?
+            .to_contour()
+            .map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
+        let params = json(&ObjectPathExtrude { object, height })?;
+        dispatch(session, OBJECT_PATH_EXTRUDE_ID, &params)?;
+        self.select_node(Some(object));
         Ok(())
     }
 
@@ -1562,28 +1562,30 @@ mod tests {
     }
 
     #[test]
-    fn the_extrude_action_turns_a_closed_path_into_a_body() {
+    fn the_extrude_action_turns_a_closed_path_into_the_body_that_owns_it() {
         let (project, path) = path_project(true);
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         editor.select_node(Some(path));
         let height = Length::from_millimetres(18).expect("height");
+        let children_before = session.project().root().children().len();
 
         editor.extrude_path(&mut session, path, height).expect("extrude the path");
-        let body = editor.selected_node().expect("the new body is selected");
-        let object = session.project().object(body).expect("object");
-        assert_eq!(object.name(), "Drawing body");
+        assert_eq!(editor.selected_node(), Some(path), "the node becomes the body in place");
+        let object = session.project().object(path).expect("object");
+        assert_eq!(object.name(), "Drawing", "the node keeps its name");
         let constructive = object.geometry().as_constructive().expect("a constructive body");
         assert_eq!(constructive.height(), Some(height));
-        assert_eq!(session.project().parent_of(body), session.project().parent_of(path));
-        assert!(session.project().object_path(path).is_ok(), "the drawing stays so it can be extruded again");
+        assert!(constructive.path().is_closed(), "the body owns the closed drawing");
+        assert_eq!(session.project().root().children().len(), children_before, "no sibling body is left behind");
+        assert!(session.project().object_path(path).is_err(), "the drawing is the body now");
         let revision = session.project().revision();
-        editor.extrude_path(&mut session, path, height).expect("extrude the path");
-        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        assert!(editor.extrude_path(&mut session, path, height).is_err(), "a body is not extruded a second time");
+        assert_eq!(session.project().revision(), revision, "the refused extrusion changes nothing");
     }
 
     #[test]
-    fn one_undo_removes_the_body_and_keeps_the_drawing() {
+    fn one_undo_restores_the_drawing_a_body_came_from() {
         let (project, path) = path_project(true);
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
@@ -1591,12 +1593,10 @@ mod tests {
         editor
             .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"))
             .expect("extrude the path");
-        let body = editor.selected_node().expect("the new body is selected");
 
         undo(&mut session, &mut editor);
-        assert!(session.project().object(body).is_none(), "undo removes the body");
-        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
-        assert!(session.project().object_path(path).is_ok(), "the drawing the body came from stays");
+        assert!(session.project().object_path(path).is_ok(), "undo restores the drawing");
+        assert_eq!(editor.selected_node(), Some(path), "the node never left the tree");
         assert!(!session.can_undo(), "one extrusion is one undo step");
     }
 

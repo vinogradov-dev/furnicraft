@@ -2582,6 +2582,17 @@ impl Path {
     }
 }
 
+impl From<Contour> for Path {
+    /// The same ring as a closed path, with its segment ids and its id counter.
+    ///
+    /// A ring is a path that already satisfies every path rule, so this conversion loses nothing
+    /// but the contour's ring-only guarantees: it carries no shape tag, because a ring is not a
+    /// figure the drawing tools recognised.
+    fn from(contour: Contour) -> Self {
+        Self { entries: contour.entries, next_segment_id: contour.next_segment_id, closed: true, shape: None }
+    }
+}
+
 /// Whether the end of `current` meets the start of `next` within the joint tolerance.
 fn joints_meet(current: ContourSegment, next: ContourSegment) -> Result<bool, PathError> {
     Ok(within_joint_tolerance(current.end()?, next.start()?))

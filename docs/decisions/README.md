@@ -78,6 +78,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0071](0071-a-contact-shadow-is-one-transparent-ground-ellipse.md) | A contact shadow is one transparent ground ellipse | Accepted |
 | [0072](0072-a-contour-joint-is-judged-with-the-drawing-tolerance.md) | A contour joint is judged with the drawing tolerance | Accepted |
 | [0073](0073-a-drawn-figure-remembers-its-shape.md) | A drawn figure remembers its shape | Accepted |
+| [0074](0074-an-extrusion-owns-the-path-it-grew-from.md) | An extrusion owns the path it grew from | Accepted |
 
 ## Format
 

@@ -989,7 +989,8 @@ mod tests {
 
     #[test]
     fn a_concave_extrusion_cap_keeps_its_triangles_inside_the_contour() {
-        let constructive = Constructive::extrude(notched_contour(), millimetres(18)).expect("a constructive object");
+        let constructive =
+            Constructive::extrude(notched_contour().into(), millimetres(18)).expect("a constructive object");
         let mesh = evaluate_constructive(&constructive).expect("document mesh");
         let data = object_mesh(&mesh).expect("render mesh");
         let mut caps = 0;
@@ -1179,6 +1180,43 @@ mod tests {
         let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("cube mesh");
         cache.finish();
         assert!(!Arc::ptr_eq(first.body().expect("body"), third.body().expect("body")));
+    }
+
+    #[test]
+    fn a_body_is_rebuilt_when_the_path_inside_it_changes() {
+        let body = Constructive::extrude(notched_contour().into(), millimetres(18)).expect("a body");
+        let object = Object::new(
+            Id::new(9).expect("id"),
+            "Body",
+            Placement::IDENTITY,
+            furnicraft_model::Geometry::Constructive(body.clone()),
+        );
+        let mut cache = EvaluationCache::new();
+        cache.start();
+        let first = cache.object(Revision::ZERO, &object).expect("body mesh");
+        cache.finish();
+
+        cache.start();
+        let second = cache.object(Revision::ZERO.checked_next().expect("revision"), &object).expect("body mesh");
+        cache.finish();
+        assert!(Arc::ptr_eq(first.body().expect("body"), second.body().expect("body")), "an unchanged path is reused");
+
+        let mut edited = body.clone();
+        edited
+            .set_path(
+                Path::rectangle([millimetres(0), millimetres(0)], [millimetres(200), millimetres(100)])
+                    .expect("rectangle"),
+            )
+            .expect("replace the path");
+        let changed =
+            Object::new(object.id(), "Body", Placement::IDENTITY, furnicraft_model::Geometry::Constructive(edited));
+        cache.start();
+        let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("body mesh");
+        cache.finish();
+        assert!(
+            !Arc::ptr_eq(first.body().expect("body"), third.body().expect("body")),
+            "the body keys on the path it owns"
+        );
     }
 
     #[test]

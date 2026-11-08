@@ -63,9 +63,10 @@ see [ADR 0035](docs/decisions/0035-furniture-types-form-a-numbered-tree.md).
 
 A named, placed node with free-form geometry, beside the panels and containers. It holds exactly one
 payload: a **baked mesh** (positions and polygon faces, edited directly, undo is its only history) or a
-**feature history** (an ordered list beginning with an extruded flat contour; the mesh is derived and
-never saved). A constructive object rebuilds from its contour and is not editable as a mesh until
-`object.collapse` bakes it, which is one undoable command and cannot be reversed after undo expires.
+**feature history** (an ordered list beginning with an extrusion of the body's own closed path; the
+mesh is derived and never saved). A constructive object rebuilds from its path and is not editable as
+a mesh until `object.collapse` bakes it, which is one undoable command and cannot be reversed after
+undo expires. Extruding a drawing turns that node into the body in place instead of copying it.
 Features reference their inputs, never a derived face: fillet and chamfer on a generated face wait for
 a persistent-naming design. A panel is not a geometry object; panel rules are manufacturing rules.
 See [`docs/domain/geometry.md`](docs/domain/geometry.md),

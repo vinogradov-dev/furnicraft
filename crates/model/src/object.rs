@@ -10,7 +10,7 @@ use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE, Path};
+use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE, Path, PathError};
 use crate::mesh::Mesh;
 use crate::primitive::Primitive;
 use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
@@ -22,40 +22,28 @@ pub const MAX_OBJECT_FEATURES: usize = 32;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExtrudeWire {
-    contour: Contour,
     height: Length,
 }
 
-/// The first feature: a contour extruded along `+Z` from `z = 0` to `z = height`.
+/// The first feature: the constructive path swept along `+Z` from `z = 0` to `z = height`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ExtrudeWire")]
 pub struct Extrude {
-    contour: Contour,
     height: Length,
 }
 
 impl Extrude {
     /// Validates the height and stores the feature.
-    pub fn new(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
+    pub fn new(height: Length) -> Result<Self, ConstructiveError> {
         if !height.is_positive() || height.micrometres() > MAX_CONTOUR_COORDINATE.micrometres() {
             return Err(ConstructiveError::InvalidHeight { height, max: MAX_CONTOUR_COORDINATE });
         }
-        Ok(Self { contour, height })
-    }
-
-    /// The contour in the object's local plane.
-    pub const fn contour(&self) -> &Contour {
-        &self.contour
+        Ok(Self { height })
     }
 
     /// The extrusion height, positive.
     pub const fn height(&self) -> Length {
         self.height
-    }
-
-    /// Replaces the contour, keeping the height.
-    pub fn set_contour(&mut self, contour: Contour) {
-        self.contour = contour;
     }
 }
 
@@ -63,7 +51,7 @@ impl TryFrom<ExtrudeWire> for Extrude {
     type Error = ConstructiveError;
 
     fn try_from(wire: ExtrudeWire) -> Result<Self, Self::Error> {
-        Self::new(wire.contour, wire.height)
+        Self::new(wire.height)
     }
 }
 
@@ -71,44 +59,90 @@ impl TryFrom<ExtrudeWire> for Extrude {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Feature {
-    /// Extrusion of a closed contour.
+    /// Extrusion of the constructive path.
     Extrude(Extrude),
 }
 
-/// Serialized form of [`Constructive`]; validation happens in its `TryFrom` implementation.
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConstructiveWire {
-    features: Vec<Feature>,
+/// Serialized form of [`Feature`], which also reads an extrusion written before the path moved out.
+///
+/// Version 18 stored `contour` inside the extrusion; see [`ConstructiveWire`] for the migration.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum FeatureWire {
+    Extrude {
+        height: Length,
+        #[serde(default)]
+        contour: Option<Contour>,
+    },
 }
 
-/// A constructive geometry payload: an ordered feature history whose mesh is derived.
+/// Serialized form of [`Constructive`]; validation happens in its `TryFrom` implementation.
 ///
-/// The contour and feature parameters are the source of truth; the mesh is never stored in the
-/// document and is not editable until [`Project::collapse_object`] bakes it ([ADR 0037]).
+/// Version 18 stored the contour inside the extrusion feature. A file written by that version is
+/// read here: its `extrude.contour` becomes the constructive `path`, and the stored feature keeps
+/// only its height. A file that carries both, or two legacy contours, is a readable error rather
+/// than a silent pick.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConstructiveWire {
+    #[serde(default)]
+    path: Option<Path>,
+    features: Vec<FeatureWire>,
+}
+
+/// A constructive geometry payload: the path it grew from and an ordered feature history.
+///
+/// The path and the feature parameters are the source of truth; the mesh is never stored in the
+/// document and is not editable until [`Project::collapse_object`] bakes it ([ADR 0037]). An
+/// extrusion owns its path: the body stores the chain the user drew, not a second copy of the ring
+/// it encloses, so editing the drawing edits the body ([ADR 0074]).
 ///
 /// [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
+/// [ADR 0074]: ../docs/decisions/0074-an-extrusion-owns-the-path-it-grew-from.md
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ConstructiveWire")]
 pub struct Constructive {
+    path: Path,
     features: Vec<Feature>,
 }
 
 impl Constructive {
-    /// Validates the feature list and stores it.
-    pub fn new(features: Vec<Feature>) -> Result<Self, ConstructiveError> {
+    /// Validates the path and the feature list and stores them.
+    ///
+    /// The first feature must be an extrusion, so the path must be a closed ring the document
+    /// accepts; an open chain is refused before the document changes.
+    pub fn new(path: Path, features: Vec<Feature>) -> Result<Self, ConstructiveError> {
         if features.is_empty() || features.len() > MAX_OBJECT_FEATURES {
             return Err(ConstructiveError::FeatureCount { count: features.len(), max: MAX_OBJECT_FEATURES });
         }
         if !matches!(features.first(), Some(Feature::Extrude(_))) {
             return Err(ConstructiveError::MissingExtrude);
         }
-        Ok(Self { features })
+        if !path.is_closed() {
+            return Err(ConstructiveError::OpenPath);
+        }
+        path.to_contour()?;
+        Ok(Self { path, features })
     }
 
-    /// Creates an object with a single extrusion.
-    pub fn extrude(contour: Contour, height: Length) -> Result<Self, ConstructiveError> {
-        Self::new(vec![Feature::Extrude(Extrude::new(contour, height)?)])
+    /// Creates an object with a single extrusion of `path`.
+    pub fn extrude(path: Path, height: Length) -> Result<Self, ConstructiveError> {
+        Self::new(path, vec![Feature::Extrude(Extrude::new(height)?)])
+    }
+
+    /// The path the body grew from.
+    pub const fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Replaces the path, keeping every feature.
+    pub fn set_path(&mut self, path: Path) -> Result<(), ConstructiveError> {
+        if !path.is_closed() {
+            return Err(ConstructiveError::OpenPath);
+        }
+        path.to_contour()?;
+        self.path = path;
+        Ok(())
     }
 
     /// The ordered features, at least one.
@@ -124,9 +158,12 @@ impl Constructive {
         }
     }
 
-    /// The current contour of the first extrusion.
-    pub fn contour(&self) -> Option<&Contour> {
-        self.extrude_feature().map(Extrude::contour)
+    /// The ring the stored path encloses, derived on read.
+    ///
+    /// The path is validated when it is stored, so this only fails on a document that was built
+    /// without the constructor; it is the same ring the mesh is built from.
+    pub fn contour(&self) -> Result<Contour, PathError> {
+        self.path.to_contour()
     }
 
     /// The height of the first extrusion.
@@ -134,12 +171,12 @@ impl Constructive {
         self.extrude_feature().map(Extrude::height)
     }
 
-    /// Replaces the contour of the first extrusion, keeping every other feature.
-    pub fn set_contour(&mut self, contour: Contour) -> Result<(), ConstructiveError> {
+    /// Replaces the height of the first extrusion, keeping the path and every other feature.
+    pub fn set_height(&mut self, height: Length) -> Result<(), ConstructiveError> {
         let Some(Feature::Extrude(extrude)) = self.features.first_mut() else {
             return Err(ConstructiveError::MissingExtrude);
         };
-        extrude.set_contour(contour);
+        *extrude = Extrude::new(height)?;
         Ok(())
     }
 }
@@ -148,7 +185,27 @@ impl TryFrom<ConstructiveWire> for Constructive {
     type Error = ConstructiveError;
 
     fn try_from(wire: ConstructiveWire) -> Result<Self, Self::Error> {
-        Self::new(wire.features)
+        let mut legacy = None;
+        let mut features = Vec::with_capacity(wire.features.len());
+        for feature in wire.features {
+            match feature {
+                FeatureWire::Extrude { height, contour } => {
+                    if let Some(contour) = contour
+                        && legacy.replace(contour).is_some()
+                    {
+                        return Err(ConstructiveError::AmbiguousPath);
+                    }
+                    features.push(Feature::Extrude(Extrude::new(height)?));
+                }
+            }
+        }
+        let path = match (wire.path, legacy) {
+            (Some(path), None) => path,
+            (None, Some(contour)) => Path::from(contour),
+            (None, None) => return Err(ConstructiveError::MissingPath),
+            (Some(_), Some(_)) => return Err(ConstructiveError::AmbiguousPath),
+        };
+        Self::new(path, features)
     }
 }
 
@@ -158,6 +215,9 @@ pub enum ConstructiveError {
     /// The contour is not a valid closed polyline.
     #[error(transparent)]
     Contour(#[from] ContourError),
+    /// The stored path is not a chain the document accepts.
+    #[error(transparent)]
+    Path(#[from] PathError),
     /// The extrusion height is not positive or is too large.
     #[error("an extrusion height must be positive and at most {max}, got {height}")]
     InvalidHeight {
@@ -177,6 +237,15 @@ pub enum ConstructiveError {
     /// The first feature is not an extrusion.
     #[error("the first feature of a constructive object must be an extrusion")]
     MissingExtrude,
+    /// The path is an open chain, which encloses no ring to extrude.
+    #[error("a constructive object needs a closed path, not an open chain")]
+    OpenPath,
+    /// Neither the constructive path nor a legacy extrusion contour was stored.
+    #[error("a constructive object stores no path")]
+    MissingPath,
+    /// The file names its path twice: as the constructive path and as a legacy extrusion contour.
+    #[error("a constructive object stores both a path and a legacy extrusion contour")]
+    AmbiguousPath,
 }
 
 /// The geometry payload of an object node.
@@ -508,7 +577,8 @@ mod tests {
         let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("valid project");
         let root = project.root().id();
-        let constructive = Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive");
+        let constructive =
+            Constructive::extrude(rectangle_contour(100, 50).into(), millimetres(18)).expect("constructive");
         let id = project
             .add_object(root, "Countertop", Placement::IDENTITY, Geometry::Constructive(constructive.clone()))
             .expect("object");
@@ -519,14 +589,14 @@ mod tests {
         assert!(project.object(id).expect("object").geometry().as_mesh().is_none(), "the mesh is derived");
 
         let wider = rectangle_contour(120, 50);
-        let revision = project.set_object_contour(id, wider.clone()).expect("replace the contour");
+        let revision = project.set_object_body_path(id, wider.clone().into()).expect("replace the contour");
         assert_eq!(revision.get(), 2, "creation was revision one");
         let object = project.object(id).expect("object");
         assert_eq!(object.name(), "Countertop");
         assert_eq!(object.placement(), Placement::IDENTITY);
         assert_eq!(
             object.geometry().as_constructive().expect("constructive").contour(),
-            Some(&wider),
+            Ok(wider),
             "the id, name and placement survive a contour edit"
         );
         assert_eq!(
@@ -546,7 +616,7 @@ mod tests {
     #[test]
     fn a_constructive_object_bounds_use_the_contour_and_height() {
         let geometry = Geometry::Constructive(
-            Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive"),
+            Constructive::extrude(rectangle_contour(100, 50).into(), millimetres(18)).expect("constructive"),
         );
         let (min, max) = object_bounds_mm(&geometry).expect("bounds");
         assert!((min - DVec3::ZERO).length() < 1.0e-9);
@@ -667,13 +737,126 @@ mod tests {
     }
 
     #[test]
+    fn extruding_a_path_turns_the_node_into_the_body_in_place() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let container = project.root().id();
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let id = project
+            .add_object(container, "Plate", Placement::IDENTITY, Geometry::Path(path.clone()))
+            .expect("a path object");
+
+        let revision = project.extrude_object_path(id, millimetres(18)).expect("extrude in place");
+        assert_eq!(revision.get(), 2, "creation was revision one");
+        let object = project.object(id).expect("the node is still there");
+        assert_eq!(object.name(), "Plate", "the node keeps its name");
+        assert_eq!(object.geometry().as_path(), None, "the drawing is the body now");
+        let body = object.geometry().as_constructive().expect("a constructive body");
+        assert_eq!(body.path(), &path, "the body owns the one path, tag and ids included");
+        assert_eq!(body.height(), Some(millimetres(18)));
+        assert_eq!(project.root().children().len(), 1, "no sibling body is left behind");
+        assert_eq!(
+            project.extrude_object_path(id, millimetres(18)),
+            Err(ProjectError::NotAPathObject { id }),
+            "a body is not extruded a second time"
+        );
+        assert_eq!(project.revision(), revision, "a refused extrusion changes nothing");
+    }
+
+    #[test]
+    fn an_open_path_is_refused_before_it_becomes_a_body() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let container = project.root().id();
+        let id = project
+            .add_object(container, "Sketch", Placement::IDENTITY, Geometry::Path(sample_path()))
+            .expect("a path object");
+
+        assert!(matches!(
+            project.extrude_object_path(id, millimetres(18)),
+            Err(ProjectError::InvalidConstructive(ConstructiveError::OpenPath))
+        ));
+        assert!(project.object_path(id).is_ok(), "the drawing stays a drawing");
+        assert_eq!(project.revision().get(), 1, "only the creation counted");
+    }
+
+    #[test]
+    fn a_body_path_and_height_are_edited_in_place() {
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("valid project");
+        let container = project.root().id();
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let id = project
+            .add_object(
+                container,
+                "Plate",
+                Placement::IDENTITY,
+                Geometry::Constructive(Constructive::extrude(path, millimetres(18)).expect("body")),
+            )
+            .expect("a body");
+
+        let wider =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(120), millimetres(50)]).expect("rectangle");
+        project.set_object_body_path(id, wider.clone()).expect("replace the path");
+        let body = project.object(id).expect("object").geometry().as_constructive().expect("body");
+        assert_eq!(body.path(), &wider, "the body's own path changed");
+        assert_eq!(body.contour().expect("ring").bounds_micrometres(), ([0, 0], [120_000, 50_000]));
+
+        project.set_object_extrusion_height(id, millimetres(30)).expect("raise the body");
+        let body = project.object(id).expect("object").geometry().as_constructive().expect("body");
+        assert_eq!(body.height(), Some(millimetres(30)));
+        assert_eq!(body.path(), &wider, "the height change keeps the path");
+        assert_eq!(
+            project.set_object_extrusion_height(id, Length::ZERO),
+            Err(ProjectError::InvalidConstructive(ConstructiveError::InvalidHeight {
+                height: Length::ZERO,
+                max: MAX_CONTOUR_COORDINATE
+            }))
+        );
+    }
+
+    #[test]
+    fn a_version_eighteen_extrusion_contour_becomes_the_constructive_path() {
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let contour = path.to_contour().expect("ring");
+        let legacy = serde_json::json!({
+            "features": [{ "kind": "extrude", "contour": contour, "height": 18_000 }]
+        });
+        let loaded: Constructive = serde_json::from_value(legacy).expect("a version 18 body loads");
+        assert_eq!(loaded.height(), Some(millimetres(18)));
+        assert_eq!(loaded.contour().expect("ring"), contour, "the contour is the path now");
+
+        let saved = serde_json::to_value(&loaded).expect("serialize");
+        assert!(saved.get("path").is_some(), "the path is written at the body: {saved}");
+        assert!(!saved.to_string().contains("contour"), "the contour copy is gone: {saved}");
+
+        let both = serde_json::json!({
+            "path": path,
+            "features": [{ "kind": "extrude", "contour": contour, "height": 18_000 }]
+        });
+        let reason = serde_json::from_value::<Constructive>(both)
+            .map_err(|error| error.to_string())
+            .expect_err("a file naming its path twice is refused");
+        assert!(reason.contains("legacy extrusion contour"), "the reason names the clash: {reason}");
+
+        let missing = serde_json::json!({ "features": [{ "kind": "extrude", "height": 18_000 }] });
+        let reason = serde_json::from_value::<Constructive>(missing)
+            .map_err(|error| error.to_string())
+            .expect_err("a body without a path is refused");
+        assert!(reason.contains("stores no path"), "the reason names the gap: {reason}");
+    }
+
+    #[test]
     fn a_bad_extrusion_height_is_rejected_on_build_and_load() {
         let contour = rectangle_contour(10, 10);
         assert_eq!(
-            Constructive::extrude(contour.clone(), Length::ZERO),
+            Constructive::extrude(contour.clone().into(), Length::ZERO),
             Err(ConstructiveError::InvalidHeight { height: Length::ZERO, max: MAX_CONTOUR_COORDINATE })
         );
-        let constructive = Constructive::extrude(contour, millimetres(10)).expect("constructive");
+        let constructive = Constructive::extrude(contour.into(), millimetres(10)).expect("constructive");
         let text = serde_json::to_string(&constructive).expect("serialize");
         let too_high = text.replace("\"height\":10000", "\"height\":0");
         assert_ne!(text, too_high, "the fixture must contain the height in micrometres");

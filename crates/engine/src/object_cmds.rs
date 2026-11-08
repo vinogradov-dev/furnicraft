@@ -183,7 +183,7 @@ fn object_extrude_create_run(
     }
     evaluate_contour(OBJECT_EXTRUDE_CREATE_ID, &params.contour)?;
     let pivot = params.contour.creation_pivot();
-    let constructive = Constructive::extrude(params.contour, params.height).map_err(ProjectError::from)?;
+    let constructive = Constructive::extrude(params.contour.into(), params.height).map_err(ProjectError::from)?;
     let id = project.add_object_with_pivot(
         params.parent,
         params.name,
@@ -213,10 +213,10 @@ pub const OBJECT_CONTOUR_REPLACE_LABEL: &str = "Replace contour";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectContourReplace {
-    /// The constructive object whose contour changes.
+    /// The constructive object whose path changes.
     pub object: Id,
-    /// The new closed flat contour.
-    pub contour: Contour,
+    /// The new closed path the body owns.
+    pub path: Path,
 }
 
 /// The `object.contour.replace` command.
@@ -232,7 +232,7 @@ fn object_contour_replace_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     session.project().object(params.object).is_some_and(|object| object.geometry().as_constructive().is_some())
-        && validate_extrusion_contour(&params.contour).is_ok()
+        && extrusion_path_ready(&params.path).is_ok()
 }
 
 fn object_contour_replace_run(
@@ -241,10 +241,135 @@ fn object_contour_replace_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectContourReplace>(params, OBJECT_CONTOUR_REPLACE_ID)?;
-    // Validate the new ring before the document changes: a contour the cap cannot hold would
-    // leave a constructive object that evaluates to an error and renders nothing.
-    evaluate_contour(OBJECT_CONTOUR_REPLACE_ID, &params.contour)?;
-    project.set_object_contour(params.object, params.contour)?;
+    // Validate the new ring before the document changes: a path that is not a ring or whose cap
+    // the mesh cannot hold would leave a body that evaluates to an error and renders nothing.
+    let contour = extrusion_path_ready(&params.path)?;
+    evaluate_contour(OBJECT_CONTOUR_REPLACE_ID, &contour)?;
+    project.set_object_body_path(params.object, params.path)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// The ring an extrudable path encloses, or the reason the command cannot store it.
+///
+/// An open chain has no ring, so the refusal names the path rather than a ring rule.
+fn extrusion_path_ready(path: &Path) -> Result<Contour, CommandError> {
+    path.to_contour().map_err(|error| CommandError::InvalidParams {
+        command: OBJECT_CONTOUR_REPLACE_ID,
+        message: format!("the body path must be a closed ring: {error}"),
+    })
+}
+
+/// Stable id of the in-place path extrusion command.
+pub const OBJECT_PATH_EXTRUDE_ID: &str = "object.path.extrude";
+
+/// User-facing label of the path extrusion command.
+pub const OBJECT_PATH_EXTRUDE_LABEL: &str = "Extrude path";
+
+/// Parameters for `object.path.extrude`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectPathExtrude {
+    /// The path node that becomes the body.
+    pub object: Id,
+    /// Positive extrusion height along `+Z`.
+    pub height: Length,
+}
+
+/// The `object.path.extrude` command.
+pub(crate) const OBJECT_PATH_EXTRUDE: CommandSpec = CommandSpec::new(
+    OBJECT_PATH_EXTRUDE_ID,
+    OBJECT_PATH_EXTRUDE_LABEL,
+    object_path_extrude_enabled,
+    object_path_extrude_run,
+);
+
+fn object_path_extrude_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<ObjectPathExtrude>(params, OBJECT_PATH_EXTRUDE_ID) else {
+        return false;
+    };
+    valid_extrusion_height(params.height)
+        && session
+            .project()
+            .object_path(params.object)
+            .is_ok_and(|path| path.to_contour().is_ok_and(|contour| validate_extrusion_contour(&contour).is_ok()))
+}
+
+fn object_path_extrude_run(
+    project: &mut Project,
+    _catalog: &furnicraft_model::Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<ObjectPathExtrude>(params, OBJECT_PATH_EXTRUDE_ID)?;
+    if !valid_extrusion_height(params.height) {
+        return Err(CommandError::InvalidParams {
+            command: OBJECT_PATH_EXTRUDE_ID,
+            message: format!(
+                "height must be positive and at most {} micrometres",
+                furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres()
+            ),
+        });
+    }
+    let path = project.object_path(params.object)?;
+    let contour = path.to_contour().map_err(|error| CommandError::InvalidParams {
+        command: OBJECT_PATH_EXTRUDE_ID,
+        message: format!("the path must be a closed ring: {error}"),
+    })?;
+    evaluate_contour(OBJECT_PATH_EXTRUDE_ID, &contour)?;
+    project.extrude_object_path(params.object, params.height)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the extrusion height command.
+pub const OBJECT_EXTRUDE_HEIGHT_SET_ID: &str = "object.extrude.height.set";
+
+/// User-facing label of the extrusion height command.
+pub const OBJECT_EXTRUDE_HEIGHT_SET_LABEL: &str = "Set extrusion height";
+
+/// Parameters for `object.extrude.height.set`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectExtrudeHeightSet {
+    /// The constructive object whose extrusion height changes.
+    pub object: Id,
+    /// Positive extrusion height along `+Z`.
+    pub height: Length,
+}
+
+/// The `object.extrude.height.set` command.
+pub(crate) const OBJECT_EXTRUDE_HEIGHT_SET: CommandSpec = CommandSpec::new(
+    OBJECT_EXTRUDE_HEIGHT_SET_ID,
+    OBJECT_EXTRUDE_HEIGHT_SET_LABEL,
+    object_extrude_height_set_enabled,
+    object_extrude_height_set_run,
+);
+
+fn object_extrude_height_set_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<ObjectExtrudeHeightSet>(params, OBJECT_EXTRUDE_HEIGHT_SET_ID) else {
+        return false;
+    };
+    valid_extrusion_height(params.height)
+        && session
+            .project()
+            .object(params.object)
+            .is_some_and(|object| object.geometry().as_constructive().is_some_and(|body| body.height().is_some()))
+}
+
+fn object_extrude_height_set_run(
+    project: &mut Project,
+    _catalog: &furnicraft_model::Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<ObjectExtrudeHeightSet>(params, OBJECT_EXTRUDE_HEIGHT_SET_ID)?;
+    if !valid_extrusion_height(params.height) {
+        return Err(CommandError::InvalidParams {
+            command: OBJECT_EXTRUDE_HEIGHT_SET_ID,
+            message: format!(
+                "height must be positive and at most {} micrometres",
+                furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres()
+            ),
+        });
+    }
+    project.set_object_extrusion_height(params.object, params.height)?;
     Ok(CommandOutcome::changed())
 }
 
@@ -670,7 +795,7 @@ mod tests {
         assert!(create.enabled(&session, &value), "a legal ring is creatable whatever its radius");
         let id = session.dispatch(OBJECT_EXTRUDE_CREATE_ID, &value).expect("create the band").created_id().expect("id");
 
-        let replace = serde_json::to_value(ObjectContourReplace { object: id, contour: band_contour() })
+        let replace = serde_json::to_value(ObjectContourReplace { object: id, path: band_contour().into() })
             .expect("params serialize");
         let spec = registry.get(OBJECT_CONTOUR_REPLACE_ID).expect("registered");
         assert!(spec.enabled(&session, &replace), "the replacement ring is buildable too");
@@ -701,12 +826,11 @@ mod tests {
                 .project()
                 .object(id)
                 .and_then(|object| object.geometry().as_constructive())
-                .and_then(Constructive::contour)
-                .cloned()
+                .and_then(|body| body.contour().ok())
         };
         let original = contour(&session).expect("the stored ring");
         let wider = rectangle(120, 50);
-        let value = serde_json::to_value(ObjectContourReplace { object: id, contour: wider.clone() })
+        let value = serde_json::to_value(ObjectContourReplace { object: id, path: wider.clone().into() })
             .expect("params serialize");
         let spec = CommandRegistry::new().get(OBJECT_CONTOUR_REPLACE_ID).expect("registered");
         assert!(spec.enabled(&session, &value));
@@ -738,13 +862,14 @@ mod tests {
         assert!(object.geometry().as_mesh().is_none(), "a constructive object has no mesh in the document");
 
         let wider = rectangle(120, 50);
-        let value = serde_json::to_value(ObjectContourReplace { object: id, contour: wider.clone() }).expect("params");
+        let value =
+            serde_json::to_value(ObjectContourReplace { object: id, path: wider.clone().into() }).expect("params");
         session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the contour");
         assert_eq!(session.project().revision().get(), 2);
         let object = session.project().object(id).expect("object");
         assert_eq!(
             object.geometry().as_constructive().expect("constructive").contour(),
-            Some(&wider),
+            Ok(wider.clone()),
             "the name, placement and height survive a contour edit"
         );
 
@@ -804,8 +929,8 @@ mod tests {
             .expect("a cube to compare kinds")
             .created_id()
             .expect("id");
-        let value =
-            serde_json::to_value(ObjectContourReplace { object: cube, contour: rectangle(10, 10) }).expect("params");
+        let value = serde_json::to_value(ObjectContourReplace { object: cube, path: rectangle(10, 10).into() })
+            .expect("params");
         assert!(session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).is_err());
         let value = serde_json::to_value(ObjectCollapse { object: cube }).expect("params");
         session.dispatch(OBJECT_COLLAPSE_ID, &value).expect("a primitive collapses to its derived mesh");
@@ -907,6 +1032,127 @@ mod tests {
     }
 
     #[test]
+    fn extruding_a_path_turns_the_node_into_the_body_in_one_revision() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        let closed =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Plate", closed.clone()))
+            .expect("create the drawing")
+            .created_id()
+            .expect("id");
+        let children = session.project().root().children().len();
+
+        let value =
+            serde_json::to_value(ObjectPathExtrude { object: id, height: millimetres(18) }).expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_PATH_EXTRUDE_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+        let before = session.project().revision();
+        session.dispatch(OBJECT_PATH_EXTRUDE_ID, &value).expect("extrude in place");
+
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        let object = session.project().object(id).expect("the node stays");
+        assert_eq!(object.name(), "Plate", "the node keeps its name");
+        let body = object.geometry().as_constructive().expect("the drawing is the body now");
+        assert_eq!(body.path(), &closed, "the body owns the path that was drawn");
+        assert_eq!(body.height(), Some(millimetres(18)));
+        assert_eq!(session.project().root().children().len(), children, "no sibling body appears");
+        assert!(session.project().object_path(id).is_err(), "the drawing is gone");
+        assert!(!spec.enabled(&session, &value), "a body is not extruded a second time");
+
+        session.undo().expect("one undo restores the drawing");
+        assert_eq!(session.project().object_path(id), Ok(&closed));
+    }
+
+    #[test]
+    fn an_open_path_cannot_be_extruded() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Sketch", open_path(100)))
+            .expect("create the drawing")
+            .created_id()
+            .expect("id");
+        let value = serde_json::to_value(ObjectPathExtrude {
+            object: id,
+            height: Length::from_millimetres(18).expect("height"),
+        })
+        .expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_PATH_EXTRUDE_ID).expect("registered");
+        assert!(!spec.enabled(&session, &value), "an open chain encloses no ring");
+        let before = session.project().revision();
+        assert!(session.dispatch(OBJECT_PATH_EXTRUDE_ID, &value).is_err());
+        assert_eq!(session.project().revision(), before);
+        assert!(session.project().object_path(id).is_ok(), "the drawing is untouched");
+    }
+
+    #[test]
+    fn the_extrusion_height_command_keeps_the_path() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("id");
+        let path = session
+            .project()
+            .object(id)
+            .and_then(|object| object.geometry().as_constructive())
+            .map(|body| body.path().clone());
+        let path = path.expect("the body owns a path");
+
+        let value = serde_json::to_value(ObjectExtrudeHeightSet {
+            object: id,
+            height: Length::from_millimetres(30).expect("height"),
+        })
+        .expect("params serialize");
+        let spec = CommandRegistry::new().get(OBJECT_EXTRUDE_HEIGHT_SET_ID).expect("registered");
+        assert!(spec.enabled(&session, &value));
+        let before = session.project().revision();
+        session.dispatch(OBJECT_EXTRUDE_HEIGHT_SET_ID, &value).expect("raise the body");
+
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        let body = session.project().object(id).and_then(|object| object.geometry().as_constructive()).expect("a body");
+        assert_eq!(body.height(), Some(Length::from_millimetres(30).expect("height")));
+        assert_eq!(body.path(), &path, "the height change keeps the path");
+
+        let bad = serde_json::to_value(ObjectExtrudeHeightSet { object: id, height: Length::ZERO }).expect("params");
+        assert!(!spec.enabled(&session, &bad), "a height must be positive");
+    }
+
+    #[test]
+    fn a_body_path_replacement_keeps_every_other_field() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let id = session
+            .dispatch(
+                OBJECT_EXTRUDE_CREATE_ID,
+                &extrude_params(&session, "Top", Length::from_millimetres(18).expect("height")),
+            )
+            .expect("create extrusion")
+            .created_id()
+            .expect("id");
+        let wider = Path::rectangle(
+            [Length::ZERO, Length::ZERO],
+            [Length::from_millimetres(120).expect("length"), Length::from_millimetres(50).expect("length")],
+        )
+        .expect("rectangle");
+        let value = serde_json::to_value(ObjectContourReplace { object: id, path: wider.clone() }).expect("params");
+        session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the path");
+
+        let body = session.project().object(id).and_then(|object| object.geometry().as_constructive()).expect("a body");
+        assert_eq!(body.path(), &wider, "the body stores the new path");
+        assert_eq!(body.height(), Some(Length::from_millimetres(18).expect("height")), "the height survives");
+        assert_eq!(
+            body.contour().expect("ring").bounds_micrometres(),
+            ([0, 0], [120_000, 50_000]),
+            "the body draws the new ring"
+        );
+    }
+
+    #[test]
     fn a_created_drawing_pivots_on_its_shape() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let millimetres = |value| Length::from_millimetres(value).expect("length");
@@ -990,7 +1236,7 @@ mod tests {
             .created_id()
             .expect("id");
         let body_pivot = session.project().pivot(body_id).expect("pivot");
-        let value = serde_json::to_value(ObjectContourReplace { object: body_id, contour: rectangle(200, 100) })
+        let value = serde_json::to_value(ObjectContourReplace { object: body_id, path: rectangle(200, 100).into() })
             .expect("params serialize");
         session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the contour");
         assert_eq!(session.project().pivot(body_id), Some(body_pivot), "a contour edit never moves the pivot");

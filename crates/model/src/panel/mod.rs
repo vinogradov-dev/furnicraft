@@ -1167,12 +1167,12 @@ mod tests {
         ])
         .expect("ring");
         let source_id = Id::new(5).expect("id");
-        let constructive = Constructive::extrude(moved.clone(), millimetres(18)).expect("constructive object");
+        let constructive = Constructive::extrude(moved.clone().into(), millimetres(18)).expect("constructive object");
         let source = Object::new(source_id, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive));
         let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![source.into()]);
         let mut project = Project::new(root).expect("valid project");
 
-        assert_eq!(project.object_contour(source_id).expect("source contour"), &moved);
+        assert_eq!(project.object_contour(source_id).expect("source contour"), moved);
         project.validate_panel_contour(project.root().id(), source_id).expect("a valid ring");
 
         let panel_id = project

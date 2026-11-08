@@ -856,7 +856,7 @@ mod tests {
             [millimetres(0), millimetres(400)],
         ])
         .expect("contour");
-        let constructive = Constructive::extrude(contour, millimetres(18)).expect("constructive");
+        let constructive = Constructive::extrude(contour.into(), millimetres(18)).expect("constructive");
 
         let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
         let mut project = Project::new(root).expect("project");

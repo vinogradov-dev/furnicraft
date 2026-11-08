@@ -151,11 +151,8 @@ fn a_version_ten_file_loads_a_constructive_object_with_a_line_ring() {
 fn a_version_eleven_file_loads_a_contour_with_an_arc() {
     let scene = SceneFile::parse(V11).expect("version 11");
     let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
-    let contour = object
-        .geometry()
-        .as_constructive()
-        .and_then(furnicraft_model::Constructive::contour)
-        .expect("the contour must load");
+    let contour =
+        object.geometry().as_constructive().expect("a constructive payload").contour().expect("the contour must load");
     assert_eq!(contour.segments().len(), 5, "four lines and one round corner");
     assert_eq!(contour.segments().filter(|segment| segment.is_arc()).count(), 1);
     assert!(!contour.is_line_only(), "the arc survives the load");
@@ -171,11 +168,8 @@ fn a_version_eleven_file_loads_a_contour_with_an_arc() {
 fn a_version_twelve_file_loads_segment_ids_and_their_counter() {
     let scene = SceneFile::parse(V12).expect("version 12");
     let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
-    let contour = object
-        .geometry()
-        .as_constructive()
-        .and_then(furnicraft_model::Constructive::contour)
-        .expect("the contour must load");
+    let contour =
+        object.geometry().as_constructive().expect("a constructive payload").contour().expect("the contour must load");
     let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
     assert_eq!(ids, vec![1, 2, 3, 4, 5], "the stored ids are kept, not renumbered");
     assert_eq!(contour.next_segment_id().get(), 6);

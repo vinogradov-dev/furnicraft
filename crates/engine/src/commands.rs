@@ -134,8 +134,10 @@ static COMMANDS: &[CommandSpec] = &[
     object_cmds::OBJECT_PRIMITIVE_CREATE,
     object_cmds::OBJECT_PRIMITIVE_REPLACE,
     object_cmds::OBJECT_EXTRUDE_CREATE,
+    object_cmds::OBJECT_EXTRUDE_HEIGHT_SET,
     object_cmds::OBJECT_CONTOUR_REPLACE,
     object_cmds::OBJECT_PATH_CREATE,
+    object_cmds::OBJECT_PATH_EXTRUDE,
     object_cmds::OBJECT_PATH_REPLACE,
     object_cmds::OBJECT_COLLAPSE,
     mesh_cmds::MESH_VERTICES_MOVE,
@@ -331,6 +333,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 48);
+        assert_eq!(registry.specs().len(), 50);
     }
 }
