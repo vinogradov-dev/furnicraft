@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A8 state=doing base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=A11 state=doing base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -11,8 +11,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 - M7 — objects and the scene file, after M6. `Container` is the only container kind, every node
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of stable-id segments (ADR 0040,
-  schema 13); `Path` is the open or closed chain that `to_contour` turns into a ring, and a primitive
-  stores the parameters that built it (ADR 0054, schema 18) while its mesh is derived.
+  schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
+  ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and a primitive stores the
+  parameters that built it (ADR 0054) while its mesh is derived. A corner moves freely or along the
+  segment picked at the drag start; each figure has numeric radius, width, height and angle setters.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -20,12 +22,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   untouched node and a collapsed object keeps the shape the user saw (ADR 0053).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus eight
   point lights in watts with a fixed exposure and no tone mapper (ADR 0039).
-- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view, a projection toggle,
+- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view, a projection toggle
   and draw/pick/snap for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061):
   the projection button draws the view it is in, a creation lands at the scene root unless a
   container is armed, the armed tool draws pressed, the pole views look down their plane, a drawing
-  pivots on its own shape, a selected chain is a screen-space stroke, and every contour kind edits
-  through one draft.
+  pivots on its own shape, a selected chain is a screen-space stroke, every contour kind edits as one draft.
 - X1, X2 and X7 are fixed: a legal ring past the 1024-vertex cap follows the shape (ADR 0062), and
   a ribbon tool is one measured cell with an elided caption (ADR 0067). The icon pipeline was audited
   against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`): U27 rasterises each white master
@@ -54,10 +55,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-A8 is in progress: the ring joint takes the one-micrometre tolerance the drawing path already uses.
-A9–A11 then give a path its shape tag, free corner movement and an extrusion that owns its path;
-U53–U55 land the new drawing tools, the grips with a number at the cursor, and the pull arrow. The
-owner's shape-editing set comes first: U45 → U48 → U46 (icons last) → U49 resume after it.
+A11 is in progress: an extrusion becomes the body that owns its path, replacing the `Path` node in
+place instead of copying it. U53–U55 follow with the drawing tools, the numeric grips and the pull
+arrow; U45 → U48 → U46 (icons last) → U49 resumes after them.
+
 ## Index
 
 | File | Holds | Read when |
