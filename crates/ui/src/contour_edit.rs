@@ -785,17 +785,18 @@ impl DrawDraft {
 
     /// The one segment that runs from the last stored end back to the first stored start.
     ///
-    /// A closed chain adds it only when the ends differ, so a chain that already returned to its
-    /// start does not store a zero-length segment.
+    /// A closed chain adds it only when the two ends do not already meet within the drawing joint
+    /// tolerance, so a rounded arc end that lands on the first point closes the ring without a
+    /// sliver segment in front of it (ADR 0072).
     fn closing_segment(&self) -> Result<Option<ContourSegment>, DrawDraftError> {
         let (Some(first), Some(last)) = (self.segments.first(), self.segments.last()) else {
             return Ok(None);
         };
-        let start = first.start()?;
-        let end = last.end()?;
-        if start == end {
+        if last.end_meets(*first)? {
             return Ok(None);
         }
+        let start = first.start()?;
+        let end = last.end()?;
         Ok(Some(ContourSegment::line(end, start)?))
     }
 
@@ -816,9 +817,11 @@ impl DrawDraft {
                 let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
                     return Err(DrawDraftError::TooFewPoints { need: 3, got: segments.len() });
                 };
-                let start = first.start()?;
-                let end = last.end()?;
-                if start != end {
+                // A last end that already meets the first start within the drawing tolerance is the
+                // closing joint itself; adding a line there would leave a sliver in the ring.
+                if !last.end_meets(*first)? {
+                    let start = first.start()?;
+                    let end = last.end()?;
                     segments.push(ContourSegment::line(end, start)?);
                 }
             }
@@ -909,12 +912,17 @@ impl DrawDraft {
         self.pending_arc = None;
         self.segments.push(arc);
         self.points.push(point);
-        // An arc that ends on the chain's first start closes the contour, which is the one way a
-        // closing click in arc mode can make a ring. A ring needs three segments; a shorter chain
-        // stays open so the next click can still extend it.
-        let first_start = self.segments.first().and_then(|segment| segment.start().ok());
-        if self.tool.closes() && first_start == Some(point) && self.segments.len() >= 3 {
-            self.closed = true;
+        // An arc that ends on the chain's first start closes the ring, which is the one way a
+        // closing click in arc mode can make a ring. The stored arc end is derived, so the joint is
+        // judged with the drawing tolerance rather than exact equality; `close` validates the whole
+        // ring before the draft becomes closed. A ring needs three segments; a shorter chain stays
+        // open so the next click can still extend it.
+        let meets_first = match self.segments.first() {
+            Some(first) => arc.end_meets(*first)?,
+            None => false,
+        };
+        if self.tool.closes() && meets_first && self.segments.len() >= 3 {
+            self.close()?;
         }
         Ok(())
     }
@@ -1498,6 +1506,28 @@ mod tests {
     }
 
     #[test]
+    fn a_closing_arc_click_finishes_the_ring() {
+        // A chain of two lines, then an arc back to the first point. The stored arc end is derived
+        // from a rounded centre, radius and angle, so it misses the click by a few micrometres on a
+        // long radius; the closing click still finishes the ring (ADR 0072).
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        let first = [millimetres(0), millimetres(0)];
+        draft.push(first).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom");
+        draft.push([millimetres(600), millimetres(400)]).expect("right");
+        assert!(draft.toggle_arc_mode());
+        draft.push_arc_through([millimetres(300), millimetres(300)]).expect("arm the closing arc");
+        draft.push(first).expect("the arc ends on the first point");
+
+        let stored_end = draft.segments().last().and_then(|segment| segment.end().ok()).expect("a stored end");
+        assert_ne!(stored_end, first, "the derived arc end is rounded away from the click");
+        assert!(draft.is_closed(), "the rounded end still closes the ring");
+        let path = draft.to_path().expect("a closed path");
+        assert_eq!(path.entries().len(), 3, "the closing joint needs no sliver segment");
+        assert_eq!(path.to_contour().expect("a ring").entries().len(), 3);
+    }
+
+    #[test]
     fn undo_cancels_a_pending_arc_before_the_last_segment() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.push([millimetres(0), millimetres(0)]).expect("start");
@@ -1566,8 +1596,6 @@ mod tests {
 
     #[test]
     fn an_arc_that_returns_to_the_start_closes_the_chain() {
-        // The radii stay small enough that a millidegree of stored angle lands well inside the
-        // one-micrometre joint tolerance.
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.toggle_arc_mode();
         draft.push([millimetres(0), millimetres(0)]).expect("start");
@@ -1580,9 +1608,10 @@ mod tests {
         assert!(draft.is_closed(), "an arc that reaches the first start closes the chain");
         let path = draft.to_path().expect("a closed path");
         assert!(path.is_closed());
-        // The stored arc end is derived from rounded angles, so a closing tie joins it to the exact
-        // first start; the ring has the three drawn segments plus that tie.
-        assert_eq!(path.entries().len(), 4, "three drawn segments and the closing tie");
+        // The stored arc end is derived from rounded angles, so it meets the exact first start only
+        // within the joint tolerance; that tolerance is the closing joint itself, so the ring holds
+        // exactly the three drawn segments and no sliver tie (ADR 0072).
+        assert_eq!(path.entries().len(), 3, "three drawn segments and no closing tie");
         assert_eq!(path.entries().iter().filter(|entry| entry.segment().is_arc()).count(), 2);
     }
 

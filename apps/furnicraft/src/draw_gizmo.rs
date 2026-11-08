@@ -26,8 +26,6 @@ const SNAP_RADIUS_POINTS: f32 = 10.0;
 const POINT_RADIUS: f32 = 3.5;
 /// Sampling tolerance for a painted preview, in millimetres.
 const PREVIEW_TOLERANCE_MM: f64 = 0.25;
-/// Joint tolerance for the preview chain, in millimetres.
-const PREVIEW_JOINT_TOLERANCE_MM: f64 = 0.001;
 
 /// Colour of the points already placed.
 const DRAFT_COLOR: Color32 = Color32::from_rgb(120, 200, 255);
@@ -130,17 +128,16 @@ impl DrawGizmo {
     /// Records what the pointer at `point` would add: a new preview, or the reason there is none.
     ///
     /// A rejected point keeps the previous preview, so the chain the user already built stays on
-    /// screen through an intermediate click that cannot join it.
+    /// screen through an intermediate click that cannot join it. A point that simply adds nothing —
+    /// the pointer sits on the chain's own end right after a click — keeps it too: clearing the
+    /// cache there is what made the preview blink between clicks.
     fn refresh_preview(&mut self, draft: &DrawDraft, point: [Length; 2]) {
         match draft.preview(point) {
             Ok(Some(path)) => {
                 self.preview = Some(path);
                 self.preview_error = None;
             }
-            Ok(None) => {
-                self.preview = None;
-                self.preview_error = None;
-            }
+            Ok(None) => self.preview_error = None,
             Err(error) => self.preview_error = Some(error.to_string()),
         }
     }
@@ -391,7 +388,9 @@ fn paint_path(
     let Ok(segments) = path.segments().map(|segment| segment.to_geom()).collect::<Result<Vec<_>, _>>() else {
         return;
     };
-    let Ok(chain) = furnicraft_geom::Contour::new_with_tolerance(segments, false, PREVIEW_JOINT_TOLERANCE_MM) else {
+    let Ok(chain) = furnicraft_geom::Contour::new_with_joint_tolerance(segments, false, |first, next| {
+        furnicraft_model::joint_tolerance_mm(*first, *next)
+    }) else {
         return;
     };
     let Ok(samples) = chain.sample(PREVIEW_TOLERANCE_MM) else {
@@ -577,6 +576,42 @@ mod tests {
         gizmo.reset();
         assert!(gizmo.preview().is_none());
         assert_eq!(gizmo.preview_error(), None);
+    }
+
+    #[test]
+    fn a_point_that_adds_nothing_keeps_the_preview() {
+        // After a click the pointer sits on the segment's own stored end, so `preview` returns
+        // `Ok(None)`; dropping the cache there made the chain blink between clicks.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        let mut gizmo = DrawGizmo::new();
+        let next = [millimetres(600), millimetres(0)];
+        gizmo.refresh_preview(&draft, next);
+        assert!(gizmo.preview().is_some(), "the first segment previews");
+        draft.push(next).expect("the click places it");
+        gizmo.refresh_preview(&draft, next);
+        assert_eq!(draft.preview(next), Ok(None), "the pointer adds nothing on the stored end");
+        assert!(gizmo.preview().is_some(), "the last valid preview survives the click");
+        assert_eq!(gizmo.preview_error(), None);
+    }
+
+    #[test]
+    fn arming_an_arc_keeps_the_chain_preview() {
+        // The click that arms an arc cannot preview an arc to itself (three equal points are
+        // degenerate), so the last shape stays on screen while the pointer waits for the end.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom");
+        draft.push([millimetres(600), millimetres(400)]).expect("right");
+        draft.toggle_arc_mode();
+        let mut gizmo = DrawGizmo::new();
+        let through = [millimetres(300), millimetres(300)];
+        gizmo.refresh_preview(&draft, through);
+        assert!(gizmo.preview().is_some(), "the next straight segment previews");
+        draft.push_arc_through(through).expect("arm the arc");
+        gizmo.refresh_preview(&draft, through);
+        assert!(gizmo.preview().is_some(), "the pending arc never blanks the preview");
+        assert!(gizmo.preview_error().is_some(), "the degenerate arc names its reason");
     }
 
     #[test]

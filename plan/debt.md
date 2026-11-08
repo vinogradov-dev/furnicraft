@@ -26,6 +26,10 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[object]` A contour's self-intersection test samples each segment into chords; a crossing finer than
   0.1 mm inside an arc can slip through. An exact segment-pair test can replace it when the sketch
   editor needs the last tenth of a millimetre.
+- `[object]` An arc stores a rounded centre, radius and angle rather than its two endpoints, so a
+  joint at an arc is judged with a radius-dependent slack (ADR 0072). Storing explicit endpoints at
+  schema 20 would make the arc end exactly the point the user drew, return the tolerance to one
+  micrometre for every pair, and drop the pair rule from `to_geometry` and `joint_tolerance_mm`.
 - `[object]` Along-contour movement at a corner shared by two arcs is refused with `ArcJointMismatch`
   when no point sits on both circles at millidegree resolution, because neither stored circle may be
   bent. Free movement rebuilds both arcs and is the default, so the grip only needs to avoid that

@@ -1969,4 +1969,40 @@ mod tests {
             signed_volume(&mesh)
         );
     }
+
+    #[test]
+    fn a_ring_closed_by_a_rounded_arc_end_still_extrudes() {
+        // The same ring the drawing tools now accept: a two-line chain closed by a 600 mm arc whose
+        // derived end misses the first point by 5 µm. It reaches a contour and a solid (ADR 0072).
+        use furnicraft_model::{ContourSegment, Path};
+        use furnicraft_units::Degrees;
+
+        let arc = ContourSegment::arc(
+            [Length::ZERO, Length::ZERO],
+            millimetres(600),
+            Degrees::ZERO,
+            Degrees::from_millidegrees(60_000),
+        )
+        .expect("a 60 degree arc of 600 mm");
+        let end = arc.end().expect("a derived end");
+        let start = [Length::from_micrometres(end[0].micrometres() + 5), end[1]];
+        let path = Path::new(
+            vec![
+                arc,
+                ContourSegment::line(start, [Length::ZERO, Length::ZERO]).expect("the chord"),
+                ContourSegment::line([Length::ZERO, Length::ZERO], [millimetres(600), Length::ZERO]).expect("the base"),
+            ],
+            true,
+        )
+        .expect("the rounded arc end closes the ring");
+        let constructive = Constructive::extrude(path, millimetres(10)).expect("constructive");
+        let mesh = build_constructive_mesh(&constructive).expect("mesh");
+        assert!(mesh.positions().len() > 6, "the arc contributes interior points");
+        let expected = std::f64::consts::PI * 600.0 * 600.0 / 6.0 * 10.0;
+        assert!(
+            (signed_volume(&mesh) - expected).abs() < expected * 1.0e-2,
+            "volume was {}, expected about {expected}",
+            signed_volume(&mesh)
+        );
+    }
 }
