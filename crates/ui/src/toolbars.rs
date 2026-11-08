@@ -800,8 +800,7 @@ fn show_group_row(
                 actions.push(ToolAction::CloseDrawing);
             }
             let cancel = draft.is_some();
-            let cancel_hint =
-                tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Ctrl+Esc"));
+            let cancel_hint = tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Esc"));
             if icons::ribbon_button(ui, cell, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
                 && cancel
             {

@@ -157,7 +157,8 @@ primitive is described in section 5.
   uses the same kind and always starts at the stored end of the previous segment. Alt suppresses the
   draft-end and grid snaps for one click and never changes the gesture, while Shift still locks the
   point to an axis ([0076](../decisions/0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md)).
-  Escape or the right button commits the figure and Ctrl+Esc or the ribbon's Cancel discards it.
+  Enter or the right button commits the figure, Escape or the ribbon's Cancel discards it, and
+  choosing another drawing tool replaces the running draft.
 - A committed figure lands as one `object.path.create` and immediately enters its own contour edit
   mode, so the grips are on screen without a second selection.
 - Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
