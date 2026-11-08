@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
-  endpoints only slide along the arc and change its angle — and dragging the middle node makes the
-  radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
-  rebuilds the adjoining arc through its other end and its current mid point, the mid node rebuilds
-  it through both endpoints and the new mid point, the centre still moves the whole arc, and
-  sliding along the arc stays an explicit mode. Suspected cause: `ContourGizmo::dragged_point`
-  projects every free corner onto an adjoining arc's circle, and the `ArcPoint`/`ArcRadius` drags
-  call `Path::set_arc_radius_at`, which takes the radius from the pointer's distance to the centre.
-  Fix: project only for `CornerMove::Along`; rebuild in `Path::free_corner` and a new
-  `set_arc_through_midpoint`; refuse a degenerate rebuild, keep the last valid arc and cap the
-  radius at the document range. Tests: a free arc end follows the pointer and changes the radius;
-  the other end stays; the mid node stays finite; a collinear mid point is refused; the along mode
-  keeps centre and radius. ADR 0075 is updated.
-  `files: crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
-
 - `[ ]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
   first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
   the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
@@ -308,6 +293,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
+  endpoints only slide along the arc and change its angle — and dragging the middle node makes the
+  radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
+  rebuilds the adjoining arc through its other end and its current mid point, the mid node rebuilds
+  it through both endpoints and the new mid point, the centre still moves the whole arc, and
+  sliding along the arc stays an explicit mode. Suspected cause: `ContourGizmo::dragged_point`
+  projects every free corner onto an adjoining arc's circle, and the `ArcPoint`/`ArcRadius` drags
+  call `Path::set_arc_radius_at`, which takes the radius from the pointer's distance to the centre.
+  Fix: project only for `CornerMove::Along`; rebuild in `Path::free_corner` and a new
+  `set_arc_through_midpoint`; refuse a degenerate rebuild, keep the last valid arc and cap the
+  radius at the document range. Tests: a free arc end follows the pointer and changes the radius;
+  the other end stays; the mid node stays finite; a collinear mid point is refused; the along mode
+  keeps centre and radius. ADR 0075 is updated.
+  `64c11d3`
+  `files: crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
 
 - `[x]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
   runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:

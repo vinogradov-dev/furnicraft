@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X13 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=X14 state=idle base=64c11d3 updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,14 +50,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-The 2026-11-08 drawing, contour and view defect report is queued first as X11–X21, one commit each,
-then U45 → U48 → U46 → U49: the tool that cannot be switched, the arc nodes, the grips, the
-rectangle, the along-contour mode, the figure card, the ghost, the top view. X21 landed the arc that
-closes a polyline: a pending arc is the closing segment, the first node turns green when a click
-would close the ring, and both Close buttons enable from two segments (ADR 0077). X12 landed the
-drawing gesture around it: another tool replaces a running draft, Escape cancels it, Enter and the
-right button commit, and a refused commit keeps both the draft and the tool (ADR 0076). X13 is next:
-an arc follows every node it is dragged by.
+The 2026-11-08 drawing, contour and view defect report is queued as X11–X21, one commit each, then
+U45 → U48 → U46 → U49. X21, X12 and X13 landed (ADRs 0077, 0076, 0075): a pending arc closes the
+ring, the drawing gesture replaces a running draft, and an arc endpoint follows the pointer in free
+mode. X14 is next: the grip set matches the figure — a polygon shows no phantom node and a circle
+keeps its rim grip from any point.
 
 ## Index
 
