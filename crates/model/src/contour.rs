@@ -154,6 +154,54 @@ impl ContourSegment {
         point_to_document(self.to_geom()?.end())
     }
 
+    /// The point on this segment at `distance` from `far_end`, measured along the curve.
+    ///
+    /// `far_end` must be one of the segment's own endpoints. A line measures a straight distance,
+    /// an arc measures its arc length. The distance is clamped to the segment's own extent, so a
+    /// caller can pass a typed length without checking it first.
+    pub fn point_at_distance_from(
+        self,
+        far_end: [Length; 2],
+        distance: Length,
+    ) -> Result<[Length; 2], ContourSegmentError> {
+        match self {
+            Self::Line { start, end } => {
+                let start = point_to_geometry(start)?;
+                let end = point_to_geometry(end)?;
+                let far = point_to_geometry(far_end)?;
+                let direction = end - start;
+                let length = direction.length();
+                if !length.is_finite() || length <= 0.0 {
+                    return Err(ContourSegmentError::ZeroLength);
+                }
+                let unit = direction / length;
+                let distance = distance.millimetres_f64().clamp(0.0, length);
+                // Travel from the far end toward the other endpoint.
+                let toward = if (far - start).length() <= (far - end).length() { unit } else { -unit };
+                point_to_document(far + toward * distance)
+            }
+            Self::Arc { center, radius, start_angle, sweep } => {
+                let center = point_to_geometry(center)?;
+                let radius_mm = radius.millimetres_f64();
+                let start_r = start_angle.radians_f64();
+                let sweep_r = sweep.radians_f64();
+                let far = point_to_geometry(far_end)?;
+                let arc_len = sweep_r.abs() * radius_mm;
+                if !arc_len.is_finite() || arc_len <= 0.0 || radius_mm <= 0.0 {
+                    return Err(ContourSegmentError::InvalidSweep);
+                }
+                let distance = distance.millimetres_f64().clamp(0.0, arc_len);
+                let far_angle = (far - center).y.atan2((far - center).x);
+                let start_point = DVec2::new(start_r.cos(), start_r.sin()) * radius_mm;
+                let at_start = (far - (center + start_point)).length() < 1.0e-3;
+                let travel = if at_start { sweep_r.signum() } else { -sweep_r.signum() };
+                let delta = travel * distance / radius_mm;
+                let angle = far_angle + delta;
+                point_to_document(center + DVec2::new(angle.cos(), angle.sin()) * radius_mm)
+            }
+        }
+    }
+
     /// Whether the end of this segment meets the start of `next` within the drawing joint
     /// tolerance.
     ///
@@ -2110,7 +2158,35 @@ impl PathShape {
             return false;
         }
         match self {
-            Self::Rectangle => path.entries.len() == 4 && path.entries.iter().all(|entry| !entry.segment().is_arc()),
+            Self::Rectangle => {
+                if path.entries.len() != 4 || path.entries.iter().any(|entry| entry.segment().is_arc()) {
+                    return false;
+                }
+                // Verify right angles: the two axis directions must be perpendicular within a
+                // micrometre of the diagonal length. Compute from the first and the fourth corner
+                // against the first corner.
+                let entries = path.entries();
+                let Some(&first_entry) = entries.first() else {
+                    return false;
+                };
+                let Ok(first) = first_entry.segment().to_geom() else {
+                    return false;
+                };
+                let Ok(second) = entries.get(1).map_or(Err(()), |e| e.segment().to_geom().map_err(|_| ())) else {
+                    return false;
+                };
+                let Ok(fourth) = entries.get(3).map_or(Err(()), |e| e.segment().to_geom().map_err(|_| ())) else {
+                    return false;
+                };
+                let u = second.start() - first.start();
+                let v = fourth.start() - first.start();
+                let dot = u.dot(v).abs();
+                // The dot product should be zero for a rectangle. Allow one micrometre of the
+                // diagonal length, which is `(u.length() + v.length()) * 0.001 * 0.5` ≈ half a
+                // part in a thousand — generous for rounding but tight enough for a rectangle.
+                let bound = (u.length() + v.length()) * 0.5e-3;
+                dot <= bound
+            }
             Self::Circle => {
                 let mut center = None;
                 let mut radius = None;

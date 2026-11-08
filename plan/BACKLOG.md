@@ -25,79 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
-  endpoints only slide along the arc and change its angle — and dragging the middle node makes the
-  radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
-  rebuilds the adjoining arc through its other end and its current mid point, the mid node rebuilds
-  it through both endpoints and the new mid point, the centre still moves the whole arc, and
-  sliding along the arc stays an explicit mode. Suspected cause: `ContourGizmo::dragged_point`
-  projects every free corner onto an adjoining arc's circle, and the `ArcPoint`/`ArcRadius` drags
-  call `Path::set_arc_radius_at`, which takes the radius from the pointer's distance to the centre.
-  Fix: project only for `CornerMove::Along`; rebuild in `Path::free_corner` and a new
-  `set_arc_through_midpoint`; refuse a degenerate rebuild, keep the last valid arc and cap the
-  radius at the document range. Tests: a free arc end follows the pointer and changes the radius;
-  the other end stays; the mid node stays finite; a collinear mid point is refused; the along mode
-  keeps centre and radius. ADR 0075 is updated.
-  `files: crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
-
-- `[ ]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
-  first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
-  the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
-  radius from a vertex and from the card; a circle can be pulled from any point on its rim in any
-  mode and only its radius changes; no grip sits off the figure. Suspected cause:
-  `PolygonFrame::radius_point` sits on the circumcircle midway between the first two vertices,
-  outside the first side; a tagged circle is four quarter arcs, and `grip_at` offers the synthetic
-  `ArcRadius` on any hovered arc, which deforms one quarter. Fix: drop
-  `ContourGrip::PolygonRadius` from the grip list and its number/value/label/drag/set tables; add a
-  circle-rim grip for a `PathShape::Circle` draft that calls `set_circle_radius_at` and numbers `R`;
-  an untagged arc chain keeps `ArcPoint`/`ArcRadius`. Tests: a circle pulled at 37° stays round and
-  takes the radius from the centre; a polygon has no grip off the figure; a vertex still scales it;
-  an arc chain keeps its arc grips.
-  `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
-
-- `[ ]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
-  not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
-  hit radius grabs it even when the pointer moves a few points before egui's drag threshold, and
-  the cursor stays the default arrow. Suspected cause: `ContourGizmo::update` resolves the grip from
-  the current pointer when `drag_started` fires, which is after the threshold, and `cursor()`
-  returns `Grab`/`Grabbing`/`PointingHand`. Fix: resolve from `pointer.press_origin()`, keep the
-  grabbed grip for the whole drag, keep the 9–12 pt hit radius and let the enlarged hovered grip
-  carry the feedback; `cursor()` returns `Default` and the shell's contour branch goes. Tests: a
-  press exactly on a grip grabs it; a press 12 pt away does not; a press followed by a 5 pt move
-  before the threshold still grabs; the cursor is the default.
-  `files: apps/furnicraft/src/contour_gizmo.rs, apps/furnicraft/src/main.rs`
-
-- `[ ]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
-  rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
-  a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
-  makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
-  the document range, and a figure edited along a side stops being that figure and becomes a plain
-  polyline. Owner decision: a midpoint crossing the opposite side clamps at a minimum extent of
-  1 mm instead of mirroring. Suspected cause: `move_rectangle_midpoint` refuses a non-positive half
-  but leaves a sliver; `rectangle_frame` never orthogonalises the axes and
-  `PathShape::fits(Rectangle)` only counts four lines; `move_rectangle_corner` does not clamp;
-  `rebuild` keeps the tag through an along-contour edit. Fix: orthonormalise the axes and require
-  right angles within a micrometre, clamp the midpoint at the minimum, clamp the corner, and drop
-  the tag on a topology change. Tests: a rotated rectangle keeps right angles through a midpoint
-  drag; a midpoint drag never yields zero; a corner drag cannot leave the range; an along-contour
-  edit drops the tag; a tagged rectangle that is not right-angled is a load error.
-  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs, crates/ui/src/contour_grips.rs`
-
-- `[ ]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
-  field, the node can pass the opposite node, and a zero-length segment cannot be finished.
-  Expectation: a length field shows the distance from the segment's opposite end and accepts a
-  typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
-  removes the zero-length segment and joins the two nodes; a ring keeps at least three segments.
-  Suspected cause: `numeric_entry` opens only when `grip_number` returns a number, and an untagged
-  polyline corner has none, while an arc corner numbers an angle or a radius; nothing clamps at the
-  opposite node and nothing records a collapse. Fix: build the entry from the drag motion (`Length`,
-  label `L`, value from the other end, Enter moves the corner that far along the support, arc length
-  for an arc); clamp to `0..=segment_length`, record `collapse` on `ContourEdit`, remove collapsed
-  segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
-  moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
-  nodes; a ring of three refuses; the undo entry is one.
-  `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
-
 - `[ ]` **X18** a figure's geometry is editable in its card: the object card has no radius for a
   circle, no width and height for a rectangle and no side count for a polygon, and a constructive
   body's drawn path is not in the summary at all. Expectation: the card shows the fields the figure
@@ -284,6 +211,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   uploaded scene without touching the document revision.
   `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
 
+- `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
+  arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
+  loop whose visible branch reads as a straight line through the joint and across the viewport.
+  Expectation: a corner drag keeps the arc's class — a shallow arc stays shallow, a deliberate major
+  arc stays major — and the draft never draws outside the figure. Suspected cause:
+  `arc_with_radius` hands `arc_between` the side of the old arc's midpoint against the *new* chord,
+  and `arc_between` returns the first candidate whose midpoint is on that side. For a shallow arc a
+  1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
+  test matches the major arc's midpoint and the sweep becomes ~360°. Reproduced with chord 100 mm,
+  sagitta 0.5 mm (R 2500 mm, sweep -2.292°): a 1 mm corner drag yields sweep 357.731° and a sampled
+  chain spanning x -2425..2575, y -4899..101 mm; the joints still meet, so the ring validates and
+  Apply stores it. Introduced by X13 (`64c11d3`). Fix: choose the candidate by its sweep magnitude
+  against the old arc's — nearest |sweep|, tie broken by the old sign — and pass the old sweep into
+  `arc_between`; the centre side stays as it is. Tests: a shallow arc keeps a small sweep and its
+  points stay inside the figure; a major arc stays major; the three existing `a_free_arc_end_*`
+  tests stay green; a grip drag on a shallow arc keeps its class.
+  `files: crates/model/src/contour_edit.rs, crates/ui/src/contour_grips.rs`
+
 ## Next
 
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
@@ -308,6 +253,84 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
+  field, the node can pass the opposite node, and a zero-length segment cannot be finished.
+  Expectation: a length field shows the distance from the segment's opposite end and accepts a
+  typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
+  removes the zero-length segment and joins the two nodes; a ring keeps at least three segments.
+  Suspected cause: `numeric_entry` opens only when `grip_number` returns a number, and an untagged
+  polyline corner has none, while an arc corner numbers an angle or a radius; nothing clamps at the
+  opposite node and nothing records a collapse. Fix: build the entry from the drag motion (`Length`,
+  label `L`, value from the other end, Enter moves the corner that far along the support, arc length
+  for an arc); clamp to `0..=segment_length`, record `collapse` on `ContourEdit`, remove collapsed
+  segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
+  moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
+  nodes; a ring of three refuses; the undo entry is one.
+  `fc2d1f3`
+  `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
+
+- `[x]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
+  rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
+  a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
+  makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
+  the document range, and a figure edited along a side stops being that figure and becomes a plain
+  polyline. Owner decision: a midpoint crossing the opposite side clamps at a minimum extent of
+  1 mm instead of mirroring. Suspected cause: `move_rectangle_midpoint` refuses a non-positive half
+  but leaves a sliver; `rectangle_frame` never orthogonalises the axes and
+  `PathShape::fits(Rectangle)` only counts four lines; `move_rectangle_corner` does not clamp;
+  `rebuild` keeps the tag through an along-contour edit. Fix: orthonormalise the axes and require
+  right angles within a micrometre, clamp the midpoint at the minimum, clamp the corner, and drop
+  the tag on a topology change. Tests: a rotated rectangle keeps right angles through a midpoint
+  drag; a midpoint drag never yields zero; a corner drag cannot leave the range; an along-contour
+  edit drops the tag; a tagged rectangle that is not right-angled is a load error.
+  `bf07643`
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs, crates/ui/src/contour_grips.rs`
+
+- `[x]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
+  first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
+  the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
+  radius from a vertex and from the card; a circle can be pulled from any point on its rim in any
+  mode and only its radius changes; no grip sits off the figure. Suspected cause:
+  `PolygonFrame::radius_point` sits on the circumcircle midway between the first two vertices,
+  outside the first side; a tagged circle is four quarter arcs, and `grip_at` offers the synthetic
+  `ArcRadius` on any hovered arc, which deforms one quarter. Fix: drop
+  `ContourGrip::PolygonRadius` from the grip list and its number/value/label/drag/set tables; add a
+  circle-rim grip for a `PathShape::Circle` draft that calls `set_circle_radius_at` and numbers `R`;
+  an untagged arc chain keeps `ArcPoint`/`ArcRadius`. Tests: a circle pulled at 37° stays round and
+  takes the radius from the centre; a polygon has no grip off the figure; a vertex still scales it;
+  an arc chain keeps its arc grips.
+  `916b15e`
+  `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
+
+- `[x]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
+  not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
+  hit radius grabs it even when the pointer moves a few points before egui's drag threshold, and
+  the cursor stays the default arrow. Suspected cause: `ContourGizmo::update` resolves the grip from
+  the current pointer when `drag_started` fires, which is after the threshold, and `cursor()`
+  returns `Grab`/`Grabbing`/`PointingHand`. Fix: resolve from `pointer.press_origin()`, keep the
+  grabbed grip for the whole drag, keep the 9–12 pt hit radius and let the enlarged hovered grip
+  carry the feedback; `cursor()` returns `Default` and the shell's contour branch goes. Tests: a
+  press exactly on a grip grabs it; a press 12 pt away does not; a press followed by a 5 pt move
+  before the threshold still grabs; the cursor is the default.
+  `52f1d0f`
+  `files: apps/furnicraft/src/contour_gizmo.rs, apps/furnicraft/src/main.rs`
+
+- `[x]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
+  endpoints only slide along the arc and change its angle — and dragging the middle node makes the
+  radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
+  rebuilds the adjoining arc through its other end and its current mid point, the mid node rebuilds
+  it through both endpoints and the new mid point, the centre still moves the whole arc, and
+  sliding along the arc stays an explicit mode. Suspected cause: `ContourGizmo::dragged_point`
+  projects every free corner onto an adjoining arc's circle, and the `ArcPoint`/`ArcRadius` drags
+  call `Path::set_arc_radius_at`, which takes the radius from the pointer's distance to the centre.
+  Fix: project only for `CornerMove::Along`; rebuild in `Path::free_corner` and a new
+  `set_arc_through_midpoint`; refuse a degenerate rebuild, keep the last valid arc and cap the
+  radius at the document range. Tests: a free arc end follows the pointer and changes the radius;
+  the other end stays; the mid node stays finite; a collinear mid point is refused; the along mode
+  keeps centre and radius. ADR 0075 is updated.
+  `64c11d3`
+  `files: crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
 
 - `[x]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
   runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:

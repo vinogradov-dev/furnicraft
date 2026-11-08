@@ -202,13 +202,15 @@ pub struct ContourEdit {
     target: ContourTarget,
     base: ContourDraft,
     draft: ContourDraft,
+    /// The segment an along-contour drag collapsed to zero length, removed on Apply.
+    collapse: Option<ContourSegmentId>,
 }
 
 impl ContourEdit {
     /// Starts editing `target`, or returns `None` when it has no ring or chain.
     pub fn start(project: &Project, target: ContourTarget) -> Option<Self> {
         let base = target.draft(project)?;
-        Some(Self { target, base: base.clone(), draft: base })
+        Some(Self { target, base: base.clone(), draft: base, collapse: None })
     }
 
     /// Whether the target still has a ring or chain to edit.
@@ -239,6 +241,45 @@ impl ContourEdit {
     /// Throws the working copy away and starts again from the stored draft.
     pub fn reset(&mut self) {
         self.draft = self.base.clone();
+        self.collapse = None;
+    }
+
+    /// Records that an along-contour drag collapsed `segment` to zero length.
+    ///
+    /// The segment is removed when the edit is applied; until then the draft keeps a legal sliver
+    /// so the ring or chain stays valid and the user can drag the corner back.
+    pub fn record_collapse(&mut self, segment: ContourSegmentId) {
+        self.collapse = Some(segment);
+    }
+
+    /// Clears a recorded collapse, for example when the corner is dragged back off the far end.
+    pub fn clear_collapse(&mut self) {
+        self.collapse = None;
+    }
+
+    /// The segment a collapse is waiting to remove, if any.
+    pub const fn collapse(&self) -> Option<ContourSegmentId> {
+        self.collapse
+    }
+
+    /// The draft with the collapsed segment removed, or an error when that would leave too few.
+    fn draft_with_collapse(&self) -> Result<ContourDraft, String> {
+        let Some(segment) = self.collapse else {
+            return Ok(self.draft.clone());
+        };
+        match &self.draft {
+            ContourDraft::Ring(contour) => {
+                if contour.entries().len() <= 3 {
+                    return Err("a ring keeps at least three segments".to_owned());
+                }
+                let removed = contour.remove_segment(segment).map_err(|error| error.to_string())?;
+                Ok(ContourDraft::Ring(removed))
+            }
+            ContourDraft::Chain(path) => {
+                let removed = path.remove_segment(segment).map_err(|error| error.to_string())?;
+                Ok(ContourDraft::Chain(removed))
+            }
+        }
     }
 
     /// Moves the corner at the start of `segment` to `point` in the target's local plane.
@@ -333,7 +374,8 @@ impl ContourEdit {
     /// The caller owns the mode and drops it only on success; a rejected edit leaves the draft in
     /// place so the user can fix it or cancel.
     pub fn apply(&self, session: &mut Session) -> Result<(), String> {
-        match (self.target, &self.draft) {
+        let draft = self.draft_with_collapse()?;
+        match (self.target, &draft) {
             (ContourTarget::Panel(panel), ContourDraft::Ring(contour)) => {
                 let params = json(&PanelOutlineSet { panel, contour: contour.clone() })?;
                 dispatch(session, OUTLINE_SET_ID, &params).map(|_| ())
@@ -2032,5 +2074,72 @@ mod tests {
         assert!(!DrawDraftError::DuplicatePoint.to_string().is_empty());
         assert!(!DrawDraftError::PointOutOfRange.to_string().is_empty());
         assert!(!DrawDraftError::AlreadyClosed.to_string().is_empty());
+    }
+
+    #[test]
+    fn a_collapsed_segment_is_removed_on_apply_and_joins_the_nodes() {
+        let (project, panel) = panel_project();
+        let mut session = session(project);
+        let mut edit = ContourEdit::start(session.project(), ContourTarget::Panel(panel)).expect("editable");
+        let segment = edit.draft().id_at(0).expect("bottom edge");
+        // A collapse records the segment to remove; the draft itself still has four sides.
+        edit.record_collapse(segment);
+        assert_eq!(edit.collapse(), Some(segment));
+        assert_eq!(edit.draft().segment_count(), 4);
+        edit.apply(&mut session).expect("apply removes the collapsed side");
+        let ring = session.project().panel(panel).expect("panel").outline_contour().expect("ring");
+        assert_eq!(ring.entries().len(), 3, "the collapsed side is gone and its nodes joined");
+        session.undo().expect("one undo restores the whole edit");
+        assert_eq!(
+            session.project().panel(panel).expect("panel").outline_contour().expect("ring").entries().len(),
+            4,
+            "one undo restores the ring"
+        );
+    }
+
+    #[test]
+    fn a_ring_of_three_refuses_a_collapse() {
+        // A triangular contour panel: removing one side would leave two, below the ring minimum.
+        let triangle = Contour::from_polygon(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(300), millimetres(0)],
+            [millimetres(150), millimetres(260)],
+        ])
+        .expect("triangle");
+        let panel = Panel::new_contour(
+            Id::new(2).expect("id"),
+            "Triangle",
+            triangle,
+            None,
+            sample_panel_thickness(),
+            Placement::IDENTITY,
+        )
+        .expect("contour panel");
+        let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
+        let project = Project::new(root).expect("project");
+        let mut session = session(project);
+        let mut edit =
+            ContourEdit::start(session.project(), ContourTarget::Panel(Id::new(2).expect("id"))).expect("editable");
+        let segment = edit.draft().id_at(0).expect("first side");
+        edit.record_collapse(segment);
+        let error = edit.apply(&mut session).expect_err("a ring of three cannot lose a side");
+        assert!(error.contains("three"), "the error names the minimum: {error}");
+        assert_eq!(edit.draft().segment_count(), 3, "the draft is untouched");
+    }
+
+    #[test]
+    fn a_path_collapse_removes_the_segment_and_keeps_one_undo_entry() {
+        let (project, object) = path_project(open_path());
+        let mut session = session(project);
+        let mut edit = ContourEdit::start(session.project(), ContourTarget::Path(object)).expect("editable");
+        let segment = edit.draft().id_at(0).expect("first segment");
+        let revision = session.project().revision();
+        edit.record_collapse(segment);
+        edit.apply(&mut session).expect("apply removes the collapsed segment");
+        let path = session.project().object_path(object).expect("path").clone();
+        assert_eq!(path.entries().len(), 1, "one segment was removed");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"), "one undo entry");
+        session.undo().expect("undo restores the path");
+        assert_eq!(session.project().object_path(object).expect("path").entries().len(), 2);
     }
 }

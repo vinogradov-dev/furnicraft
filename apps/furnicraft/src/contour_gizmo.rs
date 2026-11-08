@@ -63,6 +63,8 @@ struct NumericEntry {
     text: String,
     /// The value the drag started from, which Escape restores.
     start: Option<GripValue>,
+    /// The motion segment for an along-contour drag, used to move the corner by a typed length.
+    motion: Option<CornerMove>,
     pointer: Pos2,
     /// Whether the field still has to ask for keyboard focus.
     focus: bool,
@@ -78,6 +80,8 @@ pub(crate) enum NumericAction {
     Apply(ContourGrip, GripValue),
     /// Put the value the drag started from back.
     Restore(ContourGrip, GripValue),
+    /// Apply a typed length to an along-contour corner, moving it along the segment.
+    ApplyAlong(ContourGrip, GripValue, CornerMove),
 }
 
 /// Pointer state of the contour gizmo; the working copy itself belongs to the editor.
@@ -116,16 +120,11 @@ impl ContourGizmo {
     }
 
     /// The cursor the viewport should show while the mode is active.
+    ///
+    /// Always the default arrow: the enlarged hovered grip and the active drag state carry the
+    /// feedback, and a hand or grab icon would fight the selection cursor and add noise.
     pub(crate) fn cursor(&self) -> egui::CursorIcon {
-        if self.drag.is_some() {
-            egui::CursorIcon::Grabbing
-        } else if self.hover.is_some() {
-            egui::CursorIcon::Grab
-        } else if self.hover_segment.is_some() {
-            egui::CursorIcon::PointingHand
-        } else {
-            egui::CursorIcon::Default
-        }
+        egui::CursorIcon::Default
     }
 
     /// Applies the pointer to the working copy; returns whether the draft changed.
@@ -159,15 +158,23 @@ impl ContourGizmo {
 
         let mut changed = false;
         if response.drag_started_by(egui::PointerButton::Primary) {
-            self.drag = grip.map(|grip| GripDrag {
+            // Resolve the grabbed grip from the press origin, not the current pointer.
+            // The pointer may have moved a few points before egui fires the drag threshold,
+            // and the user clearly intended to grab whatever was under the initial press.
+            let press_origin = response.ctx.input(|i| i.pointer.press_origin());
+            let press_grip = press_origin.and_then(|origin| {
+                let seg = segment_at(camera, rect, placement, &draft, origin);
+                grip_at(camera, rect, placement, &draft, origin, seg)
+            });
+            self.drag = press_grip.map(|grip| GripDrag {
                 target,
                 grip,
-                motion: self.motion_for(camera, rect, placement, &draft, grip, pointer),
+                motion: self.motion_for(camera, rect, placement, &draft, grip, press_origin),
             });
             if let Some(drag) = self.drag
-                && let Some(pointer) = pointer
+                && let Some(origin) = press_origin
             {
-                self.numeric = numeric_entry(&draft, drag.grip, pointer);
+                self.numeric = numeric_entry(&draft, drag.grip, origin, Some(drag.motion));
             }
         }
         if let Some(drag) = self.drag {
@@ -183,15 +190,41 @@ impl ContourGizmo {
                     && editor.contour_edit_drag_grip(drag.grip, [x, y], drag.motion).is_ok()
                 {
                     changed = true;
+                    // An along-contour drag that reaches the far end records a collapse, which
+                    // Apply turns into a segment removal. Dragging back clears it.
+                    if let (ContourGrip::Corner(corner), CornerMove::Along(segment)) = (drag.grip, drag.motion) {
+                        let collapsed = editor
+                            .contour_edit()
+                            .and_then(|edit| {
+                                let start = edit.base().grip_position(ContourGrip::Corner(corner))?;
+                                edit.draft().along_contour_length(segment, corner, start)
+                            })
+                            .is_some_and(|length| length.micrometres() <= 2);
+                        if collapsed {
+                            editor.contour_edit_record_collapse(segment);
+                        } else {
+                            editor.contour_edit_clear_collapse();
+                        }
+                    }
                 }
                 if let Some(entry) = &mut self.numeric
                     && let Some(pointer) = pointer
                 {
                     entry.pointer = pointer;
-                    if !entry.edited
-                        && let Some(value) = editor.contour_edit().and_then(|edit| edit.grip_value(entry.grip))
-                    {
-                        entry.text = value.text();
+                    if !entry.edited {
+                        let value = if let Some(CornerMove::Along(segment)) = entry.motion
+                            && let ContourGrip::Corner(corner) = entry.grip
+                        {
+                            editor.contour_edit().and_then(|edit| {
+                                let start = edit.base().grip_position(ContourGrip::Corner(corner))?;
+                                edit.draft().along_contour_length(segment, corner, start).map(GripValue::Length)
+                            })
+                        } else {
+                            editor.contour_edit().and_then(|edit| edit.grip_value(entry.grip))
+                        };
+                        if let Some(value) = value {
+                            entry.text = value.text();
+                        }
                     }
                 }
                 if response.drag_stopped_by(egui::PointerButton::Primary) {
@@ -221,12 +254,16 @@ impl ContourGizmo {
         Ok(changed)
     }
 
-    /// The point a grip really receives, after the arc projection a free corner needs.
+    /// The point a grip really receives, after the arc projection an along-contour corner needs.
+    ///
+    /// A free corner takes the pointer point directly and the arc endpoint rebuilds the arc through
+    /// the other end and its current midpoint. An along-contour corner projects onto the arc's
+    /// circle so the centre and radius stay fixed.
     fn dragged_point(&self, draft: &ContourDraft, drag: GripDrag, local: DVec2) -> Option<DVec2> {
         let ContourGrip::Corner(corner) = drag.grip else {
             return Some(local);
         };
-        if matches!(drag.motion, CornerMove::Free) { project_arc_corner(draft, corner, local) } else { Some(local) }
+        if matches!(drag.motion, CornerMove::Along(_)) { project_arc_corner(draft, corner, local) } else { Some(local) }
     }
 
     /// The motion a drag takes, resolved once from the toggle and the junction under the pointer.
@@ -282,7 +319,8 @@ impl ContourGizmo {
             paint_grip(&painter, position, *grip, selected, hovered);
         }
         // The radius grip on a hovered arc curve is not part of the stable list, so paint it here.
-        if let Some(grip @ ContourGrip::ArcRadius(..)) = self.hover
+        // The radius grip on a hovered arc curve or a circle rim is not part of the stable list, so paint it here.
+        if let Some(grip @ (ContourGrip::ArcRadius(..) | ContourGrip::CircleRim(..))) = self.hover
             && !grips.contains(&grip)
             && let Some(local) = edit.draft().grip_position(grip)
         {
@@ -334,7 +372,13 @@ impl ContourGizmo {
                             }
                         } else if enter {
                             match entry.kind.parse(&entry.text) {
-                                Ok(value) => action = Some(NumericAction::Apply(entry.grip, value)),
+                                Ok(value) => {
+                                    action = if let Some(motion) = entry.motion {
+                                        Some(NumericAction::ApplyAlong(entry.grip, value, motion))
+                                    } else {
+                                        Some(NumericAction::Apply(entry.grip, value))
+                                    };
+                                }
                                 Err(error) => entry.error = Some(error),
                             }
                         } else if response.lost_focus() && !dragging {
@@ -353,16 +397,33 @@ impl ContourGizmo {
 }
 
 /// The editable numeric field a grip opens, when it takes a number at all.
-fn numeric_entry(draft: &ContourDraft, grip: ContourGrip, pointer: Pos2) -> Option<NumericEntry> {
-    let kind = draft.grip_number(grip)?;
-    let value = draft.grip_value(grip)?;
-    let label = draft.grip_label(grip)?;
+fn numeric_entry(
+    draft: &ContourDraft,
+    grip: ContourGrip,
+    pointer: Pos2,
+    motion: Option<CornerMove>,
+) -> Option<NumericEntry> {
+    let (kind, value, label, motion) = if let Some(motion @ CornerMove::Along(segment)) = motion
+        && let ContourGrip::Corner(corner) = grip
+    {
+        // Along-contour mode: show the length from the far end of the motion segment. At the
+        // moment the drag starts the corner is still at its base position.
+        let start = draft.grip_position(grip)?;
+        let length = draft.along_contour_length(segment, corner, start)?;
+        (GripNumber::Length, GripValue::Length(length), "L", Some(motion))
+    } else {
+        let kind = draft.grip_number(grip)?;
+        let value = draft.grip_value(grip)?;
+        let label = draft.grip_label(grip)?;
+        (kind, value, label, None)
+    };
     Some(NumericEntry {
         grip,
         kind,
         label,
         text: value.text(),
         start: Some(value),
+        motion,
         pointer,
         focus: true,
         edited: false,
@@ -518,11 +579,18 @@ fn grip_at(
     // A ring has no arc grips yet, so it must not offer a radius handle it cannot drag.
     draft.as_chain()?;
     let segment = hover_segment?;
-    if !draft.segment(segment)?.is_arc() {
+    let curve = draft.segment(segment)?;
+    if !curve.is_arc() {
         return None;
     }
+    // A circle-tagged path exposes a rim grip that scales the whole circle.
+    if draft.as_chain().is_some_and(|path| path.shape() == Some(furnicraft_model::PathShape::Circle)) {
+        let local = local_point(pointer, rect, camera, placement)?;
+        let point = arc_nearest(curve, local)?;
+        return Some(ContourGrip::CircleRim(point));
+    }
     let local = local_point(pointer, rect, camera, placement)?;
-    let point = arc_nearest(draft.segment(segment)?, local)?;
+    let point = arc_nearest(curve, local)?;
     Some(ContourGrip::ArcRadius(segment, point))
 }
 
@@ -1178,19 +1246,99 @@ mod tests {
     fn a_numeric_entry_starts_from_the_grip_value_and_its_kind() {
         let circle =
             ContourDraft::Chain(Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle"));
-        let entry = numeric_entry(&circle, ContourGrip::CircleQuadrant(0), Pos2::ZERO).expect("a radius field");
+        let entry = numeric_entry(&circle, ContourGrip::CircleQuadrant(0), Pos2::ZERO, None).expect("a radius field");
         assert_eq!(entry.kind, GripNumber::Length);
         assert_eq!(entry.text, "40 mm");
         assert_eq!(entry.start, Some(GripValue::Length(millimetres(40))));
 
         let arc = ContourDraft::Chain(line_and_arc());
         let id = arc.entries().last().expect("arc").id();
-        let entry = numeric_entry(&arc, ContourGrip::Corner(PathCorner::End(id)), Pos2::ZERO).expect("an angle field");
+        let entry =
+            numeric_entry(&arc, ContourGrip::Corner(PathCorner::End(id)), Pos2::ZERO, None).expect("an angle field");
         assert_eq!(entry.kind, GripNumber::Angle);
         assert_eq!(entry.text, "0°");
         assert!(entry.label.contains('∠') || entry.label.contains('R'), "the field is labelled: {entry:?}");
 
-        assert!(numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO).is_none(), "a centre has no number");
+        assert!(
+            numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO, None).is_none(),
+            "a centre has no number"
+        );
+    }
+
+    #[test]
+    fn an_along_contour_numeric_entry_shows_the_length_from_the_far_end() {
+        let draft = ContourDraft::Chain(open_path());
+        let first = draft.id_at(0).expect("first segment");
+        let second = draft.id_at(1).expect("second segment");
+        let corner = PathCorner::Start(second);
+        let motion = Some(CornerMove::Along(first));
+        let entry = numeric_entry(&draft, ContourGrip::Corner(corner), Pos2::ZERO, motion).expect("a length field");
+        assert_eq!(entry.kind, GripNumber::Length);
+        assert_eq!(entry.label, "L", "the along-contour field is labelled L");
+        assert_eq!(entry.text, "100 mm", "the corner sits at the far end of a 100 mm segment");
+        assert_eq!(entry.motion, Some(CornerMove::Along(first)));
+
+        // An arc's value is its arc length, not its chord.
+        let arc_draft = ContourDraft::Chain(line_and_arc());
+        let arc = arc_draft.id_at(1).expect("arc segment");
+        let arc_corner = PathCorner::End(arc);
+        let entry =
+            numeric_entry(&arc_draft, ContourGrip::Corner(arc_corner), Pos2::ZERO, Some(CornerMove::Along(arc)))
+                .expect("an arc length field");
+        // A quarter arc of radius 40 is 40·π/2 ≈ 62.83 mm.
+        let expected = (40.0 * std::f64::consts::FRAC_PI_2 * 1_000.0).round() as i64;
+        assert_eq!(entry.text, Length::from_micrometres(expected).to_string(), "the arc length is 62.83 mm");
+    }
+
+    #[test]
+    fn the_cursor_is_always_the_default_arrow() {
+        let mut gizmo = ContourGizmo::default();
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "fresh gizmo shows the default arrow");
+        gizmo.hover = Some(ContourGrip::CircleCenter);
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "hover over a grip is still the default arrow");
+        gizmo.drag = Some(GripDrag {
+            target: ContourTarget::Path(furnicraft_model::Id::new(1).expect("id")),
+            grip: ContourGrip::RectangleCenter,
+            motion: CornerMove::Free,
+        });
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "a running drag is still the default arrow");
+    }
+
+    #[test]
+    fn a_grip_is_found_within_the_hit_radius_and_refused_outside_it() {
+        let path = Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle");
+        let draft = ContourDraft::Chain(path.clone());
+        let camera = Camera::default();
+        let circle_centre_in_screen = screen_of(camera, [millimetres(0), millimetres(0)]);
+
+        let right_on = grip_at(camera, viewport(), Placement::IDENTITY, &draft, circle_centre_in_screen, None);
+        assert!(matches!(right_on, Some(ContourGrip::CircleCenter)), "exactly on the centre grabs it");
+
+        let far_away = circle_centre_in_screen + egui::vec2(100.0, 0.0);
+        let outside = grip_at(camera, viewport(), Placement::IDENTITY, &draft, far_away, None);
+        assert!(outside.is_none(), "100 pt from the centre is well beyond the 9 pt hit radius");
+    }
+
+    #[test]
+    fn a_grip_within_9_pt_is_still_grabbed_after_a_small_move() {
+        let path = Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle");
+        let draft = ContourDraft::Chain(path.clone());
+        let camera = Camera::default();
+        let centre_screen = screen_of(camera, [millimetres(0), millimetres(0)]);
+
+        // The press origin is right on the centre, so the grip resolves even if the drag
+        // fires at a position 5 pt away (below the 9 pt hit radius from the centre).
+        let at_origin = grip_at(camera, viewport(), Placement::IDENTITY, &draft, centre_screen, None);
+        assert!(
+            matches!(at_origin, Some(ContourGrip::CircleCenter)),
+            "the grip resolves from the press origin, not the moved pointer"
+        );
+
+        // A pointer 5 pt from the centre is still within the 9 pt hit radius, so a grip that
+        // started at the centre would still be held.
+        let moved = centre_screen + egui::vec2(5.0, 0.0);
+        let near_origin = grip_at(camera, viewport(), Placement::IDENTITY, &draft, moved, None);
+        assert!(near_origin.is_some(), "5 pt from the centre is inside the hit radius");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X13 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=X18 state=idle base=fc2d1f3 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,14 +50,12 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-The 2026-11-08 drawing, contour and view defect report is queued first as X11–X21, one commit each,
-then U45 → U48 → U46 → U49: the tool that cannot be switched, the arc nodes, the grips, the
-rectangle, the along-contour mode, the figure card, the ghost, the top view. X21 landed the arc that
-closes a polyline: a pending arc is the closing segment, the first node turns green when a click
-would close the ring, and both Close buttons enable from two segments (ADR 0077). X12 landed the
-drawing gesture around it: another tool replaces a running draft, Escape cancels it, Enter and the
-right button commit, and a refused commit keeps both the draft and the tool (ADR 0076). X13 is next:
-an arc follows every node it is dragged by.
+X17 is done: an along-contour drag shows a length from the far end (line distance,
+arc length), cannot pass the opposite node, and records a collapse that Apply turns
+into one segment removal and one undo entry; a ring of three refuses.
+X18 is next: a figure's geometry is editable in its card — circle radius, rectangle
+width and height, polygon sides and radius, a single arc's radius and end angle —
+for a `Path` node and for the constructive body that owns a path.
 
 ## Index
 
