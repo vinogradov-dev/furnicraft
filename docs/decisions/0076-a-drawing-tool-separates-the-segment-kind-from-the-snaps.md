@@ -28,13 +28,16 @@ A drawing tool reads its input in two independent layers.
   with its own icon and shortcut, not a hidden mode of the rectangle-from-centre tool. A shifted
   letter is the alternate of the same family (`Shift+R` beside `R`), and the shortcut table remains
   the one the button hints and the key handler share.
-- **A build ends or is cancelled explicitly.** Escape and the right button finish the figure and
-  commit it; Ctrl+Esc and the ribbon's Cancel button throw the draft away. A committed figure opens
-  its own contour edit mode at once, so the shape can be reshaped without a second gesture.
+- **A build ends, switches or is cancelled explicitly.** Enter and the right button finish the
+  figure and commit it; Escape and the ribbon's Cancel button throw the draft away. Choosing another
+  drawing tool replaces the running draft, because the draft wrote nothing and undo gains no half
+  figure. A committed figure opens its own contour edit mode at once, so the shape can be reshaped
+  without a second gesture.
 
 ## Consequences
 The gesture and the snap state stop competing for one key, and every construction is visible in the
 ribbon. The cost is more buttons in the Sketch tab (the row scrolls sideways rather than shrinking
 cells) and one rule to remember: Tab belongs to the polyline, every other tool is complete on its
-last click. Escape no longer discards a draft, which is why the status bar, the ribbon hint and the
-key handler all name Ctrl+Esc as the cancel.
+last click. Escape cancels a draft, Enter commits it, and a second tool replaces the first without a
+cancel step; the status bar, the ribbon hint and the key handler all name the same
+pair.

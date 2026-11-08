@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X12 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=X13 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -42,7 +42,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   made their edges mean the form; X10's stencil slot lets an object show its own inside but never
   the one behind it. U44 gives every floor-standing object a contact shadow (ADR 0071). X11 fixed a
   ring closed by an arc: a joint is `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's
-  derived end closes, reaches a contour and extrudes, and the preview never blanks (ADR 0072).
+  derived end closes, reaches a contour and extrudes, and the preview never blanks (ADR 0072). X12
+  made a drawing tool switch and cancel: another tool replaces the running draft, Escape discards
+  it, Enter and the right button commit, and the shortcut table reads keys while a draft runs.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0)
   checks the plan files. Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
@@ -52,9 +54,10 @@ The 2026-11-08 drawing, contour and view defect report is queued first as X11–
 then U45 → U48 → U46 → U49: the tool that cannot be switched, the arc nodes, the grips, the
 rectangle, the along-contour mode, the figure card, the ghost, the top view. X21 landed the arc that
 closes a polyline: a pending arc is the closing segment, the first node turns green when a click
-would close the ring, and both Close buttons enable from two segments (ADR 0077). X12 is next:
-another tool ends the running draft, Escape cancels, and a failed commit keeps the draft and the
-tool.
+would close the ring, and both Close buttons enable from two segments (ADR 0077). X12 landed the
+drawing gesture around it: another tool replaces a running draft, Escape cancels it, Enter and the
+right button commit, and a refused commit keeps both the draft and the tool (ADR 0076). X13 is next:
+an arc follows every node it is dragged by.
 
 ## Index
 

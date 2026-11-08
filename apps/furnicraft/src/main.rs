@@ -837,8 +837,8 @@ impl FurniCraftApp {
             if finished && let Err(error) = self.commit_drawing() {
                 self.last_error = Some(error);
             }
-            // The right button finishes the figure as Escape does; it is the CAD habit and keeps
-            // the left button free for placing points.
+            // The right button commits the figure like Enter; it is the CAD habit and keeps the
+            // left button free for placing points.
             if !finished
                 && !pointer_over_widget
                 && response.clicked_by(egui::PointerButton::Secondary)
@@ -1788,11 +1788,11 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         let close = ui
             .add_enabled(furnicraft_ui::toolbars::draft_can_close(tool, points, closed), egui::Button::new("Close"))
             .clicked();
-        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Esc)")).clicked();
-        let cancel = ui.button("Cancel  (Ctrl+Esc)").clicked();
+        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
+        let cancel = ui.button("Cancel  (Esc)").clicked();
         hint(
             ui,
-            "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Esc/RMB finish  ·  Ctrl+Esc cancel",
+            "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Enter/RMB finish  ·  Esc cancel",
         );
         if let Some(reason) = &info.preview_error {
             hint(ui, reason);
@@ -2165,6 +2165,29 @@ struct Shortcuts {
     palette: bool,
 }
 
+/// What one frame's keys ask of a running drawing draft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DraftKey {
+    /// Drop the draft; the tool leaves nothing in the document.
+    Cancel,
+    /// Commit the draft as one path.
+    Commit,
+}
+
+/// The key a running draft obeys: Escape cancels, Enter commits (ADR 0076).
+///
+/// Escape wins a frame that somehow carried both, because the destructive key is the one the user
+/// pressed to get out of the gesture. The right button is handled by the viewport separately.
+const fn drawing_key(escape: bool, enter: bool) -> Option<DraftKey> {
+    if escape {
+        Some(DraftKey::Cancel)
+    } else if enter {
+        Some(DraftKey::Commit)
+    } else {
+        None
+    }
+}
+
 fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
     ctx.input_mut(|input| Shortcuts {
         save: input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
@@ -2174,6 +2197,25 @@ fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
         projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
         palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
     })
+}
+
+/// Consumes at most one drawing-tool key and starts its tool.
+///
+/// The table is [`furnicraft_ui::toolbars::shortcut`], the same one the button hints print, so the
+/// key and the tooltip cannot drift apart. Returns whether a key was taken. A running draft is
+/// replaced, because of ADR 0076: the old draft wrote nothing and the new tool owns the next click.
+fn take_drawing_shortcut(ctx: &egui::Context, editor: &mut Editor, sides: u32) -> bool {
+    for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
+        let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
+            continue;
+        };
+        let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+        if ctx.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
+            editor.start_drawing_with(tool, sides);
+            return true;
+        }
+    }
+    false
 }
 
 impl eframe::App for FurniCraftApp {
@@ -2194,16 +2236,18 @@ impl eframe::App for FurniCraftApp {
                 }
             }
         } else if self.editor.drawing().is_some() {
-            // Escape or the right button finishes the figure; Ctrl+Esc (or the Cancel button)
-            // throws the draft away. Enter stays as the keyboard finish the status bar names.
+            // Escape drops the draft and ends the tool; nothing reached the document and undo gains
+            // no half figure. Enter and the right button commit a valid draft (ADR 0076), and a
+            // refused commit keeps both the draft and the tool so the user can fix or cancel it.
             if !ui.ctx().text_edit_focused() {
-                let ctrl = ui.input(|input| input.modifiers.ctrl);
-                if escape && ctrl {
-                    self.cancel_drawing();
-                } else if (escape || enter)
-                    && let Err(error) = self.commit_drawing()
-                {
-                    self.last_error = Some(error);
+                match drawing_key(escape, enter) {
+                    Some(DraftKey::Cancel) => self.cancel_drawing(),
+                    Some(DraftKey::Commit) => {
+                        if let Err(error) = self.commit_drawing() {
+                            self.last_error = Some(error);
+                        }
+                    }
+                    None => {}
                 }
                 if ui.input(|input| input.key_pressed(egui::Key::G)) {
                     self.draw_gizmo.toggle_grid();
@@ -2260,22 +2304,16 @@ impl eframe::App for FurniCraftApp {
                 }
             }
         }
-        // A drawing shortcut starts its tool from anywhere outside a text field. The table is the
-        // one the toolbar hints show, so the key and the tooltip cannot drift apart.
-        if self.editor.contour_edit().is_none() && self.editor.drawing().is_none() && !ui.ctx().text_edit_focused() {
-            for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
-                let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
-                    continue;
-                };
-                let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
-                if ui.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
-                    let sides = self.editor.polygon_sides();
-                    if !self.editor.start_drawing_with(tool, sides) {
-                        self.last_error = Some("A drawing is already in progress.".to_owned());
-                    }
-                    self.draw_gizmo.reset();
-                    break;
-                }
+        // A drawing shortcut starts its tool from anywhere outside a text field, including while
+        // another draft runs: choosing a tool ends the running draft and starts the new one
+        // (ADR 0076). The table is the one the toolbar hints show, so the key and the tooltip
+        // cannot drift apart.
+        if self.editor.contour_edit().is_none() && !ui.ctx().text_edit_focused() {
+            let sides = self.editor.polygon_sides();
+            if take_drawing_shortcut(ui.ctx(), &mut self.editor, sides) {
+                self.draw_gizmo.reset();
+                self.extrude_gizmo.cancel();
+                self.cluster.navigation = None;
             }
         }
         if self.editor.selected_nodes() != self.highlighted
@@ -2939,6 +2977,59 @@ mod tests {
             events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn escape_cancels_a_draft_and_enter_commits_it() {
+        assert_eq!(drawing_key(true, false), Some(DraftKey::Cancel), "Escape cancels");
+        assert_eq!(drawing_key(false, true), Some(DraftKey::Commit), "Enter commits");
+        assert_eq!(drawing_key(true, true), Some(DraftKey::Cancel), "the way out wins a frame with both");
+        assert_eq!(drawing_key(false, false), None, "no key changes the draft");
+    }
+
+    #[test]
+    fn a_drawing_shortcut_replaces_the_running_draft() {
+        // `R` while a polyline runs starts the rectangle tool with an empty draft (ADR 0076).
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
+        editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("end");
+
+        let mut started = false;
+        let output = ctx.run_ui(key_input(egui::Key::R, egui::Modifiers::NONE), |ui| {
+            let sides = editor.polygon_sides();
+            started = take_drawing_shortcut(ui.ctx(), &mut editor, sides);
+        });
+        output.drop_without_applying_deltas();
+        assert!(started, "the key is taken");
+        let draft = editor.drawing().expect("the rectangle tool is live");
+        assert_eq!(draft.tool(), DrawTool::Rectangle);
+        assert!(draft.points().is_empty(), "the running polyline is gone");
+    }
+
+    #[test]
+    fn a_drawing_shortcut_takes_one_key_at_a_time() {
+        // A plain letter consumes the frame; a second tool would otherwise start from the same
+        // key press through the remainder of the table.
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        let mut started = false;
+        let output = ctx.run_ui(key_input(egui::Key::N, egui::Modifiers::NONE), |ui| {
+            let sides = editor.polygon_sides();
+            started = take_drawing_shortcut(ui.ctx(), &mut editor, sides);
+        });
+        output.drop_without_applying_deltas();
+        assert!(started);
+        assert_eq!(editor.drawing().map(DrawDraft::tool), Some(DrawTool::RegularPolygon));
+
+        // The same frame cannot start a second tool: the table already consumed its key.
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let sides = editor.polygon_sides();
+            assert!(!take_drawing_shortcut(ui.ctx(), &mut editor, sides), "no new key");
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(editor.drawing().map(DrawDraft::tool), Some(DrawTool::RegularPolygon));
     }
 
     #[test]

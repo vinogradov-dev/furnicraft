@@ -370,25 +370,23 @@ impl Editor {
 
     /// Starts an empty drawing draft with `tool` and leaves the other pointer modes.
     ///
-    /// A running draft is never replaced silently; the caller ends or commits it first. Returns
-    /// whether the draft started. The regular polygon uses the default side count; every other
-    /// tool ignores the count, so this is the plain "start" the key handler calls.
-    pub fn start_drawing(&mut self, tool: DrawTool) -> bool {
-        self.start_drawing_with(tool, DEFAULT_POLYGON_SIDES)
+    /// The regular polygon uses the default side count; every other tool ignores the count, so
+    /// this is the plain "start" a caller without a side field uses.
+    pub fn start_drawing(&mut self, tool: DrawTool) {
+        self.start_drawing_with(tool, DEFAULT_POLYGON_SIDES);
     }
 
     /// Starts an empty drawing draft with `tool` and the regular polygon's side count.
     ///
-    /// The count is clamped by [`DrawDraft::with_sides`], so a ribbon field can pass anything and
-    /// the document still receives a polygon it accepts.
-    pub fn start_drawing_with(&mut self, tool: DrawTool, sides: u32) -> bool {
-        if self.drawing.is_some() {
-            return false;
-        }
+    /// A running draft is replaced, because it wrote nothing and undo gains no half figure
+    /// (ADR 0076): choosing another tool is one gesture, not "cancel, then start". The count is
+    /// clamped by [`DrawDraft::with_sides`], so a ribbon field can pass anything and the document
+    /// still receives a polygon it accepts.
+    pub fn start_drawing_with(&mut self, tool: DrawTool, sides: u32) {
         self.mesh_edit = None;
         self.contour_edit = None;
+        self.pending_primitive = None;
         self.drawing = Some(DrawDraft::with_sides(tool, sides));
-        true
     }
 
     /// The regular polygon side count the ribbon field holds.
@@ -631,9 +629,7 @@ impl Editor {
         for action in actions {
             match action {
                 ToolAction::Draw { tool, sides } => {
-                    if !self.start_drawing_with(tool, sides) {
-                        return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
-                    }
+                    self.start_drawing_with(tool, sides);
                     outcome.started_drawing = true;
                 }
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
@@ -1308,6 +1304,34 @@ mod tests {
     }
 
     #[test]
+    fn another_tool_replaces_the_running_draft_and_writes_nothing() {
+        // A tool switch is one gesture, not "cancel, then start" (ADR 0076): the running draft is
+        // dropped and the new tool starts empty, and because no draft ever reached the document
+        // undo gains no half figure.
+        let (project, _panel) = contour_panel_project();
+        let session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let revision = session.project().revision();
+
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
+        editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("end");
+        assert_eq!(editor.drawing().map(DrawDraft::len), Some(1));
+        editor
+            .arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size"))
+            .expect("arm a cube, which a drawing tool must drop");
+
+        editor.start_drawing(DrawTool::Rectangle);
+        let draft = editor.drawing().expect("the rectangle tool is live");
+        assert_eq!(draft.tool(), DrawTool::Rectangle);
+        assert!(draft.points().is_empty(), "the new tool starts with an empty draft");
+        assert!(draft.segments().is_empty(), "the old chain is gone");
+        assert!(editor.pending_primitive().is_none(), "a drawing tool drops an armed primitive");
+        assert_eq!(session.project().revision(), revision, "the switch writes nothing");
+        assert!(!session.can_undo(), "no half figure entered the undo history");
+    }
+
+    #[test]
     fn a_drawing_draft_is_view_state_until_it_is_committed() {
         let (project, _panel) = contour_panel_project();
         let session = Session::with_catalog(project, sample_catalog());
@@ -1320,8 +1344,14 @@ mod tests {
         );
 
         let revision = session.project().revision();
-        assert!(editor.start_drawing(DrawTool::Polyline));
-        assert!(!editor.start_drawing(DrawTool::Polyline), "a running draft is not replaced");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.start_drawing(DrawTool::Line);
+        assert_eq!(
+            editor.drawing().map(DrawDraft::tool),
+            Some(DrawTool::Line),
+            "another tool replaces the running draft"
+        );
+        editor.start_drawing(DrawTool::Polyline);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first point");
         editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("second point");
         assert_eq!(editor.drawing().map(DrawDraft::len), Some(1), "one straight segment");
@@ -1344,7 +1374,7 @@ mod tests {
         let mut editor = Editor::new();
         editor.select_node(Some(panel));
         assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
-        assert!(editor.start_drawing(DrawTool::Polyline));
+        editor.start_drawing(DrawTool::Polyline);
         assert!(editor.contour_edit().is_none(), "a drawing owns the pointer");
 
         assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
@@ -1358,7 +1388,7 @@ mod tests {
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         editor.select_node(Some(panel));
-        assert!(editor.start_drawing(DrawTool::Rectangle));
+        editor.start_drawing(DrawTool::Rectangle);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("first corner");
         editor
             .drawing_point([Length::from_millimetres(600).expect("x"), Length::from_millimetres(400).expect("y")])
@@ -1411,7 +1441,7 @@ mod tests {
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
-        assert!(editor.start_drawing(DrawTool::Polyline));
+        editor.start_drawing(DrawTool::Polyline);
         editor.drawing_point([mm(0), mm(0)]).expect("start");
         editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
         editor.drawing_point([mm(600), mm(400)]).expect("right run");
@@ -1448,7 +1478,7 @@ mod tests {
         ];
         for (tool, points) in cases {
             let mut editor = Editor::new();
-            assert!(editor.start_drawing_with(tool, 6), "{} starts", tool.label());
+            editor.start_drawing_with(tool, 6);
             for point in points {
                 editor.drawing_point([mm(point.0), mm(point.1)]).expect("a tool point");
             }
@@ -1477,7 +1507,7 @@ mod tests {
 
         editor.select_node(Some(inner));
         assert_eq!(editor.creation_target(session.project()), root, "the scene root is the default parent");
-        assert!(editor.start_drawing(DrawTool::Line));
+        editor.start_drawing(DrawTool::Line);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
         editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
         let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
@@ -1525,7 +1555,7 @@ mod tests {
         assert_eq!(editor.creation_parent_name(session.project()), Some("Frame"));
         assert_eq!(editor.creation_target(session.project()), assembly, "the armed container is the target");
 
-        assert!(editor.start_drawing(DrawTool::Line));
+        editor.start_drawing(DrawTool::Line);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
         editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
         let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
@@ -1586,7 +1616,7 @@ mod tests {
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         editor.select_node(Some(Id::new(1).expect("root")));
-        assert!(editor.start_drawing(DrawTool::Rectangle));
+        editor.start_drawing(DrawTool::Rectangle);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("one corner");
 
         let revision = session.project().revision();
@@ -1609,7 +1639,7 @@ mod tests {
         let (project, _panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
-        assert!(editor.start_drawing(DrawTool::Polyline));
+        editor.start_drawing(DrawTool::Polyline);
         editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
         editor.drawing_point([Length::from_millimetres(400).expect("x"), Length::ZERO]).expect("middle");
         editor
@@ -1868,7 +1898,7 @@ mod tests {
         for (key, shift, tool) in cases {
             let shortcut = crate::toolbars::Shortcut { key, shift };
             assert_eq!(crate::toolbars::shortcut(tool), Some(shortcut), "{} starts {}", key.name(), tool.label());
-            assert!(editor.start_drawing(tool));
+            editor.start_drawing(tool);
             assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
             editor.cancel_drawing();
         }
@@ -2113,7 +2143,7 @@ mod tests {
         assert_eq!(pressed_fill(&idle.shapes, fill), 0, "an idle editor presses no tool");
         idle.drop_without_applying_deltas();
 
-        assert!(editor.start_drawing(DrawTool::Line));
+        editor.start_drawing(DrawTool::Line);
         let drawing = ctx.run_ui(Default::default(), |ui| {
             editor.show_ribbon(ui, &mut session, view).expect("ribbon");
         });

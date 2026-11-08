@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
-  runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:
-  choosing another tool ends the running one and starts the new one, Escape cancels the draft and
-  leaves the tool with nothing written, Enter and the right button commit a valid draft, the
-  drawing shortcuts work while a draft runs, and the status line names the keys. Owner decision: a
-  tool switch discards the running draft, because nothing was written and undo gains no half
-  figure. Suspected cause: `Editor::start_drawing_with` refuses while `drawing.is_some()`, the shell
-  skips the shortcut table while a draft runs, and Escape and Enter both commit (U53/ADR 0076).
-  Fix: replace the draft instead of refusing, route Escape to `cancel_drawing`, keep Enter and the
-  right button on commit, and let a failed commit keep the draft and the tool. Tests: start a
-  polyline, press R, the rectangle tool is live with an empty draft; Escape leaves the tool and the
-  document untouched; Enter commits; a shortcut starts a tool while a draft runs; a failed commit
-  keeps it. ADR 0076 is updated.
-  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs`
-
 - `[ ]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
   endpoints only slide along the arc and change its angle — and dragging the middle node makes the
   radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
@@ -323,6 +308,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
+  runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:
+  choosing another tool ends the running one and starts the new one, Escape cancels the draft and
+  leaves the tool with nothing written, Enter and the right button commit a valid draft, the
+  drawing shortcuts work while a draft runs, and the status line names the keys. Owner decision: a
+  tool switch discards the running draft, because nothing was written and undo gains no half
+  figure. Suspected cause: `Editor::start_drawing_with` refuses while `drawing.is_some()`, the shell
+  skips the shortcut table while a draft runs, and Escape and Enter both commit (U53/ADR 0076).
+  Fix: replace the draft instead of refusing, route Escape to `cancel_drawing`, keep Enter and the
+  right button on commit, and let a failed commit keep the draft and the tool. Tests: start a
+  polyline, press R, the rectangle tool is live with an empty draft; Escape leaves the tool and the
+  document untouched; Enter commits; a shortcut starts a tool while a draft runs; a failed commit
+  keeps it. ADR 0076 is updated.
+  `62cfc45`
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs`
 
 - `[x]` **X21** a polyline closes through the arc it is drawing: with arc mode on and the arc's start
   and middle already placed, the *Close* button refused with "the arc is still waiting for its end
