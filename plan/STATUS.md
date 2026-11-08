@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U45 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=A8 state=doing base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -54,11 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U45 is next: several scenes open at once. The tab row holds one tab per open file, each with its own
-session, undo history, selection, camera and dirty marker, so activating a tab swaps the workspace
-without touching a `.fcs`. It moves `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo
-state into one `Document` per tab with its own renderer target: write the plan and get the owner's
-approval before code. Order: U45 → U48 → U46 (icons last) → U49.
+A8 is in progress: the ring joint takes the one-micrometre tolerance the drawing path already uses.
+A9–A11 then give a path its shape tag, free corner movement and an extrusion that owns its path;
+U53–U55 land the new drawing tools, the grips with a number at the cursor, and the pull arrow. The
+owner's shape-editing set comes first: U45 → U48 → U46 (icons last) → U49 resume after it.
 ## Index
 
 | File | Holds | Read when |
