@@ -21,7 +21,9 @@ Before reading a large file, check `plan/map.md` for the anchor; read the range 
 whole file. If the anchor is wrong or missing, fix the row — the map is a contract, not a suggestion.
 
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
-area, never read them at start. `plan/archive/done.md` is history; `git log --oneline` replaces it.
+area, never read them at start. `plan/rename.md` is the same kind of file: it holds the measured
+inventory and the procedure for the pre-release rename (task R1). `plan/archive/done.md` is history;
+`git log --oneline` replaces it.
 
 Answering the next step has its own procedure (§1.1); it never re-derives the state from the code.
 
@@ -312,5 +314,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
 - `cargo xtask dashboard` prints the state with the file each section comes from.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
+- `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
+  measured procedure and its gotchas. Read only when R1 is taken.
 - `plan/questions.md` — decisions waiting for the owner.
 - `plan/archive/done.md` — the history the old status file carried; `git log --oneline` is the live record.

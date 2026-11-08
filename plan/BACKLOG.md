@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U44** a ground shadow: the scene draws a soft contact shadow under the bounds of every
-  object that touches the floor, so a cabinet reads as standing on something instead of floating in
-  a grid. The first version is a flat ellipse or rounded rectangle derived from the world bound,
-  drawn unlit on the ground plane with a radial falloff — no shadow map, no extra pass, no texture
-  dependency — and it is a toggle in the display settings. A projected shadow map is a later
-  decision with its own ADR, because it is the one feature here that can cost a frame. Tests: a
-  bound with no floor contact draws nothing; the ellipse stays inside the object's footprint; the toggle removes it from the frame.
-  Session notes: derive the contact shadow from `Bounds` in `crates/scene` and draw it unlit on the
-  ground plane (a thick ring on `line_pipeline`, or a transparent triangle pass); no texture. A shadow
-  is view data — a `SceneFrame` field next to `grid`, never a document field.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -182,7 +170,61 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Next
 
+- `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
+  later choice of name is one constant and no refactor. The work is measured and scripted in
+  `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
+  identity one home — `theme::PRODUCT_NAME` for the words, an `APP_ID` for the window class and the
+  settings directory set through `ViewportBuilder::with_app_id`, `project::FORMAT` +
+  `project::EXTENSION` for the file — and delete the hardcoded duplicates in `main.rs` (title, app
+  name, error), `scene_build.rs` (`"FurniCraft sample"`), `file_menu.rs` (the `scene.fcs` default and
+  the `"fcs"` filter) and `settings_store.rs` (three platform branches); (2) rename the 13 crates to
+  bare names and move `apps/furnicraft` to `app/` at the workspace root, with the `sed` and `mv` in
+  `plan/rename.md` and `cargo fmt --all` after them; (3) the four registers that must agree in that
+  commit — the `CRATES` table and its tests in `xtask`, the crate map in `AGENTS.md` and `PROJECT.md`,
+  the layer list in `skills/enforce-architecture/SKILL.md`, and the 38 path hints in
+  `plan/BACKLOG.md`, `plan/map.md` and `plan/debt.md`, which the plan gate rejects once the path is
+  gone; (4) the envelope `format`
+  string and line 2 of the eight goldens, leaving the `generator` fixture alone. No compatibility
+  path: nothing is released, so the file format and the settings directory change outright. Measured
+  on a scratch copy of this tree: 1140 tests pass, clippy clean, `layers: ok`, 960 changed lines and
+  no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
+  open-dialog filter all read the constants, so a second rename cannot miss a copy.
+  `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+
 ## Done
+
+- `[x]` **U44** a ground shadow: every object that rests on the floor casts a soft contact shadow, so
+  a cabinet reads as standing on something instead of floating in a grid. `ContactShadow` is frame
+  data in `crates/scene` beside `Grid`: a node `Id`, a centre on the ground plane and two half-axes
+  derived from the object's world bounds, covering 92 % of its footprint so the ellipse stays inside
+  the outline. One shadow per root node whose solid subtree touches the floor, with a 0.5 mm
+  tolerance; a path or drawing on the work plane casts nothing. The renderer draws one unlit
+  transparent triangle fan per shadow with a radial falloff in the shader — no shadow map, no extra
+  pass, no texture — on a plane just below the grid, and the switch and strength travel in the camera
+  uniform, so toggling uploads nothing. A checkbox and the strength slider sit in the display-settings
+  popover. Tests: a bound with no floor contact draws nothing; the ellipse stays inside the footprint;
+  the switch empties the pass; the sample scene emits exactly one shadow. ADR 0071 — `4e0348f`
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs`
+
+- `[x]` **X10** every triangle edge is drawn, and far edges show through near panels: a flat panel
+  draws the diagonals of its triangulation instead of its outline, and a panel a metre behind another
+  shows its edges through it in *shaded with edges* and *wireframe*. A dark viewport draws dark ink,
+  so edges vanish on the default background. Expectation: the default edge pass draws form edges only
+  — a boundary or a real crease, so a box shows twelve, not eighteen, and a triangular body nine —
+  the full triangulation is a switch in the display settings, the ink is light on a dark viewport,
+  and an edge behind a face is not drawn unless the *hidden edges* style is on, which shows one
+  object's own inside but never the object behind it.
+  Suspected cause: `crates/mesh` deduplicated edges by position but kept every one, so coplanar
+  diagonals survived; the `vs_edge` shader moved clip-space depth by a constant, which is ~90 mm of
+  world offset at one metre and >1 m at five, so a far line overtook the near face in front of it;
+  `edge_color` was a single dark constant; and the hidden pass compared depth with `Always` and
+  nothing else, so it drew through every object.
+  Tests: a coplanar quad drops its diagonal and keeps four boundary edges; a 90° fold keeps its
+  shared edge; a cube yields twelve edges and eighteen in the diagnostic list; a triangular prism
+  yields nine; an occluded drawable's edge slice is separate from the near one and carries its own
+  stencil slot; the face pass owns the depth bias and stamps the slot; the hidden pass accepts only
+  its own slot; the ink follows the background. ADR 0070 — `afeba77`
+  `files: crates/mesh/src/lib.rs, crates/render/src/lib.rs, crates/scene/src/lib.rs`
 
 - `[x]` **U43** the display styles the bar offers become real: *shaded with edges*, *shaded*,
   *wireframe*, *shaded with hidden edges* and *translucent*. Edges are derived data — one deduplicated

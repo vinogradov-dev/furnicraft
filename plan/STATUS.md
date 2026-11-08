@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U44 state=idle base=HEAD updated=2026-11-07
+STATE: milestone=M7 phase=U task=U45 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -19,51 +19,52 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   (ADRs 0044–0046, schema 16). `crates/mesh` caches by derivation inputs, so a rebuild reuses every
   untouched node and a collapsed object keeps the shape the user saw (ADR 0053).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus eight
-  point lights in watts (ADR 0039), with a fixed exposure and no tone mapper.
-- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the current ortho view, a projection
-  toggle, and draw/pick/snap for a `Path` (ADRs 0047–0052).
-- X3–X6 and U30–U37 are all fixed (ADRs 0056–0061): the projection button draws the view it is in, a
-  creation lands at the scene root unless a container is armed, the armed tool draws pressed, the pole
-  views look down their plane, a new drawing pivots on its own shape, a selected chain is a screen-space
-  stroke, and every kind of contour edits through one draft.
-- X1, X2 and X7 are fixed: a legal ring sampled past the 1024-vertex cap, so the chord follows the
-  shape (ADR 0062); a ribbon tool is one measured cell with an elided caption (ADR 0067).
-- The icon pipeline was audited against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`):
-  U27 rasterises each white master at `pt × pixels_per_point`, bakes the widget colour into the pixels
-  and caches per `(uri, px, colour)`, at 20 pt tools and 16 pt inline; U28 fixes the tonal emphasis
-  (ADR 0066 adds a 22 pt ribbon button). 47 placeholders are in `plan/debt.md`.
+  point lights in watts with a fixed exposure and no tone mapper (ADR 0039).
+- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view, a projection toggle,
+  and draw/pick/snap for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061):
+  the projection button draws the view it is in, a creation lands at the scene root unless a
+  container is armed, the armed tool draws pressed, the pole views look down their plane, a drawing
+  pivots on its own shape, a selected chain is a screen-space stroke, and every contour kind edits
+  through one draft.
+- X1, X2 and X7 are fixed: a legal ring past the 1024-vertex cap follows the shape (ADR 0062), and
+  a ribbon tool is one measured cell with an elided caption (ADR 0067). The icon pipeline was audited
+  against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`): U27 rasterises each white master
+  at `pt × pixels_per_point`, bakes the widget colour into the pixels and caches per `(uri, px,
+  colour)`, at 20 pt tools and 16 pt inline; 47 placeholders are in `plan/debt.md`.
 - U38–U42 landed the visual pass: `theme.rs` owns two palettes and the type scale (ADRs 0063, 0069);
-  `header.rs` returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (22 pt icons over captions,
-  ADR 0066); U40 folded the side panels over one header row and moved the view controls into a
-  translucent cluster at the viewport's bottom centre; U41 added the *Settings* modal, the atomic
-  `settings.json` (ADR 0068) and *Home*. U47 added the `Ctrl+K` palette, and U42 divided the central
-  area into one, two or four views: `view_layout.rs` owns the split tree, its clamped borders and each
-  leaf's camera and preset, `ViewportRenderer` draws one target with a scissored pass and a camera slot
-  per view, and the orientation widget gained a home button and an optional pitch/yaw/roll readout.
+  `header.rs` returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (ADR 0066); U40 folded the
+  side panels over one header row and moved the view controls into a translucent cluster at the
+  viewport's bottom centre; U41 added the *Settings* modal, the atomic `settings.json` (ADR 0068) and
+  *Home*. U47 added the `Ctrl+K` palette, and U42 divided the central area into one, two or four
+  views: `view_layout.rs` owns the split tree, its clamped borders and each leaf's camera and preset,
+  `ViewportRenderer` draws one target with a scissored pass and a camera slot per view, and the
+  orientation widget gained a home button and an optional pitch/yaw/roll readout.
   U43 made the five display styles real: `ShadingStyle` is frame data in `crates/scene` (ADR 0070),
-  `crates/mesh` caches one deduplicated edge list per mesh, and the renderer draws biased visible
-  edges, always-tested hidden edges, wireframe edges alone and blended back-to-front translucent
-  faces. U44–U48 queue the rest, and ADR 0065 fixes visibility and lock as session state.
+  and the renderer draws visible edges, hidden edges, wireframe alone and translucent faces. X10 made
+  those edges mean the form: `mesh_edges` drops a coplanar triangulation diagonal, so a box draws
+  twelve and a triangular body nine, and the full triangulation is a diagnostic switch beside the
+  style. The depth bias moved from the line shader onto the face pipeline, where a constant depth unit
+  stays distance-independent; the hidden-edge style is gated by a per-drawable stencil slot, so an
+  object shows its own inside but never the one behind it. U44 gives every floor-standing object a
+  soft contact shadow: a transparent ellipse derived from its solid bounds, frame data beside `grid`
+  (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U44 is next: a soft contact shadow under every object that touches the floor. The first version is a
-flat ellipse or rounded rectangle derived from the world bound, drawn unlit on the ground plane with
-a radial falloff — no shadow map, no extra pass, no texture — and a toggle in the display settings.
-It is view data, a `SceneFrame` field next to `grid`; a projected shadow map is a later decision.
-
-Order: U44 → U45 → U48 → U46 (icons last) → U49. Read the U44 entry, `crates/scene`'s `Grid`, the
-`Bounds` in `scene_build.rs` and the line/face passes in `ViewportRenderer`.
-
+U45 is next: several scenes open at once. The tab row holds one tab per open file, each with its own
+session, undo history, selection, camera and dirty marker, so activating a tab swaps the workspace
+without touching a `.fcs`. It moves `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo
+state into one `Document` per tab with its own renderer target: write the plan and get the owner's
+approval before code. Order: U45 → U48 → U46 (icons last) → U49.
 ## Index
 
 | File | Holds | Read when |
 |---|---|---|
 | `plan/BACKLOG.md` | one line per task, ids, order, file hints | always |
 | `plan/SESSION.md` | the live task: steps, blocker, next command | only while `state=doing` |
-| `plan/debt.md` | accepted gaps, tagged by area | a task touches that area |
-| `plan/questions.md` | decisions waiting for the owner | a task touches the question |
+| `plan/debt.md`, `plan/questions.md` | accepted gaps; decisions waiting for the owner | a task touches that area |
+| `plan/rename.md` | the pre-release rename: inventory, procedure, gotchas | task R1, or a change that adds another place the product name appears |
 | `plan/archive/done.md` | history up to schema 11 | never, `git log` replaces it |

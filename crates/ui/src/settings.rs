@@ -106,13 +106,21 @@ pub struct ViewportSettings {
     pub grid: bool,
     /// The minor grid spacing, in millimetres.
     pub grid_step_mm: u32,
+    /// Whether the edge pass draws every triangle edge, diagonals included.
+    pub all_edges: bool,
     /// The direction a viewport opens from.
     pub opening_view: OpeningView,
 }
 
 impl Default for ViewportSettings {
     fn default() -> Self {
-        Self { style: ShadingStyle::default(), grid: true, grid_step_mm: 100, opening_view: OpeningView::default() }
+        Self {
+            style: ShadingStyle::default(),
+            grid: true,
+            grid_step_mm: 100,
+            all_edges: false,
+            opening_view: OpeningView::default(),
+        }
     }
 }
 
@@ -385,6 +393,10 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
                 .speed(5.0),
         )
         .changed();
+    changed |= ui
+        .checkbox(&mut settings.viewport.all_edges, "Show every triangle edge")
+        .on_hover_text("Diagnostic: keeps the triangulation diagonals the form-edge view hides.")
+        .changed();
     ui.label(
         egui::RichText::new("These are the defaults of a new viewport; the open view keeps its own state.")
             .small()
@@ -471,6 +483,7 @@ mod tests {
                 style: ShadingStyle::Wireframe,
                 grid: false,
                 grid_step_mm: 25,
+                all_edges: true,
                 opening_view: OpeningView::Top,
             },
             ribbon: RibbonSettings { opacity: 0.6 },

@@ -188,6 +188,7 @@ impl FurniCraftApp {
         }
         let mut scene = evaluated.frame;
         scene.shading = settings.viewport.style;
+        scene.all_edges = settings.viewport.all_edges;
         apply_viewport_defaults(&mut scene.grid, &settings.viewport);
         scene.camera = scene_build::scene_camera(session.project(), layout.active_camera());
 
@@ -200,7 +201,12 @@ impl FurniCraftApp {
         };
         renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
 
-        let cluster = ViewCluster { style: settings.viewport.style, ..ViewCluster::default() };
+        let cluster = ViewCluster {
+            style: settings.viewport.style,
+            all_edges: settings.viewport.all_edges,
+            ..ViewCluster::default()
+        };
+        scene.contact_shadows = cluster.shadow_settings();
 
         Ok(Self {
             scene_revision: session.project().revision(),
@@ -254,6 +260,7 @@ impl FurniCraftApp {
         let home_camera = opening_camera(evaluated.bounds, self.settings.viewport.opening_view)?;
         let mut scene = evaluated.frame;
         scene.shading = self.settings.viewport.style;
+        scene.all_edges = self.settings.viewport.all_edges;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
 
         // A new document keeps the split the user arranged: only the cameras are refitted, so a
@@ -276,6 +283,8 @@ impl FurniCraftApp {
         self.editor = Editor::new();
         self.cluster = ViewCluster::default();
         self.cluster.style = self.settings.viewport.style;
+        self.cluster.all_edges = self.settings.viewport.all_edges;
+        self.scene.contact_shadows = self.cluster.shadow_settings();
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
@@ -396,6 +405,8 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         let mut scene = evaluated.frame;
         scene.shading = self.cluster.style;
+        scene.all_edges = self.cluster.all_edges;
+        scene.contact_shadows = self.cluster.shadow_settings();
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
         scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
         self.scene = scene;
@@ -1000,8 +1011,17 @@ impl FurniCraftApp {
         }
 
         // The style is frame data the renderer reads when it draws, so a button in the cluster
-        // changes the next frame without re-uploading a buffer.
+        // changes the next frame without re-uploading a buffer. The edge list is not: switching
+        // between form edges and the full triangulation reads a different cached list, so the last
+        // upload is replayed when the switch flips.
         self.scene.shading = self.cluster.style;
+        self.scene.contact_shadows = self.cluster.shadow_settings();
+        if self.scene.all_edges != self.cluster.all_edges {
+            self.scene.all_edges = self.cluster.all_edges;
+            if let Err(error) = self.upload_scene() {
+                self.last_error = Some(error);
+            }
+        }
         // A drag preview commits nothing, but the frame can still follow a moved light: the shader
         // reads one uniform, so a sun direction or a point-light position updates without a mesh
         // rebuild. With no moved light the base lighting is already correct.
@@ -1495,13 +1515,16 @@ impl FurniCraftApp {
         }
         if self.settings.viewport != before.viewport {
             self.cluster.style = self.settings.viewport.style;
+            self.cluster.all_edges = self.settings.viewport.all_edges;
             self.scene.shading = self.cluster.style;
-            let grid_changed = self.settings.viewport.grid != before.viewport.grid
-                || self.settings.viewport.grid_step_mm != before.viewport.grid_step_mm;
+            self.scene.all_edges = self.cluster.all_edges;
+            let geometry_changed = self.settings.viewport.grid != before.viewport.grid
+                || self.settings.viewport.grid_step_mm != before.viewport.grid_step_mm
+                || self.settings.viewport.all_edges != before.viewport.all_edges;
             apply_viewport_defaults(&mut self.scene.grid, &self.settings.viewport);
-            // A style is frame data the renderer reads at draw time; only a grid change rebuilds a
-            // line list.
-            if grid_changed && let Err(error) = self.upload_scene() {
+            // A style is frame data the renderer reads at draw time; only a grid or edge-list
+            // change rebuilds an uploaded buffer.
+            if geometry_changed && let Err(error) = self.upload_scene() {
                 self.last_error = Some(error);
             }
         }
@@ -2614,6 +2637,20 @@ mod tests {
         assert!(!cluster.angles_visible(), "the readout is off until the switch is turned on (U42)");
         cluster.show_angles = true;
         assert!(cluster.angles_visible(), "the switch controls the orientation readout");
+    }
+
+    #[test]
+    fn the_display_settings_switch_controls_the_contact_shadow() {
+        let mut cluster = ViewCluster::default();
+        assert!(cluster.shadow_settings().draws(), "the soft ground shadow is on by default");
+        cluster.contact_shadows = false;
+        assert!(!cluster.shadow_settings().visible, "the switch reaches the frame");
+        assert!(!cluster.shadow_settings().draws());
+        cluster.contact_shadows = true;
+        cluster.shadow_strength = 50.0;
+        assert!((cluster.shadow_settings().strength - 0.5).abs() < 1.0e-6);
+        cluster.shadow_strength = 0.0;
+        assert!(!cluster.shadow_settings().draws(), "a zero strength draws nothing either");
     }
 
     #[test]

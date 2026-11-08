@@ -18,7 +18,8 @@ use furnicraft_model::{
     StructuralKind,
 };
 use furnicraft_scene::{
-    Camera, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection, SceneFrame,
+    Camera, ContactShadow, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection,
+    SceneFrame,
 };
 use furnicraft_units::Length;
 
@@ -71,6 +72,24 @@ impl Bounds {
         self.min = DVec3::new(self.min.x.min(point.x), self.min.y.min(point.y), self.min.z.min(point.z));
         self.max = DVec3::new(self.max.x.max(point.x), self.max.y.max(point.y), self.max.z.max(point.z));
         self.valid = true;
+    }
+
+    fn include_bounds(&mut self, other: Self) {
+        if !other.valid {
+            return;
+        }
+        self.include_point(other.min);
+        self.include_point(other.max);
+    }
+
+    /// The minimum corner of the box, or `None` when no finite vertex was included.
+    pub fn min(self) -> Option<DVec3> {
+        self.valid.then_some(self.min)
+    }
+
+    /// The maximum corner of the box, or `None` when no finite vertex was included.
+    pub fn max(self) -> Option<DVec3> {
+        self.valid.then_some(self.max)
     }
 
     /// The centre of the box, or `None` when no finite vertex was included.
@@ -198,19 +217,34 @@ pub fn evaluate(
     let root_world = Placement::compose(Placement::IDENTITY, project.root().placement()).map_err(describe)?;
     cache.start();
     let mut evaluation = Evaluation::new(cache, kernel, session);
-    if let Err(error) = evaluation.collect(project.root().children(), root_world) {
-        // A failed pass must not leave half-evaluated bodies in the kernel, nor a stale entry that
-        // claims a mesh the document no longer produces.
-        evaluation.kernel.clear();
-        return Err(error);
+    let mut scene_bounds = Bounds::empty();
+    for child in project.root().children() {
+        let subtree = match evaluation.collect(std::slice::from_ref(child), root_world) {
+            Ok(subtree) => subtree,
+            Err(error) => {
+                // A failed pass must not leave half-evaluated bodies in the kernel, nor a stale
+                // entry that claims a mesh the document no longer produces.
+                evaluation.kernel.clear();
+                return Err(error);
+            }
+        };
+        scene_bounds.include_bounds(subtree.all);
+        // One shadow per root object, derived from its solid bounds only: a drawing on the work
+        // plane is not a body and casts nothing.
+        let (Some(min), Some(max)) = (subtree.solid.min(), subtree.solid.max()) else {
+            continue;
+        };
+        if let Some(shadow) = ContactShadow::from_bounds(child.id(), min, max) {
+            evaluation.frame.push_contact_shadow(shadow);
+        }
     }
-    let Evaluation { cache, frame, bounds, .. } = evaluation;
+    let Evaluation { cache, frame, .. } = evaluation;
     cache.finish();
     let mut frame = frame;
     if let Some(lighting) = authored_lighting(project) {
         frame.lighting = lighting;
     }
-    Ok(EvaluatedScene { frame, bounds })
+    Ok(EvaluatedScene { frame, bounds: scene_bounds })
 }
 
 /// The frame lighting from the authored lights.
@@ -278,6 +312,26 @@ pub fn previewed_world(project: &Project, id: Id, previewed: &[(Id, Placement)])
         .or_else(|| project.world_placement(id))
 }
 
+/// Bounds of one node subtree: every drawn point, and the solid meshes that cast a contact shadow.
+#[derive(Clone, Copy, Debug)]
+struct SubtreeBounds {
+    /// Everything the subtree draws, line chains included; used to frame the scene.
+    all: Bounds,
+    /// Solid meshes only; a flat drawing touches the floor but stands on nothing.
+    solid: Bounds,
+}
+
+impl SubtreeBounds {
+    fn empty() -> Self {
+        Self { all: Bounds::empty(), solid: Bounds::empty() }
+    }
+
+    fn include(&mut self, other: Self) {
+        self.all.include_bounds(other.all);
+        self.solid.include_bounds(other.solid);
+    }
+}
+
 /// Mutable state shared by one scene evaluation.
 struct Evaluation<'a> {
     cache: &'a mut EvaluationCache,
@@ -285,39 +339,32 @@ struct Evaluation<'a> {
     session: &'a Session,
     options: TessOptions,
     frame: SceneFrame,
-    bounds: Bounds,
     palette_index: usize,
 }
 
 impl<'a> Evaluation<'a> {
     fn new(cache: &'a mut EvaluationCache, kernel: &'a mut TruckKernel, session: &'a Session) -> Self {
-        Self {
-            cache,
-            kernel,
-            session,
-            options: TessOptions::default(),
-            frame: SceneFrame::default(),
-            bounds: Bounds::empty(),
-            palette_index: 0,
-        }
+        Self { cache, kernel, session, options: TessOptions::default(), frame: SceneFrame::default(), palette_index: 0 }
     }
 
-    fn collect(&mut self, children: &[Node], parent: Placement) -> Result<(), String> {
+    fn collect(&mut self, children: &[Node], parent: Placement) -> Result<SubtreeBounds, String> {
+        let mut bounds = SubtreeBounds::empty();
         for child in children {
-            match child {
+            let child_bounds = match child {
                 Node::Container(container) => {
                     let world = Placement::compose(parent, container.placement()).map_err(describe)?;
-                    self.collect(container.children(), world)?;
+                    self.collect(container.children(), world)?
                 }
                 Node::Panel(panel) => self.collect_panel(panel, parent)?,
                 Node::Object(object) => self.collect_object(object, parent)?,
-                Node::Camera(_) | Node::Light(_) => {}
-            }
+                Node::Camera(_) | Node::Light(_) => SubtreeBounds::empty(),
+            };
+            bounds.include(child_bounds);
         }
-        Ok(())
+        Ok(bounds)
     }
 
-    fn collect_panel(&mut self, panel: &Panel, parent: Placement) -> Result<(), String> {
+    fn collect_panel(&mut self, panel: &Panel, parent: Placement) -> Result<SubtreeBounds, String> {
         let world = Placement::compose(parent, panel.placement()).map_err(describe)?;
         let session = self.session;
         let geometry = session.panel_geometry(panel.id()).map_err(describe)?;
@@ -329,23 +376,24 @@ impl<'a> Evaluation<'a> {
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
         let color = PANEL_COLORS[self.palette_index % PANEL_COLORS.len()];
         self.palette_index = self.palette_index.saturating_add(1);
+        let mut bounds = SubtreeBounds::empty();
         if let Some(body) = evaluated.body() {
-            self.bounds.include_mesh(body, transform);
+            bounds.all.include_mesh(body, transform);
+            bounds.solid.include_mesh(body, transform);
             let drawable = Drawable::new(panel.id(), Arc::clone(body), transform, color);
-            self.frame.push(match evaluated.body_edges() {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
+            self.frame.push(with_cached_edges(drawable, evaluated.body_edges(), evaluated.body_all_edges()));
         }
         for (index, mesh) in evaluated.bands().iter().enumerate() {
-            self.bounds.include_mesh(mesh, transform);
+            bounds.all.include_mesh(mesh, transform);
+            bounds.solid.include_mesh(mesh, transform);
             let drawable = Drawable::new(panel.id(), Arc::clone(mesh), transform, EDGE_BAND_COLOR);
-            self.frame.push(match evaluated.band_edges().get(index) {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
+            self.frame.push(with_cached_edges(
+                drawable,
+                evaluated.band_edges().get(index),
+                evaluated.band_all_edges().get(index),
+            ));
         }
-        Ok(())
+        Ok(bounds)
     }
 
     /// Turns a geometry object into one flat-shaded drawable or one line chain in world space.
@@ -353,30 +401,48 @@ impl<'a> Evaluation<'a> {
     /// A mesh payload is drawn as stored. A constructive or primitive payload is evaluated through
     /// the cache's one evaluator — the same function `object.collapse` bakes — so the collapsed
     /// object keeps the shape the viewport showed.
-    fn collect_object(&mut self, object: &furnicraft_model::Object, parent: Placement) -> Result<(), String> {
+    fn collect_object(
+        &mut self,
+        object: &furnicraft_model::Object,
+        parent: Placement,
+    ) -> Result<SubtreeBounds, String> {
         let world = Placement::compose(parent, object.placement()).map_err(describe)?;
         let revision = self.session.project().revision();
         let evaluated = self.cache.object(revision, object).map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
+        let mut bounds = SubtreeBounds::empty();
         // A path has no solid: it is drawn as an unlit chain of line segments, and its points are
         // sampled from the same analytic segments a later extrusion uses.
         if let Some(points) = evaluated.polyline() {
             for point in points.iter() {
-                self.bounds.include_point(transform.transform_point3(*point));
+                bounds.all.include_point(transform.transform_point3(*point));
             }
             self.frame.push_polyline(Polyline::new(object.id(), Arc::clone(points), transform, PATH_COLOR));
-            return Ok(());
+            return Ok(bounds);
         }
         if let Some(mesh) = evaluated.body() {
-            self.bounds.include_mesh(mesh, transform);
+            bounds.all.include_mesh(mesh, transform);
+            bounds.solid.include_mesh(mesh, transform);
             let drawable = Drawable::new(object.id(), Arc::clone(mesh), transform, OBJECT_COLOR);
-            self.frame.push(match evaluated.body_edges() {
-                Some(edges) => drawable.with_edges(Arc::clone(edges)),
-                None => drawable,
-            });
-            return Ok(());
+            self.frame.push(with_cached_edges(drawable, evaluated.body_edges(), evaluated.body_all_edges()));
+            return Ok(bounds);
         }
         Err(format!("{}: the object has no drawable geometry", object.name()))
+    }
+}
+
+/// Attaches the cached form edges and the full triangulation edges to a drawable.
+///
+/// The two lists come from the same cached mesh, so this copies two `Arc`s and never searches the
+/// mesh. The renderer picks one from the frame's style; the other is shared with the cache.
+fn with_cached_edges(drawable: Drawable, edges: Option<&Arc<[u32]>>, all_edges: Option<&Arc<[u32]>>) -> Drawable {
+    let drawable = match edges {
+        Some(edges) => drawable.with_edges(Arc::clone(edges)),
+        None => drawable,
+    };
+    match all_edges {
+        Some(all_edges) => drawable.with_all_edges(Arc::clone(all_edges)),
+        None => drawable,
     }
 }
 
@@ -718,8 +784,51 @@ mod tests {
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty());
+        assert!(evaluated.frame.shadows().is_empty(), "nothing on the floor casts a shadow");
         assert_eq!(evaluated.bounds.center(), None);
         assert!(home_camera(evaluated.bounds).is_ok(), "an empty scene still has a usable camera");
+    }
+
+    #[test]
+    fn a_drawing_on_the_floor_casts_no_contact_shadow() {
+        let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
+        let path = Path::new(
+            vec![
+                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(600), millimetres(0)])
+                    .expect("line"),
+                ContourSegment::line([millimetres(600), millimetres(0)], [millimetres(600), millimetres(400)])
+                    .expect("line"),
+            ],
+            false,
+        )
+        .expect("path");
+
+        let root = Container::new(id(1).expect("id"), "Root", Placement::IDENTITY, Vec::new());
+        let mut project = Project::new(root).expect("project");
+        let root = project.root().id();
+        project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("object");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        assert_eq!(evaluated.frame.polylines().len(), 1);
+        assert!(evaluated.frame.shadows().is_empty(), "a flat chain is not a body and stands on nothing");
+    }
+
+    #[test]
+    fn the_sample_rests_on_one_contact_shadow() {
+        let session = sample_session().expect("sample session");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+
+        assert_eq!(evaluated.frame.shadows().len(), 1, "only the floor-standing group casts one");
+        let shadow = evaluated.frame.shadows().first().expect("shadow");
+        assert!(shadow.radii[0] > 0.0 && shadow.radii[1] > 0.0);
+        assert_eq!(shadow.center.z, 0.01, "the ellipse lies on the shadow plane");
+        let floor = evaluated.bounds.min().expect("bounds");
+        assert!(floor.z.abs() < 1.0e-9, "the sample stands on the floor");
     }
 
     #[test]
