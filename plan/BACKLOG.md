@@ -25,14 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U55** the extrusion pulls its height in the viewport: a fresh body is created at the last
-  height used in the session (100 mm at first) and shows an arrow along its contour normal; dragging
-  the arrow or typing a number sets `object.extrude.height.set`, and a click or Enter finishes. The
-  height lives in session view state until the command, never as a default in the document. Tests:
-  the arrow maps a drag to a height along the normal and not to the screen; Enter and a click both
-  finish; the next body starts at the last height.
-  `files: apps/furnicraft/src/main.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -200,6 +192,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U55** a fresh extrusion pulls its height in the viewport: the ribbon creates the body at
+  the last height used in the session (100 mm at first) and reports it, so an arrow runs from the
+  contour's bounds centre along the body's local `+Z`. Dragging it writes one
+  `object.extrude.height.set` on release and keeps the pull open; a bare click or Enter finishes,
+  Escape drops the pull at the height the document already holds, and a typed number applies the
+  same way. The height is session view state until the command, never a document default. Tests: a
+  drag maps to millimetres along the body's own axis, a click finishes at the pull's height, a
+  pulled height becomes the next extrusion's default, and a path has no pull.
+  `5efa195`
+  `files: apps/furnicraft/src/main.rs`
 
 - `[x]` **U54** every figure exposes its grips: a circle its centre and four quadrants, an arc its
   centre, a midpoint and a radius grip on a hovered curve, a rectangle its corners, four side

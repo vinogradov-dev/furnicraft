@@ -121,3 +121,7 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[ui]` The number field opens when a grip drag starts, not when a grip is merely hovered or
   clicked, so typing a value without moving the pointer first needs a tiny drag. A click-only path
   would need the field to survive a press that never becomes a drag.
+- `[ui]` The pull arrow opens only when the ribbon's *Extrude* button creates the body: the same
+  `object.path.extrude` from the command palette or an API, and `object.extrude.create` from a
+  contour, leave the body without a pull. The shell reads the height from the command result, so
+  another entry point needs the same signal before it can pull too.

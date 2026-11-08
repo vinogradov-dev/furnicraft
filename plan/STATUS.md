@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U55 state=doing base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=U45 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -14,7 +14,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
   ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an extrusion owns its
   path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure shows its grips, a
-  corner moves freely or along the segment picked at the drag start, and a grip keeps its figure (ADR 0075).
+  corner moves freely or along the segment picked at the drag start, a grip keeps its figure (ADR
+  0075), and a fresh extrusion pulls its height from an arrow.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -55,9 +56,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U54 landed: every figure shows its grips, a number follows a grip drag, and movement is free or
-along the contour (ADR 0075). U55 is in progress: a fresh extrusion pulls its height with an arrow;
-U45 → U48 → U46 → U49 resume after it.
+U55 landed: a fresh extrusion pulls its height with an arrow, a drag or a typed number writes one
+height command, and the last height becomes the next default. U45 → U48 → U46 → U49 are next.
 
 ## Index
 
