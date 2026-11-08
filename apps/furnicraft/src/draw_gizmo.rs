@@ -256,7 +256,7 @@ impl DrawGizmo {
             for point in draft.points() {
                 paint_point(&painter, camera, rect, plane, *point, DRAFT_COLOR, POINT_RADIUS);
             }
-            if draft.can_close() && draft.points().first() == Some(&hover.point) {
+            if closes_at(draft, hover.point) {
                 paint_point(&painter, camera, rect, plane, hover.point, CLOSE_COLOR, POINT_RADIUS + 2.0);
             }
             paint_marker(&painter, hover);
@@ -310,6 +310,15 @@ fn snap_cursor(
     let world = plane.world(DVec2::new(point[0].millimetres_f64(), point[1].millimetres_f64()));
     let screen = screen_point(camera, rect, world)?;
     Some(SnapOutcome { point, target: snapped.target, screen })
+}
+
+/// Whether the hovered point is the chain's first one, where a click closes the ring.
+///
+/// The same `can_close` the ribbon and the status bar read decides whether the ring can finish, so
+/// the green node never promises a closure the command would refuse. A pending arc counts: it is
+/// the closing segment, so the first node stays green while the arc waits and the pointer is on it.
+fn closes_at(draft: &DrawDraft, point: [Length; 2]) -> bool {
+    draft.can_close() && draft.points().first() == Some(&point)
 }
 
 /// What the click does, given the live draft and the snapped point.
@@ -483,7 +492,37 @@ mod tests {
         );
 
         let short = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
-        assert_eq!(click_action(&short, first), DrawClick::Ignore, "two points cannot close a ring");
+        assert_eq!(click_action(&short, first), DrawClick::Ignore, "one segment cannot close a ring");
+    }
+
+    #[test]
+    fn the_first_node_lights_up_when_a_click_would_close_the_chain() {
+        // A chain of two segments is one click from a ring: the first node turns green under the
+        // pointer. One segment is not, and a closed chain is finished, so neither lights up.
+        let two = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
+        let first = [millimetres(0), millimetres(0)];
+        assert!(closes_at(&two, first), "the first node closes the chain");
+        assert!(!closes_at(&two, [millimetres(600), millimetres(400)]), "only the first node closes");
+
+        let one = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
+        assert!(!closes_at(&one, first), "one segment cannot close");
+
+        let mut closed = two.clone();
+        closed.close().expect("close the triangle");
+        assert!(!closes_at(&closed, first), "a closed chain cannot close again");
+    }
+
+    #[test]
+    fn the_first_node_lights_up_with_a_pending_arc() {
+        // The closing arc is what the user is drawing: while it waits for its end, the first node is
+        // still the place that finishes the ring, so it must light up there too (ADR 0077).
+        let mut draft = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
+        assert!(draft.toggle_arc_mode());
+        draft.push_arc_through([millimetres(300), millimetres(300)]).expect("arm the closing arc");
+        assert!(draft.pending_arc().is_some());
+        let first = [millimetres(0), millimetres(0)];
+        assert!(closes_at(&draft, first), "the first node closes through the pending arc");
+        assert_eq!(click_action(&draft, first), DrawClick::Append(first), "the click ends the arc on it");
     }
 
     #[test]

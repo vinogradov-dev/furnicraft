@@ -324,6 +324,27 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X21** a polyline closes through the arc it is drawing: with arc mode on and the arc's start
+  and middle already placed, the *Close* button refused with "the arc is still waiting for its end
+  point", so the ring could not be finished by that arc, and the first node was not highlighted as
+  the closing joint while the arc waited. Expectation: *Close* completes the pending arc from the
+  chain's stored end through its middle point to the first start and closes the ring, both close
+  buttons enable from two segments on — the count a closing segment already needs — and the first
+  node turns green when a click there would close the chain, in arc mode too. Suspected cause:
+  `DrawDraft::close` refused while `pending_arc.is_some()`, `DrawDraft::can_close` demanded
+  `pending_arc.is_none()` so the green first-point highlight and the ribbon's *Close* were off, and
+  `draft_can_close` plus the status bar demanded three segments. Fix: `closing_segment` builds the
+  pending arc as the closing segment through the first start and `close`/`to_path` share it,
+  `can_close` counts the pending arc, both close buttons enable from two segments through
+  `draft_can_close`, and `closes_at` lights the first node. Undo reopens a closed chain before it
+  takes the waiting arc; `push` refuses a closed draft first. Tests: a two-line chain with a pending
+  arc closes and reaches a contour; its closing segment is the arc; a degenerate closing arc is
+  refused and leaves the draft editable; undo keeps the closing arc; the first node lights up with a
+  pending arc; both Close buttons enable from two segments; the gesture commits one closed path and
+  one undo entry. ADR 0077.
+  `8ff248f`
+  `files: crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs, crates/ui/src/toolbars.rs, apps/furnicraft/src/main.rs`
+
 - `[x]` **X11** a polyline closed by an arc is one ring: a chain whose last segment is an arc never
   closes — the third click on the first point does not finish it and the command reports "path
   segment 2 does not meet the next segment" — and the arc preview blinks at an intermediate click.

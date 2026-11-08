@@ -792,7 +792,7 @@ fn show_group_row(
             let close_hint = if close {
                 "Close the draft into a ring".to_owned()
             } else {
-                "A draft needs three points to close".to_owned()
+                "A draft needs two segments to close".to_owned()
             };
             if icons::ribbon_button(ui, cell, icons::contour::CLOSE, "Close", &close_hint, close, false).clicked()
                 && close
@@ -893,10 +893,14 @@ fn show_group_row(
     }
 }
 
-/// Whether a running draft can be closed into a ring: only a tool that closes, and only once it
-/// has the three points a ring needs, and only while it is still open.
+/// Whether a running draft can be closed into a ring: only a tool that closes, and only once the
+/// chain has the two segments a ring needs, and only while it is still open.
+///
+/// Two segments are the whole requirement: a straight close adds the third, and a pending arc *is*
+/// the closing segment (ADR 0077). This is the rule `DrawDraft::can_close` applies, so the button
+/// and the first-node highlight never disagree with the command that runs.
 pub const fn draft_can_close(tool: DrawTool, points: usize, closed: bool) -> bool {
-    tool.closes() && points >= 3 && !closed
+    tool.closes() && points >= 2 && !closed
 }
 
 /// The icon and the short caption of the projection toggle.
@@ -1369,14 +1373,16 @@ mod tests {
 
     #[test]
     fn the_draft_group_offers_close_only_for_a_closable_draft() {
-        assert!(draft_can_close(DrawTool::Polyline, 3, false), "a polyline with three points can close");
-        assert!(!draft_can_close(DrawTool::Polyline, 2, false), "a ring needs three points");
+        assert!(draft_can_close(DrawTool::Polyline, 2, false), "two segments and the closing one make a ring");
+        assert!(!draft_can_close(DrawTool::Polyline, 1, false), "one segment cannot close");
         assert!(!draft_can_close(DrawTool::Polyline, 4, true), "a closed ring cannot close again");
         assert!(!draft_can_close(DrawTool::Line, 2, false), "a line never closes");
 
         let mut state = Toolbars::new();
         state.set_tab(RibbonTab::Sketch);
-        let context = RibbonContext { draft: Some((DrawTool::Polyline, 3, false)), ..full_context() };
+        // A pending arc is a segment the draft has drawn, so a chain of two lines plus the arc can
+        // close; the ribbon cannot know it is pending, so two segments is the whole test.
+        let context = RibbonContext { draft: Some((DrawTool::Polyline, 2, false)), ..full_context() };
         let (_, labels, _) = draw(&mut state, context);
         assert!(labels.iter().any(|label| label.contains("Close")), "the draft group is drawn: {labels:?}");
         assert!(labels.iter().any(|label| label.contains("Cancel")), "a draft can always cancel: {labels:?}");

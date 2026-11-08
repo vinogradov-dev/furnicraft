@@ -1783,7 +1783,11 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
             if tool.closes() { if arc_mode { " · arc" } else { " · line" } } else { "" }
         ));
         let grid = ui.selectable_label(info.grid, "Grid 10 mm  (G)").clicked();
-        let close = ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
+        // The ribbon's *Close* and this one read the same rule, so a closure one offers is never
+        // greyed out by the other (ADR 0077).
+        let close = ui
+            .add_enabled(furnicraft_ui::toolbars::draft_can_close(tool, points, closed), egui::Button::new("Close"))
+            .clicked();
         let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Esc)")).clicked();
         let cancel = ui.button("Cancel  (Ctrl+Esc)").clicked();
         hint(
@@ -2762,6 +2766,33 @@ mod tests {
         assert!(texts.iter().any(|text| text.contains("Draw")), "the armed tool is named: {texts:?}");
         assert!(texts.iter().any(|text| text.contains('3')), "the draft's point count is shown: {texts:?}");
         assert_eq!(out.state, None, "drawing alone runs no tool");
+    }
+
+    #[test]
+    fn the_status_bar_offers_close_from_two_segments_and_through_a_pending_arc() {
+        // The status bar is the second *Close* button. It enables from two segments — the closing
+        // one makes three — and a pending arc is drawn as a segment the draft already has, so the
+        // count it reports is the one the command needs (ADR 0077). The rule is the ribbon's, so a
+        // closure one surface offers is never greyed out by the other.
+        assert!(furnicraft_ui::toolbars::draft_can_close(DrawTool::Polyline, 2, false));
+        assert!(furnicraft_ui::toolbars::draft_can_close(DrawTool::Polyline, 3, false));
+        assert!(!furnicraft_ui::toolbars::draft_can_close(DrawTool::Polyline, 1, false));
+        assert!(!furnicraft_ui::toolbars::draft_can_close(DrawTool::Polyline, 2, true));
+
+        // The bar still draws the button, so the pair never vanishes between clicks.
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = StatusInfo { drawing: Some((DrawTool::Polyline, 2, false, true)), ..idle_status() };
+        let output = ctx.run_ui(Default::default(), |ui| {
+            status_state_ui(ui, &info);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text.contains("Close")), "the bar names its own Close: {texts:?}");
+        assert!(
+            texts.iter().any(|text| text.contains("arc")),
+            "the bar names the pending arc's segment kind: {texts:?}"
+        );
     }
 
     #[test]

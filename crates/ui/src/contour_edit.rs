@@ -597,18 +597,25 @@ impl DrawDraft {
         }
     }
 
-    /// Whether the chain has enough segments to close into a ring.
+    /// Whether the chain can close into a ring right now.
+    ///
+    /// Two segments are enough: a straight close adds the third, and a pending arc *is* the closing
+    /// segment, so a chain of two lines with an arc waiting can finish the ring. This is the same
+    /// predicate the ribbon's *Close*, the status bar's *Close* and the first-node highlight read,
+    /// so a closure the document accepts is never greyed out by the chrome.
     pub fn can_close(&self) -> bool {
-        self.tool.closes() && !self.closed && self.pending_arc.is_none() && self.segments.len() >= 2
+        self.tool.closes() && !self.closed && self.segments.len() >= 2
     }
 
     /// Whether the tool is done with this drawing and it should be committed.
     ///
     /// A fixed tool finishes on its last point; a polyline finishes when the user closes the chain;
-    /// an open polyline is committed explicitly, because a chain is a valid drawing. A pending arc is
-    /// never finished: it still waits for the click that ends it.
+    /// an open polyline is committed explicitly, because a chain is a valid drawing. A pending arc
+    /// never finishes a chain by itself — it still waits for the click that ends it — but a chain
+    /// the user already closed through that arc is finished, because the closing segment is derived
+    /// from the pending midpoint (ADR 0077).
     pub fn is_finished(&self) -> bool {
-        self.pending_arc.is_none() && (self.closed || self.tool.points().is_some_and(|need| self.points.len() >= need))
+        self.closed || (self.pending_arc.is_none() && self.tool.points().is_some_and(|need| self.points.len() >= need))
     }
 
     /// Appends a click, which becomes a straight segment on a polyline and one point on a fixed tool.
@@ -616,11 +623,11 @@ impl DrawDraft {
     /// A path may touch or cross itself — the ring rules run only when it becomes a contour — but two
     /// equal neighbours would make a zero-length segment the document cannot store.
     pub fn push(&mut self, point: [Length; 2]) -> Result<(), DrawDraftError> {
-        if let Some(through) = self.pending_arc {
-            return self.finish_arc(through, point);
-        }
         if self.closed {
             return Err(DrawDraftError::AlreadyClosed);
+        }
+        if let Some(through) = self.pending_arc {
+            return self.finish_arc(through, point);
         }
         if let Some(need) = self.tool.points()
             && self.points.len() >= need
@@ -693,15 +700,17 @@ impl DrawDraft {
         Ok(())
     }
 
-    /// Removes the last action: a pending arc, then a close, then the last segment.
+    /// Removes the last action: a close, then a pending arc, then the last segment.
     ///
-    /// Returns `false` for an empty, open draft.
+    /// A closed draft is opened first, because a close that used a pending arc keeps that arc
+    /// waiting: taking the arc before reopening would drop the closing segment and leave the chain
+    /// looking straight. Returns `false` for an empty, open draft.
     pub fn undo(&mut self) -> bool {
-        if self.pending_arc.take().is_some() {
-            return true;
-        }
         if self.closed {
             self.closed = false;
+            return true;
+        }
+        if self.pending_arc.take().is_some() {
             return true;
         }
         if self.tool.closes() && self.segments.pop().is_some() {
@@ -718,14 +727,17 @@ impl DrawDraft {
     /// Closes the chain back to its first point.
     ///
     /// Only a polyline can close; a rectangle and a circle are closed by their constructors and a
-    /// line and an arc stay open. A ring needs three segments, so a shorter chain is refused. The
-    /// closed chain is validated before the state changes, so a draft that cannot become a path —
-    /// for example because its last point repeats the first — stays open and editable. Whether the
-    /// ring is simple and non-degenerate is a ring rule that runs when the path becomes a contour.
+    /// line and an arc stay open. A ring needs three segments, so a shorter chain is refused. A
+    /// pending arc is the closing segment: it runs from the last stored end through its waiting
+    /// midpoint to the first start, so a chain the user has already curved is finished by the arc
+    /// they were drawing instead of demanding one more click (ADR 0077). The closed chain is
+    /// validated before the state changes, so a draft that cannot become a path — for example
+    /// because its last point repeats the first or its closing arc is degenerate — stays open and
+    /// editable. The arc keeps waiting on the closed draft so `to_path` derives the same closing
+    /// segment and undo can reopen the chain with the arc still there; a click on a closed draft is
+    /// ignored, so the waiting arc cannot append a second one. Whether the ring is simple and
+    /// non-degenerate is a ring rule that runs when the path becomes a contour.
     pub fn close(&mut self) -> Result<(), DrawDraftError> {
-        if self.pending_arc.is_some() {
-            return Err(DrawDraftError::ArcInProgress);
-        }
         if !self.tool.closes() {
             return Err(DrawDraftError::NotClosable { tool: self.tool });
         }
@@ -787,17 +799,14 @@ impl DrawDraft {
     ///
     /// A closed chain adds it only when the two ends do not already meet within the drawing joint
     /// tolerance, so a rounded arc end that lands on the first point closes the ring without a
-    /// sliver segment in front of it (ADR 0072).
+    /// sliver segment in front of it (ADR 0072). A pending arc is that closing segment: it runs
+    /// from the stored end through the midpoint the user already placed to the first start, so the
+    /// chain is finished by the arc the user was drawing rather than by a straight tie (ADR 0077).
     fn closing_segment(&self) -> Result<Option<ContourSegment>, DrawDraftError> {
         let (Some(first), Some(last)) = (self.segments.first(), self.segments.last()) else {
             return Ok(None);
         };
-        if last.end_meets(*first)? {
-            return Ok(None);
-        }
-        let start = first.start()?;
-        let end = last.end()?;
-        Ok(Some(ContourSegment::line(end, start)?))
+        closing_segment(*first, *last, self.pending_arc)
     }
 
     /// The path with an optional extra click, built by the draft's tool.
@@ -818,11 +827,10 @@ impl DrawDraft {
                     return Err(DrawDraftError::TooFewPoints { need: 3, got: segments.len() });
                 };
                 // A last end that already meets the first start within the drawing tolerance is the
-                // closing joint itself; adding a line there would leave a sliver in the ring.
-                if !last.end_meets(*first)? {
-                    let start = first.start()?;
-                    let end = last.end()?;
-                    segments.push(ContourSegment::line(end, start)?);
+                // closing joint itself; the same rule and the same pending arc as `close` build the
+                // closing segment, so the validated ring and the committed path are one chain.
+                if let Some(segment) = closing_segment(*first, *last, self.pending_arc)? {
+                    segments.push(segment);
                 }
             }
             return Path::new(segments, closed).map_err(DrawDraftError::from);
@@ -956,6 +964,31 @@ fn point_in_range(point: [Length; 2]) -> bool {
         let value = coordinate.micrometres();
         (-max..=max).contains(&value)
     })
+}
+
+/// The segment that closes a chain from the end of `last` back to the start of `first`.
+///
+/// The two ends meeting within the drawing joint tolerance is the closing joint itself, so no
+/// segment is added: a rounded arc end that lands on the first point closes the ring without a
+/// sliver in front of it (ADR 0072). A pending arc becomes that closing segment — it runs from the
+/// stored end through `through` to the first start — so a chain can finish on the arc the user was
+/// drawing instead of a straight tie (ADR 0077). A straight close runs the other way round, from
+/// the stored end to the first start. Both `close` and `to_path` call this one rule, so the ring
+/// that was validated and the ring that is committed are the same chain.
+fn closing_segment(
+    first: ContourSegment,
+    last: ContourSegment,
+    through: Option<[Length; 2]>,
+) -> Result<Option<ContourSegment>, DrawDraftError> {
+    if last.end_meets(first)? {
+        return Ok(None);
+    }
+    let start = last.end()?;
+    let end = first.start()?;
+    Ok(Some(match through {
+        Some(through) => ContourSegment::arc_through(start, through, end)?,
+        None => ContourSegment::line(start, end)?,
+    }))
 }
 
 /// Why a drawing draft refused an edit.
@@ -1535,7 +1568,11 @@ mod tests {
         draft.push_arc_through([millimetres(650), millimetres(50)]).expect("a pending arc");
         assert!(draft.pending_arc().is_some());
         assert!(!draft.is_finished(), "an arc still waits for its end");
-        assert_eq!(draft.close(), Err(DrawDraftError::ArcInProgress), "an unfinished arc cannot close");
+        assert_eq!(
+            draft.close(),
+            Err(DrawDraftError::TooFewPoints { need: 3, got: 2 }),
+            "one line plus the closing arc is still two segments, not a ring"
+        );
 
         // The next click ends the arc instead of starting a straight segment.
         draft.push([millimetres(700), millimetres(0)]).expect("the arc end");
@@ -1547,6 +1584,89 @@ mod tests {
         assert_eq!(draft.len(), 1, "the line before the arc survives");
         assert!(draft.undo());
         assert!(draft.is_empty());
+    }
+
+    #[test]
+    fn a_pending_arc_closes_the_chain_the_user_already_curved() {
+        // Two straight runs, then Tab puts the pointer into arc mode and the user places the
+        // midpoint. The *Close* button must finish the ring with that arc: the chain already has the
+        // two segments a ring needs and the arc is the third (ADR 0077).
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        let first = [millimetres(0), millimetres(0)];
+        draft.push(first).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom run");
+        draft.push([millimetres(600), millimetres(400)]).expect("right run");
+        assert!(draft.can_close());
+        assert!(draft.toggle_arc_mode());
+        let through = [millimetres(300), millimetres(300)];
+        draft.push_arc_through(through).expect("arm the closing arc");
+
+        assert!(draft.pending_arc().is_some());
+        assert!(draft.can_close(), "the pending arc is the closing segment");
+        assert!(!draft.is_finished(), "the arc still waits for a click that ends it");
+        draft.close().expect("close through the arc");
+
+        assert!(draft.is_closed());
+        assert!(draft.is_finished(), "a closed draft is finished even with the arc waiting");
+        let path = draft.to_path().expect("a closed path");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 3, "two straight runs and the closing arc");
+        assert!(path.entries().last().is_some_and(|entry| entry.segment().is_arc()), "the close used the arc");
+        let arc_end = path.entries().last().and_then(|entry| entry.segment().end().ok()).expect("the arc end");
+        // The arc stores a rounded centre, radius and angle, so its derived end lands within the
+        // drawing joint tolerance of the first point rather than exactly on it (ADR 0072).
+        assert!(
+            (arc_end[0].micrometres() - first[0].micrometres()).abs() <= 10
+                && (arc_end[1].micrometres() - first[1].micrometres()).abs() <= 10,
+            "the closing arc ends on the first point: {arc_end:?}"
+        );
+        let ring = path.to_contour().expect("the arc closes the ring");
+        assert_eq!(ring.entries().len(), 3);
+    }
+
+    #[test]
+    fn a_degenerate_pending_arc_is_refused_by_close() {
+        // The midpoint sits on the straight line from the stored end to the first start, so no arc
+        // can pass through it. The refusal leaves the draft open, editable and waiting.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom run");
+        draft.push([millimetres(600), millimetres(400)]).expect("right run");
+        assert!(draft.toggle_arc_mode());
+        let collinear = [millimetres(300), millimetres(200)];
+        draft.push_arc_through(collinear).expect("arm the collinear arc");
+
+        assert!(draft.close().is_err(), "three collinear points are no arc");
+        assert!(!draft.is_closed(), "a refused close leaves the draft open");
+        assert_eq!(draft.pending_arc(), Some(collinear), "the arc waits for a usable end");
+        assert_eq!(draft.len(), 2, "no segment was stored");
+        assert!(draft.can_close(), "the draft can still be closed once the midpoint moves");
+    }
+
+    #[test]
+    fn undoing_a_close_keeps_the_closing_arc() {
+        // A close through a pending arc leaves that arc waiting, because the segment is derived from
+        // it on demand. Undo must reopen the chain before it takes the arc, or the arc that closed
+        // the ring disappears and the chain looks straight.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom run");
+        draft.push([millimetres(600), millimetres(400)]).expect("right run");
+        assert!(draft.toggle_arc_mode());
+        let through = [millimetres(300), millimetres(300)];
+        draft.push_arc_through(through).expect("arm the closing arc");
+        draft.close().expect("close through the arc");
+
+        assert!(draft.undo(), "the first undo reopens the chain");
+        assert!(!draft.is_closed());
+        assert_eq!(draft.pending_arc(), Some(through), "the closing arc is still waiting");
+        assert!(draft.can_close(), "the reopened chain can close again");
+        draft.close().expect("close it again through the same arc");
+        assert!(draft.undo(), "a second close is undone before the arc");
+        assert!(!draft.is_closed());
+        assert_eq!(draft.pending_arc(), Some(through));
+        assert!(draft.undo(), "the next undo takes the arc that would have closed it");
+        assert_eq!(draft.pending_arc(), None);
     }
 
     #[test]
@@ -1684,13 +1804,17 @@ mod tests {
     }
 
     #[test]
-    fn a_drawing_draft_needs_three_segments_to_close() {
+    fn a_drawing_draft_needs_two_segments_before_it_can_close() {
         let mut draft = DrawDraft::new(DrawTool::Polyline);
         draft.push([millimetres(0), millimetres(0)]).expect("point");
         assert_eq!(draft.to_path(), Err(DrawDraftError::TooFewPoints { need: 2, got: 0 }));
         draft.push([millimetres(600), millimetres(0)]).expect("point");
+        // One drawn segment plus the closing one is two, and a ring needs three.
         assert_eq!(draft.close(), Err(DrawDraftError::TooFewPoints { need: 3, got: 2 }));
-        assert!(!draft.can_close());
+        assert!(!draft.can_close(), "one segment cannot close");
+        draft.push([millimetres(600), millimetres(400)]).expect("a second segment");
+        assert!(draft.can_close(), "two segments plus the closing one make a ring");
+        draft.close().expect("the triangle closes");
     }
 
     #[test]

@@ -1402,6 +1402,39 @@ mod tests {
     }
 
     #[test]
+    fn closing_through_a_pending_arc_commits_a_closed_path() {
+        // The whole gesture the *Close* button runs: a chain of two lines, Tab into arc mode, the
+        // arc's midpoint placed, then Close. The arc finishes the ring and the commit writes one
+        // closed path — one undo entry — so the button the user pressed is the command that ran
+        // (ADR 0077).
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        assert!(editor.start_drawing(DrawTool::Polyline));
+        editor.drawing_point([mm(0), mm(0)]).expect("start");
+        editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
+        editor.drawing_point([mm(600), mm(400)]).expect("right run");
+        assert_eq!(editor.toggle_drawing_arc_mode(), Some(true));
+        editor.drawing_arc_through([mm(300), mm(300)]).expect("arm the closing arc");
+
+        assert!(editor.drawing().is_some_and(DrawDraft::can_close), "Close is offered and will work");
+        let revision = session.project().revision();
+        editor.close_drawing().expect("close through the pending arc");
+        assert!(editor.drawing().is_some_and(DrawDraft::is_finished), "the closed draft commits");
+        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit");
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+
+        let path = session.project().object_path(drawn.object).expect("a path object");
+        assert!(path.is_closed(), "the closed ring reached the document");
+        assert!(path.entries().iter().any(|entry| entry.segment().is_arc()), "the arc survived the close");
+        assert!(path.to_contour().is_ok(), "the ring converts, so the figure can extrude");
+        session.undo().expect("one undo removes the whole drawing");
+        assert!(session.project().object(drawn.object).is_none());
+        assert!(!session.can_undo(), "the drawing was one undo entry");
+    }
+
+    #[test]
     fn every_new_tool_commits_its_path_and_opens_the_edit() {
         let (project, _panel) = contour_panel_project();
         let mut session = Session::with_catalog(project, sample_catalog());

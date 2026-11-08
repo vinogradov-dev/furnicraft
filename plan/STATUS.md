@@ -48,10 +48,13 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-The 2026-11-08 drawing, contour and view defect report is queued first as X11–X20, one commit each,
+The 2026-11-08 drawing, contour and view defect report is queued first as X11–X21, one commit each,
 then U45 → U48 → U46 → U49: the tool that cannot be switched, the arc nodes, the grips, the
-rectangle, the along-contour mode, the figure card, the ghost, the top view. X12 is next: another
-tool ends the running draft, Escape cancels, and a failed commit keeps the draft and the tool.
+rectangle, the along-contour mode, the figure card, the ghost, the top view. X21 landed the arc that
+closes a polyline: a pending arc is the closing segment, the first node turns green when a click
+would close the ring, and both Close buttons enable from two segments (ADR 0077). X12 is next:
+another tool ends the running draft, Escape cancels, and a failed commit keeps the draft and the
+tool.
 
 ## Index
 

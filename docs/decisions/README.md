@@ -81,6 +81,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0074](0074-an-extrusion-owns-the-path-it-grew-from.md) | An extrusion owns the path it grew from | Accepted |
 | [0075](0075-a-grip-names-what-its-number-means.md) | A grip names what its number means | Accepted |
 | [0076](0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md) | A drawing tool separates the segment kind from the snaps | Accepted |
+| [0077](0077-a-pending-arc-is-the-closing-segment.md) | A pending arc is the closing segment | Accepted |
 
 ## Format
 
