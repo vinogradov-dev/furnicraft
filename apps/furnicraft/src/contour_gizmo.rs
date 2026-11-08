@@ -116,16 +116,11 @@ impl ContourGizmo {
     }
 
     /// The cursor the viewport should show while the mode is active.
+    ///
+    /// Always the default arrow: the enlarged hovered grip and the active drag state carry the
+    /// feedback, and a hand or grab icon would fight the selection cursor and add noise.
     pub(crate) fn cursor(&self) -> egui::CursorIcon {
-        if self.drag.is_some() {
-            egui::CursorIcon::Grabbing
-        } else if self.hover.is_some() {
-            egui::CursorIcon::Grab
-        } else if self.hover_segment.is_some() {
-            egui::CursorIcon::PointingHand
-        } else {
-            egui::CursorIcon::Default
-        }
+        egui::CursorIcon::Default
     }
 
     /// Applies the pointer to the working copy; returns whether the draft changed.
@@ -159,15 +154,23 @@ impl ContourGizmo {
 
         let mut changed = false;
         if response.drag_started_by(egui::PointerButton::Primary) {
-            self.drag = grip.map(|grip| GripDrag {
+            // Resolve the grabbed grip from the press origin, not the current pointer.
+            // The pointer may have moved a few points before egui fires the drag threshold,
+            // and the user clearly intended to grab whatever was under the initial press.
+            let press_origin = response.ctx.input(|i| i.pointer.press_origin());
+            let press_grip = press_origin.and_then(|origin| {
+                let seg = segment_at(camera, rect, placement, &draft, origin);
+                grip_at(camera, rect, placement, &draft, origin, seg)
+            });
+            self.drag = press_grip.map(|grip| GripDrag {
                 target,
                 grip,
-                motion: self.motion_for(camera, rect, placement, &draft, grip, pointer),
+                motion: self.motion_for(camera, rect, placement, &draft, grip, press_origin),
             });
             if let Some(drag) = self.drag
-                && let Some(pointer) = pointer
+                && let Some(origin) = press_origin
             {
-                self.numeric = numeric_entry(&draft, drag.grip, pointer);
+                self.numeric = numeric_entry(&draft, drag.grip, origin);
             }
         }
         if let Some(drag) = self.drag {
@@ -1195,6 +1198,57 @@ mod tests {
         assert!(entry.label.contains('∠') || entry.label.contains('R'), "the field is labelled: {entry:?}");
 
         assert!(numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO).is_none(), "a centre has no number");
+    }
+
+    #[test]
+    fn the_cursor_is_always_the_default_arrow() {
+        let mut gizmo = ContourGizmo::default();
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "fresh gizmo shows the default arrow");
+        gizmo.hover = Some(ContourGrip::CircleCenter);
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "hover over a grip is still the default arrow");
+        gizmo.drag = Some(GripDrag {
+            target: ContourTarget::Path(furnicraft_model::Id::new(1).expect("id")),
+            grip: ContourGrip::RectangleCenter,
+            motion: CornerMove::Free,
+        });
+        assert_eq!(gizmo.cursor(), egui::CursorIcon::Default, "a running drag is still the default arrow");
+    }
+
+    #[test]
+    fn a_grip_is_found_within_the_hit_radius_and_refused_outside_it() {
+        let path = Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle");
+        let draft = ContourDraft::Chain(path.clone());
+        let camera = Camera::default();
+        let circle_centre_in_screen = screen_of(camera, [millimetres(0), millimetres(0)]);
+
+        let right_on = grip_at(camera, viewport(), Placement::IDENTITY, &draft, circle_centre_in_screen, None);
+        assert!(matches!(right_on, Some(ContourGrip::CircleCenter)), "exactly on the centre grabs it");
+
+        let far_away = circle_centre_in_screen + egui::vec2(100.0, 0.0);
+        let outside = grip_at(camera, viewport(), Placement::IDENTITY, &draft, far_away, None);
+        assert!(outside.is_none(), "100 pt from the centre is well beyond the 9 pt hit radius");
+    }
+
+    #[test]
+    fn a_grip_within_9_pt_is_still_grabbed_after_a_small_move() {
+        let path = Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle");
+        let draft = ContourDraft::Chain(path.clone());
+        let camera = Camera::default();
+        let centre_screen = screen_of(camera, [millimetres(0), millimetres(0)]);
+
+        // The press origin is right on the centre, so the grip resolves even if the drag
+        // fires at a position 5 pt away (below the 9 pt hit radius from the centre).
+        let at_origin = grip_at(camera, viewport(), Placement::IDENTITY, &draft, centre_screen, None);
+        assert!(
+            matches!(at_origin, Some(ContourGrip::CircleCenter)),
+            "the grip resolves from the press origin, not the moved pointer"
+        );
+
+        // A pointer 5 pt from the centre is still within the 9 pt hit radius, so a grip that
+        // started at the centre would still be held.
+        let moved = centre_screen + egui::vec2(5.0, 0.0);
+        let near_origin = grip_at(camera, viewport(), Placement::IDENTITY, &draft, moved, None);
+        assert!(near_origin.is_some(), "5 pt from the centre is inside the hit radius");
     }
 
     #[test]
