@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X11** a polyline closed by an arc is one ring: a chain whose last segment is an arc never
-  closes — the third click on the first point does not finish it and the command reports "path
-  segment 2 does not meet the next segment" — and the arc preview blinks at an intermediate click.
-  Expectation: an arc's derived endpoints join their neighbours within the drawing tolerance, a
-  closing click in arc mode ends the arc on the first point and closes the ring, and the preview
-  keeps the pending arc and never blanks. Suspected cause: the joint tolerance is a constant
-  micrometre (ADR 0072), while an arc endpoint is derived from a rounded centre, radius and angle
-  and misses by `radius × 8.73e-6` — about 5 µm on a 600 mm arc; `DrawDraft::finish_arc` sets
-  `closed` without validating the ring, and `preview` clears the cache when it returns `Ok(None)`.
-  Fix: a pair rule, `1 µm + arc_slack(first) + arc_slack(next)` with `arc_slack = radius × 8.73e-6`
-  (zero for a line), used by `Path::assemble`, `Contour::assemble` and `to_geometry`; `finish_arc`
-  closes through `close()`; `preview` keeps the last valid path and paints the pending arc.
-  Tests: a 600 mm arc closes a polyline and reaches a contour; the same ring extrudes; a 20 µm gap
-  on a 100 mm arc is still refused; a rejected preview keeps the last valid one; a 1 µm gap loads.
-  Correct ADR 0072; note explicit arc endpoints (schema 20) in `plan/debt.md`.
-  `files: crates/model/src/contour.rs, crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs`
-
 - `[ ]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
   runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:
   choosing another tool ends the running one and starts the new one, Escape cancels the draft and
@@ -340,6 +323,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X11** a polyline closed by an arc is one ring: a chain whose last segment is an arc never
+  closes — the third click on the first point does not finish it and the command reports "path
+  segment 2 does not meet the next segment" — and the arc preview blinks at an intermediate click.
+  Expectation: an arc's derived endpoints join their neighbours within the drawing tolerance, a
+  closing click in arc mode ends the arc on the first point and closes the ring, and the preview
+  keeps the pending arc and never blanks. Suspected cause: the joint tolerance is a constant
+  micrometre (ADR 0072), while an arc endpoint is derived from a rounded centre, radius and angle
+  and misses by `radius × 8.73e-6` — about 5 µm on a 600 mm arc; `DrawDraft::finish_arc` sets
+  `closed` without validating the ring, and `preview` clears the cache when it returns `Ok(None)`.
+  Fix: a pair rule, `1 µm + arc_slack(first) + arc_slack(next)` with `arc_slack = radius × 8.73e-6`
+  (zero for a line), used by `Path::assemble`, `Contour::assemble` and `to_geometry`; `finish_arc`
+  closes through `close()`; `preview` keeps the last valid path and paints the pending arc.
+  Tests: a 600 mm arc closes a polyline and reaches a contour; the same ring extrudes; a 20 µm gap
+  on a 100 mm arc is still refused; a rejected preview keeps the last valid one; a 1 µm gap loads.
+  Correct ADR 0072; note explicit arc endpoints (schema 20) in `plan/debt.md`.
+  `f3123d7`
+  `files: crates/model/src/contour.rs, crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs`
 
 - `[x]` **U55** a fresh extrusion pulls its height in the viewport: the ribbon creates the body at
   the last height used in the session (100 mm at first) and reports it, so an arrow runs from the

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X11 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=X12 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -11,11 +11,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 - M7 — objects and the scene file, after M6. `Container` is the only container kind, every node
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of stable-id segments (ADR 0040,
-  schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
-  ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an extrusion owns its
-  path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure shows its grips, a
-  corner moves freely or along the segment picked at the drag start, a grip keeps its figure (ADR
-  0075), and a fresh extrusion pulls its height from an arrow.
+  schema 13) whose joints take the drawing tolerance (ADR 0072); `Path` is the chain `to_contour`
+  turns into a ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an
+  extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure
+  shows its grips, a corner moves freely or along the segment picked at the drag start, a grip keeps
+  its figure (ADR 0075), and a fresh extrusion pulls its height from an arrow.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -35,29 +35,23 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   colour)`, at 20 pt tools and 16 pt inline; 47 placeholders are in `plan/debt.md`.
 - U38–U42 landed the visual pass: `theme.rs` owns two palettes and the type scale (ADRs 0063, 0069);
   `header.rs` returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (ADR 0066); U40 folded the
-  side panels over one header row and moved the view controls into a translucent cluster at the
-  viewport's bottom centre; U41 added the *Settings* modal, the atomic `settings.json` (ADR 0068) and
-  *Home*. U47 added the `Ctrl+K` palette, and U42 divided the central area into one, two or four
-  views: `view_layout.rs` owns the split tree, its clamped borders and each leaf's camera and preset,
-  `ViewportRenderer` draws one target with a scissored pass and a camera slot per view, and the
-  orientation widget gained a home button and an optional pitch/yaw/roll readout.
-  U43 made the five display styles real: `ShadingStyle` is frame data in `crates/scene` (ADR 0070),
-  and the renderer draws visible edges, hidden edges, wireframe alone and translucent faces. X10 made
-  those edges mean the form: `mesh_edges` drops a coplanar triangulation diagonal, so a box draws
-  twelve and a triangular body nine; the full triangulation is a diagnostic switch beside the style.
-  The depth bias moved to the face pipeline, where a constant depth unit stays distance-independent,
-  and a per-drawable stencil slot gates hidden edges, so an object shows its own inside but never
-  the one behind it. U44 gives every floor-standing object a soft contact shadow: an ellipse from its
-  solid bounds, frame data beside `grid` (ADR 0071). X11–X20 fix the 2026-11-08 report first;
-  U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
+  side panels and moved the view controls into a bottom-centre cluster; U41 added *Settings*, the
+  atomic `settings.json` (ADR 0068) and *Home*; U47 added the `Ctrl+K` palette; U42 divided the
+  central area into one, two or four views with a split tree, a scissored pass per leaf and an
+  orientation widget with a home button. U43 made the five display styles real (ADR 0070) and X10
+  made their edges mean the form; X10's stencil slot lets an object show its own inside but never
+  the one behind it. U44 gives every floor-standing object a contact shadow (ADR 0071). X11 fixed a
+  ring closed by an arc: a joint is `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's
+  derived end closes, reaches a contour and extrudes, and the preview never blanks (ADR 0072).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0)
   checks the plan files. Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
 The 2026-11-08 drawing, contour and view defect report is queued first as X11–X20, one commit each,
-then U45 → U48 → U46 → U49: the arc that will not close a polyline, the tool that cannot be switched,
-the arc nodes, the grips, the rectangle, the along-contour mode, the figure card, the ghost, the top view.
+then U45 → U48 → U46 → U49: the tool that cannot be switched, the arc nodes, the grips, the
+rectangle, the along-contour mode, the figure card, the ghost, the top view. X12 is next: another
+tool ends the running draft, Escape cancels, and a failed commit keeps the draft and the tool.
 
 ## Index
 
