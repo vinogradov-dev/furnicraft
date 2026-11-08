@@ -51,8 +51,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, PanelNominalSize, Path, PathCorner, Placement,
-    Project,
+    CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, PanelNominalSize, Path,
+    PathCorner, Placement, Project,
 };
 use furnicraft_units::Length;
 
@@ -281,19 +281,20 @@ impl Editor {
         segment: ContourSegmentId,
         point: [Length; 2],
     ) -> Result<(), ContourEditError> {
-        self.contour_edit_move_corner_at(PathCorner::Start(segment), point)
+        self.contour_edit_move_corner_at(PathCorner::Start(segment), point, CornerMove::Free)
     }
 
-    /// Moves the path corner named by `corner` of the working copy.
+    /// Moves the path corner named by `corner` of the working copy, following `motion`.
     pub fn contour_edit_move_corner_at(
         &mut self,
         corner: PathCorner,
         point: [Length; 2],
+        motion: CornerMove,
     ) -> Result<(), ContourEditError> {
         let Some(edit) = self.contour_edit.as_mut() else {
             return Err(ContourEditError::UnknownSegment { segment: corner.segment() });
         };
-        edit.move_corner_at(corner, point)
+        edit.move_corner_at(corner, point, motion)
     }
 
     /// Splits one side of the working copy and returns the new segment id.

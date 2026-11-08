@@ -16,9 +16,9 @@ use furnicraft_engine::{
     ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelMachiningUpdate, PanelOutlineSet, Session,
 };
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, Cutout,
-    CutoutShape, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path, PathCorner,
-    PathError, Placement, Project,
+    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, CornerMove,
+    Cutout, CutoutShape, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path,
+    PathCorner, PathError, Placement, Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
@@ -242,22 +242,28 @@ impl ContourEdit {
 
     /// Moves the corner at the start of `segment` to `point` in the target's local plane.
     pub fn move_corner(&mut self, segment: ContourSegmentId, point: [Length; 2]) -> Result<(), ContourEditError> {
-        self.move_corner_at(PathCorner::Start(segment), point)
+        self.move_corner_at(PathCorner::Start(segment), point, CornerMove::Free)
     }
 
-    /// Moves the corner named by `corner` to `point` in the target's local plane.
+    /// Moves the corner named by `corner` to `point` in the target's local plane, following `motion`.
     ///
     /// A ring addresses a corner by the segment that starts on it, so an end names the next
-    /// segment's start; a chain uses the corner the path edit names.
-    pub fn move_corner_at(&mut self, corner: PathCorner, point: [Length; 2]) -> Result<(), ContourEditError> {
+    /// segment's start; a chain uses the corner the path edit names. A ring and a chain take the
+    /// same two modes, so a grip behaves the same on a panel outline and on a drawn figure.
+    pub fn move_corner_at(
+        &mut self,
+        corner: PathCorner,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
         match &mut self.draft {
             ContourDraft::Ring(contour) => {
                 let segment = ring_corner_segment(contour, corner)?;
-                let moved = contour.move_corner(segment, point)?;
+                let moved = contour.move_corner_with(segment, point, motion)?;
                 *contour = moved;
             }
             ContourDraft::Chain(path) => {
-                let moved = path.move_corner_at(corner, point)?;
+                let moved = path.move_corner_at(corner, point, motion)?;
                 *path = moved;
             }
         }
@@ -1160,7 +1166,8 @@ mod tests {
         assert!(!edit.is_dirty());
 
         let last = edit.draft().entries().last().map(|entry| entry.id()).expect("last segment");
-        edit.move_corner_at(PathCorner::End(last), [millimetres(700), millimetres(500)]).expect("move the free end");
+        edit.move_corner_at(PathCorner::End(last), [millimetres(700), millimetres(500)], CornerMove::Free)
+            .expect("move the free end");
         assert!(edit.is_dirty());
         assert_eq!(
             session.project().object_path(object).expect("path"),

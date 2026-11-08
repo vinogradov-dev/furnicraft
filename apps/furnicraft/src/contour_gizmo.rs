@@ -15,7 +15,7 @@
 use eframe::egui::{self, Pos2, Response, Ui};
 use furnicraft_geom::{DVec2, DVec3};
 use furnicraft_model::{
-    Contour, ContourSegment, ContourSegmentEntry, ContourSegmentId, PathCorner, Placement, Project,
+    Contour, ContourSegment, ContourSegmentEntry, ContourSegmentId, CornerMove, PathCorner, Placement, Project,
 };
 use furnicraft_scene::Camera;
 use furnicraft_ui::{ContourDraft, ContourEdit, ContourTarget, Editor};
@@ -127,7 +127,7 @@ impl ContourGizmo {
                     response.interact_pointer_pos().and_then(|pointer| local_point(pointer, rect, camera, placement))
                 && let Some(local) = project_arc_corner(&draft, drag.corner, local)
                 && let (Some(x), Some(y)) = (length_from_millimetres(local.x), length_from_millimetres(local.y))
-                && editor.contour_edit_move_corner_at(drag.corner, [x, y]).is_ok()
+                && editor.contour_edit_move_corner_at(drag.corner, [x, y], CornerMove::Free).is_ok()
             {
                 changed = true;
             }
@@ -719,7 +719,8 @@ mod tests {
         // A dirty draft paints the stored shape faintly behind the working copy.
         let mut edit = edit;
         let last = edit.draft().id_at(1).expect("last segment");
-        edit.move_corner_at(PathCorner::End(last), [millimetres(140), millimetres(60)]).expect("move the free end");
+        edit.move_corner_at(PathCorner::End(last), [millimetres(140), millimetres(60)], CornerMove::Free)
+            .expect("move the free end");
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ContourGizmo::default().paint(ui, rect, camera, &project, &edit);
         });
