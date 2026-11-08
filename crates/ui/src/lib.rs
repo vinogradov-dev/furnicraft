@@ -44,12 +44,14 @@ use furnicraft_engine::node_cmds::{
     ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
     NODE_UNGROUP_ID,
 };
-use furnicraft_engine::object_cmds::{OBJECT_PATH_EXTRUDE_ID, OBJECT_PRIMITIVE_CREATE_ID};
+use furnicraft_engine::object_cmds::{
+    OBJECT_EXTRUDE_HEIGHT_SET_ID, OBJECT_PATH_EXTRUDE_ID, OBJECT_PRIMITIVE_CREATE_ID,
+};
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
-    NodeUngroup, ObjectPathExtrude, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
+    NodeUngroup, ObjectExtrudeHeightSet, ObjectPathExtrude, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
     CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, PanelNominalSize, Path,
@@ -639,7 +641,10 @@ impl Editor {
                 ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(kind, size)?,
                 ToolAction::CreateCamera => self.create_camera(session, target)?,
                 ToolAction::CreateLight => self.create_light(session, target)?,
-                ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
+                ToolAction::ExtrudePath { object, height } => {
+                    self.extrude_path(session, object, height)?;
+                    outcome.extruded = Some((object, height));
+                }
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
                 ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
                 ToolAction::CancelDrawing => self.cancel_drawing(),
@@ -743,7 +748,8 @@ impl Editor {
     /// Only a closed path encloses a ring, so an open one is refused with the reason from
     /// `Path::to_contour` before a command runs. The node becomes the body and keeps its id, name,
     /// placement and pivot: the drawing is not left behind as a second object, and the selection
-    /// stays on the one node the user was editing.
+    /// stays on the one node the user was editing. A live contour edit of that node ends here: the
+    /// node is a body now, and its pull arrow would compete with the corner grips for the pointer.
     fn extrude_path(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
         session
             .project()
@@ -753,8 +759,26 @@ impl Editor {
             .map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
         let params = json(&ObjectPathExtrude { object, height })?;
         dispatch(session, OBJECT_PATH_EXTRUDE_ID, &params)?;
+        self.end_contour_edit();
         self.select_node(Some(object));
         Ok(())
+    }
+
+    /// Sets one body's extrusion height and remembers it as the next default.
+    ///
+    /// The height is session view state, not document data: the ribbon field carries it into the
+    /// next extrusion, while the document only ever sees the command. A refused height leaves both
+    /// the document and the field untouched.
+    pub fn set_extrude_height(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
+        let params = json(&ObjectExtrudeHeightSet { object, height })?;
+        dispatch(session, OBJECT_EXTRUDE_HEIGHT_SET_ID, &params)?;
+        self.toolbars.set_extrude_height_text(height.to_string());
+        Ok(())
+    }
+
+    /// The height the ribbon will hand the next extrusion.
+    pub fn extrude_height_text(&self) -> &str {
+        self.toolbars.extrude_height_text()
     }
 
     /// Dispatches `camera.create`.
@@ -1680,6 +1704,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pulled_height_becomes_the_next_extrusions_default() {
+        let (project, path) = path_project(true);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(path));
+        editor
+            .extrude_path(&mut session, path, Length::from_millimetres(100).expect("height"))
+            .expect("extrude the path");
+        assert_eq!(editor.extrude_height_text(), "100", "the ribbon starts at the default");
+
+        let height = Length::from_millimetres(240).expect("height");
+        editor.set_extrude_height(&mut session, path, height).expect("raise the body");
+        assert_eq!(editor.extrude_height_text(), "240 mm", "the next extrusion starts at the pulled height");
+        let body =
+            session.project().object(path).and_then(|object| object.geometry().as_constructive()).expect("a body");
+        assert_eq!(body.height(), Some(height));
+
+        let revision = session.project().revision();
+        assert!(editor.set_extrude_height(&mut session, path, Length::ZERO).is_err(), "a zero height is refused");
+        assert_eq!(session.project().revision(), revision, "a refused height changes nothing");
+        assert_eq!(editor.extrude_height_text(), "240 mm", "a refused height leaves the field alone");
+    }
+
+    #[test]
     fn one_undo_restores_the_drawing_a_body_came_from() {
         let (project, path) = path_project(true);
         let mut session = Session::with_catalog(project, sample_catalog());
@@ -1732,8 +1780,8 @@ mod tests {
     #[test]
     fn the_extrude_height_field_parses_a_positive_length() {
         let mut state = crate::toolbars::Toolbars::new();
-        assert_eq!(state.extrude_height_text(), "18");
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+        assert_eq!(state.extrude_height_text(), "100");
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
         state.set_extrude_height_text("-2");
         assert!(state.extrude_height().is_err());
         state.set_extrude_height_text("thick");

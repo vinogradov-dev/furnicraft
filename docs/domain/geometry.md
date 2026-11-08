@@ -106,6 +106,12 @@ primitive is described in section 5.
   is invalid, and a body that stores no path, or names its path twice, is a readable load error.
 - A version 18 file stored the contour inside its extrusion feature; it loads into the body's path,
   and every later save writes the path once (schema 19).
+- A fresh extrusion opens a **pull arrow** at the contour's bounds centre, on the top face at the
+  current height and pointing along the body's local `+Z`. Dragging it or typing a height writes
+  `object.extrude.height.set`; a released drag commits one command and leaves the pull open, while
+  Enter or a bare click finishes it. The last committed height stays in session view state, so the
+  next extrusion starts there (100 mm at first); Escape drops the pull without touching the
+  document, leaving the height the last command gave the body.
 
 ## 5. Primitive payload
 
@@ -324,6 +330,8 @@ At minimum:
 - extruding a path replaces the node in place, leaves no sibling, is one undo entry and is refused on
   an open chain or a second time;
 - replacing the body's path keeps its height, and setting the height keeps its path;
+- a pull drag writes one height command, raises the body along its own axis, and the next extrusion
+  starts at that height;
 - every drawing tool builds its figure from its own clicks, and a committed figure opens its edit
   mode;
 - Tab makes a polyline's next segment straight or an arc, and an arc that returns to the stored start

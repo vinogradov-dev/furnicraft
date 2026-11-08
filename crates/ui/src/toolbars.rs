@@ -23,7 +23,7 @@ use crate::icons::{self, Icon, Theme, tool_hint};
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
 /// Height of a new extrusion, in millimetres; also the value the field starts with.
-pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 18;
+pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 100;
 
 /// One action a toolbar panel asks the editor to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -531,6 +531,11 @@ pub struct RibbonOutcome {
     pub started_drawing: bool,
     /// The view action the ribbon asked for, if any.
     pub view: Option<RibbonViewAction>,
+    /// The body a path extrusion just created, with the height it used.
+    ///
+    /// The shell starts the pull arrow on that body; the height is session view state, so the next
+    /// extrusion starts here instead of at the default.
+    pub extruded: Option<(Id, Length)>,
 }
 
 /// What the ribbon reads from the scene, the pointer and the view camera while it draws.
@@ -1236,7 +1241,7 @@ mod tests {
         state.set_tab(RibbonTab::Model);
         let (_, labels, _) = draw(&mut state, full_context());
         assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
     }
 
     #[test]
