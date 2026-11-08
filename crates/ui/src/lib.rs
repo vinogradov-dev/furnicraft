@@ -300,6 +300,32 @@ impl Editor {
         edit.move_corner_at(corner, point, motion)
     }
 
+    /// Drags one grip of the working copy, following the motion the drag resolved.
+    pub fn contour_edit_drag_grip(
+        &mut self,
+        grip: ContourGrip,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::Untagged);
+        };
+        edit.drag_grip(grip, point, motion)
+    }
+
+    /// Applies a number typed at one grip of the working copy.
+    pub fn contour_edit_set_grip_value(&mut self, grip: ContourGrip, value: GripValue) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::Untagged);
+        };
+        edit.set_grip_value(grip, value)
+    }
+
+    /// The current value of one grip, for a field that follows a drag.
+    pub fn contour_edit_grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
+        self.contour_edit.as_ref()?.grip_value(grip)
+    }
+
     /// Splits one side of the working copy and returns the new segment id.
     pub fn contour_edit_split(
         &mut self,

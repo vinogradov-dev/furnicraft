@@ -1087,7 +1087,17 @@ impl FurniCraftApp {
         };
         // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
         if let Some(edit) = self.editor.contour_edit() {
-            self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+            let action = self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+            if let Some(action) = action {
+                let (grip, value) = match action {
+                    contour_gizmo::NumericAction::Apply(grip, value)
+                    | contour_gizmo::NumericAction::Restore(grip, value) => (grip, value),
+                };
+                match self.editor.contour_edit_set_grip_value(grip, value) {
+                    Ok(()) => ui.ctx().request_repaint(),
+                    Err(error) => self.last_error = Some(error.to_string()),
+                }
+            }
         } else if let Some(draft) = self.editor.drawing() {
             self.draw_gizmo.paint(ui, rect, self.scene.camera, draft);
         } else if let Some(object) = mesh_object {
@@ -1415,7 +1425,10 @@ impl FurniCraftApp {
             error: self.last_error.clone(),
             notice: self.settings_notice.clone(),
             mode: self.mode,
-            contour: self.editor.contour_edit().map(|edit| (edit.draft().segment_count(), edit.is_dirty())),
+            contour: self
+                .editor
+                .contour_edit()
+                .map(|edit| (edit.draft().segment_count(), edit.is_dirty(), self.contour_gizmo.along())),
             drawing: self
                 .editor
                 .drawing()
@@ -1447,6 +1460,7 @@ impl FurniCraftApp {
                 }
             }
             Some(StatusAction::CancelContour) => self.cancel_contour_edit(),
+            Some(StatusAction::ToggleContourAlong) => self.contour_gizmo.toggle_along(),
             Some(StatusAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
             Some(StatusAction::CloseDraft) => match self.editor.close_drawing() {
                 Ok(()) => {
@@ -1577,7 +1591,7 @@ struct StatusInfo {
     /// Why the workspace defaults were used instead of the saved settings, if they were.
     notice: Option<String>,
     mode: TransformMode,
-    contour: Option<(usize, bool)>,
+    contour: Option<(usize, bool, bool)>,
     drawing: Option<(DrawTool, usize, bool, bool)>,
     /// Why the pointer cannot extend the live draft, if it cannot.
     preview_error: Option<String>,
@@ -1602,6 +1616,7 @@ struct StatusOut {
 enum StatusAction {
     ApplyContour,
     CancelContour,
+    ToggleContourAlong,
     ToggleGrid,
     CloseDraft,
     FinishDraft,
@@ -1636,12 +1651,22 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         }
         theme::divider(ui);
     }
-    if let Some((segments, dirty)) = info.contour {
+    if let Some((segments, dirty, along)) = info.contour {
         ui.label(format!("Contour edit · {segments} segments{}", if dirty { " · modified" } else { "" }));
+        let motion = ui.selectable_label(along, if along { "Along contour" } else { "Free move" }).clicked();
         let apply = ui.button("Apply").clicked();
         let cancel = ui.button("Cancel").clicked();
-        hint(ui, "Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
-        let action = if apply {
+        hint(
+            ui,
+            if along {
+                "Drag corners along their segment  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
+            } else {
+                "Drag corners freely  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
+            },
+        );
+        let action = if motion {
+            Some(StatusAction::ToggleContourAlong)
+        } else if apply {
             Some(StatusAction::ApplyContour)
         } else if cancel {
             Some(StatusAction::CancelContour)

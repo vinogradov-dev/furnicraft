@@ -185,12 +185,29 @@ in one viewport mode. Its state is view state, not document data
   applies. Leaving the mode without applying drops the draft.
 - A corner handle sits at the start of every segment. Dragging it moves that corner in the node's
   local XY plane through its world placement; the two adjoining segments follow, and the rest of the
-  ring is unchanged.
+  ring is unchanged. The list of handles follows the figure the path was drawn as
+  ([0075](../decisions/0075-a-grip-names-what-its-number-means.md)): a tagged circle adds its centre
+  and four quadrants, a rectangle its side midpoints and centre, a polygon its radius point and
+  centre, and a chain adds the centre and point-on-curve of each arc.
+- A corner drag is **free** by default; the status bar switches it to **along the contour**. Then the
+  segment nearest the pointer at the drag start becomes the support and the edit projects onto its
+  line or circle for the whole drag. The target is resolved once, so crossing the junction does not
+  switch segments half way.
+- A tag constrains a free drag: a rectangle corner pins the opposite corner and keeps the right
+  angles, a rectangle midpoint moves one side and leaves the opposite one, a circle quadrant scales
+  the circle, and a polygon vertex keeps every side equal. A centre handle translates the figure
+  without turning it or changing its size.
+- A small numeric field follows the pointer while a grip is dragged. It is prefilled with the grip's
+  current value and labelled with its dimension: a radius for a circle quadrant, an arc point or a
+  hovered arc curve, an angle for an arc end, `W` or `H` for a rectangle side, the circumradius for a
+  polygon radius point. Enter applies the same model setter the drag uses and keeps the edit mode;
+  Escape restores the value the drag started from. A refused number leaves the field open and the
+  draft untouched.
 - Double-clicking a side splits it at the projected point. A split near a corner is refused so it
   cannot mint a segment a few micrometres long.
-- An arc corner slides along its own circle: the drag point is projected onto the arc first, and the
-  edit trims or extends the sweep. The centre and radius of a stored arc are never redefined; a point
-  that misses the circle by more than a micrometre is rejected by the edit math.
+- A corner next to an arc is projected onto that arc's circle, so a drag trims or extends the sweep
+  instead of redefining the curve. A free corner of a tagged figure takes the shape constraint
+  instead. A point that misses the circle by more than a micrometre is rejected by the edit math.
 - The model edit API is `move_corner`, `trim_segment` and `split_segment`. The viewport uses the first
   and the third; trimming along a supporting line or circle is available to a command but is not a
   gesture yet.
@@ -333,6 +350,11 @@ At minimum:
 - a split keeps the first part's id and the new part takes the next id; untouched segments keep
   theirs;
 - an arc corner slides on its circle, and a corner off the circle is rejected;
+- a circle, a rectangle, a polygon and an arc expose the grips their shape needs, and dragging one
+  keeps the figure (a circle stays round, a rectangle keeps right angles, a polygon keeps its sides);
+- a numeric field parses the grip's dimension and applies it, an angle for an arc end and a length
+  for a radius or a side; Escape restores the drag-start value and a refused number changes nothing;
+- free movement is the default, and an along-contour drag keeps the segment resolved at its start;
 - a draft that would open or cross the ring leaves the last valid shape in place, and cancelling the
   mode changes nothing.
 

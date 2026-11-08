@@ -172,11 +172,12 @@ impl ContourDraft {
                     },
                 }
             }
-            ContourGrip::CircleCenter | ContourGrip::CircleQuadrant(_) => Some(GripNumber::Length),
-            ContourGrip::ArcCenter(_) | ContourGrip::ArcPoint(_) | ContourGrip::ArcRadius(..) => {
-                Some(GripNumber::Length)
-            }
-            ContourGrip::RectangleCenter | ContourGrip::PolygonCenter => None,
+            ContourGrip::CircleQuadrant(_) => Some(GripNumber::Length),
+            ContourGrip::ArcPoint(_) | ContourGrip::ArcRadius(..) => Some(GripNumber::Length),
+            ContourGrip::CircleCenter
+            | ContourGrip::ArcCenter(_)
+            | ContourGrip::RectangleCenter
+            | ContourGrip::PolygonCenter => None,
             ContourGrip::RectangleMidpoint(_) => Some(GripNumber::Length),
             ContourGrip::PolygonRadius => Some(GripNumber::Length),
         }
@@ -186,8 +187,8 @@ impl ContourDraft {
     pub fn grip_label(&self, grip: ContourGrip) -> Option<&'static str> {
         match grip {
             ContourGrip::RectangleMidpoint(side) => Some(if side % 2 == 0 { "H" } else { "W" }),
-            ContourGrip::RectangleCenter => None,
-            ContourGrip::PolygonCenter => None,
+            ContourGrip::RectangleCenter | ContourGrip::PolygonCenter => None,
+            ContourGrip::CircleCenter | ContourGrip::ArcCenter(_) => None,
             ContourGrip::Corner(corner) => {
                 let segment = self.segment(corner.segment())?;
                 match segment {
@@ -200,9 +201,7 @@ impl ContourDraft {
                     },
                 }
             }
-            ContourGrip::CircleCenter
-            | ContourGrip::CircleQuadrant(_)
-            | ContourGrip::ArcCenter(_)
+            ContourGrip::CircleQuadrant(_)
             | ContourGrip::ArcPoint(_)
             | ContourGrip::ArcRadius(..)
             | ContourGrip::PolygonRadius => Some("R"),
@@ -441,7 +440,8 @@ mod tests {
         assert_eq!(draft.grip_position(ContourGrip::CircleQuadrant(1)), Some(point(10, 60)));
         assert_eq!(draft.grip_position(ContourGrip::CircleQuadrant(2)), Some(point(-30, 20)));
         assert_eq!(draft.grip_position(ContourGrip::CircleQuadrant(3)), Some(point(10, -20)));
-        assert_eq!(draft.grip_value(ContourGrip::CircleCenter), Some(GripValue::Length(millimetres(40))));
+        assert_eq!(draft.grip_value(ContourGrip::CircleCenter), None, "the centre translates, it takes no number");
+        assert_eq!(draft.grip_value(ContourGrip::CircleQuadrant(2)), Some(GripValue::Length(millimetres(40))));
         assert_eq!(draft.grip_label(ContourGrip::CircleQuadrant(2)), Some("R"));
     }
 
@@ -547,7 +547,7 @@ mod tests {
         };
         let parsed = GripNumber::Length.parse("60 mm").expect("a typed radius");
         draft.set_grip_value(grip, parsed).expect("apply the radius");
-        assert_eq!(draft.grip_value(ContourGrip::CircleCenter), Some(GripValue::Length(millimetres(60))));
+        assert_eq!(draft.grip_value(ContourGrip::CircleQuadrant(0)), Some(GripValue::Length(millimetres(60))));
         assert!(GripNumber::Length.parse("nope").is_err(), "a bad number is refused");
     }
 
