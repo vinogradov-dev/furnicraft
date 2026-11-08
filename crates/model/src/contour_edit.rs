@@ -591,6 +591,30 @@ impl Path {
         self.rectangle_from_parts(frame.center, frame.first_axis, frame.second_axis, half_width, half_height)
     }
 
+    /// Rebuilds one arc through a new midpoint, keeping both endpoints.
+    ///
+    /// The centre and radius are recalculated from the three points (start, new midpoint, end). A
+    /// collinear midpoint or one that makes the endpoints swap is refused.
+    pub fn set_arc_through_midpoint(
+        &self,
+        segment: ContourSegmentId,
+        midpoint: [Length; 2],
+    ) -> Result<Self, ContourEditError> {
+        let (index, _) = self.position(segment)?;
+        let curve = self.segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
+        let ContourSegment::Arc { .. } = curve else {
+            return Err(ContourEditError::NotAnArc { segment });
+        };
+        let start = curve.start()?;
+        let end = curve.end()?;
+        let rebuilt = ContourSegment::arc_through(start, midpoint, end).map_err(|_| ContourEditError::InvalidValue)?;
+        let Some(entry) = self.entries().get(index) else {
+            return Err(ContourEditError::UnknownSegment { segment });
+        };
+        // The endpoints are the same, so neighbours need no adjustment.
+        self.replaced(index, ContourSegmentEntry::new(entry.id(), rebuilt))
+    }
+
     /// Sets the radius of one arc, keeping both of its stored endpoints.
     ///
     /// The centre moves along the perpendicular bisector of the chord, to the side the arc already
@@ -1775,6 +1799,71 @@ mod tests {
         assert_eq!(radius, millimetres(50), "the chord is a diameter");
         assert_eq!(sweep.abs(), 180_000, "a diameter makes a semicircle");
         assert_eq!(moved.segment(id(2)).expect("arc").end().expect("end"), point(200, 0));
+    }
+
+    #[test]
+    fn a_free_arc_end_keeps_the_other_end_in_place() {
+        let path = line_and_arc();
+        let moved =
+            path.move_corner_at(PathCorner::End(id(2)), point(180, 40), CornerMove::Free).expect("a free arc end");
+        // The start of the arc (shared with the line) must not move.
+        assert_eq!(moved.segment(id(2)).expect("arc").start().expect("start"), point(100, 0));
+        assert_eq!(moved.segment(id(1)).expect("line").end().expect("end"), point(100, 0));
+        // The free end reached the pointer.
+        assert_eq!(moved.segment(id(2)).expect("arc").end().expect("end"), point(180, 40));
+    }
+
+    #[test]
+    fn an_arc_midpoint_rebuilds_the_arc_through_both_endpoints() {
+        let path = line_and_arc();
+        let moved = path.set_arc_through_midpoint(id(2), point(140, 60)).expect("rebuild through a new midpoint");
+        let (center, radius, _, _) = arc_fields(moved.segment(id(2)).expect("arc"));
+        // The endpoints stayed where they were.
+        assert_eq!(moved.segment(id(2)).expect("arc").start().expect("start"), point(100, 0));
+        assert_eq!(moved.segment(id(2)).expect("arc").end().expect("end"), point(140, 40));
+        // The centre and radius changed to pass through (140, 60).
+        let start = DVec2::new(100.0, 0.0);
+        let through = DVec2::new(140.0, 60.0);
+        let end = DVec2::new(140.0, 40.0);
+        let center_geom = DVec2::new(center[0].millimetres_f64(), center[1].millimetres_f64());
+        let r = radius.millimetres_f64();
+        assert!(((start - center_geom).length() - r).abs() < 1.0e-3, "start is on the circle");
+        assert!(((through - center_geom).length() - r).abs() < 1.0e-3, "through is on the circle");
+        assert!(((end - center_geom).length() - r).abs() < 1.0e-3, "end is on the circle");
+        assert!(moved.segment(id(1)).expect("line").end().expect("end") == point(100, 0), "neighbour stays");
+    }
+
+    #[test]
+    fn a_collinear_arc_midpoint_is_refused() {
+        let path = line_and_arc();
+        // A midpoint on the straight line between the two endpoints is collinear.
+        assert_eq!(path.set_arc_through_midpoint(id(2), point(120, 20)), Err(ContourEditError::InvalidValue));
+        // A midpoint at an endpoint is degenerate.
+        assert_eq!(path.set_arc_through_midpoint(id(2), point(140, 40)), Err(ContourEditError::InvalidValue));
+        assert_eq!(
+            path.set_arc_through_midpoint(id(1), point(0, 0)),
+            Err(ContourEditError::NotAnArc { segment: id(1) }),
+            "a line is not an arc"
+        );
+    }
+
+    #[test]
+    fn the_mid_node_stays_finite_after_a_midpoint_rebuild() {
+        let path = line_and_arc();
+        let moved = path.set_arc_through_midpoint(id(2), point(105, 10)).expect("a small displacement");
+        let (_, radius, _, _) = arc_fields(moved.segment(id(2)).expect("arc"));
+        assert!(radius.millimetres_f64().is_finite() && radius.millimetres_f64() > 0.0);
+        // The endpoints are where they were (within the arc endpoint tolerance).
+        let start = moved.segment(id(2)).expect("arc").start().expect("start");
+        let end = moved.segment(id(2)).expect("arc").end().expect("end");
+        assert!(
+            (start[0].micrometres() - 100_000).abs() <= 1 && start[1].micrometres().abs() <= 1,
+            "start at (100, 0): {start:?}"
+        );
+        assert!(
+            (end[0].micrometres() - 140_000).abs() <= 1 && (end[1].micrometres() - 40_000).abs() <= 1,
+            "end at (140, 40): {end:?}"
+        );
     }
 
     #[test]

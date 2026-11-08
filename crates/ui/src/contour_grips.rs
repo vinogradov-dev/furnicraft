@@ -284,7 +284,12 @@ impl ContourDraft {
                     *path = moved;
                     Ok(())
                 }
-                ContourGrip::ArcPoint(segment) | ContourGrip::ArcRadius(segment, _) => {
+                ContourGrip::ArcPoint(segment) => {
+                    let moved = path.set_arc_through_midpoint(segment, point)?;
+                    *path = moved;
+                    Ok(())
+                }
+                ContourGrip::ArcRadius(segment, _) => {
                     let moved = path.set_arc_radius_at(segment, point)?;
                     *path = moved;
                     Ok(())
@@ -536,6 +541,81 @@ mod tests {
         assert_eq!(draft.grip_value(ContourGrip::ArcPoint(arc_id)), Some(GripValue::Length(millimetres(40))));
         // The free end of an open chain is a corner grip as well.
         assert!(grips.contains(&ContourGrip::Corner(PathCorner::End(arc_id))));
+    }
+
+    #[test]
+    fn an_arc_midpoint_drag_rebuilds_through_the_new_point_and_keeps_endpoints() {
+        let arc = Path::new(
+            vec![
+                ContourSegment::line(point(0, 0), point(100, 0)).expect("a line"),
+                ContourSegment::arc(
+                    [millimetres(100), millimetres(40)],
+                    millimetres(40),
+                    Degrees::from_millidegrees(-90_000),
+                    Degrees::from_millidegrees(90_000),
+                )
+                .expect("an arc"),
+            ],
+            false,
+        )
+        .expect("a line and an arc");
+        let mut draft = ContourDraft::Chain(arc);
+        let arc_id = draft.entries().last().expect("the arc").id();
+        // Drag the midpoint to a point off the original circle; the arc rebuilds through it.
+        draft
+            .drag_grip(ContourGrip::ArcPoint(arc_id), point(140, 50), CornerMove::Free)
+            .expect("rebuild through the new midpoint");
+        let frame = draft.arc_frame(arc_id).expect("an arc frame");
+        // The centre is no longer at the old position — the arc was rebuilt, not just scaled.
+        assert_ne!(frame.center, [millimetres(100), millimetres(40)]);
+        // The centre y moved above the old 40 mm because the arc passes through (140, 50).
+        assert!(frame.center[1].micrometres() > millimetres(40).micrometres(), "centre y > 40 mm");
+        // The line neighbour is untouched.
+        let line_end = draft.entries()[0].segment().end().expect("line end");
+        assert_eq!(line_end, point(100, 0));
+        // The endpoints of the arc are still where they were.
+        let arc_segment = draft.segment(arc_id).expect("the arc");
+        assert_eq!(arc_segment.start().expect("start"), point(100, 0));
+        assert_eq!(arc_segment.end().expect("end"), point(140, 40));
+    }
+
+    #[test]
+    fn an_arc_radius_drag_does_not_rebuild_through_the_midpoint() {
+        let arc = Path::new(
+            vec![
+                ContourSegment::line(point(0, 0), point(100, 0)).expect("a line"),
+                ContourSegment::arc(
+                    [millimetres(100), millimetres(40)],
+                    millimetres(40),
+                    Degrees::from_millidegrees(-90_000),
+                    Degrees::from_millidegrees(90_000),
+                )
+                .expect("an arc"),
+            ],
+            false,
+        )
+        .expect("a line and an arc");
+        let mut draft = ContourDraft::Chain(arc);
+        let arc_id = draft.entries().last().expect("the arc").id();
+        let midpoint = draft.grip_position(ContourGrip::ArcPoint(arc_id)).expect("midpoint");
+        // Drag the radius grip to a point far out; the radius changes.
+        draft
+            .drag_grip(ContourGrip::ArcRadius(arc_id, midpoint), point(140, 60), CornerMove::Free)
+            .expect("drag the radius grip");
+        let frame = draft.arc_frame(arc_id).expect("an arc frame");
+        assert!(frame.radius > millimetres(40), "the radius grew");
+        // The endpoints are still where they were (within the arc endpoint tolerance).
+        let arc_segment = draft.segment(arc_id).expect("arc");
+        let start = arc_segment.start().expect("start");
+        let end = arc_segment.end().expect("end");
+        assert!(
+            (start[0].micrometres() - 100_000).abs() <= 1 && start[1].micrometres().abs() <= 1,
+            "start at (100, 0): {start:?}"
+        );
+        assert!(
+            (end[0].micrometres() - 140_000).abs() <= 1 && (end[1].micrometres() - 40_000).abs() <= 1,
+            "end at (140, 40): {end:?}"
+        );
     }
 
     #[test]

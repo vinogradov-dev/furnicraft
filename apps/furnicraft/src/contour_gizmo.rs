@@ -221,12 +221,16 @@ impl ContourGizmo {
         Ok(changed)
     }
 
-    /// The point a grip really receives, after the arc projection a free corner needs.
+    /// The point a grip really receives, after the arc projection an along-contour corner needs.
+    ///
+    /// A free corner takes the pointer point directly and the arc endpoint rebuilds the arc through
+    /// the other end and its current midpoint. An along-contour corner projects onto the arc's
+    /// circle so the centre and radius stay fixed.
     fn dragged_point(&self, draft: &ContourDraft, drag: GripDrag, local: DVec2) -> Option<DVec2> {
         let ContourGrip::Corner(corner) = drag.grip else {
             return Some(local);
         };
-        if matches!(drag.motion, CornerMove::Free) { project_arc_corner(draft, corner, local) } else { Some(local) }
+        if matches!(drag.motion, CornerMove::Along(_)) { project_arc_corner(draft, corner, local) } else { Some(local) }
     }
 
     /// The motion a drag takes, resolved once from the toggle and the junction under the pointer.

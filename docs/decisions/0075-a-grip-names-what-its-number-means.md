@@ -38,7 +38,10 @@ pub enum ContourGrip {
 - **Dragging is a separate call.** `ContourDraft::drag_grip` routes a grip to the model setter that
   keeps the figure: a rectangle corner pins the opposite corner and keeps four right angles, a
   rectangle midpoint moves one side and leaves the opposite one, a circle quadrant scales the
-  circle, a polygon vertex keeps every side equal, and a centre translates the whole figure.
+  circle, a polygon vertex keeps every side equal, a centre translates the whole figure, an arc
+  midpoint (`ArcPoint`) rebuilds the arc through the two endpoints and the new midpoint, and a
+  hovered arc curve (`ArcRadius`) and a corner on an arc keep the arc's endpoints and move the
+  centre and radius.
 - **Free movement is the default; the contour is a toggle.** A corner drag is free unless the status
   bar's switch is on. Then the segment the pointer is nearest at the drag start becomes the support,
   and the model projects onto it for the rest of the drag; the target is not re-resolved when the
