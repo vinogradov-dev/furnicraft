@@ -530,6 +530,39 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_joins_its_segments_with_the_drawing_tolerance() {
+        let point = |x: i64, y: i64| [Length::from_micrometres(x), Length::from_micrometres(y)];
+        let square = |last: [Length; 2]| {
+            vec![
+                ContourSegment::line(point(0, 0), point(100_000, 0)).expect("line"),
+                ContourSegment::line(point(100_000, 0), point(100_000, 50_000)).expect("line"),
+                ContourSegment::line(point(100_000, 50_000), point(0, 50_000)).expect("line"),
+                ContourSegment::line(point(0, 50_000), last).expect("the closing line"),
+            ]
+        };
+        assert!(Contour::new(square(point(1, 0))).is_ok(), "one micrometre is still a joint");
+        assert_eq!(Contour::new(square(point(2, 0))), Err(ContourError::NotClosed { index: 3 }));
+    }
+
+    /// An arc stores its centre, radius and angles, so its start point is derived: after rounding it
+    /// can miss the drawn point by a micrometre. A ring the user drew must still assemble (ADR 0072).
+    #[test]
+    fn a_ring_joins_an_arc_to_the_point_it_was_drawn_from() {
+        let point = |x: i64, y: i64| [Length::from_micrometres(x), Length::from_micrometres(y)];
+        let drawn = point(100_000, 0);
+        let arc = ContourSegment::arc_through(drawn, point(-60_000, 20_000), point(-90_000, -71_000)).expect("arc");
+        assert_ne!(arc.start().expect("start"), drawn, "the stored start is derived and rounded");
+        let end = arc.end().expect("end");
+        let ring = Contour::new(vec![
+            ContourSegment::line(point(0, 0), drawn).expect("line"),
+            arc,
+            ContourSegment::line(end, point(0, 0)).expect("line"),
+        ])
+        .expect("the one-micrometre rounding is a joint");
+        ring.to_geometry().expect("the geometry layer uses the same tolerance");
+    }
+
+    #[test]
     fn a_clockwise_ring_is_stored_counter_clockwise_exactly() {
         let clockwise = Contour::from_polygon(vec![
             [millimetres(0), millimetres(0)],
@@ -1409,6 +1442,11 @@ impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
 /// Each segment is converted to the geometry layer, where a line or arc is validated once, and the
 /// joints, the signed area and the self-intersection test then run on that exact curve. Document
 /// units stay integer: every point that leaves the module is rounded to a whole micrometre.
+///
+/// A joint is judged with the same [`PATH_JOINT_TOLERANCE_MICROMETRES`] the drawing path uses. An
+/// arc stores its centre, radius and angles, so its endpoints are derived and can miss the point the
+/// user drew by a micrometre after rounding; requiring exact equality would refuse a ring the user
+/// legitimately drew (ADR 0072).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ContourWire", into = "ContourWire")]
 pub struct Contour {
@@ -1519,7 +1557,7 @@ impl Contour {
             let (Some(entry), Some(next)) = (entries.get(index), entries.get((index + 1) % count)) else {
                 continue;
             };
-            if entry.segment().end()? != next.segment().start()? {
+            if !within_joint_tolerance(entry.segment().end()?, next.segment().start()?) {
                 return Err(ContourError::NotClosed { index });
             }
         }
@@ -2504,7 +2542,7 @@ pub enum ContourError {
         /// The supported maximum.
         max: usize,
     },
-    /// The end of a segment does not meet the start of the next one.
+    /// The end of a segment does not meet the start of the next one, beyond the joint tolerance.
     #[error("contour segment {index} does not meet the next segment")]
     NotClosed {
         /// Index of the segment whose end is checked.

@@ -1307,11 +1307,10 @@ mod tests {
     }
 
     #[test]
-    fn a_one_micrometre_gap_builds_a_path_but_not_a_ring() {
-        // This is the trap U29 has to avoid: a rounded arc end can miss the clicked point, so a
-        // chain that starts its next segment at the click has a one-micrometre gap. `Path` accepts
-        // that, the ring assembler does not, and `to_contour` is the only way to an extrusion — so
-        // the draft follows the stored end instead.
+    fn a_one_micrometre_gap_still_becomes_a_ring() {
+        // A rounded arc end can miss the clicked point by one micrometre. `Path` accepts that joint
+        // and, since ADR 0072, so does the ring assembler, so `to_contour` — the only way to an
+        // extrusion — takes the chain the user drew instead of refusing it.
         let stored = [millimetres(600), millimetres(400)];
         let gap = [stored[0], Length::from_micrometres(stored[1].micrometres() + 1)];
         let chain = |end: [Length; 2], next_start: [Length; 2]| {
@@ -1328,7 +1327,7 @@ mod tests {
             )
         };
         let drawn = chain(gap, stored).expect("a path tolerates one micrometre");
-        assert!(drawn.to_contour().is_err(), "the ring assembler demands an exact joint");
+        assert!(drawn.to_contour().is_ok(), "the ring takes the same tolerance as the path");
         assert!(chain(stored, stored).expect("an exact chain").to_contour().is_ok(), "the exact joint closes");
     }
 
