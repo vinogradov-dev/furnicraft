@@ -17,6 +17,7 @@ mod camera_card;
 mod command;
 mod container_card;
 mod contour_edit;
+mod contour_grips;
 pub mod display;
 pub mod home;
 pub mod icons;
@@ -71,6 +72,7 @@ use crate::scene_tree::{Selection, TreeAction};
 use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
+pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};

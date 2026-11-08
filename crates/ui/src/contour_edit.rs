@@ -24,6 +24,7 @@ use furnicraft_units::Length;
 use thiserror::Error;
 
 use crate::command::{dispatch, json};
+use crate::contour_grips::{ContourGrip, GripValue};
 
 /// The node whose contour the editor is changing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,6 +268,43 @@ impl ContourEdit {
                 *path = moved;
             }
         }
+        Ok(())
+    }
+
+    /// Every grip the working copy shows, in painting order.
+    pub fn grips(&self) -> Vec<ContourGrip> {
+        self.draft.grips()
+    }
+
+    /// Drags `grip` to `point` in the target's local plane.
+    ///
+    /// A tagged figure keeps its own constraint, so a circle quadrant scales the circle and a
+    /// rectangle midpoint moves one side; a plain chain takes [`CornerMove`] like any corner.
+    pub fn drag_grip(
+        &mut self,
+        grip: ContourGrip,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
+        let mut draft = self.draft.clone();
+        draft.drag_grip(grip, point, motion)?;
+        self.draft = draft;
+        Ok(())
+    }
+
+    /// The value a numeric field starts with at `grip`, when the grip takes a number.
+    pub fn grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
+        self.draft.grip_value(grip)
+    }
+
+    /// Applies a number typed at `grip`.
+    ///
+    /// The working copy is replaced only when the value builds a legal figure, so a refused number
+    /// leaves the draft as it was and the field can stay open.
+    pub fn set_grip_value(&mut self, grip: ContourGrip, value: GripValue) -> Result<(), ContourEditError> {
+        let mut draft = self.draft.clone();
+        draft.set_grip_value(grip, value)?;
+        self.draft = draft;
         Ok(())
     }
 

@@ -17,7 +17,7 @@ use furnicraft_geom::{Arc, ContourError as GeomError, DVec2, Segment};
 use furnicraft_units::{Degrees, Length};
 use thiserror::Error;
 
-use crate::contour::point_to_geometry;
+use crate::contour::{MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, point_to_geometry};
 use crate::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, Path, PathError,
     PathShape,
@@ -89,6 +89,9 @@ pub enum ContourEditError {
     /// A numeric value would build a curve the document cannot hold.
     #[error("the value cannot build the figure")]
     InvalidValue,
+    /// The path carries no shape tag, so it has no figure-specific grip.
+    #[error("the path does not remember a figure")]
+    Untagged,
 }
 
 /// How a dragged corner follows the pointer.
@@ -139,8 +142,10 @@ impl Path {
     /// segment's own supporting line or circle, so an arc keeps its centre and radius and reaches the
     /// corner by trimming or extending its sweep. [`CornerMove::Free`] takes the point itself: a line
     /// follows exactly and an arc keeps its radius when the other end and the point still fit a
-    /// circle of that radius, and becomes a semicircle when they do not. Every other segment keeps
-    /// its id, and the shape tag is kept because the figure is the same figure.
+    /// circle of that radius, and becomes a semicircle when they do not. A tagged figure keeps its
+    /// own constraint instead of bending freely: a rectangle corner keeps the right angles, a circle
+    /// quadrant keeps the circle, and a polygon vertex keeps every side. Every segment keeps its id
+    /// where the figure's construction allows it.
     pub fn move_corner_at(
         &self,
         corner: PathCorner,
@@ -148,12 +153,253 @@ impl Path {
         motion: CornerMove,
     ) -> Result<Self, ContourEditError> {
         match motion {
-            CornerMove::Free => self.move_corner_free(corner, point),
+            CornerMove::Free => match self.shape() {
+                Some(PathShape::Rectangle) => self.move_rectangle_corner(corner, point),
+                Some(PathShape::Circle) => {
+                    let frame = self.circle_frame()?;
+                    self.set_circle_radius(distance(frame.center, point)?)
+                }
+                Some(PathShape::RegularPolygon) => self.move_polygon_vertex(corner, point),
+                None => self.move_corner_free(corner, point),
+            },
             CornerMove::Along(segment) => {
                 let point = self.nearest_on_support(segment, point)?;
                 self.move_corner_on_support(corner, point)
             }
         }
+    }
+
+    /// Moves one corner of a rectangle-tagged path, keeping the four right angles.
+    ///
+    /// The opposite corner stays where it is; the dragged corner defines the other end of the
+    /// diagonal, so the centre and both extents follow. The axes keep their direction, so a
+    /// rectangle never turns because a corner was dragged past its neighbour.
+    pub fn move_rectangle_corner(&self, corner: PathCorner, point: [Length; 2]) -> Result<Self, ContourEditError> {
+        let frame = self.rectangle_frame()?;
+        let index = self.corner_index(corner)? % 4;
+        let opposite = match frame.corners.get((index + 2) % 4) {
+            Some(corner) => *corner,
+            None => return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle }),
+        };
+        let center = midpoint(opposite, point)?;
+        let diagonal = point_to_geometry(point)? - point_to_geometry(opposite)?;
+        let half_width = diagonal.dot(frame.first_axis).abs() * 0.5;
+        let half_height = diagonal.dot(frame.second_axis).abs() * 0.5;
+        if half_width <= 0.0 || half_height <= 0.0 {
+            return Err(ContourEditError::InvalidValue);
+        }
+        self.rectangle_from_parts(center, frame.first_axis, frame.second_axis, half_width, half_height)
+    }
+
+    /// Moves one side midpoint of a rectangle-tagged path, keeping the opposite side.
+    ///
+    /// Sides `0` and `2` run along the first axis, so dragging their midpoint sets the second
+    /// extent (the height); sides `1` and `3` set the first extent (the width). The opposite side
+    /// and the axes stay where they are, so the figure grows and shrinks from that side.
+    pub fn move_rectangle_midpoint(&self, side: usize, point: [Length; 2]) -> Result<Self, ContourEditError> {
+        let frame = self.rectangle_frame()?;
+        if side >= 4 {
+            return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
+        }
+        let normal = if side.is_multiple_of(2) { frame.second_axis } else { frame.first_axis };
+        let half_extent = if side.is_multiple_of(2) {
+            frame.height.millimetres_f64() * 0.5
+        } else {
+            frame.width.millimetres_f64() * 0.5
+        };
+        let center = point_to_geometry(frame.center)?;
+        let requested = point_to_geometry(point)?;
+        // Side 0 (and 2) sits at `-half_extent` on the normal, side 1 (and 3) at `+half_extent`;
+        // the opposite side is the one that stays.
+        let opposite = if side.is_multiple_of(2) { half_extent } else { -half_extent };
+        let moved = (requested - center).dot(normal);
+        let new_half = (moved - opposite).abs() * 0.5;
+        if !new_half.is_finite() || new_half <= 0.0 {
+            return Err(ContourEditError::InvalidValue);
+        }
+        let new_center = center + normal * ((moved + opposite) * 0.5);
+        let new_center = crate::contour::point_to_document(new_center)?;
+        let (half_width, half_height) = if side.is_multiple_of(2) {
+            (frame.width.millimetres_f64() * 0.5, new_half)
+        } else {
+            (new_half, frame.height.millimetres_f64() * 0.5)
+        };
+        self.rectangle_from_parts(new_center, frame.first_axis, frame.second_axis, half_width, half_height)
+    }
+
+    /// Moves the centre of a tagged figure, keeping its size and its turn.
+    pub fn move_shape_center(&self, center: [Length; 2]) -> Result<Self, ContourEditError> {
+        let current = match self.shape() {
+            Some(PathShape::Circle) => self.circle_frame()?.center,
+            Some(PathShape::Rectangle) => self.rectangle_frame()?.center,
+            Some(PathShape::RegularPolygon) => self.polygon_frame()?.center,
+            None => return Err(ContourEditError::Untagged),
+        };
+        let offset = [
+            center[0].checked_sub(current[0]).ok_or(ContourEditError::InvalidValue)?,
+            center[1].checked_sub(current[1]).ok_or(ContourEditError::InvalidValue)?,
+        ];
+        self.translated_by(offset)
+    }
+
+    /// Moves the centre of one arc segment, keeping its radius and its angles.
+    ///
+    /// Both adjoining segments follow the arc's new endpoints, so the chain stays joined.
+    pub fn move_arc_center(&self, segment: ContourSegmentId, center: [Length; 2]) -> Result<Self, ContourEditError> {
+        let (index, count) = self.position(segment)?;
+        let curve = self.segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
+        let ContourSegment::Arc { radius, start_angle, sweep, .. } = curve else {
+            return Err(ContourEditError::NotAnArc { segment });
+        };
+        let moved = ContourSegment::arc(center, radius, start_angle, sweep)?;
+        let start = moved.start()?;
+        let end = moved.end()?;
+        let mut edited = self.entries().to_vec();
+        let Some(slot) = edited.get_mut(index) else {
+            return Err(ContourEditError::UnknownSegment { segment });
+        };
+        *slot = ContourSegmentEntry::new(segment, moved);
+        let previous = if index > 0 {
+            Some(index - 1)
+        } else if self.is_closed() && count > 1 {
+            Some(count - 1)
+        } else {
+            None
+        };
+        let next = if index + 1 < count {
+            Some(index + 1)
+        } else if self.is_closed() && count > 1 {
+            Some(0)
+        } else {
+            None
+        };
+        if let Some(previous) = previous {
+            let entry = edited.get(previous).ok_or(ContourEditError::UnknownSegment { segment })?;
+            let (id, curve) = (entry.id(), entry.segment());
+            let fixed = with_corner(id, curve, start, true)?.0;
+            let Some(slot) = edited.get_mut(previous) else {
+                return Err(ContourEditError::UnknownSegment { segment });
+            };
+            *slot = ContourSegmentEntry::new(id, fixed);
+        }
+        if let Some(next) = next {
+            let entry = edited.get(next).ok_or(ContourEditError::UnknownSegment { segment })?;
+            let (id, curve) = (entry.id(), entry.segment());
+            let fixed = with_corner(id, curve, end, false)?.0;
+            let Some(slot) = edited.get_mut(next) else {
+                return Err(ContourEditError::UnknownSegment { segment });
+            };
+            *slot = ContourSegmentEntry::new(id, fixed);
+        }
+        Ok(self.rebuild(edited)?)
+    }
+
+    /// The centre, radius and phase of a circle-tagged path.
+    pub fn circle_frame(&self) -> Result<CircleFrame, ContourEditError> {
+        if self.shape() != Some(PathShape::Circle) {
+            return Err(ContourEditError::NotShaped { shape: PathShape::Circle });
+        }
+        let Some(first) = self.entries().first() else {
+            return Err(ContourEditError::NotShaped { shape: PathShape::Circle });
+        };
+        let ContourSegment::Arc { center, radius, start_angle, .. } = first.segment() else {
+            return Err(ContourEditError::NotShaped { shape: PathShape::Circle });
+        };
+        for entry in self.entries() {
+            match entry.segment() {
+                ContourSegment::Arc { center: arc_center, radius: arc_radius, .. }
+                    if arc_center == center && arc_radius == radius => {}
+                _ => return Err(ContourEditError::NotShaped { shape: PathShape::Circle }),
+            }
+        }
+        Ok(CircleFrame { center, radius, phase: start_angle })
+    }
+
+    /// The centre, radius, angles and endpoints of one arc segment.
+    pub fn arc_frame(&self, segment: ContourSegmentId) -> Result<ArcFrame, ContourEditError> {
+        match self.segment(segment) {
+            Some(ContourSegment::Arc { center, radius, start_angle, sweep }) => {
+                Ok(ArcFrame { center, radius, start_angle, sweep })
+            }
+            Some(_) => Err(ContourEditError::NotAnArc { segment }),
+            None => Err(ContourEditError::UnknownSegment { segment }),
+        }
+    }
+
+    /// The index of the corner in ring order, where `Start` is its segment's position.
+    fn corner_index(&self, corner: PathCorner) -> Result<usize, ContourEditError> {
+        let (index, _) = self.position(corner.segment())?;
+        Ok(if corner.is_end() { index + 1 } else { index })
+    }
+
+    /// The same path moved by `offset` in both coordinates.
+    fn translated_by(&self, offset: [Length; 2]) -> Result<Self, ContourEditError> {
+        let mut edited = Vec::with_capacity(self.entries().len());
+        for entry in self.entries() {
+            let moved = match entry.segment() {
+                ContourSegment::Line { start, end } => {
+                    ContourSegment::line(shift(start, offset)?, shift(end, offset)?)?
+                }
+                ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                    ContourSegment::arc(shift(center, offset)?, radius, start_angle, sweep)?
+                }
+            };
+            edited.push(ContourSegmentEntry::new(entry.id(), moved));
+        }
+        Ok(self.rebuild(edited)?)
+    }
+
+    /// The four side entries of a rectangle, rebuilt around `center` with the given axes.
+    fn rectangle_from_parts(
+        &self,
+        center: [Length; 2],
+        first_axis: DVec2,
+        second_axis: DVec2,
+        half_width: f64,
+        half_height: f64,
+    ) -> Result<Self, ContourEditError> {
+        let center = point_to_geometry(center)?;
+        let corners = [
+            center - first_axis * half_width - second_axis * half_height,
+            center + first_axis * half_width - second_axis * half_height,
+            center + first_axis * half_width + second_axis * half_height,
+            center - first_axis * half_width + second_axis * half_height,
+        ];
+        let mut edited = Vec::with_capacity(4);
+        for (index, entry) in self.entries().iter().enumerate().take(4) {
+            let (Some(&start), Some(&end)) = (corners.get(index), corners.get((index + 1) % corners.len())) else {
+                return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
+            };
+            let start = crate::contour::point_to_document(start)?;
+            let end = crate::contour::point_to_document(end)?;
+            edited.push(ContourSegmentEntry::new(entry.id(), ContourSegment::line(start, end)?));
+        }
+        Ok(self.rebuild(edited)?)
+    }
+
+    /// Rebuilds a regular polygon from its centre and a dragged vertex, keeping its ids.
+    fn move_polygon_vertex(&self, corner: PathCorner, point: [Length; 2]) -> Result<Self, ContourEditError> {
+        self.position(corner.segment())?;
+        let frame = self.polygon_frame()?;
+        let sides = u32::try_from(self.entries().len()).map_err(|_| ContourEditError::InvalidValue)?;
+        if !(MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES).contains(&sides) {
+            return Err(ContourEditError::InvalidValue);
+        }
+        let center = point_to_geometry(frame.center)?;
+        let offset = point_to_geometry(point)? - center;
+        let radius = offset.length();
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(ContourEditError::InvalidValue);
+        }
+        let phase = offset.y.atan2(offset.x);
+        let step = std::f64::consts::TAU / f64::from(sides);
+        let mut corners = Vec::with_capacity(self.entries().len());
+        for index in 0..self.entries().len() {
+            let angle = phase + step * index as f64;
+            corners.push(crate::contour::point_to_document(center + DVec2::new(angle.cos(), angle.sin()) * radius)?);
+        }
+        let edited = self.polygon_entries(&corners)?;
+        Ok(self.rebuild(edited)?)
     }
 
     /// The point of `segment`'s own line or circle nearest to `point`.
@@ -269,6 +515,24 @@ impl Path {
         Ok(self.rebuild(edited)?)
     }
 
+    /// Sets a circle's radius from a rim point, which is what a quadrant drag gives.
+    pub fn set_circle_radius_at(&self, rim: [Length; 2]) -> Result<Self, ContourEditError> {
+        let frame = self.circle_frame()?;
+        self.set_circle_radius(distance(frame.center, rim)?)
+    }
+
+    /// Sets a regular polygon's radius from a rim point, keeping its phase and its ids.
+    pub fn set_polygon_radius_at(&self, rim: [Length; 2]) -> Result<Self, ContourEditError> {
+        let frame = self.polygon_frame()?;
+        self.set_polygon_radius(distance(frame.center, rim)?)
+    }
+
+    /// Sets one arc's radius from a point, which is what a drag on the curve gives.
+    pub fn set_arc_radius_at(&self, segment: ContourSegmentId, rim: [Length; 2]) -> Result<Self, ContourEditError> {
+        let frame = self.arc_frame(segment)?;
+        self.set_arc_radius(segment, distance(frame.center, rim)?)
+    }
+
     /// Sets the radius of a regular polygon from its centre, keeping its phase and its ids.
     pub fn set_polygon_radius(&self, radius: Length) -> Result<Self, ContourEditError> {
         let frame = self.polygon_frame()?;
@@ -317,30 +581,14 @@ impl Path {
         self.set_rectangle_extents(height, Some(()))
     }
 
-    /// Rebuilds the rectangle with one half-extent replaced.
+    /// Rebuilds the rectangle with one extent replaced.
     fn set_rectangle_extents(&self, value: Length, height: Option<()>) -> Result<Self, ContourEditError> {
-        let (center, u, v, half_w, half_h) = self.rectangle_frame()?;
-        let (half_w, half_h) = match height {
-            Some(()) => (half_w, value.millimetres_f64() * 0.5),
-            None => (value.millimetres_f64() * 0.5, half_h),
+        let frame = self.rectangle_frame()?;
+        let (half_width, half_height) = match height {
+            Some(()) => (frame.width.millimetres_f64() * 0.5, value.millimetres_f64() * 0.5),
+            None => (value.millimetres_f64() * 0.5, frame.height.millimetres_f64() * 0.5),
         };
-        let center_geometry = center;
-        let corners = [
-            center_geometry - u * half_w - v * half_h,
-            center_geometry + u * half_w - v * half_h,
-            center_geometry + u * half_w + v * half_h,
-            center_geometry - u * half_w + v * half_h,
-        ];
-        let mut edited = Vec::with_capacity(4);
-        for (index, entry) in self.entries().iter().enumerate() {
-            let (Some(&start), Some(&end)) = (corners.get(index), corners.get((index + 1) % corners.len())) else {
-                return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
-            };
-            let start = crate::contour::point_to_document(start)?;
-            let end = crate::contour::point_to_document(end)?;
-            edited.push(ContourSegmentEntry::new(entry.id(), ContourSegment::line(start, end)?));
-        }
-        Ok(self.rebuild(edited)?)
+        self.rectangle_from_parts(frame.center, frame.first_axis, frame.second_axis, half_width, half_height)
     }
 
     /// Sets the radius of one arc, keeping both of its stored endpoints.
@@ -414,8 +662,8 @@ impl Path {
         Ok(self.rebuild(edited)?)
     }
 
-    /// The centre, the corners and the circumradius of a regular polygon path.
-    fn polygon_frame(&self) -> Result<PolygonFrame, ContourEditError> {
+    /// The centre, the corners, the circumradius and the phase of a regular polygon path.
+    pub fn polygon_frame(&self) -> Result<PolygonFrame, ContourEditError> {
         if self.shape() != Some(PathShape::RegularPolygon) {
             return Err(ContourEditError::NotShaped { shape: PathShape::RegularPolygon });
         }
@@ -442,7 +690,8 @@ impl Path {
         if !radius.is_finite() || radius <= 0.0 {
             return Err(ContourEditError::InvalidValue);
         }
-        Ok(PolygonFrame { center, corners: vertices, radius: Length::from_micrometres(radius.round() as i64) })
+        let phase = Degrees::from_radians(dy.atan2(dx)).ok_or(ContourEditError::InvalidValue)?;
+        Ok(PolygonFrame { center, corners: vertices, radius: Length::from_micrometres(radius.round() as i64), phase })
     }
 
     /// The side entries of a regular polygon through `corners`, keeping the ids of the sides.
@@ -457,32 +706,42 @@ impl Path {
         Ok(edited)
     }
 
-    /// The centre, the two unit axes and the half extents of a rectangle path, in millimetres.
-    fn rectangle_frame(&self) -> Result<(DVec2, DVec2, DVec2, f64, f64), ContourEditError> {
+    /// The centre, the four corners, the extents and the axes of a rectangle path.
+    pub fn rectangle_frame(&self) -> Result<RectangleFrame, ContourEditError> {
         if self.shape() != Some(PathShape::Rectangle) || self.entries().len() != 4 {
             return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
         }
-        let corners: Vec<DVec2> = self
-            .entries()
-            .iter()
-            .map(|entry| entry.segment().to_geom().map(|segment| segment.start()))
-            .collect::<Result<_, _>>()?;
-        let (Some(&first), Some(&second), Some(&third), Some(&fourth)) =
-            (corners.first(), corners.get(1), corners.get(2), corners.get(3))
-        else {
+        let mut document = [[Length::ZERO; 2]; 4];
+        let mut geometry = [DVec2::ZERO; 4];
+        for (index, entry) in self.entries().iter().enumerate().take(4) {
+            let segment = entry.segment().to_geom()?;
+            let (Some(slot), Some(point)) = (document.get_mut(index), geometry.get_mut(index)) else {
+                return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
+            };
+            *slot = entry.segment().start()?;
+            *point = segment.start();
+        }
+        let (Some(&first), Some(&second), Some(&third)) = (geometry.first(), geometry.get(1), geometry.get(2)) else {
             return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
         };
         let u = second - first;
-        let v = fourth - first;
+        let v = geometry.get(3).copied().unwrap_or_default() - first;
         let width = u.length();
         let height = v.length();
         if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
             return Err(ContourEditError::InvalidValue);
         }
-        let u = u / width;
-        let v = v / height;
-        let center = (first + third) * 0.5;
-        Ok((center, u, v, width * 0.5, height * 0.5))
+        let first_axis = u / width;
+        let second_axis = v / height;
+        let center = crate::contour::point_to_document((first + third) * 0.5)?;
+        Ok(RectangleFrame {
+            center,
+            corners: document,
+            width: Length::from_micrometres((width * 1_000.0).round() as i64),
+            height: Length::from_micrometres((height * 1_000.0).round() as i64),
+            first_axis,
+            second_axis,
+        })
     }
 
     /// Splits `segment` at a point strictly inside it, keeping the path open or closed.
@@ -805,13 +1064,112 @@ impl Contour {
 }
 
 /// What a regular polygon path looks like around its centre.
-struct PolygonFrame {
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolygonFrame {
     /// The centre of the circumscribed circle, averaged from the stored vertices.
-    center: [Length; 2],
+    pub center: [Length; 2],
     /// The corner each side starts on, in ring order.
-    corners: Vec<[Length; 2]>,
+    pub corners: Vec<[Length; 2]>,
     /// The distance from the centre to the first corner.
-    radius: Length,
+    pub radius: Length,
+    /// The angle of the first corner around the centre, which fixes the figure's turn.
+    pub phase: Degrees,
+}
+
+/// What a circle-tagged path looks like around its centre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CircleFrame {
+    /// The shared centre of the arcs.
+    pub center: [Length; 2],
+    /// The shared radius of the arcs.
+    pub radius: Length,
+    /// The start angle of the first quarter arc, which fixes where the quadrants sit.
+    pub phase: Degrees,
+}
+
+impl PolygonFrame {
+    /// One point on the circumcircle midway between the first two corners.
+    ///
+    /// The vertex handles already cover the corners, so the radius grip sits on the arc between
+    /// them: dragging it scales the figure without turning it.
+    pub fn radius_point(&self) -> Result<[Length; 2], ContourEditError> {
+        let count = u32::try_from(self.corners.len()).map_err(|_| ContourEditError::InvalidValue)?;
+        if count < MIN_POLYGON_SIDES {
+            return Err(ContourEditError::NotShaped { shape: PathShape::RegularPolygon });
+        }
+        let step = std::f64::consts::TAU / f64::from(count);
+        let angle = self.phase.radians_f64() + step * 0.5;
+        let center = point_to_geometry(self.center)?;
+        let offset = DVec2::new(angle.cos(), angle.sin()) * self.radius.millimetres_f64();
+        Ok(crate::contour::point_to_document(center + offset)?)
+    }
+}
+
+impl CircleFrame {
+    /// The point of the circle at `angle`, rounded to whole micrometres.
+    pub fn point_at(self, angle: Degrees) -> Result<[Length; 2], ContourEditError> {
+        let center = point_to_geometry(self.center)?;
+        let radians = angle.radians_f64();
+        let offset = DVec2::new(radians.cos(), radians.sin()) * self.radius.millimetres_f64();
+        Ok(crate::contour::point_to_document(center + offset)?)
+    }
+}
+
+/// What a rectangle-tagged path looks like around its centre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RectangleFrame {
+    /// The centre of the rectangle: the midpoint of two opposite corners.
+    pub center: [Length; 2],
+    /// The four corners in ring order, the first one where the first side starts.
+    pub corners: [[Length; 2]; 4],
+    /// The side length from `corners[0]` to `corners[1]`, on the first axis.
+    pub width: Length,
+    /// The side length from `corners[1]` to `corners[2]`, on the second axis.
+    pub height: Length,
+    /// The unit axis of the first side.
+    first_axis: DVec2,
+    /// The unit axis of the second side.
+    second_axis: DVec2,
+}
+
+/// What one arc segment looks like around its centre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArcFrame {
+    /// The centre of the arc.
+    pub center: [Length; 2],
+    /// The radius of the arc.
+    pub radius: Length,
+    /// The angle the arc starts at.
+    pub start_angle: Degrees,
+    /// The signed sweep from the start to the end.
+    pub sweep: Degrees,
+}
+
+impl ArcFrame {
+    /// The angle the arc ends at.
+    pub fn end_angle(self) -> Result<Degrees, ContourEditError> {
+        let millidegrees = self
+            .start_angle
+            .millidegrees()
+            .checked_add(self.sweep.millidegrees())
+            .ok_or(ContourEditError::InvalidValue)?;
+        Ok(Degrees::from_millidegrees(millidegrees))
+    }
+
+    /// The point of the arc at `angle`, rounded to whole micrometres.
+    pub fn point_at(self, angle: Degrees) -> Result<[Length; 2], ContourEditError> {
+        let center = point_to_geometry(self.center)?;
+        let radians = angle.radians_f64();
+        let offset = DVec2::new(radians.cos(), radians.sin()) * self.radius.millimetres_f64();
+        Ok(crate::contour::point_to_document(center + offset)?)
+    }
+
+    /// The point midway along the sweep.
+    pub fn midpoint(self) -> Result<[Length; 2], ContourEditError> {
+        let half = self.sweep.millidegrees() / 2;
+        let millidegrees = self.start_angle.millidegrees().checked_add(half).ok_or(ContourEditError::InvalidValue)?;
+        self.point_at(Degrees::from_millidegrees(millidegrees))
+    }
 }
 
 /// The same segment moved freely to `corner`, and the corner it actually reaches.
@@ -1003,6 +1361,29 @@ fn geometry_arc(
     sweep: Degrees,
 ) -> Result<Arc, ContourEditError> {
     Ok(Arc::new(point_to_geometry(center)?, radius.millimetres_f64(), start_angle.radians_f64(), sweep.radians_f64())?)
+}
+
+/// The distance between two document points, rounded to whole micrometres.
+fn distance(first: [Length; 2], second: [Length; 2]) -> Result<Length, ContourEditError> {
+    let offset = point_to_geometry(second)? - point_to_geometry(first)?;
+    let length = offset.length();
+    if !length.is_finite() {
+        return Err(ContourEditError::InvalidValue);
+    }
+    Ok(Length::from_micrometres((length * 1_000.0).round() as i64))
+}
+
+/// The midpoint between two document points.
+fn midpoint(first: [Length; 2], second: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
+    let sum = point_to_geometry(first)? + point_to_geometry(second)?;
+    Ok(crate::contour::point_to_document(sum * 0.5)?)
+}
+
+/// A document point moved by an integer offset.
+fn shift(point: [Length; 2], offset: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
+    let x = point[0].checked_add(offset[0]).ok_or(ContourEditError::InvalidValue)?;
+    let y = point[1].checked_add(offset[1]).ok_or(ContourEditError::InvalidValue)?;
+    Ok([x, y])
 }
 
 #[cfg(test)]
@@ -1455,6 +1836,127 @@ mod tests {
         let taller = wider.set_rectangle_height(millimetres(100)).expect("a taller rectangle");
         assert_eq!(taller.bounds_micrometres(), ([-50_000, -25_000], [150_000, 75_000]));
         assert_eq!(taller.shape(), Some(crate::PathShape::Rectangle));
+    }
+
+    #[test]
+    fn a_rectangle_corner_keeps_the_right_angles_and_pins_the_opposite_corner() {
+        let rectangle = Path::rectangle(point(0, 0), point(100, 50)).expect("rectangle");
+        let moved = rectangle
+            .move_corner_at(PathCorner::Start(id(3)), point(120, 80), CornerMove::Free)
+            .expect("move a corner freely");
+        assert_eq!(moved.shape(), Some(crate::PathShape::Rectangle));
+        assert_eq!(moved.bounds_micrometres(), ([0, 0], [120_000, 80_000]));
+        assert_eq!(path_ids(&moved), path_ids(&rectangle), "the sides keep their ids");
+        let frame = moved.rectangle_frame().expect("a rectangle frame");
+        assert_eq!(frame.width, millimetres(120));
+        assert_eq!(frame.height, millimetres(80));
+        assert_eq!(frame.center, point(60, 40));
+    }
+
+    #[test]
+    fn a_rectangle_midpoint_changes_only_its_own_extent() {
+        let rectangle = Path::rectangle(point(0, 0), point(100, 50)).expect("rectangle");
+        // Side 0 runs along the width, so its midpoint sets the height about the centre.
+        let taller = rectangle.move_rectangle_midpoint(0, point(50, -80)).expect("a taller rectangle");
+        assert_eq!(taller.bounds_micrometres(), ([0, -80_000], [100_000, 50_000]), "the top side stayed");
+        // Side 1 runs along the height, so its midpoint sets the width.
+        let wider = taller.move_rectangle_midpoint(1, point(150, -15)).expect("a wider rectangle");
+        assert_eq!(wider.bounds_micrometres(), ([0, -80_000], [150_000, 50_000]));
+        assert_eq!(wider.shape(), Some(crate::PathShape::Rectangle));
+        assert!(rectangle.move_rectangle_midpoint(4, point(1, 1)).is_err(), "a fifth side is refused");
+    }
+
+    #[test]
+    fn a_circle_corner_keeps_the_figure_round() {
+        let circle = Path::circle(point(10, 20), millimetres(40)).expect("circle");
+        let moved =
+            circle.move_corner_at(PathCorner::Start(id(1)), point(90, 20), CornerMove::Free).expect("drag a quadrant");
+        assert_eq!(moved.shape(), Some(crate::PathShape::Circle));
+        let frame = moved.circle_frame().expect("a circle frame");
+        assert_eq!(frame.center, point(10, 20), "the centre did not move");
+        assert_eq!(frame.radius, millimetres(80));
+        for entry in moved.entries() {
+            let ContourSegment::Arc { center, radius, .. } = entry.segment() else {
+                panic!("a circle is four arcs");
+            };
+            assert_eq!(center, point(10, 20));
+            assert_eq!(radius, millimetres(80), "every quarter followed");
+        }
+    }
+
+    #[test]
+    fn a_polygon_corner_keeps_every_side_equal() {
+        let polygon = Path::regular_polygon(point(0, 0), point(50, 0), 6).expect("hexagon");
+        let moved =
+            polygon.move_corner_at(PathCorner::Start(id(1)), point(0, 80), CornerMove::Free).expect("drag a vertex");
+        let frame = moved.polygon_frame().expect("a polygon frame");
+        assert_eq!(frame.center, point(0, 0));
+        assert_eq!(frame.radius, millimetres(80));
+        assert_eq!(frame.phase, Degrees::from_millidegrees(90_000));
+        assert_eq!(moved.entries().len(), 6);
+        let sides: Vec<f64> = moved
+            .entries()
+            .iter()
+            .map(|entry| {
+                let start = entry.segment().start().expect("start");
+                let end = entry.segment().end().expect("end");
+                let dx = (end[0].micrometres() - start[0].micrometres()) as f64;
+                let dy = (end[1].micrometres() - start[1].micrometres()) as f64;
+                dx.hypot(dy)
+            })
+            .collect();
+        let first = sides.first().copied().unwrap_or_default();
+        assert!(sides.iter().all(|side| (side - first).abs() <= 2.0), "every side stays equal: {sides:?}");
+    }
+
+    #[test]
+    fn a_shape_centre_moves_the_whole_figure() {
+        let circle = Path::circle(point(10, 20), millimetres(40)).expect("circle");
+        let moved = circle.move_shape_center(point(110, 120)).expect("move the circle");
+        let frame = moved.circle_frame().expect("a circle frame");
+        assert_eq!(frame.center, point(110, 120));
+        assert_eq!(frame.radius, millimetres(40));
+        assert_eq!(path_ids(&moved), path_ids(&circle));
+
+        let rectangle = Path::rectangle(point(0, 0), point(100, 50)).expect("rectangle");
+        let moved = rectangle.move_shape_center(point(10, 10)).expect("move the rectangle");
+        assert_eq!(moved.bounds_micrometres(), ([-40_000, -15_000], [60_000, 35_000]));
+
+        let polygon = Path::regular_polygon(point(0, 0), point(50, 0), 6).expect("hexagon");
+        let moved = polygon.move_shape_center(point(-20, 30)).expect("move the hexagon");
+        assert_eq!(moved.polygon_frame().expect("a polygon frame").center, point(-20, 30));
+
+        let untagged = open_path(vec![point(0, 0), point(100, 0)]);
+        assert_eq!(untagged.move_shape_center(point(1, 1)), Err(ContourEditError::Untagged));
+    }
+
+    #[test]
+    fn an_arc_centre_moves_the_curve_and_drags_its_neighbours() {
+        let path = line_and_arc();
+        let moved = path.move_arc_center(id(2), point(120, 40)).expect("move the arc centre");
+        let (center, radius, _, sweep) = arc_fields(moved.segment(id(2)).expect("arc"));
+        assert_eq!(center, point(120, 40));
+        assert_eq!(radius, millimetres(40));
+        assert_eq!(sweep, 90_000, "the angle is kept");
+        assert_eq!(moved.segment(id(1)).expect("line").end().expect("end"), point(120, 0));
+        assert_eq!(moved.segment(id(2)).expect("arc").end().expect("end"), point(160, 40));
+        assert_eq!(path.move_arc_center(id(1), point(0, 0)), Err(ContourEditError::NotAnArc { segment: id(1) }));
+    }
+
+    #[test]
+    fn a_circle_frame_places_its_quadrants_and_an_arc_its_midpoint() {
+        let circle = Path::circle(point(10, 20), millimetres(40)).expect("circle");
+        let frame = circle.circle_frame().expect("a circle frame");
+        assert_eq!(frame.point_at(Degrees::ZERO).expect("east"), point(50, 20));
+        assert_eq!(frame.point_at(Degrees::from_millidegrees(90_000)).expect("north"), point(10, 60));
+
+        let arc = line_and_arc();
+        let frame = arc.arc_frame(id(2)).expect("an arc frame");
+        assert_eq!(frame.end_angle().expect("end"), Degrees::from_millidegrees(0));
+        let midpoint = frame.midpoint().expect("midpoint");
+        assert!((midpoint[0].micrometres() - 128_284).abs() <= 1, "{midpoint:?}");
+        assert!((midpoint[1].micrometres() - 11_716).abs() <= 1, "{midpoint:?}");
+        assert!(arc.arc_frame(id(1)).is_err(), "a line is not an arc");
     }
 
     #[test]
