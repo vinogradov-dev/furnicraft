@@ -233,11 +233,6 @@ impl ContourEdit {
         &self.draft
     }
 
-    /// The working copy, mutable.
-    pub(crate) fn draft_mut(&mut self) -> &mut ContourDraft {
-        &mut self.draft
-    }
-
     /// Whether the working copy differs from the stored draft.
     pub fn is_dirty(&self) -> bool {
         self.draft != self.base

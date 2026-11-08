@@ -324,6 +324,9 @@ impl Editor {
     }
 
     /// Applies a typed length to an along-contour corner, moving it along the segment.
+    ///
+    /// Works for a path and for a ring: the corner moves along the motion segment's own support,
+    /// and a zero length records a collapse for Apply to turn into a segment removal.
     pub fn contour_edit_along_length(
         &mut self,
         grip: ContourGrip,
@@ -339,11 +342,9 @@ impl Editor {
         // The far end is fixed by where the corner sat when the edit began.
         let start = edit.base().grip_position(grip).ok_or(ContourEditError::InvalidValue)?;
         let far_end = edit.base().motion_far_end(segment, start).ok_or(ContourEditError::InvalidValue)?;
-        let moved = match edit.draft().as_chain() {
-            Some(path) => path.move_corner_to_distance_from(corner, segment, far_end, length)?,
-            None => return Err(ContourEditError::Untagged),
-        };
-        *edit.draft_mut() = ContourDraft::Chain(moved);
+        let curve = edit.draft().segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
+        let target = curve.point_at_distance_from(far_end, length)?;
+        edit.move_corner_at(corner, target, CornerMove::Along(segment))?;
         // A typed length of zero (or within the collapse threshold) records a collapse.
         if length.micrometres() <= 2 {
             edit.record_collapse(segment);
@@ -1221,6 +1222,28 @@ mod tests {
             !editor.start_contour_edit(&project, ContourTarget::Panel(panel)),
             "a multi-selection cannot enter contour editing"
         );
+    }
+
+    #[test]
+    fn a_ring_typed_along_length_moves_the_corner_and_collapses_at_zero() {
+        let (project, panel) = contour_panel_project();
+        let mut editor = Editor::new();
+        editor.select_node(Some(panel));
+        assert!(editor.start_contour_edit(&project, ContourTarget::Panel(panel)));
+        let (bottom, right) = {
+            let draft = editor.contour_edit().expect("edit").draft();
+            (draft.id_at(0).expect("bottom"), draft.id_at(1).expect("right"))
+        };
+        // The corner at the start of the right side is the end of the bottom side.
+        let corner = ContourGrip::Corner(PathCorner::Start(right));
+        let length = Length::from_millimetres(200).expect("length");
+        editor.contour_edit_along_length(corner, bottom, length).expect("a typed length");
+        let ring = editor.contour_edit().expect("edit").draft().as_ring().expect("ring").clone();
+        let end = ring.segment(bottom).expect("bottom").end().expect("end");
+        assert_eq!(end[0], length, "the corner moved 200 mm from the far start");
+        // A zero length records a collapse for Apply.
+        editor.contour_edit_along_length(corner, bottom, Length::ZERO).expect("zero length");
+        assert_eq!(editor.contour_edit().expect("edit").collapse(), Some(bottom));
     }
 
     #[test]

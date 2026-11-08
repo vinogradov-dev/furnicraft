@@ -198,45 +198,7 @@ impl Path {
         distance: Length,
     ) -> Result<Self, ContourEditError> {
         let curve = self.segment(motion_segment).ok_or(ContourEditError::UnknownSegment { segment: motion_segment })?;
-        let requested = match curve {
-            ContourSegment::Line { start, end } => {
-                let start_g = point_to_geometry(start)?;
-                let end_g = point_to_geometry(end)?;
-                let far = point_to_geometry(far_end)?;
-                let direction = end_g - start_g;
-                let length = direction.length();
-                if length <= 0.0 {
-                    return Err(ContourEditError::InvalidValue);
-                }
-                let unit = direction / length;
-                // Clamp the typed length to the segment's own extent.
-                let distance = distance.millimetres_f64().clamp(0.0, length);
-                // Which way to travel from the far end: toward the other endpoint.
-                let toward = if (far - start_g).length() <= (far - end_g).length() { unit } else { -unit };
-                crate::contour::point_to_document(far + toward * distance)?
-            }
-            ContourSegment::Arc { center, radius, start_angle, sweep } => {
-                let center_g = point_to_geometry(center)?;
-                let radius_mm = radius.millimetres_f64();
-                let start_r = start_angle.radians_f64();
-                let sweep_r = sweep.radians_f64();
-                let far = point_to_geometry(far_end)?;
-                // Clamp the typed length to the arc's own length.
-                let arc_len = sweep_r.abs() * radius_mm;
-                let distance = distance.millimetres_f64().clamp(0.0, arc_len);
-                // The angle of the far end on the circle.
-                let far_angle = (far - center_g).y.atan2((far - center_g).x);
-                // Travel from the far end toward the other endpoint: same sign as the sweep when
-                // the far end is the start, opposite when it is the end.
-                let start_point = DVec2::new(start_r.cos(), start_r.sin()) * radius_mm;
-                let at_start = (far - (center_g + start_point)).length() < 1.0e-3;
-                let travel = if at_start { sweep_r.signum() } else { -sweep_r.signum() };
-                let delta = travel * distance / radius_mm.max(f64::MIN_POSITIVE);
-                let angle = far_angle + delta;
-                let offset = DVec2::new(angle.cos(), angle.sin()) * radius_mm;
-                crate::contour::point_to_document(center_g + offset)?
-            }
-        };
+        let requested = curve.point_at_distance_from(far_end, distance)?;
         self.move_corner_on_support(corner, requested)
     }
 
@@ -497,54 +459,9 @@ impl Path {
 
     /// Clamps a point to lie on the segment between its two endpoints, so the corner cannot pass
     /// the opposite node when moving along the contour.
-    ///
-    /// For a line the point is projected onto the segment's axis and clamped to `[start, end]`.
-    /// For an arc the angle is clamped to the sweep range, so the arc length stays within the
-    /// segment's own extent.
     fn clamp_to_segment(&self, segment: ContourSegmentId, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
         let curve = self.segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
-        match curve {
-            ContourSegment::Line { start, end } => {
-                let start = point_to_geometry(start)?;
-                let end = point_to_geometry(end)?;
-                let requested = point_to_geometry(point)?;
-                let direction = end - start;
-                let len2 = direction.length_squared();
-                if len2 <= 0.0 {
-                    return Err(ContourEditError::InvalidValue);
-                }
-                // Leave at least 1 µm (= 0.001 mm) so the segment stays valid in the draft.
-                // The collapse to zero happens on Apply.
-                let margin = 1.0e-3 / (end - start).length().max(f64::MIN_POSITIVE);
-                let t = ((requested - start).dot(direction) / len2).clamp(margin, 1.0 - margin);
-                Ok(crate::contour::point_to_document(start + direction * t)?)
-            }
-            ContourSegment::Arc { center, radius, start_angle, sweep } => {
-                let center = point_to_geometry(center)?;
-                let requested = point_to_geometry(point)?;
-                let offset = requested - center;
-                if offset.length() <= f64::EPSILON {
-                    return Ok(point);
-                }
-                let angle = offset.y.atan2(offset.x);
-                let start_r = start_angle.radians_f64();
-                let sweep_r = sweep.radians_f64();
-                let travel = if sweep_r >= 0.0 {
-                    (angle - start_r).rem_euclid(std::f64::consts::TAU)
-                } else {
-                    -((-angle + start_r).rem_euclid(std::f64::consts::TAU))
-                };
-                // Same margin: leave 1 µm from the far end.
-                let arc_len = (sweep_r.abs() * radius.millimetres_f64()).max(f64::MIN_POSITIVE);
-                let margin = 1.0e-3 / arc_len;
-                let low = 0.0_f64.min(sweep_r);
-                let high = 0.0_f64.max(sweep_r);
-                let clamped = travel.clamp(low + margin * sweep_r.abs(), high - margin * sweep_r.abs());
-                let clamped_angle = start_r + clamped;
-                let clamped_offset = DVec2::new(clamped_angle.cos(), clamped_angle.sin()) * radius.millimetres_f64();
-                Ok(crate::contour::point_to_document(center + clamped_offset)?)
-            }
-        }
+        clamp_to_curve(curve, point)
     }
 
     /// The point of `segment`'s own line or circle nearest to `point`.
@@ -1123,7 +1040,10 @@ impl Contour {
                 let requested = point_to_geometry(point)?;
                 let curve = self.segment(target).ok_or(ContourEditError::UnknownSegment { segment: target })?;
                 let nearest = curve.to_geom()?.nearest_on_support(requested).ok_or(ContourEditError::InvalidValue)?;
-                self.move_corner(segment, crate::contour::point_to_document(nearest)?)
+                let nearest = crate::contour::point_to_document(nearest)?;
+                // Clamp on the motion segment so the corner cannot pass the opposite node.
+                let clamped = clamp_to_curve(curve, nearest)?;
+                self.move_corner(segment, clamped)
             }
             CornerMove::Free => self.move_corner_free(segment, point),
         }
@@ -1503,6 +1423,53 @@ fn with_corner(
             let moved = ContourSegment::from_geom(Segment::Arc(moved))?;
             let reached = if at_end { moved.end()? } else { moved.start()? };
             Ok((moved, reached))
+        }
+    }
+}
+
+/// Clamps a point to lie on `curve` between its two endpoints, leaving a one-micrometre margin.
+///
+/// A corner sliding along the contour must not pass the opposite node: the point is projected onto
+/// the segment's own extent and held short of the far end by a micrometre, so the draft stays a
+/// legal segment. The collapse to zero is recorded separately and happens on Apply.
+fn clamp_to_curve(curve: ContourSegment, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
+    match curve {
+        ContourSegment::Line { start, end } => {
+            let start = point_to_geometry(start)?;
+            let end = point_to_geometry(end)?;
+            let requested = point_to_geometry(point)?;
+            let direction = end - start;
+            let len2 = direction.length_squared();
+            if len2 <= 0.0 {
+                return Err(ContourEditError::InvalidValue);
+            }
+            let margin = 1.0e-3 / (end - start).length().max(f64::MIN_POSITIVE);
+            let t = ((requested - start).dot(direction) / len2).clamp(margin, 1.0 - margin);
+            Ok(crate::contour::point_to_document(start + direction * t)?)
+        }
+        ContourSegment::Arc { center, radius, start_angle, sweep } => {
+            let center = point_to_geometry(center)?;
+            let requested = point_to_geometry(point)?;
+            let offset = requested - center;
+            if offset.length() <= f64::EPSILON {
+                return Ok(point);
+            }
+            let angle = offset.y.atan2(offset.x);
+            let start_r = start_angle.radians_f64();
+            let sweep_r = sweep.radians_f64();
+            let travel = if sweep_r >= 0.0 {
+                (angle - start_r).rem_euclid(std::f64::consts::TAU)
+            } else {
+                -((-angle + start_r).rem_euclid(std::f64::consts::TAU))
+            };
+            let arc_len = (sweep_r.abs() * radius.millimetres_f64()).max(f64::MIN_POSITIVE);
+            let margin = 1.0e-3 / arc_len;
+            let low = 0.0_f64.min(sweep_r);
+            let high = 0.0_f64.max(sweep_r);
+            let clamped = travel.clamp(low + margin * sweep_r.abs(), high - margin * sweep_r.abs());
+            let clamped_angle = start_r + clamped;
+            let clamped_offset = DVec2::new(clamped_angle.cos(), clamped_angle.sin()) * radius.millimetres_f64();
+            Ok(crate::contour::point_to_document(center + clamped_offset)?)
         }
     }
 }
@@ -2469,6 +2436,17 @@ mod tests {
         // The corner must stay inside the segment, short of the far end by the 1 µm margin.
         assert!(end[0].micrometres() <= 100_000, "the corner did not pass the far end: {end:?}");
         assert!(end[0].micrometres() >= 99_000, "the corner reached the far end: {end:?}");
+    }
+
+    #[test]
+    fn a_ring_along_contour_drag_cannot_pass_the_opposite_node() {
+        // A ring: the corner at the start of the right side slides along the bottom side.
+        let ring = rectangle();
+        let moved =
+            ring.move_corner_with(id(2), point(-50, 0), CornerMove::Along(id(1))).expect("clamped on the bottom side");
+        let end = moved.segment(id(1)).expect("bottom").end().expect("end");
+        assert!(end[0].micrometres() >= 0, "the corner did not pass the far start: {end:?}");
+        assert!(end[0].micrometres() <= 1_000, "the corner reached the far start: {end:?}");
     }
 
     #[test]
