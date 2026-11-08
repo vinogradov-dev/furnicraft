@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X14 state=idle base=64c11d3 updated=2026-11-08
+STATE: milestone=M7 phase=A task=X14 state=idle base=52f1d0f updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,11 +50,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-The 2026-11-08 drawing, contour and view defect report is queued as X11–X21, one commit each, then
-U45 → U48 → U46 → U49. X21, X12 and X13 landed (ADRs 0077, 0076, 0075): a pending arc closes the
-ring, the drawing gesture replaces a running draft, and an arc endpoint follows the pointer in free
-mode. X14 is next: the grip set matches the figure — a polygon shows no phantom node and a circle
-keeps its rim grip from any point.
+X15 is done: the grip set cursor is always the default arrow and drag resolution
+uses the press origin. X14 is next: a polygon shows no phantom node outside its
+first side, and a circle's rim grip works from any point.
 
 ## Index
 

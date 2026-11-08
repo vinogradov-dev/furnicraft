@@ -40,18 +40,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   an arc chain keeps its arc grips.
   `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
 
-- `[ ]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
-  not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
-  hit radius grabs it even when the pointer moves a few points before egui's drag threshold, and
-  the cursor stays the default arrow. Suspected cause: `ContourGizmo::update` resolves the grip from
-  the current pointer when `drag_started` fires, which is after the threshold, and `cursor()`
-  returns `Grab`/`Grabbing`/`PointingHand`. Fix: resolve from `pointer.press_origin()`, keep the
-  grabbed grip for the whole drag, keep the 9–12 pt hit radius and let the enlarged hovered grip
-  carry the feedback; `cursor()` returns `Default` and the shell's contour branch goes. Tests: a
-  press exactly on a grip grabs it; a press 12 pt away does not; a press followed by a 5 pt move
-  before the threshold still grabs; the cursor is the default.
-  `files: apps/furnicraft/src/contour_gizmo.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
   rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
   a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
@@ -293,6 +281,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
+  not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
+  hit radius grabs it even when the pointer moves a few points before egui's drag threshold, and
+  the cursor stays the default arrow. Suspected cause: `ContourGizmo::update` resolves the grip from
+  the current pointer when `drag_started` fires, which is after the threshold, and `cursor()`
+  returns `Grab`/`Grabbing`/`PointingHand`. Fix: resolve from `pointer.press_origin()`, keep the
+  grabbed grip for the whole drag, keep the 9–12 pt hit radius and let the enlarged hovered grip
+  carry the feedback; `cursor()` returns `Default` and the shell's contour branch goes. Tests: a
+  press exactly on a grip grabs it; a press 12 pt away does not; a press followed by a 5 pt move
+  before the threshold still grabs; the cursor is the default.
+  `52f1d0f`
+  `files: apps/furnicraft/src/contour_gizmo.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
   endpoints only slide along the arc and change its angle — and dragging the middle node makes the
