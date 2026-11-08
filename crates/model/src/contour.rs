@@ -2110,7 +2110,35 @@ impl PathShape {
             return false;
         }
         match self {
-            Self::Rectangle => path.entries.len() == 4 && path.entries.iter().all(|entry| !entry.segment().is_arc()),
+            Self::Rectangle => {
+                if path.entries.len() != 4 || path.entries.iter().any(|entry| entry.segment().is_arc()) {
+                    return false;
+                }
+                // Verify right angles: the two axis directions must be perpendicular within a
+                // micrometre of the diagonal length. Compute from the first and the fourth corner
+                // against the first corner.
+                let entries = path.entries();
+                let Some(&first_entry) = entries.first() else {
+                    return false;
+                };
+                let Ok(first) = first_entry.segment().to_geom() else {
+                    return false;
+                };
+                let Ok(second) = entries.get(1).map_or(Err(()), |e| e.segment().to_geom().map_err(|_| ())) else {
+                    return false;
+                };
+                let Ok(fourth) = entries.get(3).map_or(Err(()), |e| e.segment().to_geom().map_err(|_| ())) else {
+                    return false;
+                };
+                let u = second.start() - first.start();
+                let v = fourth.start() - first.start();
+                let dot = u.dot(v).abs();
+                // The dot product should be zero for a rectangle. Allow one micrometre of the
+                // diagonal length, which is `(u.length() + v.length()) * 0.001 * 0.5` ≈ half a
+                // part in a thousand — generous for rounding but tight enough for a rectangle.
+                let bound = (u.length() + v.length()) * 0.5e-3;
+                dot <= bound
+            }
             Self::Circle => {
                 let mut center = None;
                 let mut radius = None;

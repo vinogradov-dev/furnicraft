@@ -29,6 +29,12 @@ use crate::{
 /// micrometre before it is rounded. One micrometre accepts that rounding and nothing coarser.
 const SUPPORT_TOLERANCE: f64 = 1.0e-3;
 
+/// Minimum half-extent for a rectangle side, in millimetres.
+///
+/// A midpoint drag that would otherwise mirror the rectangle clamps at this value, so the total
+/// extent is at least 1 mm (ADR 0034).
+const MIN_RECTANGLE_HALF_EXTENT_MM: f64 = 0.5;
+
 /// Why a contour edit cannot be applied.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum ContourEditError {
@@ -164,7 +170,15 @@ impl Path {
             },
             CornerMove::Along(segment) => {
                 let point = self.nearest_on_support(segment, point)?;
-                self.move_corner_on_support(corner, point)
+                let mut result = self.move_corner_on_support(corner, point)?;
+                // An along-contour edit can turn a rectangle into a parallelogram; drop the tag
+                // when the figure no longer fits the shape that was recorded.
+                if let Some(shape) = result.shape()
+                    && !shape.fits(&result)
+                {
+                    result = result.with_shape(None);
+                }
+                Ok(result)
             }
         }
     }
@@ -173,7 +187,8 @@ impl Path {
     ///
     /// The opposite corner stays where it is; the dragged corner defines the other end of the
     /// diagonal, so the centre and both extents follow. The axes keep their direction, so a
-    /// rectangle never turns because a corner was dragged past its neighbour.
+    /// rectangle never turns because a corner was dragged past its neighbour. The half-extents
+    /// are clamped to [`MAX_CONTOUR_COORDINATE`], so a corner drag cannot leave the document range.
     pub fn move_rectangle_corner(&self, corner: PathCorner, point: [Length; 2]) -> Result<Self, ContourEditError> {
         let frame = self.rectangle_frame()?;
         let index = self.corner_index(corner)? % 4;
@@ -188,6 +203,10 @@ impl Path {
         if half_width <= 0.0 || half_height <= 0.0 {
             return Err(ContourEditError::InvalidValue);
         }
+        // Clamp to the document range so a far drag cannot leave it.
+        let max_half = crate::contour::MAX_CONTOUR_COORDINATE.millimetres_f64();
+        let half_width = half_width.min(max_half);
+        let half_height = half_height.min(max_half);
         self.rectangle_from_parts(center, frame.first_axis, frame.second_axis, half_width, half_height)
     }
 
@@ -195,7 +214,9 @@ impl Path {
     ///
     /// Sides `0` and `2` run along the first axis, so dragging their midpoint sets the second
     /// extent (the height); sides `1` and `3` set the first extent (the width). The opposite side
-    /// and the axes stay where they are, so the figure grows and shrinks from that side.
+    /// and the axes stay where they are, so the figure grows and shrinks from that side. A drag
+    /// that would cross the opposite side clamps at [`MIN_RECTANGLE_HALF_EXTENT_MM`] instead of
+    /// mirroring.
     pub fn move_rectangle_midpoint(&self, side: usize, point: [Length; 2]) -> Result<Self, ContourEditError> {
         let frame = self.rectangle_frame()?;
         if side >= 4 {
@@ -213,11 +234,26 @@ impl Path {
         // the opposite side is the one that stays.
         let opposite = if side.is_multiple_of(2) { half_extent } else { -half_extent };
         let moved = (requested - center).dot(normal);
+        // Whether the dragged side started on the negative side of the normal.
+        let starts_negative = side.is_multiple_of(2);
+        let crossed = if starts_negative { moved > opposite } else { moved < opposite };
         let new_half = (moved - opposite).abs() * 0.5;
+        let new_half = if crossed { MIN_RECTANGLE_HALF_EXTENT_MM } else { new_half.max(MIN_RECTANGLE_HALF_EXTENT_MM) };
         if !new_half.is_finite() || new_half <= 0.0 {
             return Err(ContourEditError::InvalidValue);
         }
-        let new_center = center + normal * ((moved + opposite) * 0.5);
+        let new_center = if crossed {
+            // The dragged side crossed the opposite side: place the centre so the opposite side
+            // stays where it is and the dragged side is `MIN_HALF` away.
+            let clamp_from = if starts_negative {
+                opposite - MIN_RECTANGLE_HALF_EXTENT_MM
+            } else {
+                opposite + MIN_RECTANGLE_HALF_EXTENT_MM
+            };
+            center + normal * (clamp_from)
+        } else {
+            center + normal * ((moved + opposite) * 0.5)
+        };
         let new_center = crate::contour::point_to_document(new_center)?;
         let (half_width, half_height) = if side.is_multiple_of(2) {
             (frame.width.millimetres_f64() * 0.5, new_half)
@@ -731,6 +767,10 @@ impl Path {
     }
 
     /// The centre, the four corners, the extents and the axes of a rectangle path.
+    ///
+    /// The axes are always orthonormal: the second axis is perpendicular to the first, so the four
+    /// corners rebuilt from them form a rectangle with right angles even when the stored corners
+    /// started as a parallelogram.
     pub fn rectangle_frame(&self) -> Result<RectangleFrame, ContourEditError> {
         if self.shape() != Some(PathShape::Rectangle) || self.entries().len() != 4 {
             return Err(ContourEditError::NotShaped { shape: PathShape::Rectangle });
@@ -751,12 +791,32 @@ impl Path {
         let u = second - first;
         let v = geometry.get(3).copied().unwrap_or_default() - first;
         let width = u.length();
-        let height = v.length();
-        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        if !width.is_finite() || width <= 0.0 {
             return Err(ContourEditError::InvalidValue);
         }
-        let first_axis = u / width;
-        let second_axis = v / height;
+        let (first_axis, second_axis, height) = {
+            let first_dir = (u / width).normalize();
+            let v_len = v.length();
+            if !v_len.is_finite() || v_len <= 0.0 {
+                return Err(ContourEditError::InvalidValue);
+            }
+            let v_dir = v / v_len;
+            // Orthonormalise: project out the first-axis component from v's direction.
+            let perp = v_dir - first_dir * v_dir.dot(first_dir);
+            let perp_len = perp.length();
+            if perp_len > 1.0e-6 {
+                let second_dir = perp / perp_len;
+                // The height is the projection of v onto the perpendicular direction.
+                let h = v.dot(second_dir).abs();
+                if h.is_finite() && h > 0.0 { (first_dir, second_dir, h) } else { (first_dir, v_dir, v_len) }
+            } else {
+                // All four corners lie on one line: fall back to the raw vector.
+                (first_dir, v_dir, v_len)
+            }
+        };
+        if !height.is_finite() || height <= 0.0 {
+            return Err(ContourEditError::InvalidValue);
+        }
         let center = crate::contour::point_to_document((first + third) * 0.5)?;
         Ok(RectangleFrame {
             center,
@@ -2177,5 +2237,92 @@ mod tests {
         ]);
         let result = path.close();
         assert!(matches!(result, Err(ContourEditError::Ring(ContourError::SelfIntersecting { .. }))), "got {result:?}");
+    }
+
+    #[test]
+    fn a_rotated_rectangle_keeps_right_angles_through_a_midpoint_drag() {
+        // A rectangle at 45 degrees: corners at (0,0), (70,70), (0,140), (-70,70).
+        let corners = vec![
+            ContourSegment::line(point(0, 0), point(70, 70)).expect("side 0"),
+            ContourSegment::line(point(70, 70), point(0, 140)).expect("side 1"),
+            ContourSegment::line(point(0, 140), point(-70, 70)).expect("side 2"),
+            ContourSegment::line(point(-70, 70), point(0, 0)).expect("side 3"),
+        ];
+        let rect = Path::new(corners, true).expect("a diamond rectangle").with_shape(Some(crate::PathShape::Rectangle));
+        // Drag the midpoint of side 0 (the bottom edge).
+        let dragged = rect.move_rectangle_midpoint(0, point(0, -40)).expect("drag the midpoint");
+        let frame = dragged.rectangle_frame().expect("still a rectangle");
+        // The axes must be perpendicular.
+        let dot = frame.first_axis.dot(frame.second_axis).abs();
+        assert!(dot < 1.0e-6, "axes should be perpendicular: dot={dot}");
+        // The shape tag is still Rectangle.
+        assert_eq!(dragged.shape(), Some(crate::PathShape::Rectangle));
+    }
+
+    #[test]
+    fn a_midpoint_drag_never_yields_zero() {
+        let rect = Path::rectangle(point(0, 0), point(100, 50)).expect("a rectangle");
+        // Drag the bottom midpoint to the opposite side — it should clamp, not mirror or collapse.
+        let clamped = rect.move_rectangle_midpoint(0, point(50, 60)).expect("clamped at min extent");
+        let frame = clamped.rectangle_frame().expect("still a rectangle");
+        // Total extent must be at least 1 mm (0.5 mm half).
+        assert!(
+            frame.height.millimetres_f64() >= 1.0,
+            "height should be at least 1 mm, got {}",
+            frame.height.millimetres_f64()
+        );
+        let bounds = clamped.bounds_micrometres();
+        // Height = 1 mm: y = [49 mm, 50 mm]. Width unchanged: x = [0, 100 mm].
+        assert_eq!(bounds, ([0, 49_000], [100_000, 50_000]), "bounds should show 1 mm height: {bounds:?}");
+    }
+
+    #[test]
+    fn a_corner_drag_cannot_leave_the_range() {
+        let rect = Path::rectangle(point(0, 0), point(100, 50)).expect("a rectangle");
+        // Drag a corner to the maximum coordinate; the rectangle should stay inside the range.
+        let limit = crate::contour::MAX_CONTOUR_COORDINATE;
+        let clamped = rect.move_rectangle_corner(PathCorner::Start(id(3)), [limit, limit]).expect("clamped corner");
+        let frame = clamped.rectangle_frame().expect("still a rectangle");
+        // Every corner must be inside the document range.
+        for corner in &frame.corners {
+            for value in corner {
+                assert!(
+                    value.micrometres().unsigned_abs() <= limit.micrometres() as u64,
+                    "corner {corner:?} is outside the range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_along_contour_edit_drops_the_shape_tag() {
+        let rect = Path::rectangle(point(0, 0), point(100, 50)).expect("a rectangle");
+        // Slide the bottom-left corner along the bottom edge (segment id 1) past the bottom-right
+        // corner, turning the rectangle into a non-rectangular shape.
+        let moved = rect
+            .move_corner_at(PathCorner::Start(id(1)), point(150, 0), CornerMove::Along(id(1)))
+            .expect("slide along the bottom");
+        // The tag must be dropped because the figure is no longer a rectangle.
+        assert_eq!(moved.shape(), None, "the rectangle tag was dropped");
+    }
+
+    #[test]
+    fn a_non_right_angled_tagged_rectangle_is_a_load_error() {
+        // Four lines that do not form right angles: the "rectangle" tag is a lie.
+        let json = r#"{
+            "entries":[
+                {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
+                {"id":2,"kind":"line","start":[100000,0],"end":[110000,60000]},
+                {"id":3,"kind":"line","start":[110000,60000],"end":[0,60000]},
+                {"id":4,"kind":"line","start":[0,60000],"end":[0,0]}
+            ],
+            "next_segment_id":5,
+            "closed":true,
+            "shape":"rectangle"
+        }"#;
+        let result = serde_json::from_str::<Path>(json);
+        assert!(result.is_err(), "a non-right-angled rectangle must be rejected on load: {result:?}");
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("rectangle") || error.contains("shape"), "error mentions the shape: {error}");
     }
 }

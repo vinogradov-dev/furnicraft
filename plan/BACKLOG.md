@@ -25,23 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[x]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
-  first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
-  the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
-  radius from a vertex and from the card; a circle can be pulled from any point on its rim in any
-  mode and only its radius changes; no grip sits off the figure. Suspected cause:
-  `PolygonFrame::radius_point` sits on the circumcircle midway between the first two vertices,
-  outside the first side; a tagged circle is four quarter arcs, and `grip_at` offers the synthetic
-  `ArcRadius` on any hovered arc, which deforms one quarter. Fix: drop
-  `ContourGrip::PolygonRadius` from the grip list and its number/value/label/drag/set tables; add a
-  circle-rim grip for a `PathShape::Circle` draft that calls `set_circle_radius_at` and numbers `R`;
-  an untagged arc chain keeps `ArcPoint`/`ArcRadius`. Tests: a circle pulled at 37° stays round and
-  takes the radius from the centre; a polygon has no grip off the figure; a vertex still scales it;
-  an arc chain keeps its arc grips.
-  `916b15e`
-  `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
-
-- `[ ]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
+- `[~]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
   rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
   a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
   makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
@@ -300,6 +284,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
+  first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
+  the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
+  radius from a vertex and from the card; a circle can be pulled from any point on its rim in any
+  mode and only its radius changes; no grip sits off the figure. Suspected cause:
+  `PolygonFrame::radius_point` sits on the circumcircle midway between the first two vertices,
+  outside the first side; a tagged circle is four quarter arcs, and `grip_at` offers the synthetic
+  `ArcRadius` on any hovered arc, which deforms one quarter. Fix: drop
+  `ContourGrip::PolygonRadius` from the grip list and its number/value/label/drag/set tables; add a
+  circle-rim grip for a `PathShape::Circle` draft that calls `set_circle_radius_at` and numbers `R`;
+  an untagged arc chain keeps `ArcPoint`/`ArcRadius`. Tests: a circle pulled at 37° stays round and
+  takes the radius from the centre; a polygon has no grip off the figure; a vertex still scales it;
+  an arc chain keeps its arc grips.
+  `916b15e`
+  `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
 
 - `[x]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
   not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
