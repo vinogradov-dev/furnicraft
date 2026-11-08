@@ -16,7 +16,10 @@
 
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{Camera, Drawable, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame, ShadingStyle};
+use furnicraft_scene::{
+    Camera, ContactShadow, ContactShadows, Drawable, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame,
+    ShadingStyle,
+};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
@@ -36,6 +39,18 @@ const MAX_VERTICES: usize = 4_000_000;
 
 /// Largest number of grid divisions on each side of the origin.
 const MAX_GRID_DIVISIONS: i64 = 512;
+
+/// Segments in one contact-shadow ellipse.
+///
+/// The falloff is interpolated across the fan, so a small count is already smooth; 48 keeps the
+/// edge round at a close zoom for 49 vertices per object.
+const SHADOW_SEGMENTS: usize = 48;
+
+/// Most contact shadows one frame may upload.
+///
+/// A shadow is a fan of [`SHADOW_SEGMENTS`] triangles; this cap is far above any furniture scene and
+/// keeps a hostile frame from allocating unbounded geometry.
+const MAX_CONTACT_SHADOWS: usize = 4096;
 
 /// The most views one frame may split into; the camera uniform holds one slot per view.
 pub const MAX_VIEWS: usize = 4;
@@ -122,6 +137,20 @@ pub enum RenderError {
         /// Position of the polyline in the frame.
         index: usize,
     },
+    /// A contact shadow has a non-finite centre or a degenerate radii pair.
+    #[error("contact shadow {index} is malformed")]
+    InvalidShadow {
+        /// Position of the shadow in the frame.
+        index: usize,
+    },
+    /// The frame carries more contact shadows than the renderer budgets.
+    #[error("{count} contact shadows exceed the renderer's budget of {max}")]
+    TooManyShadows {
+        /// Number of shadows in the frame.
+        count: usize,
+        /// The renderer's budget.
+        max: usize,
+    },
 }
 
 /// A shaded vertex in world space.
@@ -160,6 +189,8 @@ struct CameraUniform {
     point_position: [[f32; 4]; MAX_POINT_LIGHTS],
     /// Linear RGB and, in `a`, the radiant power in watts.
     point_color: [[f32; 4]; MAX_POINT_LIGHTS],
+    /// Gamma-space RGB and, in `a`, the contact-shadow strength.
+    shadow: [f32; 4],
 }
 
 struct GpuMesh {
@@ -177,6 +208,13 @@ struct GpuMesh {
 struct GpuLineList {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
+}
+
+/// One indexed triangle buffer: the contact-shadow pass owns one.
+struct GpuTriangles {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
 }
 
 /// One drawable's contiguous run inside the flattened edge buffer.
@@ -269,6 +307,8 @@ pub struct ViewportRenderer {
     line_pipeline: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     hidden_edge_pipeline: wgpu::RenderPipeline,
+    /// The unlit, blended triangle pass that draws the contact shadows.
+    shadow_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     /// The stride between two camera slots, which is the device's uniform offset alignment.
@@ -288,6 +328,8 @@ pub struct ViewportRenderer {
     edge_slices: Vec<EdgeSlice>,
     grid: Option<GpuLineList>,
     polylines: Option<GpuLineList>,
+    /// The contact shadows of every floor-standing object, in one triangle buffer.
+    shadows: Option<GpuTriangles>,
     targets: RenderTargets,
     size: [u32; 2],
 }
@@ -377,6 +419,7 @@ impl ViewportRenderer {
             "FurniCraft hidden edge pipeline",
             edge_depth_state(true),
         );
+        let shadow_pipeline = create_shadow_pipeline(device, &pipeline_layout, &shader);
 
         Self {
             mesh_pipeline,
@@ -384,6 +427,7 @@ impl ViewportRenderer {
             line_pipeline,
             edge_pipeline,
             hidden_edge_pipeline,
+            shadow_pipeline,
             camera_buffer,
             camera_bind_group,
             camera_stride,
@@ -394,6 +438,7 @@ impl ViewportRenderer {
             edge_slices: Vec::new(),
             grid: None,
             polylines: None,
+            shadows: None,
             targets,
             size,
         }
@@ -458,6 +503,8 @@ impl ViewportRenderer {
         let polylines = line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines())?)?;
         let (edge_vertices, edge_slices) = edge_geometry(frame.drawables(), frame.all_edges, frame.background);
         let edges = line_list(device, "FurniCraft edge vertices", edge_vertices)?;
+        let (shadow_vertices, shadow_indices) = shadow_geometry(frame.shadows())?;
+        let shadows = triangle_list(device, "FurniCraft contact shadows", &shadow_vertices, &shadow_indices);
 
         let draw_order: Vec<usize> = (0..drawables.len()).collect();
         self.drawables = drawables;
@@ -467,6 +514,7 @@ impl ViewportRenderer {
         self.edge_slices = edge_slices;
         self.grid = grid;
         self.polylines = polylines;
+        self.shadows = shadows;
         Ok(())
     }
 
@@ -523,7 +571,7 @@ impl ViewportRenderer {
         let mut uniforms = Vec::with_capacity(views.len());
         for (index, (camera, region)) in views.iter().enumerate() {
             let aspect = f64::from(region.width.max(1)) / f64::from(region.height.max(1));
-            uniforms.push(self.camera_uniform(*camera, lighting, aspect));
+            uniforms.push(self.camera_uniform(*camera, lighting, aspect, &frame.contact_shadows));
             offsets.push((index as u64 * self.camera_stride) as u32);
             let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
             debug_assert!(x.saturating_add(width) <= self.size[0] && y.saturating_add(height) <= self.size[1]);
@@ -600,6 +648,19 @@ impl ViewportRenderer {
                 }
             }
 
+            // Contact shadows lie on the floor: they draw after the opaque faces, so the depth
+            // buffer hides the part an object covers, and before the unlit grid lines, which sit a
+            // fraction of a millimetre higher. The pass is blended and writes no depth, so two
+            // overlapping footprints simply tint each other.
+            if frame.contact_shadows.draws()
+                && let Some(shadows) = &self.shadows
+            {
+                pass.set_pipeline(&self.shadow_pipeline);
+                pass.set_vertex_buffer(0, shadows.vertex_buffer.slice(..));
+                pass.set_index_buffer(shadows.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..shadows.index_count, 0, 0..1);
+            }
+
             if self.grid.is_some() || self.polylines.is_some() {
                 pass.set_pipeline(&self.line_pipeline);
                 if let Some(grid) = &self.grid {
@@ -658,7 +719,13 @@ impl ViewportRenderer {
     }
 
     /// The uniform one view shades with.
-    fn camera_uniform(&self, camera: Camera, lighting: &Lighting, aspect: f64) -> CameraUniform {
+    fn camera_uniform(
+        &self,
+        camera: Camera,
+        lighting: &Lighting,
+        aspect: f64,
+        shadows: &ContactShadows,
+    ) -> CameraUniform {
         let eye = camera.eye();
         let light = lighting.key_direction.try_normalize().unwrap_or(DVec3::Z);
         let (point_count, point_position, point_color) = point_uniforms(lighting);
@@ -675,6 +742,7 @@ impl ViewportRenderer {
             point_count,
             point_position,
             point_color,
+            shadow: shadow_uniform(shadows),
         }
     }
 }
@@ -817,6 +885,59 @@ fn create_line_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+/// One unlit, blended triangle pipeline for the contact shadows.
+///
+/// The shadow has no faces to light and no texture: the vertex fan carries a radial alpha and the
+/// fragment entry returns the uniform's shadow colour times that alpha. It shares `vs_mesh`
+/// because a shadow is still a world-space triangle, only without a shading model.
+fn create_shadow_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("FurniCraft contact shadow pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_mesh"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[Some(vertex_layout())],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            // The ellipse is seen from either side when the camera dips below the floor.
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(shadow_depth_state()),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_shadow"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: std::slice::from_ref(&face_target(Some(wgpu::BlendState::ALPHA_BLENDING))),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The depth state of the shadow pass: it lies on the floor, so it is tested but never occludes.
+fn shadow_depth_state() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: Some(false),
+        depth_compare: Some(wgpu::CompareFunction::LessEqual),
+        stencil: wgpu::StencilState::default(),
+        bias: wgpu::DepthBiasState::default(),
+    }
 }
 
 /// The depth state of the grid and path lines: tested against the scene, writing nothing.
@@ -990,6 +1111,79 @@ fn line_list(
         usage: wgpu::BufferUsages::VERTEX,
     });
     Ok(Some(GpuLineList { vertex_buffer, vertex_count }))
+}
+
+/// Uploads an indexed triangle buffer, or nothing when there is no geometry.
+fn triangle_list(device: &wgpu::Device, label: &str, vertices: &[MeshVertex], indices: &[u32]) -> Option<GpuTriangles> {
+    if vertices.is_empty() || indices.is_empty() {
+        return None;
+    }
+    let index_count = u32::try_from(indices.len()).ok()?;
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    Some(GpuTriangles { vertex_buffer, index_buffer, index_count })
+}
+
+/// Builds one triangle fan per contact shadow on the ground plane.
+///
+/// The centre vertex has full vertex alpha and the rim has none, so the fragment interpolates a
+/// radial falloff; the uniform multiplies it by the shadow strength, which is why the colour and
+/// the switch never reach this buffer. A malformed ellipse is an error instead of a silently
+/// missing shadow.
+fn shadow_geometry(shadows: &[ContactShadow]) -> Result<(Vec<MeshVertex>, Vec<u32>), RenderError> {
+    if shadows.len() > MAX_CONTACT_SHADOWS {
+        return Err(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS });
+    }
+    let vertices_per_shadow = SHADOW_SEGMENTS.saturating_add(1);
+    let indices_per_shadow = SHADOW_SEGMENTS.saturating_mul(3);
+    let vertex_count = shadows
+        .len()
+        .checked_mul(vertices_per_shadow)
+        .ok_or(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS })?;
+    let index_count = shadows
+        .len()
+        .checked_mul(indices_per_shadow)
+        .ok_or(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS })?;
+    if vertex_count > MAX_VERTICES || index_count > MAX_VERTICES {
+        return Err(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS });
+    }
+    let mut vertices = Vec::with_capacity(vertex_count);
+    let mut indices = Vec::with_capacity(index_count);
+    for (index, shadow) in shadows.iter().enumerate() {
+        let [radius_x, radius_y] = shadow.radii;
+        if !shadow.center.is_finite() || !radius_x.is_finite() || !radius_y.is_finite() {
+            return Err(RenderError::InvalidShadow { index });
+        }
+        if radius_x <= 0.0 || radius_y <= 0.0 {
+            return Err(RenderError::InvalidShadow { index });
+        }
+        let center = to_array(shadow.center);
+        let base = u32::try_from(vertices.len()).map_err(|_| RenderError::InvalidShadow { index })?;
+        vertices.push(MeshVertex { position: center, normal: [0.0, 0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] });
+        for step in 0..SHADOW_SEGMENTS {
+            let angle = std::f64::consts::TAU * (step as f64) / (SHADOW_SEGMENTS as f64);
+            let position = [
+                (shadow.center.x + radius_x * angle.cos()) as f32,
+                (shadow.center.y + radius_y * angle.sin()) as f32,
+                shadow.center.z as f32,
+            ];
+            vertices.push(MeshVertex { position, normal: [0.0, 0.0, 1.0], color: [1.0, 1.0, 1.0, 0.0] });
+        }
+        for step in 0..SHADOW_SEGMENTS {
+            let current = base + 1 + step as u32;
+            let next = base + 1 + ((step + 1) % SHADOW_SEGMENTS) as u32;
+            indices.extend_from_slice(&[base, current, next]);
+        }
+    }
+    Ok((vertices, indices))
 }
 
 /// Flattens every frame polyline into one line-list vertex buffer.
@@ -1191,6 +1385,15 @@ fn sanitize_color(color: [f32; 4]) -> [f32; 4] {
     if color.iter().all(|component| component.is_finite()) { color } else { [0.8, 0.8, 0.8, 1.0] }
 }
 
+/// The shadow colour and strength the fragment shader reads.
+///
+/// A switch that is off, a zero strength or a hostile value collapses to zero alpha, so the pass
+/// blends nothing; the colour is kept so turning the strength back up needs no upload.
+fn shadow_uniform(shadows: &ContactShadows) -> [f32; 4] {
+    let strength = if shadows.draws() { shadows.strength.clamp(0.0, 1.0) } else { 0.0 };
+    [shadows.color[0], shadows.color[1], shadows.color[2], strength]
+}
+
 /// Packs the point lights into the fixed uniform arrays, stopping at the frame budget.
 fn point_uniforms(lighting: &Lighting) -> ([u32; 4], [[f32; 4]; MAX_POINT_LIGHTS], [[f32; 4]; MAX_POINT_LIGHTS]) {
     let mut positions = [[0.0; 4]; MAX_POINT_LIGHTS];
@@ -1335,6 +1538,60 @@ mod tests {
     fn a_hidden_grid_costs_no_vertices() {
         let grid = Grid { visible: false, ..Grid::default() };
         assert!(grid_vertices(&grid).is_empty(), "a hidden grid must not build line geometry");
+    }
+
+    fn contact_shadow() -> ContactShadow {
+        ContactShadow { id: Id::new(1).expect("id"), center: DVec3::new(10.0, 20.0, 0.01), radii: [100.0, 50.0] }
+    }
+
+    #[test]
+    fn a_contact_shadow_becomes_one_radial_triangle_fan_on_the_floor() {
+        let shadow = contact_shadow();
+        let (vertices, indices) = shadow_geometry(&[shadow]).expect("a valid shadow");
+        assert_eq!(vertices.len(), SHADOW_SEGMENTS + 1, "a centre and one rim vertex per segment");
+        assert_eq!(indices.len(), SHADOW_SEGMENTS * 3, "one triangle per segment");
+        assert_eq!(vertices[0].position, [10.0, 20.0, 0.01], "the centre sits on the shadow plane");
+        assert_eq!(vertices[0].color[3], 1.0, "the centre is the opaque end of the falloff");
+        assert!(vertices[1..].iter().all(|vertex| vertex.color[3] == 0.0), "the rim fades to nothing");
+        for vertex in &vertices[1..] {
+            let x = (f64::from(vertex.position[0]) - 10.0) / 100.0;
+            let y = (f64::from(vertex.position[1]) - 20.0) / 50.0;
+            assert!(x * x + y * y <= 1.0 + 1.0e-5, "every rim vertex lies on the ellipse");
+        }
+        assert!(shadow_geometry(&[]).is_ok_and(|(vertices, indices)| vertices.is_empty() && indices.is_empty()));
+    }
+
+    #[test]
+    fn a_malformed_contact_shadow_is_refused() {
+        let id = Id::new(2).expect("id");
+        let non_finite = ContactShadow { id, center: DVec3::new(f64::NAN, 0.0, 0.0), radii: [1.0, 1.0] };
+        assert_eq!(shadow_geometry(&[non_finite]), Err(RenderError::InvalidShadow { index: 0 }));
+        let degenerate = ContactShadow { id, center: DVec3::ZERO, radii: [0.0, 1.0] };
+        assert_eq!(shadow_geometry(&[degenerate]), Err(RenderError::InvalidShadow { index: 0 }));
+
+        let many = vec![contact_shadow(); MAX_CONTACT_SHADOWS + 1];
+        assert!(matches!(shadow_geometry(&many), Err(RenderError::TooManyShadows { .. })));
+    }
+
+    #[test]
+    fn the_shadow_pass_lies_on_the_floor_and_writes_no_depth() {
+        let state = shadow_depth_state();
+        assert_eq!(state.depth_write_enabled, Some(false), "a shadow never occludes the object above it");
+        assert_eq!(state.depth_compare, Some(wgpu::CompareFunction::LessEqual));
+        assert_eq!(state.stencil, wgpu::StencilState::default());
+        assert_eq!(state.bias, wgpu::DepthBiasState::default());
+    }
+
+    #[test]
+    fn the_shadow_switch_collapses_the_uniform_to_zero_alpha() {
+        let shadows = ContactShadows::default();
+        let on = shadow_uniform(&shadows);
+        assert!(on[3] > 0.0, "the default draws a shadow");
+        let off = shadow_uniform(&ContactShadows { visible: false, ..shadows });
+        assert_eq!(off[3], 0.0, "the switch blends nothing");
+        assert_eq!(off[..3], on[..3], "the colour survives the switch, so turning it back on costs no upload");
+        let faint = shadow_uniform(&ContactShadows { strength: 0.0, ..shadows });
+        assert_eq!(faint[3], 0.0);
     }
 
     #[test]

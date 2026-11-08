@@ -206,6 +206,7 @@ impl FurniCraftApp {
             all_edges: settings.viewport.all_edges,
             ..ViewCluster::default()
         };
+        scene.contact_shadows = cluster.shadow_settings();
 
         Ok(Self {
             scene_revision: session.project().revision(),
@@ -283,6 +284,7 @@ impl FurniCraftApp {
         self.cluster = ViewCluster::default();
         self.cluster.style = self.settings.viewport.style;
         self.cluster.all_edges = self.settings.viewport.all_edges;
+        self.scene.contact_shadows = self.cluster.shadow_settings();
         self.translate_gizmo = TranslateGizmo::default();
         self.rotate_gizmo = RotateGizmo::default();
         self.vertex_gizmo = VertexGizmo::default();
@@ -404,6 +406,7 @@ impl FurniCraftApp {
         let mut scene = evaluated.frame;
         scene.shading = self.cluster.style;
         scene.all_edges = self.cluster.all_edges;
+        scene.contact_shadows = self.cluster.shadow_settings();
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
         scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
         self.scene = scene;
@@ -1012,6 +1015,7 @@ impl FurniCraftApp {
         // between form edges and the full triangulation reads a different cached list, so the last
         // upload is replayed when the switch flips.
         self.scene.shading = self.cluster.style;
+        self.scene.contact_shadows = self.cluster.shadow_settings();
         if self.scene.all_edges != self.cluster.all_edges {
             self.scene.all_edges = self.cluster.all_edges;
             if let Err(error) = self.upload_scene() {
@@ -2633,6 +2637,20 @@ mod tests {
         assert!(!cluster.angles_visible(), "the readout is off until the switch is turned on (U42)");
         cluster.show_angles = true;
         assert!(cluster.angles_visible(), "the switch controls the orientation readout");
+    }
+
+    #[test]
+    fn the_display_settings_switch_controls_the_contact_shadow() {
+        let mut cluster = ViewCluster::default();
+        assert!(cluster.shadow_settings().draws(), "the soft ground shadow is on by default");
+        cluster.contact_shadows = false;
+        assert!(!cluster.shadow_settings().visible, "the switch reaches the frame");
+        assert!(!cluster.shadow_settings().draws());
+        cluster.contact_shadows = true;
+        cluster.shadow_strength = 50.0;
+        assert!((cluster.shadow_settings().strength - 0.5).abs() < 1.0e-6);
+        cluster.shadow_strength = 0.0;
+        assert!(!cluster.shadow_settings().draws(), "a zero strength draws nothing either");
     }
 
     #[test]

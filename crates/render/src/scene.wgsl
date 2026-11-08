@@ -16,6 +16,8 @@ struct Camera {
     point_position: array<vec4<f32>, 8>,
     // rgb = linear colour, a = radiant power in watts
     point_color: array<vec4<f32>, 8>,
+    // rgb = gamma-space shadow colour, a = contact-shadow strength
+    shadow: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -138,4 +140,15 @@ struct LineIn {
 fn fs_line(fragment: LineIn) -> @location(0) vec4<f32> {
     // Grid and path line colours are already in gamma space.
     return fragment.color;
+}
+
+// The contact shadow is unlit: the vertex alpha carries the radial falloff and the uniform carries
+// the colour and the strength, so a switch or a strength change costs no upload.
+struct ShadowIn {
+    @location(2) color: vec4<f32>,
+};
+
+@fragment
+fn fs_shadow(fragment: ShadowIn) -> @location(0) vec4<f32> {
+    return vec4<f32>(camera.shadow.rgb, fragment.color.a * camera.shadow.a);
 }
