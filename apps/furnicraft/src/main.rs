@@ -43,14 +43,16 @@ use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
 use furnicraft_engine::{MeshVertexMove, MeshVerticesMove, NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{EvaluationCache, object_mesh};
-use furnicraft_model::{Id, NodeQuery, Placement, Project, Revision, StructuralKind};
+use furnicraft_model::{CornerMove, Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
 use furnicraft_ui::display::OpeningView;
 use furnicraft_ui::settings::{Settings, SettingsSection, ViewportSettings};
 use furnicraft_ui::ui_scale;
-use furnicraft_ui::{DrawDraft, DrawTool, Editor, MeshElement, Palette, PaletteContext, icons, theme};
+use furnicraft_ui::{
+    ContourGrip, DrawDraft, DrawTool, Editor, GripValue, MeshElement, Palette, PaletteContext, icons, theme,
+};
 use furnicraft_units::Length;
 
 use crate::contour_gizmo::ContourGizmo;
@@ -1164,11 +1166,22 @@ impl FurniCraftApp {
         if let Some(edit) = self.editor.contour_edit() {
             let action = self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
             if let Some(action) = action {
-                let (grip, value) = match action {
+                let result = match action {
                     contour_gizmo::NumericAction::Apply(grip, value)
-                    | contour_gizmo::NumericAction::Restore(grip, value) => (grip, value),
+                    | contour_gizmo::NumericAction::Restore(grip, value) => {
+                        self.editor.contour_edit_set_grip_value(grip, value)
+                    }
+                    contour_gizmo::NumericAction::ApplyAlong(grip, value, motion) => {
+                        if let (ContourGrip::Corner(_), CornerMove::Along(segment), GripValue::Length(length)) =
+                            (grip, motion, value)
+                        {
+                            self.editor.contour_edit_along_length(grip, segment, length)
+                        } else {
+                            self.editor.contour_edit_set_grip_value(grip, value)
+                        }
+                    }
                 };
-                match self.editor.contour_edit_set_grip_value(grip, value) {
+                match result {
                     Ok(()) => ui.ctx().request_repaint(),
                     Err(error) => self.last_error = Some(error.to_string()),
                 }

@@ -323,6 +323,50 @@ impl Editor {
         edit.set_grip_value(grip, value)
     }
 
+    /// Applies a typed length to an along-contour corner, moving it along the segment.
+    pub fn contour_edit_along_length(
+        &mut self,
+        grip: ContourGrip,
+        segment: ContourSegmentId,
+        length: Length,
+    ) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::Untagged);
+        };
+        let ContourGrip::Corner(corner) = grip else {
+            return Err(ContourEditError::InvalidValue);
+        };
+        // The far end is fixed by where the corner sat when the edit began.
+        let start = edit.base().grip_position(grip).ok_or(ContourEditError::InvalidValue)?;
+        let far_end = edit.base().motion_far_end(segment, start).ok_or(ContourEditError::InvalidValue)?;
+        let moved = match edit.draft().as_chain() {
+            Some(path) => path.move_corner_to_distance_from(corner, segment, far_end, length)?,
+            None => return Err(ContourEditError::Untagged),
+        };
+        *edit.draft_mut() = ContourDraft::Chain(moved);
+        // A typed length of zero (or within the collapse threshold) records a collapse.
+        if length.micrometres() <= 2 {
+            edit.record_collapse(segment);
+        } else {
+            edit.clear_collapse();
+        }
+        Ok(())
+    }
+
+    /// Records that an along-contour drag collapsed `segment` to zero length.
+    pub fn contour_edit_record_collapse(&mut self, segment: ContourSegmentId) {
+        if let Some(edit) = self.contour_edit.as_mut() {
+            edit.record_collapse(segment);
+        }
+    }
+
+    /// Clears a recorded collapse.
+    pub fn contour_edit_clear_collapse(&mut self) {
+        if let Some(edit) = self.contour_edit.as_mut() {
+            edit.clear_collapse();
+        }
+    }
+
     /// The current value of one grip, for a field that follows a drag.
     pub fn contour_edit_grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
         self.contour_edit.as_ref()?.grip_value(grip)

@@ -207,6 +207,61 @@ impl ContourDraft {
         }
     }
 
+    /// The length a numeric field shows when a corner moves along the contour.
+    ///
+    /// `start_position` is where the corner was when the drag began: that tells which end of
+    /// `motion_segment` is the "opposite" end. The value is the distance from the current corner
+    /// to that opposite end along the segment, so it falls to zero as the corner reaches it.
+    /// A line measures a straight distance, an arc measures its arc length.
+    pub fn along_contour_length(
+        &self,
+        motion_segment: ContourSegmentId,
+        corner: PathCorner,
+        start_position: [Length; 2],
+    ) -> Option<Length> {
+        let curve = self.segment(motion_segment)?;
+        let far_end = self.motion_far_end(motion_segment, start_position)?;
+        let pos = self.corner_point(corner)?;
+        match curve {
+            ContourSegment::Line { .. } => {
+                let dx = (far_end[0].micrometres() - pos[0].micrometres()) as f64;
+                let dy = (far_end[1].micrometres() - pos[1].micrometres()) as f64;
+                let dist = dx.hypot(dy);
+                dist.is_finite().then(|| Length::from_micrometres(dist.round() as i64))
+            }
+            ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                let center_x = center[0].millimetres_f64();
+                let center_y = center[1].millimetres_f64();
+                let radius_mm = radius.millimetres_f64();
+                let start_r = start_angle.radians_f64();
+                let sweep_r = sweep.radians_f64();
+                let travel = |point: [Length; 2]| {
+                    let dx = point[0].millimetres_f64() - center_x;
+                    let dy = point[1].millimetres_f64() - center_y;
+                    let angle = dy.atan2(dx);
+                    if sweep_r >= 0.0 {
+                        (angle - start_r).rem_euclid(std::f64::consts::TAU).min(sweep_r)
+                    } else {
+                        -((-angle + start_r).rem_euclid(std::f64::consts::TAU)).max(sweep_r)
+                    }
+                };
+                let arc_len = (travel(pos) - travel(far_end)).abs() * radius_mm;
+                arc_len.is_finite().then(|| Length::from_micrometres((arc_len * 1_000.0).round() as i64))
+            }
+        }
+    }
+
+    /// The far end of `motion_segment`, given where the corner was when the drag began.
+    ///
+    /// The corner starts at one end of the segment; the far end is the other one. It is fixed for
+    /// the whole drag, so the length field and a typed length agree even after the corner moved.
+    pub fn motion_far_end(&self, motion_segment: ContourSegmentId, start_position: [Length; 2]) -> Option<[Length; 2]> {
+        let curve = self.segment(motion_segment)?;
+        let start = curve.start().ok()?;
+        let end = curve.end().ok()?;
+        if near_point(start_position, start) { Some(end) } else { Some(start) }
+    }
+
     /// The current value a numeric field starts with.
     pub fn grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
         match self.grip_number(grip)? {
@@ -399,6 +454,11 @@ impl ContourDraft {
         *contour = moved;
         Ok(())
     }
+}
+
+/// Whether two document points are within one micrometre of each other.
+fn near_point(first: [Length; 2], second: [Length; 2]) -> bool {
+    first.iter().zip(second.iter()).all(|(a, b)| (a.micrometres() - b.micrometres()).abs() <= 1)
 }
 
 /// The midpoint between two document points, rounded down to the micrometre.

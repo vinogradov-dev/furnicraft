@@ -63,6 +63,8 @@ struct NumericEntry {
     text: String,
     /// The value the drag started from, which Escape restores.
     start: Option<GripValue>,
+    /// The motion segment for an along-contour drag, used to move the corner by a typed length.
+    motion: Option<CornerMove>,
     pointer: Pos2,
     /// Whether the field still has to ask for keyboard focus.
     focus: bool,
@@ -78,6 +80,8 @@ pub(crate) enum NumericAction {
     Apply(ContourGrip, GripValue),
     /// Put the value the drag started from back.
     Restore(ContourGrip, GripValue),
+    /// Apply a typed length to an along-contour corner, moving it along the segment.
+    ApplyAlong(ContourGrip, GripValue, CornerMove),
 }
 
 /// Pointer state of the contour gizmo; the working copy itself belongs to the editor.
@@ -170,7 +174,7 @@ impl ContourGizmo {
             if let Some(drag) = self.drag
                 && let Some(origin) = press_origin
             {
-                self.numeric = numeric_entry(&draft, drag.grip, origin);
+                self.numeric = numeric_entry(&draft, drag.grip, origin, Some(drag.motion));
             }
         }
         if let Some(drag) = self.drag {
@@ -186,15 +190,41 @@ impl ContourGizmo {
                     && editor.contour_edit_drag_grip(drag.grip, [x, y], drag.motion).is_ok()
                 {
                     changed = true;
+                    // An along-contour drag that reaches the far end records a collapse, which
+                    // Apply turns into a segment removal. Dragging back clears it.
+                    if let (ContourGrip::Corner(corner), CornerMove::Along(segment)) = (drag.grip, drag.motion) {
+                        let collapsed = editor
+                            .contour_edit()
+                            .and_then(|edit| {
+                                let start = edit.base().grip_position(ContourGrip::Corner(corner))?;
+                                edit.draft().along_contour_length(segment, corner, start)
+                            })
+                            .is_some_and(|length| length.micrometres() <= 2);
+                        if collapsed {
+                            editor.contour_edit_record_collapse(segment);
+                        } else {
+                            editor.contour_edit_clear_collapse();
+                        }
+                    }
                 }
                 if let Some(entry) = &mut self.numeric
                     && let Some(pointer) = pointer
                 {
                     entry.pointer = pointer;
-                    if !entry.edited
-                        && let Some(value) = editor.contour_edit().and_then(|edit| edit.grip_value(entry.grip))
-                    {
-                        entry.text = value.text();
+                    if !entry.edited {
+                        let value = if let Some(CornerMove::Along(segment)) = entry.motion
+                            && let ContourGrip::Corner(corner) = entry.grip
+                        {
+                            editor.contour_edit().and_then(|edit| {
+                                let start = edit.base().grip_position(ContourGrip::Corner(corner))?;
+                                edit.draft().along_contour_length(segment, corner, start).map(GripValue::Length)
+                            })
+                        } else {
+                            editor.contour_edit().and_then(|edit| edit.grip_value(entry.grip))
+                        };
+                        if let Some(value) = value {
+                            entry.text = value.text();
+                        }
                     }
                 }
                 if response.drag_stopped_by(egui::PointerButton::Primary) {
@@ -342,7 +372,13 @@ impl ContourGizmo {
                             }
                         } else if enter {
                             match entry.kind.parse(&entry.text) {
-                                Ok(value) => action = Some(NumericAction::Apply(entry.grip, value)),
+                                Ok(value) => {
+                                    action = if let Some(motion) = entry.motion {
+                                        Some(NumericAction::ApplyAlong(entry.grip, value, motion))
+                                    } else {
+                                        Some(NumericAction::Apply(entry.grip, value))
+                                    };
+                                }
                                 Err(error) => entry.error = Some(error),
                             }
                         } else if response.lost_focus() && !dragging {
@@ -361,16 +397,33 @@ impl ContourGizmo {
 }
 
 /// The editable numeric field a grip opens, when it takes a number at all.
-fn numeric_entry(draft: &ContourDraft, grip: ContourGrip, pointer: Pos2) -> Option<NumericEntry> {
-    let kind = draft.grip_number(grip)?;
-    let value = draft.grip_value(grip)?;
-    let label = draft.grip_label(grip)?;
+fn numeric_entry(
+    draft: &ContourDraft,
+    grip: ContourGrip,
+    pointer: Pos2,
+    motion: Option<CornerMove>,
+) -> Option<NumericEntry> {
+    let (kind, value, label, motion) = if let Some(motion @ CornerMove::Along(segment)) = motion
+        && let ContourGrip::Corner(corner) = grip
+    {
+        // Along-contour mode: show the length from the far end of the motion segment. At the
+        // moment the drag starts the corner is still at its base position.
+        let start = draft.grip_position(grip)?;
+        let length = draft.along_contour_length(segment, corner, start)?;
+        (GripNumber::Length, GripValue::Length(length), "L", Some(motion))
+    } else {
+        let kind = draft.grip_number(grip)?;
+        let value = draft.grip_value(grip)?;
+        let label = draft.grip_label(grip)?;
+        (kind, value, label, None)
+    };
     Some(NumericEntry {
         grip,
         kind,
         label,
         text: value.text(),
         start: Some(value),
+        motion,
         pointer,
         focus: true,
         edited: false,
@@ -1193,19 +1246,48 @@ mod tests {
     fn a_numeric_entry_starts_from_the_grip_value_and_its_kind() {
         let circle =
             ContourDraft::Chain(Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle"));
-        let entry = numeric_entry(&circle, ContourGrip::CircleQuadrant(0), Pos2::ZERO).expect("a radius field");
+        let entry = numeric_entry(&circle, ContourGrip::CircleQuadrant(0), Pos2::ZERO, None).expect("a radius field");
         assert_eq!(entry.kind, GripNumber::Length);
         assert_eq!(entry.text, "40 mm");
         assert_eq!(entry.start, Some(GripValue::Length(millimetres(40))));
 
         let arc = ContourDraft::Chain(line_and_arc());
         let id = arc.entries().last().expect("arc").id();
-        let entry = numeric_entry(&arc, ContourGrip::Corner(PathCorner::End(id)), Pos2::ZERO).expect("an angle field");
+        let entry =
+            numeric_entry(&arc, ContourGrip::Corner(PathCorner::End(id)), Pos2::ZERO, None).expect("an angle field");
         assert_eq!(entry.kind, GripNumber::Angle);
         assert_eq!(entry.text, "0°");
         assert!(entry.label.contains('∠') || entry.label.contains('R'), "the field is labelled: {entry:?}");
 
-        assert!(numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO).is_none(), "a centre has no number");
+        assert!(
+            numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO, None).is_none(),
+            "a centre has no number"
+        );
+    }
+
+    #[test]
+    fn an_along_contour_numeric_entry_shows_the_length_from_the_far_end() {
+        let draft = ContourDraft::Chain(open_path());
+        let first = draft.id_at(0).expect("first segment");
+        let second = draft.id_at(1).expect("second segment");
+        let corner = PathCorner::Start(second);
+        let motion = Some(CornerMove::Along(first));
+        let entry = numeric_entry(&draft, ContourGrip::Corner(corner), Pos2::ZERO, motion).expect("a length field");
+        assert_eq!(entry.kind, GripNumber::Length);
+        assert_eq!(entry.label, "L", "the along-contour field is labelled L");
+        assert_eq!(entry.text, "100 mm", "the corner sits at the far end of a 100 mm segment");
+        assert_eq!(entry.motion, Some(CornerMove::Along(first)));
+
+        // An arc's value is its arc length, not its chord.
+        let arc_draft = ContourDraft::Chain(line_and_arc());
+        let arc = arc_draft.id_at(1).expect("arc segment");
+        let arc_corner = PathCorner::End(arc);
+        let entry =
+            numeric_entry(&arc_draft, ContourGrip::Corner(arc_corner), Pos2::ZERO, Some(CornerMove::Along(arc)))
+                .expect("an arc length field");
+        // A quarter arc of radius 40 is 40·π/2 ≈ 62.83 mm.
+        let expected = (40.0 * std::f64::consts::FRAC_PI_2 * 1_000.0).round() as i64;
+        assert_eq!(entry.text, Length::from_micrometres(expected).to_string(), "the arc length is 62.83 mm");
     }
 
     #[test]
