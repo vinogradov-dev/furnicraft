@@ -1,22 +1,24 @@
 # Session
 
 ```text
-task: A11
-goal: an extrusion is the body that owns the path it grew from
+task: U53
+goal: every drawing tool finishes its own shape, and a committed shape opens for editing
 
 steps:
-  [ ] Constructive stores { path, features } and Extrude keeps only its height
-  [ ] schema 19 loads a version 18 extrude.contour into constructive.path
-  [ ] object.path.extrude turns the Path node into the body in place
-  [ ] object.contour.replace edits the path inside the body, the mesh cache keys on it
-  [ ] object.extrude.height.set drives the pull and keeps the path
-  [ ] tests: node replacement, contour edit rebuild, height, old file round trip
+  [ ] DrawTool gains ArcFromCenter, CircleThreePoints, RectangleFromCenter (+ Alt directed),
+      RegularPolygon; points(), closes(), is_closed() and label() follow
+  [ ] DrawDraft builds each new tool from its clicked points, N from the ribbon for the polygon
+  [ ] Tab switches the polyline between a straight segment and an arc; Alt only overrides snaps
+  [ ] the closing segment of a polyline is an arc in arc mode and starts at the stored end
+  [ ] a preview that cannot become a path keeps the last valid one and the status names the reason
+  [ ] committing a figure opens its edit mode
 
-now: read crates/model/src/object.rs and the Constructive/Extrude/Feature shapes
+now: read DrawTool/DrawDraft in crates/ui/src/contour_edit.rs and draw_gizmo.rs
 blocked: nothing
-run: cargo test -p furnicraft-model --lib object
-resume: rewrite Constructive as { path, features } in crates/model/src/object.rs
-map: plan/map.md row for the constructive body
-decisions: schema 19 already landed with the path shape tag; the extrusion migration rides in
-  the same version because no file written by a release exists yet.
+run: cargo test -p furnicraft-ui --lib contour_edit
+resume: add the new DrawTool variants and their construction to DrawDraft
+map: plan/map.md row for the drawing draft
+decisions: Tab owns line/arc inside a polyline and Alt is only the snap override; N-gon takes two
+  clicks (centre + radius/orientation); a degenerate free arc step is refused, never turned into a
+  line.
 ```

@@ -20,16 +20,16 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[render]` An authored camera pins the view and disables navigation, so the only way back to the
   navigable view is clearing the active camera in the inspector; a viewport-level "leave camera view"
   control is not implemented.
-- `[object]` A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text
-  lines in the object card, not in the viewport, and a ring that holds an arc has no editor at all
-  until the sketch phase; there are no booleans, fillets or other feature kinds yet. Collapse is a
-  one-way door and only undo brings the history back.
+- `[object]` A constructive object supports one `Extrude` feature; there are no booleans, fillets or
+  other feature kinds yet. Collapse is a one-way door and only undo brings the history back. The
+  object card still offers `X, Y` text lines for a line-only ring beside the viewport editor.
 - `[object]` A contour's self-intersection test samples each segment into chords; a crossing finer than
   0.1 mm inside an arc can slip through. An exact segment-pair test can replace it when the sketch
   editor needs the last tenth of a millimetre.
-- `[object]` A corner shared by two arcs moves only to a point both circles reach at millidegree
-  resolution; the ring stores whole endpoints, so `move_corner` rejects such a point with
-  `ArcJointMismatch` instead of bending either curve. The edit mode must place the handle accordingly.
+- `[object]` Along-contour movement at a corner shared by two arcs is refused with `ArcJointMismatch`
+  when no point sits on both circles at millidegree resolution, because neither stored circle may be
+  bent. Free movement rebuilds both arcs and is the default, so the grip only needs to avoid that
+  motion at such a corner.
 - `[mesh]` Vertex markers and face fills are painted over the viewport image without an occlusion test,
   so a vertex on the far side of the mesh is visible and selectable through it. A depth readback or a
   pick pass can hide the back vertices when the first large mesh makes it matter.

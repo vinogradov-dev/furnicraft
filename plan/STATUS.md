@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=A11 state=doing base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=U53 state=doing base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -12,9 +12,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of stable-id segments (ADR 0040,
   schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
-  ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and a primitive stores the
-  parameters that built it (ADR 0054) while its mesh is derived. A corner moves freely or along the
-  segment picked at the drag start; each figure has numeric radius, width, height and angle setters.
+  ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an extrusion owns its
+  path (ADR 0074). A primitive stores its parameters (ADR 0054); a corner moves freely or along the
+  segment picked at the drag start, and each figure has numeric radius, width, height and angle setters.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -55,9 +55,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-A11 is in progress: an extrusion becomes the body that owns its path, replacing the `Path` node in
-place instead of copying it. U53–U55 follow with the drawing tools, the numeric grips and the pull
-arrow; U45 → U48 → U46 (icons last) → U49 resumes after them.
+A11 landed: an extrusion owns its path and replaces the node in place. U53 is in progress: the new
+drawing tools, Tab between line and arc, and an edit mode after a commit. U54–U55 then add the numeric
+grips and the pull arrow; U45 → U48 → U46 → U49 resume after them.
 
 ## Index
 

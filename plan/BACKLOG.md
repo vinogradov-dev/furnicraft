@@ -25,17 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **A11** an extrusion owns the path it grew from: `Constructive` stores `{ path, features }`
-  and `Extrude` keeps only its height, so the contour is no longer copied and "absorbed" means the
-  body holds the one path. `object.path.extrude` turns the selected `Path` node into a constructive
-  body in place (no sibling, no orphan), `object.contour.replace` edits the path inside the body and
-  the mesh cache keys on it, and `object.extrude.height.set` drives the pull. Schema 19 migrates a
-  version 18 `extrude.contour` into `constructive.path`. Tests: extruding a path replaces the node
-  and leaves no second object; editing the contour inside the body rebuilds its mesh; the height
-  command keeps the path; an old file loads into the new shape and saves without a contour copy.
-  `files: crates/model/src/object.rs`
-
-- `[ ]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
+- `[~]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
   clicks), circle through three points, rectangle from its centre (two clicks, plus the three-click
   Alt variant centre → side direction → corner) and a regular polygon (centre plus radius and
   orientation point, `N` from the ribbon). Tab switches polyline input between a straight segment and
@@ -235,6 +225,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **A11** an extrusion owns the path it grew from: `Constructive` stores `{ path, features }`
+  and `Extrude` keeps only its height, so the contour is no longer copied and "absorbed" means the
+  body holds the one path. `object.path.extrude` turns the selected `Path` node into a constructive
+  body in place (no sibling, no orphan), `object.contour.replace` edits the path inside the body and
+  the mesh cache keys on it, and `object.extrude.height.set` drives the pull. Schema 19 migrates a
+  version 18 `extrude.contour` into `constructive.path`. Tests: extruding a path replaces the node
+  and leaves no second object; editing the contour inside the body rebuilds its mesh; the height
+  command keeps the path; an old file loads into the new shape and saves without a contour copy.
+  ADR 0074 — `c98f590`
+  `files: crates/model/src/object.rs`
 
 - `[x]` **A10** a corner moves freely or along the segment picked at drag start: `move_corner_at`
   takes a `CornerMove` (`Free` or `AlongContour`) plus the target resolved once by the caller from
