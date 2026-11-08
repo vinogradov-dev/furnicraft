@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=X11 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -48,16 +48,16 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   The depth bias moved to the face pipeline, where a constant depth unit stays distance-independent,
   and a per-drawable stencil slot gates hidden edges, so an object shows its own inside but never
   the one behind it. U44 gives every floor-standing object a soft contact shadow: an ellipse from its
-  solid bounds, frame data beside `grid` (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes
-  visibility and lock.
-- Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
-  the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
-  unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
+  solid bounds, frame data beside `grid` (ADR 0071). X11–X20 fix the 2026-11-08 report first;
+  U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
+- Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0)
+  checks the plan files. Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U55 landed: a fresh extrusion pulls its height with an arrow, a drag or a typed number writes one
-height command, and the last height becomes the next default. U45 → U48 → U46 → U49 are next.
+The 2026-11-08 drawing, contour and view defect report is queued first as X11–X20, one commit each,
+then U45 → U48 → U46 → U49: the arc that will not close a polyline, the tool that cannot be switched,
+the arc nodes, the grips, the rectangle, the along-contour mode, the figure card, the ghost, the top view.
 
 ## Index
 

@@ -25,6 +25,154 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **X11** a polyline closed by an arc is one ring: a chain whose last segment is an arc never
+  closes — the third click on the first point does not finish it and the command reports "path
+  segment 2 does not meet the next segment" — and the arc preview blinks at an intermediate click.
+  Expectation: an arc's derived endpoints join their neighbours within the drawing tolerance, a
+  closing click in arc mode ends the arc on the first point and closes the ring, and the preview
+  keeps the pending arc and never blanks. Suspected cause: the joint tolerance is a constant
+  micrometre (ADR 0072), while an arc endpoint is derived from a rounded centre, radius and angle
+  and misses by `radius × 8.73e-6` — about 5 µm on a 600 mm arc; `DrawDraft::finish_arc` sets
+  `closed` without validating the ring, and `preview` clears the cache when it returns `Ok(None)`.
+  Fix: a pair rule, `1 µm + arc_slack(first) + arc_slack(next)` with `arc_slack = radius × 8.73e-6`
+  (zero for a line), used by `Path::assemble`, `Contour::assemble` and `to_geometry`; `finish_arc`
+  closes through `close()`; `preview` keeps the last valid path and paints the pending arc.
+  Tests: a 600 mm arc closes a polyline and reaches a contour; the same ring extrudes; a 20 µm gap
+  on a 100 mm arc is still refused; a rejected preview keeps the last valid one; a 1 µm gap loads.
+  Correct ADR 0072; note explicit arc endpoints (schema 20) in `plan/debt.md`.
+  `files: crates/model/src/contour.rs, crates/ui/src/contour_edit.rs, apps/furnicraft/src/draw_gizmo.rs`
+
+- `[ ]` **X12** a drawing tool can be switched and cancelled: choosing another drawing tool while one
+  runs does nothing, Escape does not reset the tool, and only Ctrl+Esc discards. Expectation:
+  choosing another tool ends the running one and starts the new one, Escape cancels the draft and
+  leaves the tool with nothing written, Enter and the right button commit a valid draft, the
+  drawing shortcuts work while a draft runs, and the status line names the keys. Owner decision: a
+  tool switch discards the running draft, because nothing was written and undo gains no half
+  figure. Suspected cause: `Editor::start_drawing_with` refuses while `drawing.is_some()`, the shell
+  skips the shortcut table while a draft runs, and Escape and Enter both commit (U53/ADR 0076).
+  Fix: replace the draft instead of refusing, route Escape to `cancel_drawing`, keep Enter and the
+  right button on commit, and let a failed commit keep the draft and the tool. Tests: start a
+  polyline, press R, the rectangle tool is live with an empty draft; Escape leaves the tool and the
+  document untouched; Enter commits; a shortcut starts a tool while a draft runs; a failed commit
+  keeps it. ADR 0076 is updated.
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs`
+
+- `[ ]` **X13** an arc follows its nodes: an arc cannot be reshaped by dragging its nodes — the
+  endpoints only slide along the arc and change its angle — and dragging the middle node makes the
+  radius jump to an absurd value. Expectation: every node follows the pointer; a free endpoint
+  rebuilds the adjoining arc through its other end and its current mid point, the mid node rebuilds
+  it through both endpoints and the new mid point, the centre still moves the whole arc, and
+  sliding along the arc stays an explicit mode. Suspected cause: `ContourGizmo::dragged_point`
+  projects every free corner onto an adjoining arc's circle, and the `ArcPoint`/`ArcRadius` drags
+  call `Path::set_arc_radius_at`, which takes the radius from the pointer's distance to the centre.
+  Fix: project only for `CornerMove::Along`; rebuild in `Path::free_corner` and a new
+  `set_arc_through_midpoint`; refuse a degenerate rebuild, keep the last valid arc and cap the
+  radius at the document range. Tests: a free arc end follows the pointer and changes the radius;
+  the other end stays; the mid node stays finite; a collinear mid point is refused; the along mode
+  keeps centre and radius. ADR 0075 is updated.
+  `files: crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
+
+- `[ ]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
+  first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
+  the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
+  radius from a vertex and from the card; a circle can be pulled from any point on its rim in any
+  mode and only its radius changes; no grip sits off the figure. Suspected cause:
+  `PolygonFrame::radius_point` sits on the circumcircle midway between the first two vertices,
+  outside the first side; a tagged circle is four quarter arcs, and `grip_at` offers the synthetic
+  `ArcRadius` on any hovered arc, which deforms one quarter. Fix: drop
+  `ContourGrip::PolygonRadius` from the grip list and its number/value/label/drag/set tables; add a
+  circle-rim grip for a `PathShape::Circle` draft that calls `set_circle_radius_at` and numbers `R`;
+  an untagged arc chain keeps `ArcPoint`/`ArcRadius`. Tests: a circle pulled at 37° stays round and
+  takes the radius from the centre; a polygon has no grip off the figure; a vertex still scales it;
+  an arc chain keeps its arc grips.
+  `files: crates/ui/src/contour_grips.rs, crates/model/src/contour_edit.rs, apps/furnicraft/src/contour_gizmo.rs`
+
+- `[ ]` **X15** the pointer grabs the node it is on: a press that visually lands on a grip often does
+  not grab it, and the cursor turns into a hand over a node. Expectation: a press within the grip's
+  hit radius grabs it even when the pointer moves a few points before egui's drag threshold, and
+  the cursor stays the default arrow. Suspected cause: `ContourGizmo::update` resolves the grip from
+  the current pointer when `drag_started` fires, which is after the threshold, and `cursor()`
+  returns `Grab`/`Grabbing`/`PointingHand`. Fix: resolve from `pointer.press_origin()`, keep the
+  grabbed grip for the whole drag, keep the 9–12 pt hit radius and let the enlarged hovered grip
+  carry the feedback; `cursor()` returns `Default` and the shell's contour branch goes. Tests: a
+  press exactly on a grip grabs it; a press 12 pt away does not; a press followed by a 5 pt move
+  before the threshold still grabs; the cursor is the default.
+  `files: apps/furnicraft/src/contour_gizmo.rs, apps/furnicraft/src/main.rs`
+
+- `[ ]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
+  rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
+  a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
+  makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
+  the document range, and a figure edited along a side stops being that figure and becomes a plain
+  polyline. Owner decision: a midpoint crossing the opposite side clamps at a minimum extent of
+  1 mm instead of mirroring. Suspected cause: `move_rectangle_midpoint` refuses a non-positive half
+  but leaves a sliver; `rectangle_frame` never orthogonalises the axes and
+  `PathShape::fits(Rectangle)` only counts four lines; `move_rectangle_corner` does not clamp;
+  `rebuild` keeps the tag through an along-contour edit. Fix: orthonormalise the axes and require
+  right angles within a micrometre, clamp the midpoint at the minimum, clamp the corner, and drop
+  the tag on a topology change. Tests: a rotated rectangle keeps right angles through a midpoint
+  drag; a midpoint drag never yields zero; a corner drag cannot leave the range; an along-contour
+  edit drops the tag; a tagged rectangle that is not right-angled is a load error.
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs, crates/ui/src/contour_grips.rs`
+
+- `[ ]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
+  field, the node can pass the opposite node, and a zero-length segment cannot be finished.
+  Expectation: a length field shows the distance from the segment's opposite end and accepts a
+  typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
+  removes the zero-length segment and joins the two nodes; a ring keeps at least three segments.
+  Suspected cause: `numeric_entry` opens only when `grip_number` returns a number, and an untagged
+  polyline corner has none, while an arc corner numbers an angle or a radius; nothing clamps at the
+  opposite node and nothing records a collapse. Fix: build the entry from the drag motion (`Length`,
+  label `L`, value from the other end, Enter moves the corner that far along the support, arc length
+  for an arc); clamp to `0..=segment_length`, record `collapse` on `ContourEdit`, remove collapsed
+  segments in `apply`, refuse a ring below three, and keep one undo entry. Tests: a typed length
+  moves the corner; a drag cannot pass the opposite node; reaching 0 collapses and Apply joins the
+  nodes; a ring of three refuses; the undo entry is one.
+  `files: apps/furnicraft/src/contour_gizmo.rs, crates/model/src/contour_edit.rs, crates/ui/src/contour_edit.rs`
+
+- `[ ]` **X18** a figure's geometry is editable in its card: the object card has no radius for a
+  circle, no width and height for a rectangle and no side count for a polygon, and a constructive
+  body's drawn path is not in the summary at all. Expectation: the card shows the fields the figure
+  has — circle radius, rectangle width and height, polygon sides (`3..=128`) and radius, a single
+  arc's radius and end angle — for a `Path` node and for the constructive body that owns a path,
+  and Apply writes one command with one undo entry. Suspected cause:
+  `object_card::geometry_section` reports only segment and arc counts, the contour editor is text
+  for a line-only ring, and `Constructive` has no `path()` accessor, so its path never reaches
+  `ObjectSummary`. Fix: add `Constructive::path()`, carry the path in the summary, add a *Figure*
+  section built from `circle_frame`/`rectangle_frame`/`polygon_frame`/`arc_frame` and the existing
+  model setters, dispatch `object.path.replace` or `object.contour.replace` so the tag survives, and
+  disable the fields while the viewport owns the working copy. Tests: each field reshapes the path
+  and keeps its tag; a constructive body keeps its tag; a card edit during a viewport edit is
+  refused; one undo restores the figure.
+  `files: crates/ui/src/object_card.rs, crates/model/src/object.rs, crates/engine/src/object_cmds.rs`
+
+- `[ ]` **X19** the extrusion pulls a phantom body: the arrow detaches from the body while the pull
+  is open and the body only appears after release. Expectation: a ghost of the extrusion at the
+  preview height is drawn, the arrow sits on its top face and moves with it, and the document still
+  changes once on release. Owner decision: the ghost is a wireframe prism drawn by the gizmo — the
+  bottom and top outlines and the vertical edges at the sampled corners — not a translucent solid.
+  Suspected cause: the body is created at the ribbon height while `ExtrudeGizmo` only changes
+  `Pull.height` and writes it on release, and `arrow_screen` puts the arrow base at the preview
+  height, so the arrow floats over the committed body. Fix: `Body` keeps the contour's sampled
+  points, `ghost_edges(contour, height)` returns the prism, `paint` draws it before the arrow in a
+  translucent accent, no document write during the drag, and Escape drops the ghost at the
+  committed height. Tests: the ghost top is at the preview height and the bottom at zero; a drag
+  changes the ghost with no revision or undo entry; release writes one height command; Escape keeps
+  the committed height. A solid preview is recorded in `plan/debt.md`.
+  `files: apps/furnicraft/src/extrude_gizmo.rs`
+
+- `[ ]` **X20** a pole view has a canonical up: clicking the top view does not change the camera's
+  roll and the view inherits whatever yaw the camera had. Expectation: a top view looks down with
+  `+Y` up and `+X` right, a bottom view looks up with `+Y` up, and the side and front views keep
+  `+Z` up. Suspected cause: `Camera::look_from` keeps the current yaw at a pole, and both
+  `OpeningView::Top` and the widget's `+Z` ball call it. Fix: `look_from_oriented(direction, up)`
+  (or a `snap_pole` flag) sets the pole yaw from the requested up — `-π/2` for top, `+π/2` for
+  bottom — while a non-pole direction keeps the current rule; the shell's `GizmoAction::LookFrom`
+  and `Leaf::apply_preset` use it. Tests: from an arbitrary yaw the top view has `up ≈ +Y` and
+  `right ≈ +X`; the bottom has `up ≈ +Y` and `right ≈ -X`; the target and distance do not move; the
+  presets agree with the widget.
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/view_layout.rs`
+
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
