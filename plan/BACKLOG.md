@@ -25,20 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
-  clicks), circle through three points, rectangle from its centre (two clicks, plus the three-click
-  Alt variant centre → side direction → corner) and a regular polygon (centre plus radius and
-  orientation point, `N` from the ribbon). Tab switches polyline input between a straight segment and
-  an arc and Alt becomes "ignore the snaps"; the closing segment of a polyline becomes an arc when
-  the closing click is taken in arc mode, and it always starts at the stored end. A preview that
-  cannot become a path keeps the last valid preview and the raw chain stays drawn, so a drawing never
-  blinks out at an intermediate click; the status line names the reason instead. A committed figure
-  opens its own edit mode. Tests: Tab builds a straight then an arc segment; an arc closes the chain;
-  each new tool commits its path; an invalid intermediate preview returns the previous one; a
-  committed shape is in edit mode.
-  `files: crates/ui/src/contour_edit.rs`
-
-- `[ ]` **U54** every figure exposes its grips with a number at the cursor: circles show four
+- `[~]` **U54** every figure exposes its grips with a number at the cursor: circles show four
   quadrant points and the centre, an arc its start, end, centre, a point on the arc and a radius grip
   under a hover on the curve, a rectangle four corners, four side midpoints and the centre, a regular
   polygon its vertices, centre and radius point. A numeric field follows the cursor and its meaning
@@ -225,6 +212,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
+  clicks), circle through three points, rectangle from its centre (two clicks), a directed
+  rectangle as its own button (centre → side direction → corner, `Shift+D`) and a regular polygon
+  (centre plus a rim point, `N` from the ribbon, `3..=128` sides). Tab switches polyline input
+  between a straight segment and an arc and Alt ignores the end and grid snaps; the closing segment
+  of a polyline is an arc when the closing click is taken in arc mode, and it always starts at the
+  stored end. A preview that cannot become a path keeps the last valid preview and the raw chain
+  stays drawn, so a drawing never blinks out at an intermediate click; the status line names the
+  reason instead. Escape or the right button commits, Ctrl+Esc or Cancel discards, and a committed
+  figure opens its own edit mode. Tests: Tab builds a straight then an arc segment; an arc closes
+  the chain; a degenerate arc step is refused; each new tool builds and commits its path; an
+  invalid intermediate preview keeps the previous one; a committed shape is in edit mode.
+  ADR 0076 — `9778d35`
+  `files: crates/ui/src/contour_edit.rs`
 
 - `[x]` **A11** an extrusion owns the path it grew from: `Constructive` stores `{ path, features }`
   and `Extrude` keeps only its height, so the contour is no longer copied and "absorbed" means the

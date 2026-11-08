@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U53 state=doing base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=U54 state=doing base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -43,21 +43,21 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   U43 made the five display styles real: `ShadingStyle` is frame data in `crates/scene` (ADR 0070),
   and the renderer draws visible edges, hidden edges, wireframe alone and translucent faces. X10 made
   those edges mean the form: `mesh_edges` drops a coplanar triangulation diagonal, so a box draws
-  twelve and a triangular body nine, and the full triangulation is a diagnostic switch beside the
-  style. The depth bias moved from the line shader onto the face pipeline, where a constant depth unit
-  stays distance-independent; the hidden-edge style is gated by a per-drawable stencil slot, so an
-  object shows its own inside but never the one behind it. U44 gives every floor-standing object a
-  soft contact shadow: a transparent ellipse derived from its solid bounds, frame data beside `grid`
-  (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
+  twelve and a triangular body nine; the full triangulation is a diagnostic switch beside the style.
+  The depth bias moved to the face pipeline, where a constant depth unit stays distance-independent,
+  and a per-drawable stencil slot gates hidden edges, so an object shows its own inside but never
+  the one behind it. U44 gives every floor-standing object a soft contact shadow: an ellipse from its
+  solid bounds, frame data beside `grid` (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes
+  visibility and lock.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-A11 landed: an extrusion owns its path and replaces the node in place. U53 is in progress: the new
-drawing tools, Tab between line and arc, and an edit mode after a commit. U54–U55 then add the numeric
-grips and the pull arrow; U45 → U48 → U46 → U49 resume after them.
+U53 landed: ten drawing tools, Tab between a straight segment and an arc, Alt as the snap override,
+and a commit that opens the contour edit. U54 is in progress: grips, a number at the cursor, and free
+or along-contour drags. U55 adds the pull arrow; U45 → U48 → U46 → U49 resume after them.
 
 ## Index
 

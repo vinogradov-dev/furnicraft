@@ -105,9 +105,13 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   `PrimitiveKind` has no `Cone` and `crates/param` builds no cone solid, so the tab draws the three
   primitives the document really has. A cone needs the model variant, the kernel plan and the drawn
   `primitives/cone` asset in one change; drawing the icon alone would offer a tool that cannot build.
-- `[ui]` 47 of the 67 declared icons are zero-byte placeholders: the whole `actions` theme (30,
+- `[ui]` 47 of the 72 declared icons are zero-byte placeholders: the whole `actions` theme (30,
   including undo, redo, delete, save, warning), `primitives/cone`, `bodies/revolve` and
   `bodies/sweep`, and the ten view glyphs U40 added for the floating cluster (orbit, pan, zoom,
   layout, sliders and the five shading styles). The empty-file fallback keeps every surface usable
   with its text label, but the cluster wraps onto several rows in a narrow viewport until U46 draws
   them. See `assets/icons/AUDIT.md` §5 and ADR 0055.
+- `[ui]` The regular polygon's `Sides` field has no refusal state: a value outside `3..=128` is
+  clamped and a non-number falls back to six, while the field keeps the typed text. The tool builds
+  a valid polygon instead of failing, but a typo is not named. A validated field can land with the
+  polygon dialog, if one is ever added.

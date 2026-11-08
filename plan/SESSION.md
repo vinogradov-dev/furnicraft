@@ -1,24 +1,28 @@
 # Session
 
 ```text
-task: U53
-goal: every drawing tool finishes its own shape, and a committed shape opens for editing
+task: U54
+goal: every drawn figure shows its grips, takes a number at the cursor, and moves freely or along
+  its own contour
 
 steps:
-  [ ] DrawTool gains ArcFromCenter, CircleThreePoints, RectangleFromCenter (+ Alt directed),
-      RegularPolygon; points(), closes(), is_closed() and label() follow
-  [ ] DrawDraft builds each new tool from its clicked points, N from the ribbon for the polygon
-  [ ] Tab switches the polyline between a straight segment and an arc; Alt only overrides snaps
-  [ ] the closing segment of a polyline is an arc in arc mode and starts at the stored end
-  [ ] a preview that cannot become a path keeps the last valid one and the status names the reason
-  [ ] committing a figure opens its edit mode
+  [ ] read the shape tag, the numeric setters and CornerMove the model already offers
+  [ ] grips: circle quadrant points and centre; arc start, end, centre, a point on the arc and a
+      radius grip on hover; rectangle corners, midpoints and centre; polygon vertices, centre and
+      radius point
+  [ ] a numeric field follows the cursor; its meaning comes from the grip, Enter applies it without
+      leaving the edit, Esc restores the value the drag started from
+  [ ] free/along-contour toggle in the edit HUD, free by default, target resolved at drag start
+  [ ] each figure keeps its identity through a grip drag: a circle stays round, a rectangle keeps
+      right angles, a polygon keeps its sides
+  [ ] ADR 0075, docs, map, tests
 
-now: read DrawTool/DrawDraft in crates/ui/src/contour_edit.rs and draw_gizmo.rs
+now: read crates/model/src/contour_edit.rs (CornerMove, numeric setters) and the shape tag
 blocked: nothing
-run: cargo test -p furnicraft-ui --lib contour_edit
-resume: add the new DrawTool variants and their construction to DrawDraft
-map: plan/map.md row for the drawing draft
-decisions: Tab owns line/arc inside a polyline and Alt is only the snap override; N-gon takes two
-  clicks (centre + radius/orientation); a degenerate free arc step is refused, never turned into a
-  line.
+run: cargo test -p furnicraft-model --lib contour_edit
+resume: list the setters the model has and the grips the gizmo has to add
+map: plan/map.md row for the contour gizmo
+decisions: free movement is the default for every kind; the along-contour target is fixed at drag
+  start; Arc numeric keeps both stored endpoints and moves the centre on the existing bulge side;
+  a degenerate free arc step stays refused.
 ```
