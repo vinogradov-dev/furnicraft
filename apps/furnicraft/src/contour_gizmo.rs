@@ -289,7 +289,8 @@ impl ContourGizmo {
             paint_grip(&painter, position, *grip, selected, hovered);
         }
         // The radius grip on a hovered arc curve is not part of the stable list, so paint it here.
-        if let Some(grip @ ContourGrip::ArcRadius(..)) = self.hover
+        // The radius grip on a hovered arc curve or a circle rim is not part of the stable list, so paint it here.
+        if let Some(grip @ (ContourGrip::ArcRadius(..) | ContourGrip::CircleRim(..))) = self.hover
             && !grips.contains(&grip)
             && let Some(local) = edit.draft().grip_position(grip)
         {
@@ -525,11 +526,18 @@ fn grip_at(
     // A ring has no arc grips yet, so it must not offer a radius handle it cannot drag.
     draft.as_chain()?;
     let segment = hover_segment?;
-    if !draft.segment(segment)?.is_arc() {
+    let curve = draft.segment(segment)?;
+    if !curve.is_arc() {
         return None;
     }
+    // A circle-tagged path exposes a rim grip that scales the whole circle.
+    if draft.as_chain().is_some_and(|path| path.shape() == Some(furnicraft_model::PathShape::Circle)) {
+        let local = local_point(pointer, rect, camera, placement)?;
+        let point = arc_nearest(curve, local)?;
+        return Some(ContourGrip::CircleRim(point));
+    }
     let local = local_point(pointer, rect, camera, placement)?;
-    let point = arc_nearest(draft.segment(segment)?, local)?;
+    let point = arc_nearest(curve, local)?;
     Some(ContourGrip::ArcRadius(segment, point))
 }
 

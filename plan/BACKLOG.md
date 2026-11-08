@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
+- `[~]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
   first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
   the path is invalid. Expectation: a polygon shows its vertices and centre only and takes its
   radius from a vertex and from the card; a circle can be pulled from any point on its rim in any

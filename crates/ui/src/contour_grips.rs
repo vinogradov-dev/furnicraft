@@ -38,8 +38,8 @@ pub enum ContourGrip {
     RectangleMidpoint(u8),
     /// The centre of a regular polygon figure.
     PolygonCenter,
-    /// A point on a polygon's circumcircle between its first two corners.
-    PolygonRadius,
+    /// A point on a circle's rim, from any hovered arc segment of a circle-tagged path.
+    CircleRim([Length; 2]),
 }
 
 /// What a number typed at a grip measures.
@@ -102,7 +102,6 @@ impl ContourDraft {
             Some(PathShape::RegularPolygon) => {
                 self.push_corners(&mut grips);
                 grips.push(ContourGrip::PolygonCenter);
-                grips.push(ContourGrip::PolygonRadius);
             }
             None => {
                 self.push_corners(&mut grips);
@@ -154,7 +153,7 @@ impl ContourDraft {
                 midpoint(*start, *end)
             }
             ContourGrip::PolygonCenter => self.polygon_frame().map(|frame| frame.center),
-            ContourGrip::PolygonRadius => self.polygon_frame()?.radius_point().ok(),
+            ContourGrip::CircleRim(point) => Some(point),
         }
     }
 
@@ -179,7 +178,7 @@ impl ContourDraft {
             | ContourGrip::RectangleCenter
             | ContourGrip::PolygonCenter => None,
             ContourGrip::RectangleMidpoint(_) => Some(GripNumber::Length),
-            ContourGrip::PolygonRadius => Some(GripNumber::Length),
+            ContourGrip::CircleRim(..) => Some(GripNumber::Length),
         }
     }
 
@@ -204,7 +203,7 @@ impl ContourDraft {
             ContourGrip::CircleQuadrant(_)
             | ContourGrip::ArcPoint(_)
             | ContourGrip::ArcRadius(..)
-            | ContourGrip::PolygonRadius => Some("R"),
+            | ContourGrip::CircleRim(..) => Some("R"),
         }
     }
 
@@ -235,7 +234,7 @@ impl ContourDraft {
                 let frame = self.rectangle_frame()?;
                 Some(if side % 2 == 0 { frame.height } else { frame.width })
             }
-            ContourGrip::PolygonRadius => Some(self.polygon_frame()?.radius),
+            ContourGrip::CircleRim(..) => Some(self.circle_frame()?.radius),
             ContourGrip::RectangleCenter | ContourGrip::PolygonCenter => None,
         }
     }
@@ -299,8 +298,8 @@ impl ContourDraft {
                     *path = moved;
                     Ok(())
                 }
-                ContourGrip::PolygonRadius => {
-                    let moved = path.set_polygon_radius_at(point)?;
+                ContourGrip::CircleRim(..) => {
+                    let moved = path.set_circle_radius_at(point)?;
                     *path = moved;
                     Ok(())
                 }
@@ -314,7 +313,10 @@ impl ContourDraft {
             return Err(ContourEditError::Untagged);
         };
         match (grip, value) {
-            (ContourGrip::CircleCenter | ContourGrip::CircleQuadrant(_), GripValue::Length(radius)) => {
+            (
+                ContourGrip::CircleCenter | ContourGrip::CircleQuadrant(_) | ContourGrip::CircleRim(..),
+                GripValue::Length(radius),
+            ) => {
                 let moved = path.set_circle_radius(radius)?;
                 *path = moved;
             }
@@ -341,10 +343,6 @@ impl ContourDraft {
             (ContourGrip::RectangleMidpoint(side), GripValue::Length(length)) => {
                 let moved =
                     if side % 2 == 0 { path.set_rectangle_height(length)? } else { path.set_rectangle_width(length)? };
-                *path = moved;
-            }
-            (ContourGrip::PolygonRadius, GripValue::Length(radius)) => {
-                let moved = path.set_polygon_radius(radius)?;
                 *path = moved;
             }
             _ => return Err(ContourEditError::InvalidValue),
@@ -491,28 +489,28 @@ mod tests {
     }
 
     #[test]
-    fn a_polygon_shows_its_vertices_a_centre_and_a_radius_point() {
+    fn a_polygon_shows_its_vertices_and_a_centre() {
         let polygon = Path::regular_polygon(point(0, 0), point(50, 0), 6).expect("a hexagon");
         let draft = ContourDraft::Chain(polygon);
         let grips = draft.grips();
         assert_eq!(grips.iter().filter(|grip| matches!(grip, ContourGrip::Corner(_))).count(), 6);
         assert!(grips.contains(&ContourGrip::PolygonCenter));
-        assert_eq!(grips.last(), Some(&ContourGrip::PolygonRadius));
-        assert_eq!(draft.grip_value(ContourGrip::PolygonRadius), Some(GripValue::Length(millimetres(50))));
-        let rim = draft.grip_position(ContourGrip::PolygonRadius).expect("a radius point");
-        let distance = ((rim[0].micrometres() as f64).powi(2) + (rim[1].micrometres() as f64).powi(2)).sqrt();
-        assert!((distance - 50_000.0).abs() <= 1.0, "on the circumcircle: {rim:?}");
+        assert_eq!(grips.last(), Some(&ContourGrip::PolygonCenter), "the centre is the last grip, no radius point");
+        assert_eq!(grips.len(), 7, "six vertices and a centre, no radius point");
     }
 
     #[test]
-    fn a_polygon_radius_drag_scales_without_turning() {
+    fn a_polygon_vertex_drag_scales_the_polygon() {
         let polygon = Path::regular_polygon(point(0, 0), point(50, 0), 6).expect("a hexagon");
         let mut draft = ContourDraft::Chain(polygon);
-        draft.drag_grip(ContourGrip::PolygonRadius, point(0, 90), CornerMove::Free).expect("drag the radius point");
+        // Drag the first vertex to a new radius; the polygon scales.
+        let first = draft.entries().first().expect("a segment").id();
+        draft
+            .drag_grip(ContourGrip::Corner(PathCorner::Start(first)), point(0, 90), CornerMove::Free)
+            .expect("drag a vertex");
         let frame = draft.as_chain().and_then(|path| path.polygon_frame().ok()).expect("still a polygon");
         assert_eq!(frame.center, point(0, 0));
         assert_eq!(frame.radius, millimetres(90));
-        assert_eq!(frame.phase, Degrees::ZERO, "the first corner still points east");
         assert_eq!(frame.corners.len(), 6);
     }
 
@@ -654,6 +652,70 @@ mod tests {
             panic!("the end of an arc measures an angle");
         };
         assert_eq!(angle, Degrees::from_millidegrees(90_000));
+    }
+
+    #[test]
+    fn a_circle_rim_drag_at_an_arbitrary_angle_keeps_it_round() {
+        let mut draft = circle();
+        // A rim grip at 37°; the circle stays round and the radius changes.
+        let rim = ContourGrip::CircleRim(point(10, 30));
+        assert_eq!(draft.grip_number(rim), Some(GripNumber::Length));
+        assert_eq!(draft.grip_label(rim), Some("R"));
+        assert_eq!(draft.grip_value(rim), Some(GripValue::Length(millimetres(40))));
+        draft.drag_grip(rim, point(10, 80), CornerMove::Free).expect("drag the rim at 37° equivalent");
+        let frame = draft.as_chain().and_then(|path| path.circle_frame().ok()).expect("still a circle");
+        assert_eq!(frame.center, point(10, 20));
+        assert_eq!(frame.radius, millimetres(60), "radius grew from 40 to 60");
+        assert_eq!(draft.grips().len(), 5, "the same five grips, CircleRim is hover-only");
+    }
+
+    #[test]
+    fn an_untagged_arc_chain_keeps_arc_grips_and_rejects_circle_rim() {
+        // An arc starting at the line end: centre (100, 40), radius 40, start at -90°.
+        let line = ContourSegment::line(point(0, 0), point(100, 0)).expect("line");
+        let arc = ContourSegment::arc(
+            point(100, 40),
+            millimetres(40),
+            Degrees::from_millidegrees(-90_000),
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("arc");
+        let path = Path::new(vec![line, arc], false).expect("line and arc");
+        let draft = ContourDraft::Chain(path);
+        let arc_id = draft.entries().last().expect("arc").id();
+        // An untagged chain still exposes ArcRadius on a hovered arc.
+        let grips = draft.grips();
+        assert!(grips.contains(&ContourGrip::ArcCenter(arc_id)));
+        assert!(grips.contains(&ContourGrip::ArcPoint(arc_id)));
+        assert!(!grips.contains(&ContourGrip::CircleRim(point(0, 0))), "no circle rim on an untagged chain");
+        // The arc radius grip is the synthetic one, not in grips list.
+        let arc_grip = ContourGrip::ArcRadius(arc_id, point(120, 30));
+        assert_eq!(draft.grip_number(arc_grip), Some(GripNumber::Length));
+        assert_eq!(draft.grip_label(arc_grip), Some("R"));
+    }
+
+    #[test]
+    fn a_circle_rim_number_applies_the_radius() {
+        let mut draft = circle();
+        let rim = ContourGrip::CircleRim(point(10, 60));
+        draft.set_grip_value(rim, GripValue::Length(millimetres(80))).expect("set radius through rim");
+        let frame = draft.as_chain().and_then(|path| path.circle_frame().ok()).expect("still a circle");
+        assert_eq!(frame.radius, millimetres(80));
+    }
+
+    #[test]
+    fn a_polygon_has_no_grip_off_the_figure() {
+        let polygon = Path::regular_polygon(point(0, 0), point(50, 0), 6).expect("a hexagon");
+        let draft = ContourDraft::Chain(polygon);
+        let grips = draft.grips();
+        // Every grip is either a vertex, a centre, or a quadrant — none sits off the figure.
+        assert!(grips.iter().all(|grip| matches!(grip, ContourGrip::Corner(_) | ContourGrip::PolygonCenter)));
+        // A vertex still scales the polygon.
+        let first = draft.entries().first().expect("a segment").id();
+        assert_eq!(
+            draft.grip_value(ContourGrip::Corner(PathCorner::Start(first))),
+            Some(GripValue::Length(millimetres(50)))
+        );
     }
 
     #[test]
