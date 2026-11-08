@@ -1,20 +1,19 @@
 # Session
 
-task: X16
-goal: прямоугольник и полигон сохраняют свою фигуру при перетаскивании
+task: X17
+goal: along-contour movement показывает длину, останавливается у opposite node, схлопывает нулевой сегмент
 
 steps:
-  [x] анализ: прочитаны contour_edit.rs, contour.rs, contour_grips.rs
-  [x] move_rectangle_midpoint — clamp на минимум 1 мм вместо зеркалирования
-  [x] rectangle_frame — orthonormalise оси (Gram–Schmidt), чтобы right angles сохранялись
-  [x] move_rectangle_corner — clamp corner в документный диапазон
-  [x] PathShape::fits(Rectangle) — проверка прямых углов
-  [x] Along-contour edit сбрасывает тег, если фигура больше не подходит
-  [x] Новые тесты: rotated rectangle midpoint, midpoint не даёт 0, corner в диапазоне,
-      along-contour сбрасывает тег, загрузка не прямоугольного rectangle — ошибка
-  [x] cargo test --workspace, clippy, fmt, layers, plan — все зелёные
+  [x] model: clamp_to_segment оставляет 1 µm зазор; move_corner_to_distance_from по far end
+  [x] model: Contour::remove_segment (ring >= 3)
+  [x] ui: along_contour_length + motion_far_end, collapse record/clear, apply removes collapsed
+  [x] gizmo: Length entry c label L, ApplyAlong action, collapse detection
+  [x] тесты model: clamp не проходит opposite, typed length (line + arc)
+  [x] тесты ui: collapse removes segment, ring of 3 refuses, path collapse one undo
+  [ ] gizmo test: numeric entry shows L for along contour
+  [ ] финальный гейт: fmt, clippy, test, layers, plan
 
-now: коммит и финализация
+now: gizmo test + финальный гейт
 blocked: nothing
-run: cargo xtask ci
-resume: git commit и merge dev → main
+run: cargo test --workspace
+resume: добавить gizmo test для along-contour numeric entry, затем cargo xtask ci

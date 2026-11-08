@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X16 state=doing base=916b15e updated=2026-11-08
+STATE: milestone=M7 phase=A task=X17 state=doing base=bf07643 updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,10 +50,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X14 is done: the polygon grip set has no phantom node outside the figure,
-and a circle's rim grip works from any arc segment and keeps it round.
-X16 is next: a rectangle keeps right angles and its axes at any angle,
-a midpoint drag never yields zero, and a corner drag stays in range.
+X16 is done: the midpoint clamps at 1 mm instead of mirroring, the axes are
+orthonormalised so a rotated rectangle keeps right angles, the corner drag stays in
+range, an along-contour edit drops the tag, and a mis-tagged file is a load error.
+X17 is next: along-contour movement has a length field, stops at the opposite node,
+and collapses a zero-length segment on Apply.
 
 ## Index
 

@@ -25,23 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
-  rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
-  a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
-  makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
-  the document range, and a figure edited along a side stops being that figure and becomes a plain
-  polyline. Owner decision: a midpoint crossing the opposite side clamps at a minimum extent of
-  1 mm instead of mirroring. Suspected cause: `move_rectangle_midpoint` refuses a non-positive half
-  but leaves a sliver; `rectangle_frame` never orthogonalises the axes and
-  `PathShape::fits(Rectangle)` only counts four lines; `move_rectangle_corner` does not clamp;
-  `rebuild` keeps the tag through an along-contour edit. Fix: orthonormalise the axes and require
-  right angles within a micrometre, clamp the midpoint at the minimum, clamp the corner, and drop
-  the tag on a topology change. Tests: a rotated rectangle keeps right angles through a midpoint
-  drag; a midpoint drag never yields zero; a corner drag cannot leave the range; an along-contour
-  edit drops the tag; a tagged rectangle that is not right-angled is a load error.
-  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs, crates/ui/src/contour_grips.rs`
-
-- `[ ]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
+- `[~]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
   field, the node can pass the opposite node, and a zero-length segment cannot be finished.
   Expectation: a length field shows the distance from the segment's opposite end and accepts a
   typed length; the node cannot pass the opposite node; at 0 the corner reaches it, and Apply
@@ -284,6 +268,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X16** a rectangle and a polygon keep their figure: dragging a side midpoint collapses a
+  rectangle to a line, a rotated rectangle turns into a parallelogram and a corner drag then yields
+  a width of thousands of millimetres. Expectation: a midpoint drag changes one extent and never
+  makes it zero, a rectangle keeps right angles and its axes at any angle, a corner drag stays in
+  the document range, and a figure edited along a side stops being that figure and becomes a plain
+  polyline. Owner decision: a midpoint crossing the opposite side clamps at a minimum extent of
+  1 mm instead of mirroring. Suspected cause: `move_rectangle_midpoint` refuses a non-positive half
+  but leaves a sliver; `rectangle_frame` never orthogonalises the axes and
+  `PathShape::fits(Rectangle)` only counts four lines; `move_rectangle_corner` does not clamp;
+  `rebuild` keeps the tag through an along-contour edit. Fix: orthonormalise the axes and require
+  right angles within a micrometre, clamp the midpoint at the minimum, clamp the corner, and drop
+  the tag on a topology change. Tests: a rotated rectangle keeps right angles through a midpoint
+  drag; a midpoint drag never yields zero; a corner drag cannot leave the range; an along-contour
+  edit drops the tag; a tagged rectangle that is not right-angled is a load error.
+  `bf07643`
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs, crates/ui/src/contour_grips.rs`
 
 - `[x]` **X14** the grip set matches the figure: a regular polygon shows a phantom node outside its
   first side whose drag cannot be finished, and dragging a circle's rim deforms one quarter until
