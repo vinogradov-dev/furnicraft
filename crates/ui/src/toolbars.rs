@@ -16,20 +16,26 @@ use furnicraft_engine::PrimitiveKind;
 use furnicraft_model::Id;
 use furnicraft_units::Length;
 
-use crate::contour_edit::DrawTool;
+use crate::contour_edit::{DEFAULT_POLYGON_SIDES, DrawTool};
 use crate::icons::{self, Icon, Theme, tool_hint};
 
 /// Edge length of a new cube, in millimetres; also the value the field starts with.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
 /// Height of a new extrusion, in millimetres; also the value the field starts with.
-pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 18;
+pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 100;
 
 /// One action a toolbar panel asks the editor to run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolAction {
-    /// Starts a drawing tool.
-    Draw(DrawTool),
+    /// Starts a drawing tool; `sides` is the regular polygon's side count and is ignored by the
+    /// other tools.
+    Draw {
+        /// Which tool to arm.
+        tool: DrawTool,
+        /// The side count the polygon tool uses.
+        sides: u32,
+    },
     /// Creates a panel at the scene root.
     CreatePanel,
     /// Creates an assembly at the scene root.
@@ -66,9 +72,32 @@ pub enum ToolAction {
     ToggleGrid,
 }
 
-/// The drawing tools of the Contour panel, in button order.
-pub const CONTOUR_TOOLS: [DrawTool; 5] =
-    [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::Rectangle, DrawTool::Circle];
+/// The open-ended half of the drawing tools, in button order.
+pub const DRAW_TOOLS: [DrawTool; 4] = [DrawTool::Line, DrawTool::Polyline, DrawTool::Arc, DrawTool::ArcFromCenter];
+
+/// The closed figures, in button order: each produces a ring without a close action.
+pub const SHAPE_TOOLS: [DrawTool; 6] = [
+    DrawTool::Rectangle,
+    DrawTool::RectangleFromCenter,
+    DrawTool::RectangleFromCenterDirected,
+    DrawTool::Circle,
+    DrawTool::CircleThreePoints,
+    DrawTool::RegularPolygon,
+];
+
+/// Every drawing tool, in ribbon order: the draw group then the shapes.
+pub const CONTOUR_TOOLS: [DrawTool; 10] = [
+    DrawTool::Line,
+    DrawTool::Polyline,
+    DrawTool::Arc,
+    DrawTool::ArcFromCenter,
+    DrawTool::Rectangle,
+    DrawTool::RectangleFromCenter,
+    DrawTool::RectangleFromCenterDirected,
+    DrawTool::Circle,
+    DrawTool::CircleThreePoints,
+    DrawTool::RegularPolygon,
+];
 
 /// The tool that owns the next pointer events, drawn as pressed on the strip.
 ///
@@ -102,29 +131,59 @@ pub fn tool_activity(drawing: Option<DrawTool>, primitive: Option<PrimitiveKind>
 /// selection sits there.
 fn is_armed(activity: Option<ToolActivity>, action: ToolAction) -> bool {
     match (activity, action) {
-        (Some(ToolActivity::Draw(armed)), ToolAction::Draw(clicked)) => armed == clicked,
+        (Some(ToolActivity::Draw(armed)), ToolAction::Draw { tool, .. }) => armed == tool,
         (Some(ToolActivity::Primitive(armed)), ToolAction::CreatePrimitive { kind, .. }) => armed == kind,
         _ => false,
     }
+}
+
+/// One key that starts a drawing tool, with the modifier it needs.
+///
+/// A shifted letter is the alternate of the same family: `A` draws an arc through points and
+/// `Shift+A` an arc from its centre, `R` a rectangle from two corners and `Shift+R` one from its
+/// centre.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shortcut {
+    /// The key that starts the tool.
+    pub key: egui::Key,
+    /// Whether Shift must be held with it.
+    pub shift: bool,
 }
 
 /// The shortcut that starts a drawing tool.
 ///
 /// The letters are free in the viewport (`F` frames, `O` toggles the projection, `G` the grid), so
 /// the tooltip and the key handler can share one table.
-pub const fn shortcut(tool: DrawTool) -> Option<egui::Key> {
-    match tool {
-        DrawTool::Line => Some(egui::Key::L),
-        DrawTool::Polyline => Some(egui::Key::P),
-        DrawTool::Arc => Some(egui::Key::A),
-        DrawTool::Rectangle => Some(egui::Key::R),
-        DrawTool::Circle => Some(egui::Key::C),
-    }
+pub const fn shortcut(tool: DrawTool) -> Option<Shortcut> {
+    let (key, shift) = match tool {
+        DrawTool::Line => (egui::Key::L, false),
+        DrawTool::Polyline => (egui::Key::P, false),
+        DrawTool::Arc => (egui::Key::A, false),
+        DrawTool::ArcFromCenter => (egui::Key::A, true),
+        DrawTool::Rectangle => (egui::Key::R, false),
+        DrawTool::RectangleFromCenter => (egui::Key::R, true),
+        DrawTool::RectangleFromCenterDirected => (egui::Key::D, true),
+        DrawTool::Circle => (egui::Key::C, false),
+        DrawTool::CircleThreePoints => (egui::Key::C, true),
+        DrawTool::RegularPolygon => (egui::Key::N, false),
+    };
+    Some(Shortcut { key, shift })
 }
 
 /// The label of a tool's shortcut, for the button hint.
-pub fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
-    shortcut(tool).map(egui::Key::name)
+pub const fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
+    match tool {
+        DrawTool::Line => Some("L"),
+        DrawTool::Polyline => Some("P"),
+        DrawTool::Arc => Some("A"),
+        DrawTool::ArcFromCenter => Some("Shift+A"),
+        DrawTool::Rectangle => Some("R"),
+        DrawTool::RectangleFromCenter => Some("Shift+R"),
+        DrawTool::RectangleFromCenterDirected => Some("Shift+D"),
+        DrawTool::Circle => Some("C"),
+        DrawTool::CircleThreePoints => Some("Shift+C"),
+        DrawTool::RegularPolygon => Some("N"),
+    }
 }
 
 /// The strip's label for a drawing tool: its name plus the one gesture the tool does not show.
@@ -133,7 +192,7 @@ pub fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
 /// name of the object the tool creates, which stays [`DrawTool::label`].
 pub const fn strip_label(tool: DrawTool) -> &'static str {
     match tool {
-        DrawTool::Polyline => "Polyline · Alt+click for an arc",
+        DrawTool::Polyline => "Polyline · Tab line/arc · Alt ignores snaps",
         _ => tool.label(),
     }
 }
@@ -144,8 +203,13 @@ const fn tool_icon(tool: DrawTool) -> Icon {
         DrawTool::Line => icons::contour::LINE,
         DrawTool::Polyline => icons::contour::POLYLINE,
         DrawTool::Arc => icons::contour::ARC,
+        DrawTool::ArcFromCenter => icons::contour::ARC_CENTRE,
         DrawTool::Rectangle => icons::contour::RECTANGLE,
+        DrawTool::RectangleFromCenter => icons::contour::RECTANGLE_CENTRE,
+        DrawTool::RectangleFromCenterDirected => icons::contour::RECTANGLE_CENTRE_DIRECTED,
         DrawTool::Circle => icons::contour::CIRCLE,
+        DrawTool::CircleThreePoints => icons::contour::CIRCLE_THREE_POINTS,
+        DrawTool::RegularPolygon => icons::contour::POLYGON,
     }
 }
 
@@ -183,7 +247,7 @@ impl RibbonTab {
         match self {
             Self::Furniture | Self::Hardware => 0,
             Self::Model => 6,
-            Self::Sketch => 7,
+            Self::Sketch => 13,
             Self::Scene => 4,
             Self::View => 3,
         }
@@ -215,15 +279,15 @@ impl RibbonTab {
 
     /// The groups this tab draws, in row order.
     ///
-    /// The tab-to-action rubric of the design: *Sketch* holds the five drawing tools and the close
-    /// and cancel for a running draft, *Model* the three primitives and the extrusion, *Scene* the
-    /// four scene creations, *View* the framing, the projection and the grid. *Furniture* and
-    /// *Hardware* hold no action yet, so they have no group and are never drawn.
+    /// The tab-to-action rubric of the design: *Sketch* holds the drawing tools, the closed figures
+    /// and the close and cancel for a running draft, *Model* the three primitives and the extrusion,
+    /// *Scene* the four scene creations, *View* the framing, the projection and the grid.
+    /// *Furniture* and *Hardware* hold no action yet, so they have no group and are never drawn.
     pub const fn groups(self) -> &'static [ToolGroup] {
         match self {
             Self::Furniture | Self::Hardware => &[],
             Self::Model => &[ToolGroup::Primitives, ToolGroup::Bodies],
-            Self::Sketch => &[ToolGroup::Draw, ToolGroup::Draft],
+            Self::Sketch => &[ToolGroup::Draw, ToolGroup::Shapes, ToolGroup::Draft],
             Self::Scene => &[ToolGroup::Scene],
             Self::View => &[ToolGroup::View, ToolGroup::Display],
         }
@@ -233,8 +297,10 @@ impl RibbonTab {
 /// One captioned group of tools inside a tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolGroup {
-    /// The drawing tools.
+    /// The open-ended drawing tools.
     Draw,
+    /// The closed figures: rectangles, circles and the polygon.
+    Shapes,
     /// Close and cancel for a running draft.
     Draft,
     /// Solid primitives and their size.
@@ -251,13 +317,14 @@ pub enum ToolGroup {
 
 impl ToolGroup {
     /// Every group, in the order the asset tree names them.
-    pub const ALL: [Self; 7] =
-        [Self::Draw, Self::Draft, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Display];
+    pub const ALL: [Self; 8] =
+        [Self::Draw, Self::Shapes, Self::Draft, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Display];
 
     /// The caption drawn under the group's row, in capitals.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Draw => "Draw",
+            Self::Shapes => "Shapes",
             Self::Draft => "Draft",
             Self::Primitives => "Primitives",
             Self::Bodies => "Bodies",
@@ -270,7 +337,7 @@ impl ToolGroup {
     /// The icon theme this group draws from.
     pub const fn theme(self) -> Theme {
         match self {
-            Self::Draw | Self::Draft => Theme::Contour,
+            Self::Draw | Self::Shapes | Self::Draft => Theme::Contour,
             Self::Primitives => Theme::Primitives,
             Self::Bodies => Theme::Bodies,
             Self::Scene => Theme::Scene,
@@ -286,6 +353,7 @@ pub struct Toolbars {
     tab: RibbonTab,
     primitive_size: String,
     extrude_height: String,
+    polygon_sides: String,
 }
 
 impl Default for Toolbars {
@@ -295,6 +363,7 @@ impl Default for Toolbars {
             tab: RibbonTab::Sketch,
             primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(),
             extrude_height: DEFAULT_EXTRUDE_HEIGHT_MM.to_string(),
+            polygon_sides: DEFAULT_POLYGON_SIDES.to_string(),
         }
     }
 }
@@ -392,6 +461,40 @@ impl Toolbars {
     pub fn set_extrude_height_text(&mut self, text: impl Into<String>) {
         self.extrude_height = text.into();
     }
+
+    /// The typed regular polygon side count.
+    pub fn polygon_sides_text(&self) -> &str {
+        &self.polygon_sides
+    }
+
+    /// The side field, so the group can edit the text in place.
+    pub fn polygon_sides_mut(&mut self) -> &mut String {
+        &mut self.polygon_sides
+    }
+
+    /// The typed side count, clamped to the range the model accepts.
+    ///
+    /// A field the user is halfway through typing is never a reason to disable the tool: the value
+    /// falls back to [`DEFAULT_POLYGON_SIDES`] so a cleared field still draws a hexagon.
+    pub fn polygon_sides(&self) -> u32 {
+        clamp_polygon_sides(self.polygon_sides.trim().parse().unwrap_or(DEFAULT_POLYGON_SIDES))
+    }
+
+    /// Replaces the typed side count.
+    pub fn set_polygon_sides_text(&mut self, text: impl Into<String>) {
+        self.polygon_sides = text.into();
+    }
+}
+
+/// Clamps a side count to the range `Path::regular_polygon` accepts.
+const fn clamp_polygon_sides(sides: u32) -> u32 {
+    if sides < furnicraft_model::MIN_POLYGON_SIDES {
+        furnicraft_model::MIN_POLYGON_SIDES
+    } else if sides > furnicraft_model::MAX_POLYGON_SIDES {
+        furnicraft_model::MAX_POLYGON_SIDES
+    } else {
+        sides
+    }
 }
 
 /// The view state the ribbon reads from the shell: how the camera and the work plane are set.
@@ -428,6 +531,11 @@ pub struct RibbonOutcome {
     pub started_drawing: bool,
     /// The view action the ribbon asked for, if any.
     pub view: Option<RibbonViewAction>,
+    /// The body a path extrusion just created, with the height it used.
+    ///
+    /// The shell starts the pull arrow on that body; the height is session view state, so the next
+    /// extrusion starts here instead of at the default.
+    pub extruded: Option<(Id, Length)>,
 }
 
 /// What the ribbon reads from the scene, the pointer and the view camera while it draws.
@@ -649,8 +757,25 @@ fn show_group_row(
         context;
     match group {
         ToolGroup::Draw => {
-            for tool in CONTOUR_TOOLS {
-                let action = ToolAction::Draw(tool);
+            for tool in DRAW_TOOLS {
+                let action = ToolAction::Draw { tool, sides: state.polygon_sides() };
+                let on = is_armed(active, action);
+                let caption = tool.label();
+                let hint = tool_hint(strip_label(tool), shortcut_label(tool));
+                if icons::ribbon_button(ui, cell, tool_icon(tool), caption, &hint, true, on).clicked() {
+                    actions.push(action);
+                }
+            }
+        }
+        ToolGroup::Shapes => {
+            // Every figure but the polygon takes exactly what the ribbon shows; the polygon reads
+            // the side field, so the field sits next to it as part of the same group.
+            let sides = state.polygon_sides();
+            for tool in SHAPE_TOOLS {
+                if tool == DrawTool::RegularPolygon {
+                    labelled_field(ui, "Sides", "3–128", state.polygon_sides_mut());
+                }
+                let action = ToolAction::Draw { tool, sides };
                 let on = is_armed(active, action);
                 let caption = tool.label();
                 let hint = tool_hint(strip_label(tool), shortcut_label(tool));
@@ -675,7 +800,8 @@ fn show_group_row(
                 actions.push(ToolAction::CloseDrawing);
             }
             let cancel = draft.is_some();
-            let cancel_hint = tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Esc"));
+            let cancel_hint =
+                tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Ctrl+Esc"));
             if icons::ribbon_button(ui, cell, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
                 && cancel
             {
@@ -683,7 +809,7 @@ fn show_group_row(
             }
         }
         ToolGroup::Primitives => {
-            labelled_field(ui, "Size", state.primitive_size_mut());
+            labelled_field(ui, "Size", "mm", state.primitive_size_mut());
             let size = state.primitive_size();
             let enabled = size.is_ok();
             let armed_size = size.as_ref().ok().copied();
@@ -708,7 +834,7 @@ fn show_group_row(
             }
         }
         ToolGroup::Bodies => {
-            labelled_field(ui, "Height", state.extrude_height_mut());
+            labelled_field(ui, "Height", "mm", state.extrude_height_mut());
             let height = state.extrude_height();
             // Only a closed path encloses a ring, so the button is off for anything else and the
             // hint names what is missing: a selection, a path, a closed chain, or a usable height.
@@ -786,11 +912,11 @@ fn projection_button(perspective: bool) -> (Icon, &'static str) {
 /// The field is one control in the group's own row, not a separate band: a primitive's size and an
 /// extrusion's height read as part of the tool they configure, which is what the owner's reference
 /// does and the floating row did not.
-fn labelled_field(ui: &mut Ui, label: &str, text: &mut String) {
+fn labelled_field(ui: &mut Ui, label: &str, hint: &str, text: &mut String) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.label(egui::RichText::new(label).size(10.5).color(crate::theme::text_dim(ui)));
-        ui.add(TextEdit::singleline(text).desired_width(64.0).hint_text("mm"));
+        ui.add(TextEdit::singleline(text).desired_width(64.0).hint_text(hint));
     });
 }
 
@@ -1061,9 +1187,9 @@ mod tests {
         let size = Length::from_millimetres(DEFAULT_PRIMITIVE_SIZE_MM).expect("default size");
         let cube = ToolAction::CreatePrimitive { kind: PrimitiveKind::Cube, size };
         let cases = [
-            (None, ToolAction::Draw(DrawTool::Line), false),
-            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw(DrawTool::Line), true),
-            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw(DrawTool::Circle), false),
+            (None, ToolAction::Draw { tool: DrawTool::Line, sides: 6 }, false),
+            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw { tool: DrawTool::Line, sides: 6 }, true),
+            (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::Draw { tool: DrawTool::Circle, sides: 6 }, false),
             (Some(ToolActivity::Draw(DrawTool::Line)), ToolAction::CreatePanel, false),
             (Some(ToolActivity::Draw(DrawTool::Line)), cube, false),
             (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), cube, true),
@@ -1115,7 +1241,7 @@ mod tests {
         state.set_tab(RibbonTab::Model);
         let (_, labels, _) = draw(&mut state, full_context());
         assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
     }
 
     #[test]
@@ -1223,14 +1349,22 @@ mod tests {
 
     #[test]
     fn every_tool_has_a_distinct_shortcut() {
+        // A shifted letter is a different shortcut from the bare one, so the table is unique on
+        // the pair and not on the key alone.
         let mut seen = std::collections::HashSet::new();
         for tool in CONTOUR_TOOLS {
             let key = shortcut(tool).expect("every drawing tool has a key");
-            assert!(seen.insert(key.name()), "{} reuses a shortcut", key.name());
-            assert_eq!(shortcut_label(tool), Some(key.name()));
+            let name = match key.shift {
+                true => format!("Shift+{}", key.key.name()),
+                false => key.key.name().to_owned(),
+            };
+            assert!(seen.insert(name.clone()), "{name} is reused by {}", tool.label());
+            assert_eq!(shortcut_label(tool), Some(name.as_str()));
         }
-        assert_eq!(shortcut(DrawTool::Line).map(egui::Key::name), Some("L"));
-        assert_eq!(shortcut(DrawTool::Rectangle).map(egui::Key::name), Some("R"));
+        assert_eq!(shortcut(DrawTool::Line), Some(Shortcut { key: egui::Key::L, shift: false }));
+        assert_eq!(shortcut(DrawTool::Rectangle), Some(Shortcut { key: egui::Key::R, shift: false }));
+        assert_eq!(shortcut(DrawTool::RectangleFromCenter), Some(Shortcut { key: egui::Key::R, shift: true }));
+        assert_eq!(shortcut(DrawTool::RegularPolygon), Some(Shortcut { key: egui::Key::N, shift: false }));
     }
 
     #[test]
@@ -1278,13 +1412,13 @@ mod tests {
     #[test]
     fn every_tab_of_the_ribbon_is_counted() {
         // A tab's column count drives the cell, so a tab that undercounts would draw past its share.
-        assert_eq!(RibbonTab::Sketch.columns(), 7, "five drawing tools and the draft pair");
+        assert_eq!(RibbonTab::Sketch.columns(), 13, "four open tools, six figures, the side field and the draft pair");
         assert_eq!(RibbonTab::Model.columns(), 6, "three primitives, the height field and the extrusion");
         assert_eq!(RibbonTab::Scene.columns(), 4);
         assert_eq!(RibbonTab::View.columns(), 3);
         assert_eq!(RibbonTab::Furniture.columns(), 0, "an empty tab never reaches the body");
         assert_eq!(RibbonTab::Hardware.columns(), 0);
-        assert_eq!(RibbonTab::Sketch.groups().len(), 2, "the Sketch tab draws two groups");
+        assert_eq!(RibbonTab::Sketch.groups().len(), 3, "the Sketch tab draws draw, shapes and draft");
     }
 
     /// Counts the painted rects filled with `fill`, the selection fill of a pressed button.

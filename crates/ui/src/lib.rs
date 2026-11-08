@@ -17,6 +17,7 @@ mod camera_card;
 mod command;
 mod container_card;
 mod contour_edit;
+mod contour_grips;
 pub mod display;
 pub mod home;
 pub mod icons;
@@ -43,22 +44,25 @@ use furnicraft_engine::node_cmds::{
     ASSEMBLY_CREATE_ID, NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID,
     NODE_UNGROUP_ID,
 };
-use furnicraft_engine::object_cmds::{OBJECT_EXTRUDE_CREATE_ID, OBJECT_PRIMITIVE_CREATE_ID};
+use furnicraft_engine::object_cmds::{
+    OBJECT_EXTRUDE_HEIGHT_SET_ID, OBJECT_PATH_EXTRUDE_ID, OBJECT_PRIMITIVE_CREATE_ID,
+};
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup,
-    NodeUngroup, ObjectExtrudeCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
+    NodeUngroup, ObjectExtrudeHeightSet, ObjectPathExtrude, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, Id, LightKind, PanelNominalSize, Path, PathCorner, Placement,
-    Project,
+    CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, PanelNominalSize, Path,
+    PathCorner, Placement, Project,
 };
 use furnicraft_units::Length;
 
 use crate::camera_card::CameraCard;
 use crate::command::{dispatch, json};
 use crate::container_card::{ContainerAction, ContainerCard};
+use crate::contour_edit::DEFAULT_POLYGON_SIDES;
 use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
 use crate::object_card::{ObjectAction, ObjectCard};
@@ -70,6 +74,7 @@ use crate::scene_tree::{Selection, TreeAction};
 use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
+pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
@@ -281,19 +286,46 @@ impl Editor {
         segment: ContourSegmentId,
         point: [Length; 2],
     ) -> Result<(), ContourEditError> {
-        self.contour_edit_move_corner_at(PathCorner::Start(segment), point)
+        self.contour_edit_move_corner_at(PathCorner::Start(segment), point, CornerMove::Free)
     }
 
-    /// Moves the path corner named by `corner` of the working copy.
+    /// Moves the path corner named by `corner` of the working copy, following `motion`.
     pub fn contour_edit_move_corner_at(
         &mut self,
         corner: PathCorner,
         point: [Length; 2],
+        motion: CornerMove,
     ) -> Result<(), ContourEditError> {
         let Some(edit) = self.contour_edit.as_mut() else {
             return Err(ContourEditError::UnknownSegment { segment: corner.segment() });
         };
-        edit.move_corner_at(corner, point)
+        edit.move_corner_at(corner, point, motion)
+    }
+
+    /// Drags one grip of the working copy, following the motion the drag resolved.
+    pub fn contour_edit_drag_grip(
+        &mut self,
+        grip: ContourGrip,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::Untagged);
+        };
+        edit.drag_grip(grip, point, motion)
+    }
+
+    /// Applies a number typed at one grip of the working copy.
+    pub fn contour_edit_set_grip_value(&mut self, grip: ContourGrip, value: GripValue) -> Result<(), ContourEditError> {
+        let Some(edit) = self.contour_edit.as_mut() else {
+            return Err(ContourEditError::Untagged);
+        };
+        edit.set_grip_value(grip, value)
+    }
+
+    /// The current value of one grip, for a field that follows a drag.
+    pub fn contour_edit_grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
+        self.contour_edit.as_ref()?.grip_value(grip)
     }
 
     /// Splits one side of the working copy and returns the new segment id.
@@ -339,15 +371,40 @@ impl Editor {
     /// Starts an empty drawing draft with `tool` and leaves the other pointer modes.
     ///
     /// A running draft is never replaced silently; the caller ends or commits it first. Returns
-    /// whether the draft started.
+    /// whether the draft started. The regular polygon uses the default side count; every other
+    /// tool ignores the count, so this is the plain "start" the key handler calls.
     pub fn start_drawing(&mut self, tool: DrawTool) -> bool {
+        self.start_drawing_with(tool, DEFAULT_POLYGON_SIDES)
+    }
+
+    /// Starts an empty drawing draft with `tool` and the regular polygon's side count.
+    ///
+    /// The count is clamped by [`DrawDraft::with_sides`], so a ribbon field can pass anything and
+    /// the document still receives a polygon it accepts.
+    pub fn start_drawing_with(&mut self, tool: DrawTool, sides: u32) -> bool {
         if self.drawing.is_some() {
             return false;
         }
         self.mesh_edit = None;
         self.contour_edit = None;
-        self.drawing = Some(DrawDraft::new(tool));
+        self.drawing = Some(DrawDraft::with_sides(tool, sides));
         true
+    }
+
+    /// The regular polygon side count the ribbon field holds.
+    ///
+    /// The key handler starts a polygon with the same count the ribbon would, so a keyboard
+    /// shortcut and a button click never build different figures.
+    pub fn polygon_sides(&self) -> u32 {
+        self.toolbars.polygon_sides()
+    }
+
+    /// Flips the running polyline between straight and arc input.
+    ///
+    /// Returns the mode after the call, or `None` when no draft is running. Other tools have no
+    /// second mode, so the mode they report stays false.
+    pub fn toggle_drawing_arc_mode(&mut self) -> Option<bool> {
+        self.drawing.as_mut().map(DrawDraft::toggle_arc_mode)
     }
 
     /// Appends a work-plane point to the running draft as a straight segment.
@@ -370,12 +427,13 @@ impl Editor {
         self.drawing.as_mut().is_some_and(DrawDraft::undo)
     }
 
-    /// Commits the running draft as one path object and drops it.
+    /// Commits the running draft as one path object and opens it for editing.
     ///
     /// The drawing lands in the armed container, or at the scene root like every other creation
     /// tool, and is placed on `placement`, which maps the work plane onto the object's local XY. The
-    /// new node becomes the selection, so the tool ends with what it just drew visible in the
-    /// inspector. A refused path leaves the draft and the selection untouched.
+    /// new node becomes the selection and immediately enters contour edit mode with its grips, so
+    /// the figure the user just drew can be reshaped without a second click. Escape or Enter leaves
+    /// that mode. A refused path leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
@@ -388,6 +446,9 @@ impl Editor {
         // A deliberate selection also counts as the first show, so the tree does not replace the
         // freshly drawn node with the first panel on the next frame.
         self.initialized = true;
+        // The new node is selected and editable, so the drawing hands straight over to the grips;
+        // a tool that somehow produced a node without a path simply stays out of edit mode.
+        self.start_contour_edit(session.project(), ContourTarget::Path(object));
         Ok(DrawnPath { object, tool })
     }
 
@@ -569,8 +630,8 @@ impl Editor {
         let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
-                ToolAction::Draw(tool) => {
-                    if !self.start_drawing(tool) {
+                ToolAction::Draw { tool, sides } => {
+                    if !self.start_drawing_with(tool, sides) {
                         return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
                     }
                     outcome.started_drawing = true;
@@ -580,7 +641,10 @@ impl Editor {
                 ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(kind, size)?,
                 ToolAction::CreateCamera => self.create_camera(session, target)?,
                 ToolAction::CreateLight => self.create_light(session, target)?,
-                ToolAction::ExtrudePath { object, height } => self.extrude_path(session, object, height)?,
+                ToolAction::ExtrudePath { object, height } => {
+                    self.extrude_path(session, object, height)?;
+                    outcome.extruded = Some((object, height));
+                }
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
                 ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
                 ToolAction::CancelDrawing => self.cancel_drawing(),
@@ -679,23 +743,42 @@ impl Editor {
         Ok(())
     }
 
-    /// Extrudes a selected path into a body in the path's own frame.
+    /// Extrudes a selected path into the body that owns it, in place.
     ///
     /// Only a closed path encloses a ring, so an open one is refused with the reason from
-    /// `Path::to_contour` before a command runs. The body is a sibling of the path with the path's
-    /// placement, because the ring is stored in the path's local XY; the path stays so the user can
-    /// extrude again or edit the drawing.
+    /// `Path::to_contour` before a command runs. The node becomes the body and keeps its id, name,
+    /// placement and pivot: the drawing is not left behind as a second object, and the selection
+    /// stays on the one node the user was editing. A live contour edit of that node ends here: the
+    /// node is a body now, and its pull arrow would compete with the corner grips for the pointer.
     fn extrude_path(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
-        let project = session.project();
-        let path = project.object_path(object).map_err(|error| error.to_string())?;
-        let contour = path.to_contour().map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
-        let parent = project.parent_of(object).unwrap_or(project.root().id());
-        let placement = project.node(object).map_or(Placement::IDENTITY, |node| node.placement());
-        let name = project.object(object).map_or_else(|| "Body".to_owned(), |object| format!("{} body", object.name()));
-        let params = json(&ObjectExtrudeCreate { parent, name, contour, height, placement })?;
-        let outcome = dispatch(session, OBJECT_EXTRUDE_CREATE_ID, &params)?;
-        self.select_created(outcome.created_id());
+        session
+            .project()
+            .object_path(object)
+            .map_err(|error| error.to_string())?
+            .to_contour()
+            .map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
+        let params = json(&ObjectPathExtrude { object, height })?;
+        dispatch(session, OBJECT_PATH_EXTRUDE_ID, &params)?;
+        self.end_contour_edit();
+        self.select_node(Some(object));
         Ok(())
+    }
+
+    /// Sets one body's extrusion height and remembers it as the next default.
+    ///
+    /// The height is session view state, not document data: the ribbon field carries it into the
+    /// next extrusion, while the document only ever sees the command. A refused height leaves both
+    /// the document and the field untouched.
+    pub fn set_extrude_height(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
+        let params = json(&ObjectExtrudeHeightSet { object, height })?;
+        dispatch(session, OBJECT_EXTRUDE_HEIGHT_SET_ID, &params)?;
+        self.toolbars.set_extrude_height_text(height.to_string());
+        Ok(())
+    }
+
+    /// The height the ribbon will hand the next extrusion.
+    pub fn extrude_height_text(&self) -> &str {
+        self.toolbars.extrude_height_text()
     }
 
     /// Dispatches `camera.create`.
@@ -1286,6 +1369,11 @@ mod tests {
         assert_eq!(drawn.tool, DrawTool::Rectangle);
         assert!(editor.drawing().is_none(), "the tool ends with the commit");
         assert_eq!(editor.selected_nodes(), [drawn.object], "the new node is selected");
+        assert_eq!(
+            editor.contour_edit().map(ContourEdit::target),
+            Some(ContourTarget::Path(drawn.object)),
+            "the committed figure opens its own edit mode"
+        );
         assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
 
         let path = session.project().object_path(drawn.object).expect("a path object");
@@ -1311,6 +1399,38 @@ mod tests {
             .expect("create the assembly")
             .created_id()
             .expect("the assembly id")
+    }
+
+    #[test]
+    fn every_new_tool_commits_its_path_and_opens_the_edit() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        let cases: [(DrawTool, &[(i64, i64)]); 5] = [
+            (DrawTool::ArcFromCenter, &[(0, 0), (50, 0), (0, 50)]),
+            (DrawTool::RectangleFromCenter, &[(0, 0), (60, 40)]),
+            (DrawTool::RectangleFromCenterDirected, &[(0, 0), (50, 0), (40, 30)]),
+            (DrawTool::CircleThreePoints, &[(0, 0), (100, 0), (50, 80)]),
+            (DrawTool::RegularPolygon, &[(0, 0), (80, 0)]),
+        ];
+        for (tool, points) in cases {
+            let mut editor = Editor::new();
+            assert!(editor.start_drawing_with(tool, 6), "{} starts", tool.label());
+            for point in points {
+                editor.drawing_point([mm(point.0), mm(point.1)]).expect("a tool point");
+            }
+            let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("the figure commits");
+            assert_eq!(drawn.tool, tool);
+            let path = session.project().object_path(drawn.object).expect("a path object");
+            assert_eq!(path.is_closed(), tool.is_closed(), "{} keeps its closure", tool.label());
+            assert_eq!(
+                editor.contour_edit().map(ContourEdit::target),
+                Some(ContourTarget::Path(drawn.object)),
+                "{} opens its edit mode",
+                tool.label()
+            );
+            editor.end_contour_edit();
+        }
     }
 
     #[test]
@@ -1561,28 +1681,54 @@ mod tests {
     }
 
     #[test]
-    fn the_extrude_action_turns_a_closed_path_into_a_body() {
+    fn the_extrude_action_turns_a_closed_path_into_the_body_that_owns_it() {
         let (project, path) = path_project(true);
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
         editor.select_node(Some(path));
         let height = Length::from_millimetres(18).expect("height");
+        let children_before = session.project().root().children().len();
 
         editor.extrude_path(&mut session, path, height).expect("extrude the path");
-        let body = editor.selected_node().expect("the new body is selected");
-        let object = session.project().object(body).expect("object");
-        assert_eq!(object.name(), "Drawing body");
+        assert_eq!(editor.selected_node(), Some(path), "the node becomes the body in place");
+        let object = session.project().object(path).expect("object");
+        assert_eq!(object.name(), "Drawing", "the node keeps its name");
         let constructive = object.geometry().as_constructive().expect("a constructive body");
         assert_eq!(constructive.height(), Some(height));
-        assert_eq!(session.project().parent_of(body), session.project().parent_of(path));
-        assert!(session.project().object_path(path).is_ok(), "the drawing stays so it can be extruded again");
+        assert!(constructive.path().is_closed(), "the body owns the closed drawing");
+        assert_eq!(session.project().root().children().len(), children_before, "no sibling body is left behind");
+        assert!(session.project().object_path(path).is_err(), "the drawing is the body now");
         let revision = session.project().revision();
-        editor.extrude_path(&mut session, path, height).expect("extrude the path");
-        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        assert!(editor.extrude_path(&mut session, path, height).is_err(), "a body is not extruded a second time");
+        assert_eq!(session.project().revision(), revision, "the refused extrusion changes nothing");
     }
 
     #[test]
-    fn one_undo_removes_the_body_and_keeps_the_drawing() {
+    fn a_pulled_height_becomes_the_next_extrusions_default() {
+        let (project, path) = path_project(true);
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        editor.select_node(Some(path));
+        editor
+            .extrude_path(&mut session, path, Length::from_millimetres(100).expect("height"))
+            .expect("extrude the path");
+        assert_eq!(editor.extrude_height_text(), "100", "the ribbon starts at the default");
+
+        let height = Length::from_millimetres(240).expect("height");
+        editor.set_extrude_height(&mut session, path, height).expect("raise the body");
+        assert_eq!(editor.extrude_height_text(), "240 mm", "the next extrusion starts at the pulled height");
+        let body =
+            session.project().object(path).and_then(|object| object.geometry().as_constructive()).expect("a body");
+        assert_eq!(body.height(), Some(height));
+
+        let revision = session.project().revision();
+        assert!(editor.set_extrude_height(&mut session, path, Length::ZERO).is_err(), "a zero height is refused");
+        assert_eq!(session.project().revision(), revision, "a refused height changes nothing");
+        assert_eq!(editor.extrude_height_text(), "240 mm", "a refused height leaves the field alone");
+    }
+
+    #[test]
+    fn one_undo_restores_the_drawing_a_body_came_from() {
         let (project, path) = path_project(true);
         let mut session = Session::with_catalog(project, sample_catalog());
         let mut editor = Editor::new();
@@ -1590,12 +1736,10 @@ mod tests {
         editor
             .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"))
             .expect("extrude the path");
-        let body = editor.selected_node().expect("the new body is selected");
 
         undo(&mut session, &mut editor);
-        assert!(session.project().object(body).is_none(), "undo removes the body");
-        assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
-        assert!(session.project().object_path(path).is_ok(), "the drawing the body came from stays");
+        assert!(session.project().object_path(path).is_ok(), "undo restores the drawing");
+        assert_eq!(editor.selected_node(), Some(path), "the node never left the tree");
         assert!(!session.can_undo(), "one extrusion is one undo step");
     }
 
@@ -1636,8 +1780,8 @@ mod tests {
     #[test]
     fn the_extrude_height_field_parses_a_positive_length() {
         let mut state = crate::toolbars::Toolbars::new();
-        assert_eq!(state.extrude_height_text(), "18");
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(18).expect("height")));
+        assert_eq!(state.extrude_height_text(), "100");
+        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
         state.set_extrude_height_text("-2");
         assert!(state.extrude_height().is_err());
         state.set_extrude_height_text("thick");
@@ -1676,15 +1820,21 @@ mod tests {
     #[test]
     fn the_drawing_shortcuts_name_their_tool() {
         let cases = [
-            (egui::Key::L, DrawTool::Line),
-            (egui::Key::P, DrawTool::Polyline),
-            (egui::Key::A, DrawTool::Arc),
-            (egui::Key::R, DrawTool::Rectangle),
-            (egui::Key::C, DrawTool::Circle),
+            (egui::Key::L, false, DrawTool::Line),
+            (egui::Key::P, false, DrawTool::Polyline),
+            (egui::Key::A, false, DrawTool::Arc),
+            (egui::Key::A, true, DrawTool::ArcFromCenter),
+            (egui::Key::R, false, DrawTool::Rectangle),
+            (egui::Key::R, true, DrawTool::RectangleFromCenter),
+            (egui::Key::D, true, DrawTool::RectangleFromCenterDirected),
+            (egui::Key::C, false, DrawTool::Circle),
+            (egui::Key::C, true, DrawTool::CircleThreePoints),
+            (egui::Key::N, false, DrawTool::RegularPolygon),
         ];
         let mut editor = Editor::new();
-        for (key, tool) in cases {
-            assert_eq!(crate::toolbars::shortcut(tool), Some(key), "{} starts {}", key.name(), tool.label());
+        for (key, shift, tool) in cases {
+            let shortcut = crate::toolbars::Shortcut { key, shift };
+            assert_eq!(crate::toolbars::shortcut(tool), Some(shortcut), "{} starts {}", key.name(), tool.label());
             assert!(editor.start_drawing(tool));
             assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
             editor.cancel_drawing();

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=U task=U45 state=idle base=HEAD updated=2026-11-08
+STATE: milestone=M7 phase=A task=U45 state=idle base=HEAD updated=2026-11-08
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -11,8 +11,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 - M7 — objects and the scene file, after M6. `Container` is the only container kind, every node
   carries typed properties, a component is a marker rather than a node kind, and `FurnType` is a
   six-digit tree (ADRs 0034–0035). `Contour` is a closed ring of stable-id segments (ADR 0040,
-  schema 13); `Path` is the open or closed chain that `to_contour` turns into a ring, and a primitive
-  stores the parameters that built it (ADR 0054, schema 18) while its mesh is derived.
+  schema 13) with one-micrometre joints (ADR 0072); `Path` is the chain `to_contour` turns into a
+  ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an extrusion owns its
+  path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure shows its grips, a
+  corner moves freely or along the segment picked at the drag start, a grip keeps its figure (ADR
+  0075), and a fresh extrusion pulls its height from an arrow.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -20,12 +23,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   untouched node and a collapsed object keeps the shape the user saw (ADR 0053).
 - Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus eight
   point lights in watts with a fixed exposure and no tone mapper (ADR 0039).
-- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view, a projection toggle,
+- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view, a projection toggle
   and draw/pick/snap for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061):
   the projection button draws the view it is in, a creation lands at the scene root unless a
   container is armed, the armed tool draws pressed, the pole views look down their plane, a drawing
-  pivots on its own shape, a selected chain is a screen-space stroke, and every contour kind edits
-  through one draft.
+  pivots on its own shape, a selected chain is a screen-space stroke, every contour kind edits as one draft.
 - X1, X2 and X7 are fixed: a legal ring past the 1024-vertex cap follows the shape (ADR 0062), and
   a ribbon tool is one measured cell with an elided caption (ADR 0067). The icon pipeline was audited
   against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`): U27 rasterises each white master
@@ -42,23 +44,21 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   U43 made the five display styles real: `ShadingStyle` is frame data in `crates/scene` (ADR 0070),
   and the renderer draws visible edges, hidden edges, wireframe alone and translucent faces. X10 made
   those edges mean the form: `mesh_edges` drops a coplanar triangulation diagonal, so a box draws
-  twelve and a triangular body nine, and the full triangulation is a diagnostic switch beside the
-  style. The depth bias moved from the line shader onto the face pipeline, where a constant depth unit
-  stays distance-independent; the hidden-edge style is gated by a per-drawable stencil slot, so an
-  object shows its own inside but never the one behind it. U44 gives every floor-standing object a
-  soft contact shadow: a transparent ellipse derived from its solid bounds, frame data beside `grid`
-  (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes visibility and lock.
+  twelve and a triangular body nine; the full triangulation is a diagnostic switch beside the style.
+  The depth bias moved to the face pipeline, where a constant depth unit stays distance-independent,
+  and a per-drawable stencil slot gates hidden edges, so an object shows its own inside but never
+  the one behind it. U44 gives every floor-standing object a soft contact shadow: an ellipse from its
+  solid bounds, frame data beside `grid` (ADR 0071). U45–U48 queue the rest; ADR 0065 fixes
+  visibility and lock.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
   the three plan files: `updated=` is a real date no older than `base`, `task=` names the first
   unfinished task in `## Now` (P2–P3). Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U45 is next: several scenes open at once. The tab row holds one tab per open file, each with its own
-session, undo history, selection, camera and dirty marker, so activating a tab swaps the workspace
-without touching a `.fcs`. It moves `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo
-state into one `Document` per tab with its own renderer target: write the plan and get the owner's
-approval before code. Order: U45 → U48 → U46 (icons last) → U49.
+U55 landed: a fresh extrusion pulls its height with an arrow, a drag or a typed number writes one
+height command, and the last height becomes the next default. U45 → U48 → U46 → U49 are next.
+
 ## Index
 
 | File | Holds | Read when |

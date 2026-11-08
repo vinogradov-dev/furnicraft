@@ -15,18 +15,18 @@
 use eframe::egui::{self, Pos2, Response, Ui};
 use furnicraft_geom::{DVec2, DVec3};
 use furnicraft_model::{
-    Contour, ContourSegment, ContourSegmentEntry, ContourSegmentId, PathCorner, Placement, Project,
+    Contour, ContourSegment, ContourSegmentEntry, ContourSegmentId, CornerMove, PathCorner, Placement, Project,
 };
 use furnicraft_scene::Camera;
-use furnicraft_ui::{ContourDraft, ContourEdit, ContourTarget, Editor};
+use furnicraft_ui::{ContourDraft, ContourEdit, ContourGrip, ContourTarget, Editor, GripNumber, GripValue};
 use furnicraft_units::Length;
 
 use crate::gizmo_math::{ACTIVE_COLOR, distance_to_segment, length_from_millimetres, ray_plane, ray_to, screen_point};
 
-/// Radius of an unselected corner handle, in points.
-const CORNER_RADIUS: f32 = 4.5;
-/// Pointer distance that grabs a corner, in points.
-const CORNER_HIT_RADIUS: f32 = 9.0;
+/// Radius of an unselected grip handle, in points.
+const GRIP_RADIUS: f32 = 4.5;
+/// Pointer distance that grabs a grip, in points.
+const GRIP_HIT_RADIUS: f32 = 9.0;
 /// Pointer distance that picks a side for a split, in points.
 const SEGMENT_HIT_RADIUS: f32 = 7.0;
 /// Sampling tolerance for the painted ring, in micrometres.
@@ -35,47 +35,91 @@ const RING_TOLERANCE_MICROMETRES: f64 = 500.0;
 const SPLIT_MARGIN: f64 = 0.02;
 /// Maximum number of screen segments used to draw one arc.
 const MAX_ARC_STEPS: usize = 64;
+/// How far from the pointer the numeric field sits, in points.
+const NUMBER_OFFSET: egui::Vec2 = egui::vec2(18.0, 12.0);
 
 /// Colour of the ring the edit started from.
 const BASE_COLOR: egui::Color32 = egui::Color32::from_rgba_premultiplied(150, 150, 150, 160);
 /// Colour of the working copy.
 const DRAFT_COLOR: egui::Color32 = egui::Color32::from_rgb(120, 200, 255);
-/// Colour of an untouched corner handle.
-const CORNER_COLOR: egui::Color32 = egui::Color32::from_rgb(240, 240, 240);
+/// Colour of an untouched grip handle.
+const GRIP_COLOR: egui::Color32 = egui::Color32::from_rgb(240, 240, 240);
 
-/// One corner drag that is in progress.
+/// One grip drag that is in progress.
 #[derive(Clone, Copy, Debug)]
-struct CornerDrag {
+struct GripDrag {
     target: ContourTarget,
-    corner: PathCorner,
+    grip: ContourGrip,
+    /// The motion resolved once at the drag start: free, or along one named segment.
+    motion: CornerMove,
+}
+
+/// The numeric field that follows the cursor while a grip is dragged.
+#[derive(Clone, Debug)]
+struct NumericEntry {
+    grip: ContourGrip,
+    kind: GripNumber,
+    label: &'static str,
+    text: String,
+    /// The value the drag started from, which Escape restores.
+    start: Option<GripValue>,
+    pointer: Pos2,
+    /// Whether the field still has to ask for keyboard focus.
+    focus: bool,
+    /// Whether the user typed into the field, so a drag must not overwrite the text.
+    edited: bool,
+    error: Option<String>,
+}
+
+/// What the numeric field asked the shell to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NumericAction {
+    /// Apply the parsed number to the grip.
+    Apply(ContourGrip, GripValue),
+    /// Put the value the drag started from back.
+    Restore(ContourGrip, GripValue),
 }
 
 /// Pointer state of the contour gizmo; the working copy itself belongs to the editor.
 #[derive(Debug, Default)]
 pub(crate) struct ContourGizmo {
-    drag: Option<CornerDrag>,
-    hover_corner: Option<PathCorner>,
+    drag: Option<GripDrag>,
+    hover: Option<ContourGrip>,
     hover_segment: Option<ContourSegmentId>,
+    numeric: Option<NumericEntry>,
+    /// Whether a corner drag runs along the contour instead of freely.
+    along: bool,
 }
 
 impl ContourGizmo {
-    /// Drops every drag and hover state, for example when the mode ends.
+    /// Drops every drag, hover and numeric state, for example when the mode ends.
     pub(crate) fn reset(&mut self) {
         self.drag = None;
-        self.hover_corner = None;
+        self.hover = None;
         self.hover_segment = None;
+        self.numeric = None;
     }
 
-    /// Whether a corner is being dragged right now.
+    /// Whether a grip drag or its numeric field owns the keyboard right now.
     pub(crate) fn is_dragging(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.numeric.is_some()
+    }
+
+    /// Whether a corner drag follows the contour instead of moving freely.
+    pub(crate) fn along(&self) -> bool {
+        self.along
+    }
+
+    /// Switches between a free corner drag and one along the contour.
+    pub(crate) fn toggle_along(&mut self) {
+        self.along = !self.along;
     }
 
     /// The cursor the viewport should show while the mode is active.
     pub(crate) fn cursor(&self) -> egui::CursorIcon {
         if self.drag.is_some() {
             egui::CursorIcon::Grabbing
-        } else if self.hover_corner.is_some() {
+        } else if self.hover.is_some() {
             egui::CursorIcon::Grab
         } else if self.hover_segment.is_some() {
             egui::CursorIcon::PointingHand
@@ -86,9 +130,9 @@ impl ContourGizmo {
 
     /// Applies the pointer to the working copy; returns whether the draft changed.
     ///
-    /// The gizmo owns the left button while the mode is live: a drag moves the grabbed corner and a
+    /// The gizmo owns the left button while the mode is live: a drag moves the grabbed grip and a
     /// double-click splits the side under the pointer. A rejected edit leaves the draft at its last
-    /// valid shape, so a corner simply stops when the ring would become invalid.
+    /// valid shape, so a grip simply stops when the ring would become invalid.
     pub(crate) fn update(
         &mut self,
         response: &Response,
@@ -108,35 +152,60 @@ impl ContourGizmo {
         };
         let draft = edit.draft().clone();
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
-        let corner = pointer.and_then(|pointer| corner_at(camera, rect, placement, &draft, pointer));
-        let segment = pointer.and_then(|pointer| {
-            if corner.is_some() { None } else { segment_at(camera, rect, placement, &draft, pointer) }
-        });
-        self.hover_corner = corner;
+        let segment = pointer.and_then(|pointer| segment_at(camera, rect, placement, &draft, pointer));
+        let grip = pointer.and_then(|pointer| grip_at(camera, rect, placement, &draft, pointer, segment));
+        self.hover = grip;
         self.hover_segment = segment;
 
         let mut changed = false;
         if response.drag_started_by(egui::PointerButton::Primary) {
-            self.drag = corner.map(|corner| CornerDrag { target, corner });
+            self.drag = grip.map(|grip| GripDrag {
+                target,
+                grip,
+                motion: self.motion_for(camera, rect, placement, &draft, grip, pointer),
+            });
+            if let Some(drag) = self.drag
+                && let Some(pointer) = pointer
+            {
+                self.numeric = numeric_entry(&draft, drag.grip, pointer);
+            }
         }
         if let Some(drag) = self.drag {
             if drag.target != target {
                 self.drag = None;
-            } else if response.dragged_by(egui::PointerButton::Primary)
-                && let Some(local) =
-                    response.interact_pointer_pos().and_then(|pointer| local_point(pointer, rect, camera, placement))
-                && let Some(local) = project_arc_corner(&draft, drag.corner, local)
-                && let (Some(x), Some(y)) = (length_from_millimetres(local.x), length_from_millimetres(local.y))
-                && editor.contour_edit_move_corner_at(drag.corner, [x, y]).is_ok()
-            {
-                changed = true;
-            }
-            if response.drag_stopped_by(egui::PointerButton::Primary) {
-                self.drag = None;
+                self.numeric = None;
+            } else {
+                if response.dragged_by(egui::PointerButton::Primary)
+                    && let Some(pointer) = response.interact_pointer_pos()
+                    && let Some(local) = local_point(pointer, rect, camera, placement)
+                    && let Some(local) = self.dragged_point(&draft, drag, local)
+                    && let (Some(x), Some(y)) = (length_from_millimetres(local.x), length_from_millimetres(local.y))
+                    && editor.contour_edit_drag_grip(drag.grip, [x, y], drag.motion).is_ok()
+                {
+                    changed = true;
+                }
+                if let Some(entry) = &mut self.numeric
+                    && let Some(pointer) = pointer
+                {
+                    entry.pointer = pointer;
+                    if !entry.edited
+                        && let Some(value) = editor.contour_edit().and_then(|edit| edit.grip_value(entry.grip))
+                    {
+                        entry.text = value.text();
+                    }
+                }
+                if response.drag_stopped_by(egui::PointerButton::Primary) {
+                    self.drag = None;
+                }
             }
         }
 
+        // An arc curve under the pointer also offers a radius grip, but a double-click there still
+        // splits the arc: only a real handle blocks the split.
+        let synthetic = matches!(grip, Some(ContourGrip::ArcRadius(..)));
         if self.drag.is_none()
+            && self.numeric.is_none()
+            && (grip.is_none() || synthetic)
             && response.double_clicked_by(egui::PointerButton::Primary)
             && let Some(segment) = segment
             && let Some(pointer) = response.interact_pointer_pos()
@@ -152,32 +221,179 @@ impl ContourGizmo {
         Ok(changed)
     }
 
-    /// Paints the base shape, the working copy and the corner handles over the viewport image.
-    pub(crate) fn paint(&self, ui: &Ui, rect: egui::Rect, camera: Camera, project: &Project, edit: &ContourEdit) {
-        let Some(placement) = project.world_placement(edit.target().id()) else {
-            return;
+    /// The point a grip really receives, after the arc projection a free corner needs.
+    fn dragged_point(&self, draft: &ContourDraft, drag: GripDrag, local: DVec2) -> Option<DVec2> {
+        let ContourGrip::Corner(corner) = drag.grip else {
+            return Some(local);
         };
+        if matches!(drag.motion, CornerMove::Free) { project_arc_corner(draft, corner, local) } else { Some(local) }
+    }
+
+    /// The motion a drag takes, resolved once from the toggle and the junction under the pointer.
+    fn motion_for(
+        &self,
+        camera: Camera,
+        rect: egui::Rect,
+        placement: Placement,
+        draft: &ContourDraft,
+        grip: ContourGrip,
+        pointer: Option<Pos2>,
+    ) -> CornerMove {
+        if !self.along {
+            return CornerMove::Free;
+        }
+        let (ContourGrip::Corner(corner), Some(pointer)) = (grip, pointer) else {
+            return CornerMove::Free;
+        };
+        along_segment(camera, rect, placement, draft, corner, pointer)
+            .map(CornerMove::Along)
+            .unwrap_or(CornerMove::Free)
+    }
+
+    /// Paints the base shape, the working copy, the grips and the numeric field.
+    ///
+    /// The numeric field is an editable widget, so the frame returns the action Enter or Escape
+    /// asked for and the shell applies it after the paint borrow ends.
+    pub(crate) fn paint(
+        &mut self,
+        ui: &Ui,
+        rect: egui::Rect,
+        camera: Camera,
+        project: &Project,
+        edit: &ContourEdit,
+    ) -> Option<NumericAction> {
+        let placement = project.world_placement(edit.target().id())?;
         let painter = ui.painter().with_clip_rect(rect);
         if edit.is_dirty() {
             paint_draft(&painter, camera, rect, placement, edit.base(), egui::Stroke::new(1.0, BASE_COLOR));
         }
         paint_draft(&painter, camera, rect, placement, edit.draft(), egui::Stroke::new(2.0, DRAFT_COLOR));
-        for corner in corner_handles(edit.draft()) {
-            let Some(start) = corner_position(edit.draft(), corner) else {
+        let grips = edit.draft().grips();
+        for grip in &grips {
+            let Some(local) = edit.draft().grip_position(*grip) else {
                 continue;
             };
-            let world = placement.transform_point(local_world(start));
+            let world = placement.transform_point(local_world(local));
             let Some(position) = screen_point(camera, rect, world) else {
                 continue;
             };
-            let selected = self.drag.is_some_and(|drag| drag.corner == corner);
-            let hovered = self.hover_corner == Some(corner);
-            let radius = if selected || hovered { CORNER_RADIUS + 1.5 } else { CORNER_RADIUS };
-            let color = if selected { ACTIVE_COLOR } else { CORNER_COLOR };
-            painter.circle_filled(position, radius, color);
-            painter.circle_stroke(position, radius, egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160)));
+            let selected = self.drag.is_some_and(|drag| drag.grip == *grip);
+            let hovered = self.hover == Some(*grip);
+            paint_grip(&painter, position, *grip, selected, hovered);
         }
+        // The radius grip on a hovered arc curve is not part of the stable list, so paint it here.
+        if let Some(grip @ ContourGrip::ArcRadius(..)) = self.hover
+            && !grips.contains(&grip)
+            && let Some(local) = edit.draft().grip_position(grip)
+        {
+            let world = placement.transform_point(local_world(local));
+            if let Some(position) = screen_point(camera, rect, world) {
+                paint_grip(&painter, position, grip, false, true);
+            }
+        }
+        self.paint_numeric(ui, rect)
     }
+
+    /// Draws the editable number beside the cursor and reads Enter and Escape.
+    fn paint_numeric(&mut self, ui: &Ui, rect: egui::Rect) -> Option<NumericAction> {
+        let entry = self.numeric.as_mut()?;
+        let dragging = self.drag.is_some();
+        let position = Pos2::new(
+            (entry.pointer.x + NUMBER_OFFSET.x).min(rect.max.x - 190.0),
+            (entry.pointer.y + NUMBER_OFFSET.y).min(rect.max.y - 48.0),
+        );
+        let mut action = None;
+        let mut close = false;
+        egui::Area::new(egui::Id::unique("contour-grip-number"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(position)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(entry.label);
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut entry.text)
+                                .desired_width(84.0)
+                                .hint_text(if matches!(entry.kind, GripNumber::Angle) { "°" } else { "mm" }),
+                        );
+                        if entry.focus {
+                            response.request_focus();
+                            entry.focus = false;
+                        }
+                        if response.changed() {
+                            entry.edited = true;
+                        }
+                        if let Some(error) = &entry.error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, error);
+                        }
+                        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        if escape {
+                            if let Some(start) = entry.start {
+                                action = Some(NumericAction::Restore(entry.grip, start));
+                            }
+                        } else if enter {
+                            match entry.kind.parse(&entry.text) {
+                                Ok(value) => action = Some(NumericAction::Apply(entry.grip, value)),
+                                Err(error) => entry.error = Some(error),
+                            }
+                        } else if response.lost_focus() && !dragging {
+                            // A click outside the field drops it without touching the draft.
+                            close = true;
+                        }
+                    });
+                });
+            });
+        if action.is_some() || close {
+            self.drag = None;
+            self.numeric = None;
+        }
+        action
+    }
+}
+
+/// The editable numeric field a grip opens, when it takes a number at all.
+fn numeric_entry(draft: &ContourDraft, grip: ContourGrip, pointer: Pos2) -> Option<NumericEntry> {
+    let kind = draft.grip_number(grip)?;
+    let value = draft.grip_value(grip)?;
+    let label = draft.grip_label(grip)?;
+    Some(NumericEntry {
+        grip,
+        kind,
+        label,
+        text: value.text(),
+        start: Some(value),
+        pointer,
+        focus: true,
+        edited: false,
+        error: None,
+    })
+}
+
+/// Paints one grip: a square for a centre, a circle for a point on the figure.
+fn paint_grip(painter: &egui::Painter, position: Pos2, grip: ContourGrip, selected: bool, hovered: bool) {
+    let radius = if selected || hovered { GRIP_RADIUS + 1.5 } else { GRIP_RADIUS };
+    let color = if selected { ACTIVE_COLOR } else { GRIP_COLOR };
+    let outline = egui::Stroke::new(1.0, egui::Color32::from_black_alpha(160));
+    if is_center(grip) {
+        let box_rect = egui::Rect::from_center_size(position, egui::vec2(radius, radius) * 2.0);
+        painter.rect_filled(box_rect, 1.0, color);
+        painter.rect_stroke(box_rect, 1.0, outline, egui::StrokeKind::Inside);
+    } else {
+        painter.circle_filled(position, radius, color);
+        painter.circle_stroke(position, radius, outline);
+    }
+}
+
+/// Whether a grip is a figure or arc centre, which paints as a square.
+fn is_center(grip: ContourGrip) -> bool {
+    matches!(
+        grip,
+        ContourGrip::CircleCenter
+            | ContourGrip::ArcCenter(_)
+            | ContourGrip::RectangleCenter
+            | ContourGrip::PolygonCenter
+    )
 }
 
 /// Paints one draft as a screen-space polyline, closed only when it is a ring.
@@ -251,10 +467,11 @@ fn ring_shape(
     (screen.len() >= 3).then(|| egui::Shape::closed_line(screen, stroke))
 }
 
-/// The corners a draft draws a handle on.
+/// The corners a draft draws a handle on, for the tests that check the corner list.
 ///
 /// A ring has one handle per segment start. A chain has the same starts plus the free end when it
 /// is open; a closed chain's last end is the first start and would put two handles on one point.
+#[cfg(test)]
 fn corner_handles(draft: &ContourDraft) -> Vec<PathCorner> {
     let mut corners: Vec<PathCorner> = draft.entries().iter().map(|entry| PathCorner::Start(entry.id())).collect();
     let open = draft.as_chain().is_some_and(|path| !path.is_closed());
@@ -264,34 +481,114 @@ fn corner_handles(draft: &ContourDraft) -> Vec<PathCorner> {
     corners
 }
 
-/// The point a corner handle sits on, in the node's local plane.
+/// The point a corner sits on, in the node's local plane.
 fn corner_position(draft: &ContourDraft, corner: PathCorner) -> Option<[Length; 2]> {
     let segment = draft.segment(corner.segment())?;
     if corner.is_end() { segment.end().ok() } else { segment.start().ok() }
 }
 
-/// The corner handle under the pointer, if any.
-fn corner_at(
+/// The grip under the pointer, if any.
+///
+/// A real handle wins over the radius grip a hovered arc curve offers; the synthetic grip carries
+/// the point on the curve so a drag that starts there measures the arc's own radius.
+fn grip_at(
     camera: Camera,
     rect: egui::Rect,
     placement: Placement,
     draft: &ContourDraft,
     pointer: Pos2,
-) -> Option<PathCorner> {
-    let mut best: Option<(f32, PathCorner)> = None;
-    for corner in corner_handles(draft) {
-        let Some(start) = corner_position(draft, corner) else {
+    hover_segment: Option<ContourSegmentId>,
+) -> Option<ContourGrip> {
+    let mut best: Option<(f32, ContourGrip)> = None;
+    for grip in draft.grips() {
+        let Some(local) = draft.grip_position(grip) else {
             continue;
         };
-        let Some(position) = screen_point(camera, rect, placement.transform_point(local_world(start))) else {
+        let Some(position) = screen_point(camera, rect, placement.transform_point(local_world(local))) else {
             continue;
         };
         let distance = position.distance(pointer);
-        if distance <= CORNER_HIT_RADIUS && best.is_none_or(|(closest, _)| distance < closest) {
-            best = Some((distance, corner));
+        if distance <= GRIP_HIT_RADIUS && best.is_none_or(|(closest, _)| distance < closest) {
+            best = Some((distance, grip));
         }
     }
-    best.map(|(_, corner)| corner)
+    if let Some((_, grip)) = best {
+        return Some(grip);
+    }
+    // A ring has no arc grips yet, so it must not offer a radius handle it cannot drag.
+    draft.as_chain()?;
+    let segment = hover_segment?;
+    if !draft.segment(segment)?.is_arc() {
+        return None;
+    }
+    let local = local_point(pointer, rect, camera, placement)?;
+    let point = arc_nearest(draft.segment(segment)?, local)?;
+    Some(ContourGrip::ArcRadius(segment, point))
+}
+
+/// The point of an arc that the pointer is closest to, when it lies inside the sweep.
+fn arc_nearest(segment: ContourSegment, local: DVec2) -> Option<[Length; 2]> {
+    let ContourSegment::Arc { center, radius, start_angle, sweep } = segment else {
+        return None;
+    };
+    let center = DVec2::new(center[0].millimetres_f64(), center[1].millimetres_f64());
+    let offset = local - center;
+    if offset.length() <= f64::EPSILON {
+        return None;
+    }
+    let point = center + offset.normalize() * radius.millimetres_f64();
+    let angle = (point - center).y.atan2((point - center).x);
+    let start = start_angle.radians_f64();
+    let sweep = sweep.radians_f64();
+    let turn = std::f64::consts::TAU;
+    let mut travel = angle - start;
+    travel = if sweep >= 0.0 { travel.rem_euclid(turn) } else { -((-travel).rem_euclid(turn)) };
+    let inside = if sweep >= 0.0 { travel <= sweep } else { travel >= sweep };
+    inside.then_some([length_from_millimetres(point.x)?, length_from_millimetres(point.y)?])
+}
+
+/// Whether two document points name the same joint, within the one-micrometre joint tolerance.
+fn near(first: [Length; 2], second: [Length; 2]) -> bool {
+    let dx = i128::from(first[0].micrometres()) - i128::from(second[0].micrometres());
+    let dy = i128::from(first[1].micrometres()) - i128::from(second[1].micrometres());
+    dx.abs() <= 1 && dy.abs() <= 1
+}
+
+/// The segment a corner should follow when the drag is constrained to the contour.
+///
+/// The corner joins up to two segments; the one whose projected curve lies nearest the pointer is
+/// the one the user grabbed. The choice is made once, when the drag starts, so a drag that moves
+/// past the other segment does not switch half way.
+fn along_segment(
+    camera: Camera,
+    rect: egui::Rect,
+    placement: Placement,
+    draft: &ContourDraft,
+    corner: PathCorner,
+    pointer: Pos2,
+) -> Option<ContourSegmentId> {
+    let point = corner_position(draft, corner)?;
+    let mut best: Option<(f32, ContourSegmentId)> = None;
+    for entry in draft.entries() {
+        let segment = entry.segment();
+        let (Ok(start), Ok(end)) = (segment.start(), segment.end()) else {
+            continue;
+        };
+        if !near(start, point) && !near(end, point) {
+            continue;
+        }
+        let points = segment_screen(camera, rect, placement, segment);
+        let mut distance = f32::INFINITY;
+        for pair in points.windows(2) {
+            if let Some(found) = distance_to_segment(pointer, pair[0], pair[1]) {
+                distance = distance.min(found);
+            }
+        }
+        if distance.is_finite() && best.is_none_or(|(closest, _)| distance < closest) {
+            best = Some((distance, entry.id()));
+        }
+    }
+    best.map(|(_, segment)| segment)
 }
 
 /// The segment whose projected curve is closest to the pointer, if within the hit radius.
@@ -719,7 +1016,8 @@ mod tests {
         // A dirty draft paints the stored shape faintly behind the working copy.
         let mut edit = edit;
         let last = edit.draft().id_at(1).expect("last segment");
-        edit.move_corner_at(PathCorner::End(last), [millimetres(140), millimetres(60)]).expect("move the free end");
+        edit.move_corner_at(PathCorner::End(last), [millimetres(140), millimetres(60)], CornerMove::Free)
+            .expect("move the free end");
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ContourGizmo::default().paint(ui, rect, camera, &project, &edit);
         });
@@ -771,6 +1069,128 @@ mod tests {
         assert!(((point - DVec2::new(100.0, 20.0)).length() - 20.0).abs() < 1.0e-3, "on the circle");
         assert!(split_point(arc, DVec2::new(120.0, 25.0)).is_none(), "too close to the end corner");
         assert!(split_point(arc, DVec2::new(100.0, 20.0)).is_none(), "the centre has no direction");
+    }
+
+    fn screen_of(camera: Camera, point: [Length; 2]) -> Pos2 {
+        screen_point(camera, viewport(), Placement::IDENTITY.transform_point(local_world(point))).expect("in front")
+    }
+
+    #[test]
+    fn an_along_contour_drag_picks_the_segment_nearest_the_pointer() {
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(60)]).expect("rectangle");
+        let draft = ContourDraft::Chain(path.clone());
+        let bottom = path.id_at(0).expect("bottom side");
+        let left = path.id_at(3).expect("left side");
+        let corner = PathCorner::Start(bottom);
+        let camera = Camera::default();
+
+        let near_bottom = screen_of(camera, [millimetres(50), millimetres(0)]);
+        assert_eq!(along_segment(camera, viewport(), Placement::IDENTITY, &draft, corner, near_bottom), Some(bottom));
+        let near_left = screen_of(camera, [millimetres(0), millimetres(30)]);
+        assert_eq!(along_segment(camera, viewport(), Placement::IDENTITY, &draft, corner, near_left), Some(left));
+    }
+
+    #[test]
+    fn the_along_toggle_resolves_a_corner_motion_and_defaults_to_free() {
+        let mut gizmo = ContourGizmo::default();
+        assert!(!gizmo.along(), "free movement is the default");
+        let path =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(60)]).expect("rectangle");
+        let draft = ContourDraft::Chain(path.clone());
+        let corner = PathCorner::Start(path.id_at(0).expect("bottom"));
+        let camera = Camera::default();
+        let pointer = Some(screen_of(camera, [millimetres(50), millimetres(0)]));
+        assert_eq!(
+            gizmo.motion_for(camera, viewport(), Placement::IDENTITY, &draft, ContourGrip::Corner(corner), pointer),
+            CornerMove::Free
+        );
+        gizmo.toggle_along();
+        assert_eq!(
+            gizmo.motion_for(camera, viewport(), Placement::IDENTITY, &draft, ContourGrip::Corner(corner), pointer),
+            CornerMove::Along(path.id_at(0).expect("bottom"))
+        );
+    }
+
+    #[test]
+    fn a_circle_paints_a_square_centre_and_four_round_quadrants() {
+        let path = Path::circle([millimetres(10), millimetres(20)], millimetres(40)).expect("circle");
+        let (project, object) = path_project(path);
+        let edit = ContourEdit::start(&project, ContourTarget::Path(object)).expect("editable");
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ContourGizmo::default().paint(ui, viewport(), Camera::default(), &project, &edit);
+        });
+        let mut filled_circles = 0;
+        let mut filled_rects = 0;
+        for clipped in &output.shapes {
+            match &clipped.shape {
+                egui::Shape::Circle(circle) if circle.fill.a() > 0 => filled_circles += 1,
+                egui::Shape::Rect(rect) if rect.fill.a() > 0 => filled_rects += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(filled_circles, 4, "one round handle per quadrant");
+        assert_eq!(filled_rects, 1, "the centre is the only square handle");
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn an_arc_curve_offers_a_radius_grip_away_from_its_midpoint() {
+        let path = Path::new(
+            vec![
+                ContourSegment::arc(
+                    [millimetres(0), millimetres(0)],
+                    millimetres(200),
+                    Degrees::ZERO,
+                    Degrees::from_millidegrees(180_000),
+                )
+                .expect("a half circle"),
+            ],
+            false,
+        )
+        .expect("an arc chain");
+        let draft = ContourDraft::Chain(path.clone());
+        let arc = path.id_at(0).expect("arc");
+        let camera = Camera::default();
+        // A quarter of the way along the sweep, away from the persistent midpoint handle.
+        let angle = 45.0_f64.to_radians();
+        let point =
+            [millimetres((200.0 * angle.cos()).round() as i64), millimetres((200.0 * angle.sin()).round() as i64)];
+        let pointer = screen_of(camera, point);
+        let grip = grip_at(camera, viewport(), Placement::IDENTITY, &draft, pointer, Some(arc));
+        assert!(
+            matches!(grip, Some(ContourGrip::ArcRadius(segment, _)) if segment == arc),
+            "the hovered curve offers its radius: {grip:?}"
+        );
+
+        // The persistent midpoint handle wins when the pointer is right on it.
+        let midpoint = draft.grip_position(ContourGrip::ArcPoint(arc)).expect("an arc midpoint");
+        let pointer = screen_of(camera, midpoint);
+        assert_eq!(
+            grip_at(camera, viewport(), Placement::IDENTITY, &draft, pointer, Some(arc)),
+            Some(ContourGrip::ArcPoint(arc))
+        );
+    }
+
+    #[test]
+    fn a_numeric_entry_starts_from_the_grip_value_and_its_kind() {
+        let circle =
+            ContourDraft::Chain(Path::circle([millimetres(0), millimetres(0)], millimetres(40)).expect("circle"));
+        let entry = numeric_entry(&circle, ContourGrip::CircleQuadrant(0), Pos2::ZERO).expect("a radius field");
+        assert_eq!(entry.kind, GripNumber::Length);
+        assert_eq!(entry.text, "40 mm");
+        assert_eq!(entry.start, Some(GripValue::Length(millimetres(40))));
+
+        let arc = ContourDraft::Chain(line_and_arc());
+        let id = arc.entries().last().expect("arc").id();
+        let entry = numeric_entry(&arc, ContourGrip::Corner(PathCorner::End(id)), Pos2::ZERO).expect("an angle field");
+        assert_eq!(entry.kind, GripNumber::Angle);
+        assert_eq!(entry.text, "0°");
+        assert!(entry.label.contains('∠') || entry.label.contains('R'), "the field is labelled: {entry:?}");
+
+        assert!(numeric_entry(&circle, ContourGrip::CircleCenter, Pos2::ZERO).is_none(), "a centre has no number");
     }
 
     #[test]

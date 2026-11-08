@@ -45,9 +45,9 @@ pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelM
 pub use container::Container;
 pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
-    MAX_CONTOUR_SEGMENTS, Path, PathError,
+    MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathError, PathShape,
 };
-pub use contour_edit::{ContourEditError, PathCorner};
+pub use contour_edit::{ArcFrame, CircleFrame, ContourEditError, CornerMove, PathCorner, PolygonFrame, RectangleFrame};
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};

@@ -2,10 +2,12 @@
 //!
 //! While a drawing draft is live the gizmo owns the pointer: it maps the cursor onto the work
 //! plane, snaps it to a draft end, an axis or the 10 mm grid, appends a point on a click and closes
-//! a polyline through its first point. Alt turns a click into an arc through that point, so one
-//! chain carries both kinds. Painting shows the placed chain, the shape the next click would make,
-//! the snap marker and a live size. The dummy document is never touched here; the commit is a
-//! separate step, so Escape costs nothing.
+//! a polyline through its first point. Tab chooses whether the next polyline segment is straight or
+//! an arc, so one chain carries both kinds; Alt drops every snap and takes the pointer as it is.
+//! Painting shows the placed chain, the shape the next click would make, the snap marker and a live
+//! size. A preview that cannot become a path keeps the last valid one, so a chain never blinks out;
+//! the reason is on [`DrawGizmo::preview_error`]. The dummy document is never touched here; the
+//! commit is a separate step, so Escape costs nothing.
 
 use eframe::egui::{self, Color32, FontId, Pos2, Shape, Stroke, Ui};
 use furnicraft_geom::DVec2;
@@ -43,8 +45,8 @@ const CLOSE_COLOR: Color32 = Color32::from_rgb(120, 230, 140);
 pub struct DrawModifiers {
     /// Shift locks the next segment to the nearest axis.
     pub axis_lock: bool,
-    /// Alt starts an arc through the clicked point instead of a straight segment.
-    pub arc: bool,
+    /// Alt takes the pointer without snapping it to a draft end or the grid.
+    pub ignore_snaps: bool,
 }
 
 /// What a click on the snapped point does to the live draft.
@@ -60,6 +62,17 @@ enum DrawClick {
     Ignore,
 }
 
+/// How the live pointer is snapped to the work plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SnapSettings {
+    /// The 10 mm grid is on.
+    grid: bool,
+    /// Shift locks the next point to an axis through the anchor.
+    axis_lock: bool,
+    /// Alt drops the end and grid snaps.
+    ignore_snaps: bool,
+}
+
 /// Pointer state of the drawing tool; the draft itself belongs to the editor.
 #[derive(Debug)]
 pub(crate) struct DrawGizmo {
@@ -70,6 +83,10 @@ pub(crate) struct DrawGizmo {
     /// Orbiting the view mid-drawing must not reinterpret the points already placed, so the plane
     /// is chosen once and kept until the tool ends.
     plane: Option<WorkPlane>,
+    /// The last preview that became a path, kept while the pointer sits on a hostile point.
+    preview: Option<Path>,
+    /// Why the current pointer cannot extend the draft, if it cannot.
+    preview_error: Option<String>,
 }
 
 /// The snapped cursor and where on screen it landed.
@@ -86,13 +103,46 @@ struct SnapOutcome {
 impl DrawGizmo {
     /// A drawing tool with the 10 mm grid on and no hover.
     pub(crate) fn new() -> Self {
-        Self { grid: true, hover: None, plane: None }
+        Self { grid: true, hover: None, plane: None, preview: None, preview_error: None }
     }
 
-    /// Drops the hover state and the frozen plane, for example when the tool ends.
+    /// Drops the hover state, the frozen plane and the cached preview, for example when the tool
+    /// ends.
     pub(crate) fn reset(&mut self) {
         self.hover = None;
         self.plane = None;
+        self.preview = None;
+        self.preview_error = None;
+    }
+
+    /// The last valid preview, for painting and for tests.
+    pub(crate) fn preview(&self) -> Option<&Path> {
+        self.preview.as_ref()
+    }
+
+    /// Why the current pointer cannot extend the draft, if it cannot.
+    ///
+    /// The status line shows this instead of letting a rejected point look like an accepted one.
+    pub(crate) fn preview_error(&self) -> Option<&str> {
+        self.preview_error.as_deref()
+    }
+
+    /// Records what the pointer at `point` would add: a new preview, or the reason there is none.
+    ///
+    /// A rejected point keeps the previous preview, so the chain the user already built stays on
+    /// screen through an intermediate click that cannot join it.
+    fn refresh_preview(&mut self, draft: &DrawDraft, point: [Length; 2]) {
+        match draft.preview(point) {
+            Ok(Some(path)) => {
+                self.preview = Some(path);
+                self.preview_error = None;
+            }
+            Ok(None) => {
+                self.preview = None;
+                self.preview_error = None;
+            }
+            Err(error) => self.preview_error = Some(error.to_string()),
+        }
     }
 
     /// The plane the live draft draws on.
@@ -144,31 +194,45 @@ impl DrawGizmo {
             self.hover = None;
             return Ok(false);
         };
-        let Some(outcome) = snap_cursor(&draft, plane, camera, rect, pointer, self.grid, modifiers.axis_lock) else {
+        let Some(outcome) = snap_cursor(
+            &draft,
+            plane,
+            camera,
+            rect,
+            pointer,
+            SnapSettings { grid: self.grid, axis_lock: modifiers.axis_lock, ignore_snaps: modifiers.ignore_snaps },
+        ) else {
             self.hover = None;
             return Ok(false);
         };
         self.hover = Some(outcome);
+        self.refresh_preview(&draft, outcome.point);
 
         // A click that the orientation widget owns must not also place a point.
         if pointer_over_widget || !response.clicked_by(egui::PointerButton::Primary) {
             return Ok(false);
         }
-        match click_action(&draft, outcome.point, modifiers.arc) {
+        let accepted = match click_action(&draft, outcome.point) {
             DrawClick::Append(point) => {
                 editor.drawing_point(point).map_err(|error| error.to_string())?;
-                Ok(true)
+                true
             }
             DrawClick::StartArc(point) => {
                 editor.drawing_arc_through(point).map_err(|error| error.to_string())?;
-                Ok(true)
+                true
             }
             DrawClick::Close => {
                 editor.close_drawing().map_err(|error| error.to_string())?;
-                Ok(true)
+                true
             }
-            DrawClick::Ignore => Ok(false),
+            DrawClick::Ignore => false,
+        };
+        if accepted && let Some(draft) = editor.drawing() {
+            // The click moved the chain, so the preview belongs to the new state under the same
+            // pointer rather than to the state before it.
+            self.refresh_preview(draft, outcome.point);
         }
+        Ok(accepted)
     }
 
     /// Paints the placed chain, the preview, the points, the snap marker and the live size.
@@ -176,12 +240,21 @@ impl DrawGizmo {
         let plane = self.plane(camera);
         let painter = ui.painter().with_clip_rect(rect);
 
-        if let Ok(path) = draft.to_path() {
-            paint_path(&painter, camera, rect, plane, &path, Stroke::new(2.0, DRAFT_COLOR));
+        match draft.to_path() {
+            Ok(path) => paint_path(&painter, camera, rect, plane, &path, Stroke::new(2.0, DRAFT_COLOR)),
+            // A chain that cannot become one path still has the segments it already stores: draw
+            // them one by one so a ring rule or a missing point never makes the drawing vanish.
+            Err(_) => {
+                for segment in draft.segments() {
+                    if let Ok(path) = Path::new(vec![*segment], false) {
+                        paint_path(&painter, camera, rect, plane, &path, Stroke::new(2.0, DRAFT_COLOR));
+                    }
+                }
+            }
         }
         if let Some(hover) = self.hover {
-            if let Some(path) = draft.preview_path(hover.point) {
-                paint_path(&painter, camera, rect, plane, &path, Stroke::new(1.5, PREVIEW_COLOR));
+            if let Some(path) = self.preview() {
+                paint_path(&painter, camera, rect, plane, path, Stroke::new(1.5, PREVIEW_COLOR));
             }
             for point in draft.points() {
                 paint_point(&painter, camera, rect, plane, *point, DRAFT_COLOR, POINT_RADIUS);
@@ -208,8 +281,7 @@ fn snap_cursor(
     camera: Camera,
     rect: egui::Rect,
     pointer: Pos2,
-    grid: bool,
-    axis_lock: bool,
+    settings: SnapSettings,
 ) -> Option<SnapOutcome> {
     let ray = ray_to(pointer, rect, camera);
     let world = plane.ray_point(ray)?;
@@ -231,9 +303,10 @@ fn snap_cursor(
         point: raw,
         anchor,
         ends: &ends,
-        mode: if grid { SnapMode::Grid } else { SnapMode::Free },
-        axis_lock,
+        mode: if settings.grid { SnapMode::Grid } else { SnapMode::Free },
+        axis_lock: settings.axis_lock,
         end_radius: radius,
+        ignore_snaps: settings.ignore_snaps,
     });
     let (x, y) = (length_from_millimetres(snapped.point.x), length_from_millimetres(snapped.point.y));
     let point = [x?, y?];
@@ -244,11 +317,15 @@ fn snap_cursor(
 
 /// What the click does, given the live draft and the snapped point.
 ///
-/// While an arc waits for its end, every click ends it, whatever the modifier: the gesture is
-/// already chosen and a second one would be ambiguous.
-fn click_action(draft: &DrawDraft, point: [Length; 2], arc: bool) -> DrawClick {
+/// While an arc waits for its end, every click ends it: the gesture is already chosen and a second
+/// one would be ambiguous, so this test comes before the close-on-first-point check. Otherwise Tab
+/// decides whether a polyline grows a straight segment or starts an arc.
+fn click_action(draft: &DrawDraft, point: [Length; 2]) -> DrawClick {
     if draft.is_closed() {
         return DrawClick::Ignore;
+    }
+    if draft.pending_arc().is_some() {
+        return DrawClick::Append(point);
     }
     if draft.tool().closes() && draft.points().first() == Some(&point) {
         return if draft.can_close() { DrawClick::Close } else { DrawClick::Ignore };
@@ -261,7 +338,7 @@ fn click_action(draft: &DrawDraft, point: [Length; 2], arc: bool) -> DrawClick {
     if draft.last_end() == Some(point) {
         return DrawClick::Ignore;
     }
-    if arc && draft.tool().closes() && !draft.is_empty() {
+    if draft.arc_mode() && draft.tool().closes() && !draft.is_empty() {
         return DrawClick::StartArc(point);
     }
     DrawClick::Append(point)
@@ -400,36 +477,52 @@ mod tests {
     fn a_polyline_closes_through_its_first_point_only() {
         let polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
         let first = [millimetres(0), millimetres(0)];
-        assert_eq!(click_action(&polyline, first, false), DrawClick::Close);
+        assert_eq!(click_action(&polyline, first), DrawClick::Close);
         assert_eq!(
-            click_action(&polyline, [millimetres(300), millimetres(200)], false),
+            click_action(&polyline, [millimetres(300), millimetres(200)]),
             DrawClick::Append([millimetres(300), millimetres(200)])
         );
 
         let short = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
-        assert_eq!(click_action(&short, first, false), DrawClick::Ignore, "two points cannot close a ring");
+        assert_eq!(click_action(&short, first), DrawClick::Ignore, "two points cannot close a ring");
     }
 
     #[test]
-    fn alt_starts_an_arc_only_inside_a_running_chain() {
-        let polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
+    fn tab_starts_an_arc_only_inside_a_running_chain() {
+        let mut polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0)]);
         let through = [millimetres(650), millimetres(50)];
-        assert_eq!(click_action(&polyline, through, true), DrawClick::StartArc(through));
-        assert_eq!(click_action(&polyline, through, false), DrawClick::Append(through));
+        assert_eq!(click_action(&polyline, through), DrawClick::Append(through));
+        assert!(polyline.toggle_arc_mode());
+        assert_eq!(click_action(&polyline, through), DrawClick::StartArc(through));
 
         // A chain needs an anchor before an arc can leave it.
-        assert_eq!(click_action(&DrawDraft::new(DrawTool::Polyline), through, true), DrawClick::Append(through));
+        let mut fresh = DrawDraft::new(DrawTool::Polyline);
+        fresh.toggle_arc_mode();
+        assert_eq!(click_action(&fresh, through), DrawClick::Append(through));
         // A fixed tool keeps its own gesture and never mixes.
         let line = draft(DrawTool::Line, &[(0, 0)]);
-        assert_eq!(click_action(&line, through, true), DrawClick::Append(through));
+        assert_eq!(click_action(&line, through), DrawClick::Append(through));
+    }
+
+    #[test]
+    fn a_pending_arc_takes_the_click_before_the_closing_point() {
+        // Once an arc waits for its end, even a click on the chain's first point ends the arc; the
+        // close rule then runs on the finished segment, where it belongs.
+        let mut polyline = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
+        polyline.toggle_arc_mode();
+        polyline.push_arc_through([millimetres(300), millimetres(300)]).expect("arm the arc");
+        assert_eq!(
+            click_action(&polyline, [millimetres(0), millimetres(0)]),
+            DrawClick::Append([millimetres(0), millimetres(0)])
+        );
     }
 
     #[test]
     fn a_fixed_tool_ignores_a_click_after_its_last_point() {
         let line = draft(DrawTool::Line, &[(0, 0), (600, 0)]);
-        assert_eq!(click_action(&line, [millimetres(600), millimetres(400)], false), DrawClick::Ignore);
+        assert_eq!(click_action(&line, [millimetres(600), millimetres(400)]), DrawClick::Ignore);
         assert_eq!(
-            click_action(&draft(DrawTool::Circle, &[(100, 100)]), [millimetres(0), millimetres(0)], false),
+            click_action(&draft(DrawTool::Circle, &[(100, 100)]), [millimetres(0), millimetres(0)]),
             DrawClick::Append([millimetres(0), millimetres(0)])
         );
     }
@@ -438,11 +531,11 @@ mod tests {
     fn a_click_on_the_previous_point_or_a_closed_chain_does_nothing() {
         let line = draft(DrawTool::Line, &[(0, 0)]);
         let same = [millimetres(0), millimetres(0)];
-        assert_eq!(click_action(&line, same, false), DrawClick::Ignore);
+        assert_eq!(click_action(&line, same), DrawClick::Ignore);
 
         let mut closed = draft(DrawTool::Polyline, &[(0, 0), (600, 0), (600, 400)]);
         closed.close().expect("close the triangle");
-        assert_eq!(click_action(&closed, [millimetres(10), millimetres(10)], false), DrawClick::Ignore);
+        assert_eq!(click_action(&closed, [millimetres(10), millimetres(10)]), DrawClick::Ignore);
     }
 
     #[test]
@@ -463,6 +556,27 @@ mod tests {
         assert_eq!(size_label(&arc, [millimetres(100), millimetres(0)]).as_deref(), Some("R 50 mm"));
 
         assert!(size_label(&DrawDraft::new(DrawTool::Line), [millimetres(10), millimetres(0)]).is_none());
+    }
+
+    #[test]
+    fn a_rejected_preview_keeps_the_last_valid_one() {
+        let mut draft = DrawDraft::new(DrawTool::Arc);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(50), millimetres(50)]).expect("through");
+        let mut gizmo = DrawGizmo::new();
+        gizmo.refresh_preview(&draft, [millimetres(100), millimetres(0)]);
+        assert!(gizmo.preview().is_some(), "three sound points preview an arc");
+        assert_eq!(gizmo.preview_error(), None);
+
+        // The third click is collinear, so the arc cannot exist; the last arc stays on screen and
+        // the status line gets the reason instead of a blink.
+        gizmo.refresh_preview(&draft, [millimetres(100), millimetres(100)]);
+        assert!(gizmo.preview().is_some(), "the previous preview survives a rejected point");
+        assert!(gizmo.preview_error().is_some(), "the reason is reported");
+
+        gizmo.reset();
+        assert!(gizmo.preview().is_none());
+        assert_eq!(gizmo.preview_error(), None);
     }
 
     #[test]

@@ -530,6 +530,39 @@ mod tests {
     }
 
     #[test]
+    fn a_ring_joins_its_segments_with_the_drawing_tolerance() {
+        let point = |x: i64, y: i64| [Length::from_micrometres(x), Length::from_micrometres(y)];
+        let square = |last: [Length; 2]| {
+            vec![
+                ContourSegment::line(point(0, 0), point(100_000, 0)).expect("line"),
+                ContourSegment::line(point(100_000, 0), point(100_000, 50_000)).expect("line"),
+                ContourSegment::line(point(100_000, 50_000), point(0, 50_000)).expect("line"),
+                ContourSegment::line(point(0, 50_000), last).expect("the closing line"),
+            ]
+        };
+        assert!(Contour::new(square(point(1, 0))).is_ok(), "one micrometre is still a joint");
+        assert_eq!(Contour::new(square(point(2, 0))), Err(ContourError::NotClosed { index: 3 }));
+    }
+
+    /// An arc stores its centre, radius and angles, so its start point is derived: after rounding it
+    /// can miss the drawn point by a micrometre. A ring the user drew must still assemble (ADR 0072).
+    #[test]
+    fn a_ring_joins_an_arc_to_the_point_it_was_drawn_from() {
+        let point = |x: i64, y: i64| [Length::from_micrometres(x), Length::from_micrometres(y)];
+        let drawn = point(100_000, 0);
+        let arc = ContourSegment::arc_through(drawn, point(-60_000, 20_000), point(-90_000, -71_000)).expect("arc");
+        assert_ne!(arc.start().expect("start"), drawn, "the stored start is derived and rounded");
+        let end = arc.end().expect("end");
+        let ring = Contour::new(vec![
+            ContourSegment::line(point(0, 0), drawn).expect("line"),
+            arc,
+            ContourSegment::line(end, point(0, 0)).expect("line"),
+        ])
+        .expect("the one-micrometre rounding is a joint");
+        ring.to_geometry().expect("the geometry layer uses the same tolerance");
+    }
+
+    #[test]
     fn a_clockwise_ring_is_stored_counter_clockwise_exactly() {
         let clockwise = Contour::from_polygon(vec![
             [millimetres(0), millimetres(0)],
@@ -1092,6 +1125,116 @@ mod tests {
     }
 
     #[test]
+    fn a_drawn_figure_remembers_its_shape() {
+        let rectangle =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        assert_eq!(rectangle.shape(), Some(PathShape::Rectangle));
+        let circle = Path::circle([millimetres(20), millimetres(10)], millimetres(40)).expect("circle");
+        assert_eq!(circle.shape(), Some(PathShape::Circle));
+        let polygon = Path::regular_polygon([millimetres(0), millimetres(0)], [millimetres(50), millimetres(0)], 6)
+            .expect("hexagon");
+        assert_eq!(polygon.shape(), Some(PathShape::RegularPolygon));
+        assert_eq!(polygon.segments().count(), 6);
+        let arc = Path::arc_from_center(
+            [millimetres(0), millimetres(0)],
+            [millimetres(50), millimetres(0)],
+            [millimetres(0), millimetres(50)],
+        )
+        .expect("a quarter arc");
+        assert_eq!(arc.shape(), None);
+        assert!(!arc.is_closed());
+        let ContourSegment::Arc { radius, sweep, .. } = arc.entries()[0].segment() else {
+            panic!("an arc from its centre is an arc");
+        };
+        assert_eq!(radius, millimetres(50));
+        assert_eq!(sweep, Degrees::from_millidegrees(90_000));
+        let polyline = Path::polyline(vec![[millimetres(0), millimetres(0)], [millimetres(10), millimetres(0)]], false)
+            .expect("line");
+        assert_eq!(polyline.shape(), None);
+    }
+
+    #[test]
+    fn a_circle_through_three_points_is_the_circumcircle() {
+        let path = Path::circle_three_points(
+            [millimetres(0), millimetres(0)],
+            [millimetres(100), millimetres(0)],
+            [millimetres(50), millimetres(50)],
+        )
+        .expect("a right triangle lies on its hypotenuse circle");
+        assert_eq!(path.shape(), Some(PathShape::Circle));
+        assert_eq!(path.bounds_micrometres(), ([0, -50_000], [100_000, 50_000]), "centre (50, 0), radius 50");
+        assert_eq!(
+            Path::circle_three_points(
+                [millimetres(0), millimetres(0)],
+                [millimetres(50), millimetres(50)],
+                [millimetres(100), millimetres(100)],
+            ),
+            Err(PathError::DegenerateCircle)
+        );
+    }
+
+    #[test]
+    fn a_rectangle_from_its_centre_mirrors_the_corner() {
+        let path = Path::rectangle_from_center([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)])
+            .expect("rectangle");
+        assert_eq!(path.shape(), Some(PathShape::Rectangle));
+        assert_eq!(path.bounds_micrometres(), ([-100_000, -50_000], [100_000, 50_000]));
+        assert_eq!(
+            Path::rectangle_from_center([millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)]),
+            Err(PathError::DegenerateRectangle)
+        );
+        let turned = Path::rectangle_from_center_directed(
+            [millimetres(0), millimetres(0)],
+            [millimetres(10), millimetres(10)],
+            [millimetres(100), millimetres(0)],
+        )
+        .expect("a square turned by 45 degrees");
+        assert_eq!(turned.shape(), Some(PathShape::Rectangle));
+        assert_eq!(turned.segments().count(), 4);
+        let (min, max) = turned.bounds_micrometres();
+        assert_eq!(min, [-100_000, -100_000]);
+        assert_eq!(max, [100_000, 100_000]);
+    }
+
+    #[test]
+    fn a_regular_polygon_refuses_a_side_count_outside_its_range() {
+        let center = [millimetres(0), millimetres(0)];
+        let rim = [millimetres(50), millimetres(0)];
+        assert!(matches!(Path::regular_polygon(center, rim, 2), Err(PathError::InvalidSides { .. })));
+        assert!(matches!(
+            Path::regular_polygon(center, rim, MAX_POLYGON_SIDES + 1),
+            Err(PathError::InvalidSides { .. })
+        ));
+        assert_eq!(Path::regular_polygon(center, center, 5), Err(PathError::DegeneratePolygon));
+        let widest = Path::regular_polygon(center, rim, MAX_POLYGON_SIDES).expect("the largest polygon");
+        assert_eq!(widest.segments().count(), MAX_POLYGON_SIDES as usize);
+    }
+
+    #[test]
+    fn a_stored_shape_tag_must_fit_the_segments() {
+        let rectangle =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let wire = serde_json::to_value(&rectangle).expect("serialize");
+        let loaded: Path = serde_json::from_value(wire.clone()).expect("the tag fits");
+        assert_eq!(loaded.shape(), Some(PathShape::Rectangle));
+
+        let mut wrong_tag = wire;
+        wrong_tag["shape"] = serde_json::json!("circle");
+        let reason = serde_json::from_value::<Path>(wrong_tag)
+            .map_err(|error| error.to_string())
+            .expect_err("a rectangle tagged as a circle");
+        assert!(reason.contains("tagged as a"), "the loader names the mismatch, got {reason}");
+
+        let unknown = r#"{"segments":[{"id":1,"kind":"line","start":[0,0],"end":[10000,0]},
+            {"id":2,"kind":"line","start":[10000,0],"end":[10000,10000]},
+            {"id":3,"kind":"line","start":[10000,10000],"end":[0,0]}],"next_segment_id":4,"closed":true}"#;
+        let untagged: Path = serde_json::from_str(unknown).expect("a version 18 path has no tag");
+        assert_eq!(untagged.shape(), None, "an older path loads without a shape");
+        let bad = unknown.replace("\"closed\":true", "\"closed\":true,\"shape\":\"blob\"");
+        assert!(serde_json::from_str::<Path>(&bad).is_err(), "an unknown shape is an error");
+    }
+
+    #[test]
     fn an_open_polyline_joins_its_segments_and_keeps_its_ids() {
         let path = Path::new(
             vec![
@@ -1409,6 +1552,11 @@ impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
 /// Each segment is converted to the geometry layer, where a line or arc is validated once, and the
 /// joints, the signed area and the self-intersection test then run on that exact curve. Document
 /// units stay integer: every point that leaves the module is rounded to a whole micrometre.
+///
+/// A joint is judged with the same [`PATH_JOINT_TOLERANCE_MICROMETRES`] the drawing path uses. An
+/// arc stores its centre, radius and angles, so its endpoints are derived and can miss the point the
+/// user drew by a micrometre after rounding; requiring exact equality would refuse a ring the user
+/// legitimately drew (ADR 0072).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "ContourWire", into = "ContourWire")]
 pub struct Contour {
@@ -1519,7 +1667,7 @@ impl Contour {
             let (Some(entry), Some(next)) = (entries.get(index), entries.get((index + 1) % count)) else {
                 continue;
             };
-            if entry.segment().end()? != next.segment().start()? {
+            if !within_joint_tolerance(entry.segment().end()?, next.segment().start()?) {
                 return Err(ContourError::NotClosed { index });
             }
         }
@@ -1833,6 +1981,15 @@ fn bounds_center_pivot(min: [i64; 2], max: [i64; 2]) -> Pivot {
 /// A path is one chain of at most this many segments, the ring size it has to fit.
 const MAX_PATH_SEGMENTS: usize = MAX_CONTOUR_SEGMENTS;
 
+/// Smallest side count of a regular polygon the drawing tools accept.
+pub const MIN_POLYGON_SIDES: u32 = 3;
+
+/// Largest side count of a regular polygon the drawing tools accept.
+///
+/// A polygon is a ring of lines, so it can never exceed the ring segment cap; the cap is what the
+/// limit expresses as a user-visible number.
+pub const MAX_POLYGON_SIDES: u32 = 128;
+
 /// How far two consecutive path joints may miss each other, in micrometres.
 ///
 /// A drawn arc endpoint is exact only in floating point, so after rounding to whole micrometres it
@@ -1852,13 +2009,101 @@ const PATH_JOINT_TOLERANCE_MICROMETRES: i64 = 1;
 /// A path is stored as drawn — direction and orientation are kept — and it is not validated for
 /// self-intersection or enclosed area. Those are ring rules, and they run when the path is turned
 /// into a contour.
+///
+/// A closed path may also remember the figure it was drawn as ([`PathShape`]). The tag stores no
+/// dimensions: the centre, the radius and the side count are read from the segments, and the tag
+/// only decides which constraint set the edit grips apply (ADR 0073). A structural edit clears it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "PathWire", into = "PathWire")]
 pub struct Path {
     entries: Vec<ContourSegmentEntry>,
     next_segment_id: ContourSegmentId,
     closed: bool,
+    shape: Option<PathShape>,
 }
+
+/// The regular figure a closed path was drawn as.
+///
+/// The tag is edit intent, not geometry: every dimension is derived from the segments, so a path
+/// cannot contradict itself by storing a radius that its arcs do not have. A tag that does not fit
+/// the stored segments is a load error (`PathError::ShapeMismatch`) rather than a silent downgrade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathShape {
+    /// Four axis-aligned lines, the figure [`Path::rectangle`] builds.
+    Rectangle,
+    /// A full turn of arcs that share one centre and one radius.
+    Circle,
+    /// Three or more equal lines closing a regular polygon.
+    RegularPolygon,
+}
+
+impl PathShape {
+    /// Whether the segments of `path` are the figure this tag names.
+    ///
+    /// The check is structural and cheap: it runs once on load, so a hand-edited file cannot claim a
+    /// rectangle that is a pentagon. It does not re-derive every angle; the edit operations keep
+    /// the figure and this guard only has to reject a tag that belongs to different geometry.
+    pub fn fits(self, path: &Path) -> bool {
+        if !path.closed {
+            return false;
+        }
+        match self {
+            Self::Rectangle => path.entries.len() == 4 && path.entries.iter().all(|entry| !entry.segment().is_arc()),
+            Self::Circle => {
+                let mut center = None;
+                let mut radius = None;
+                let mut sweep = 0_i64;
+                for entry in &path.entries {
+                    let ContourSegment::Arc { center: arc_center, radius: arc_radius, sweep: arc_sweep, .. } =
+                        entry.segment()
+                    else {
+                        return false;
+                    };
+                    if center.is_some_and(|stored| stored != arc_center)
+                        || radius.is_some_and(|stored| stored != arc_radius)
+                    {
+                        return false;
+                    }
+                    center = Some(arc_center);
+                    radius = Some(arc_radius);
+                    let Some(total) = sweep.checked_add(arc_sweep.millidegrees().abs()) else {
+                        return false;
+                    };
+                    sweep = total;
+                }
+                sweep == FULL_TURN.millidegrees()
+            }
+            Self::RegularPolygon => {
+                let count = path.entries.len();
+                if !(3..=MAX_CONTOUR_SEGMENTS).contains(&count) {
+                    return false;
+                }
+                let mut first = None;
+                for entry in &path.entries {
+                    let Ok(segment) = entry.segment().to_geom() else {
+                        return false;
+                    };
+                    if matches!(segment, Segment::Arc(_)) {
+                        return false;
+                    }
+                    let length = segment.length();
+                    match first {
+                        None => first = Some(length),
+                        Some(expected) if (length - expected).abs() > LENGTH_TOLERANCE_MM => return false,
+                        Some(_) => {}
+                    }
+                }
+                true
+            }
+        }
+    }
+}
+
+/// How far two side lengths of a regular polygon may differ, in millimetres.
+///
+/// The sides are built from rounded vertices, so they differ by the rounding of one document unit.
+const LENGTH_TOLERANCE_MM: f64 = 1.0e-3;
 
 impl Path {
     /// Validates a chain of segments, gives every segment a fresh id and stores it open or closed.
@@ -1897,21 +2142,53 @@ impl Path {
     /// The same path rebuilt from new entries, keeping this path's counter and open/closed flag.
     ///
     /// This is the edit path: a caller changes one segment, keeps the id of every segment it did not
-    /// touch, and mints a new id from [`Path::next_segment_id`] for every segment it adds.
+    /// touch, and mints a new id from [`Path::next_segment_id`] for every segment it adds. The shape
+    /// tag survives, because reshaping a figure keeps it the same figure; a caller that changes the
+    /// structure instead calls [`Path::rebuild_topology`].
     pub fn rebuild(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, PathError> {
-        self.rebuild_as(entries, self.closed)
+        self.rebuild_of(entries, self.closed, self.shape)
     }
 
     /// The same path rebuilt from new entries with a new open or closed flag.
     ///
     /// [`Path::rebuild`] keeps the flag; closing a chain is the one edit that flips it, and it still
-    /// has to keep the counter that [`Path::rebuild`] keeps. A closed chain must join its last end
-    /// to its first start, so the caller supplies entries that already do.
+    /// has to keep the counter that [`Path::rebuild`] keeps. Closing adds a segment, so the shape tag
+    /// is dropped: a figure that was drawn open is not the regular shape it may resemble.
     pub(crate) fn rebuild_as(&self, entries: Vec<ContourSegmentEntry>, closed: bool) -> Result<Self, PathError> {
+        self.rebuild_of(entries, closed, None)
+    }
+
+    /// The same path rebuilt from new entries after a change of structure.
+    ///
+    /// Splitting or removing a segment can turn a rectangle into a pentagon, so the shape tag is
+    /// dropped rather than left to describe a figure that no longer exists.
+    pub(crate) fn rebuild_topology(&self, entries: Vec<ContourSegmentEntry>) -> Result<Self, PathError> {
+        self.rebuild_of(entries, self.closed, None)
+    }
+
+    /// Rebuilds the entries, the flag and the tag, keeping the id counter.
+    fn rebuild_of(
+        &self,
+        entries: Vec<ContourSegmentEntry>,
+        closed: bool,
+        shape: Option<PathShape>,
+    ) -> Result<Self, PathError> {
         let after_entries = next_id_after_entries(&entries).ok_or(PathError::SegmentIdExhausted)?;
         let next = self.next_segment_id.get().max(after_entries.get());
         let next_segment_id = ContourSegmentId::new(next).ok_or(PathError::SegmentIdExhausted)?;
-        Self::assemble(entries, next_segment_id, closed)
+        let path = Self::assemble(entries, next_segment_id, closed)?;
+        Ok(path.with_shape(shape))
+    }
+
+    /// The figure this path was drawn as, when the grips should keep its own constraints.
+    pub const fn shape(&self) -> Option<PathShape> {
+        self.shape
+    }
+
+    /// The same path carrying a shape tag.
+    pub fn with_shape(mut self, shape: Option<PathShape>) -> Self {
+        self.shape = shape;
+        self
     }
 
     /// A closed rectangle whose sides follow the axes, from two opposite corners.
@@ -1933,7 +2210,7 @@ impl Path {
             };
             segments.push(ContourSegment::line(start, end)?);
         }
-        Self::new(segments, true)
+        Self::new(segments, true).map(|path| path.with_shape(Some(PathShape::Rectangle)))
     }
 
     /// A closed circle as four quarter arcs.
@@ -1946,7 +2223,7 @@ impl Path {
             let start = Degrees::from_millidegrees(quarter.saturating_mul(90_000));
             segments.push(ContourSegment::arc(center, radius, start, Degrees::from_millidegrees(90_000))?);
         }
-        Self::new(segments, true)
+        Self::new(segments, true).map(|path| path.with_shape(Some(PathShape::Circle)))
     }
 
     /// A closed circle through a point away from its centre.
@@ -1966,6 +2243,184 @@ impl Path {
         let radius = Length::from_micrometres(radius.round() as i64);
         Self::circle(center, radius)
     }
+
+    /// The closed circle that passes through three points.
+    ///
+    /// The centre is the intersection of the perpendicular bisectors, so the three points must be
+    /// distinct and not collinear. Centre and radius are rounded to whole micrometres before the
+    /// four quarter arcs are built, so the stored circle can miss a click by a micrometre.
+    pub fn circle_three_points(first: [Length; 2], second: [Length; 2], third: [Length; 2]) -> Result<Self, PathError> {
+        check_point(first)?;
+        check_point(second)?;
+        check_point(third)?;
+        let a = point_to_geometry(first)?;
+        let b = point_to_geometry(second)?;
+        let c = point_to_geometry(third)?;
+        let determinant = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+        let span = (b - a).length_squared().max((c - a).length_squared());
+        if !determinant.is_finite() || determinant.abs() <= 1.0e-9 * span {
+            return Err(PathError::DegenerateCircle);
+        }
+        let a2 = a.length_squared();
+        let b2 = b.length_squared();
+        let c2 = c.length_squared();
+        let center = DVec2::new(
+            (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / determinant,
+            (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / determinant,
+        );
+        let radius = (a - center).length();
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(PathError::DegenerateCircle);
+        }
+        let center = point_to_document(center)?;
+        let radius = length_to_document(radius)?;
+        Self::circle(center, radius)
+    }
+
+    /// One open arc from a centre, a start point on the circle and a direction for its end.
+    ///
+    /// The radius is the distance from the centre to `start`; the end point only supplies the
+    /// angle, so a click that misses the circle still ends the arc where the user pointed. The arc
+    /// runs counter-clockwise, like a dial, and a zero or full turn is refused.
+    pub fn arc_from_center(center: [Length; 2], start: [Length; 2], end: [Length; 2]) -> Result<Self, PathError> {
+        check_point(center)?;
+        check_point(start)?;
+        check_point(end)?;
+        let c = point_to_geometry(center)?;
+        let s = point_to_geometry(start)?;
+        let e = point_to_geometry(end)?;
+        let radius = (s - c).length();
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(PathError::DegenerateArc);
+        }
+        let start_angle = (s.y - c.y).atan2(s.x - c.x);
+        let end_angle = (e.y - c.y).atan2(e.x - c.x);
+        let sweep = (end_angle - start_angle).rem_euclid(TAU);
+        if !sweep.is_finite() || sweep <= 0.0 {
+            return Err(PathError::DegenerateArc);
+        }
+        let segment = ContourSegment::arc(
+            center,
+            length_to_document(radius)?,
+            degrees_to_document(start_angle)?,
+            degrees_to_document(sweep)?,
+        )
+        .map_err(|error| match error {
+            ContourSegmentError::DegenerateArc => PathError::DegenerateArc,
+            other => PathError::Segment(other),
+        })?;
+        Self::new(vec![segment], false)
+    }
+
+    /// A closed rectangle centred on `center`, with `corner` as one of its corners.
+    ///
+    /// The opposite corner mirrors `corner` through the centre, so the rectangle has the axes of the
+    /// document and twice the offset as its sides. A corner on either axis through the centre
+    /// encloses no area and is refused.
+    pub fn rectangle_from_center(center: [Length; 2], corner: [Length; 2]) -> Result<Self, PathError> {
+        check_point(center)?;
+        check_point(corner)?;
+        let dx = i128::from(corner[0].micrometres()) - i128::from(center[0].micrometres());
+        let dy = i128::from(corner[1].micrometres()) - i128::from(center[1].micrometres());
+        if dx == 0 || dy == 0 {
+            return Err(PathError::DegenerateRectangle);
+        }
+        let low = [mirrored(center[0], dx)?, mirrored(center[1], dy)?];
+        let high = [mirrored(center[0], -dx)?, mirrored(center[1], -dy)?];
+        Self::rectangle(low, high)
+    }
+
+    /// A closed rectangle centred on `center`, its sides turned by a direction point, through `corner`.
+    ///
+    /// One axis of the rectangle follows `center → direction` and the other is square to it; `corner`
+    /// is the far corner, so its offset from the centre gives the half extents along both axes. The
+    /// direction must differ from the centre and the corner must be off both axes.
+    pub fn rectangle_from_center_directed(
+        center: [Length; 2],
+        direction: [Length; 2],
+        corner: [Length; 2],
+    ) -> Result<Self, PathError> {
+        check_point(center)?;
+        check_point(direction)?;
+        check_point(corner)?;
+        let c = point_to_geometry(center)?;
+        let axis = point_to_geometry(direction)? - c;
+        let reach = axis.length();
+        if !reach.is_finite() || reach <= 0.0 {
+            return Err(PathError::DegenerateRectangle);
+        }
+        let u = axis / reach;
+        let v = DVec2::new(-u.y, u.x);
+        let offset = point_to_geometry(corner)? - c;
+        let half_x = offset.dot(u);
+        let half_y = offset.dot(v);
+        if !half_x.is_finite()
+            || !half_y.is_finite()
+            || half_x.abs() < LENGTH_TOLERANCE_MM
+            || half_y.abs() < LENGTH_TOLERANCE_MM
+        {
+            return Err(PathError::DegenerateRectangle);
+        }
+        let points = [
+            c - u * half_x - v * half_y,
+            c + u * half_x - v * half_y,
+            c + u * half_x + v * half_y,
+            c - u * half_x + v * half_y,
+        ];
+        let mut corners = Vec::with_capacity(4);
+        for point in points {
+            corners.push(point_to_document(point)?);
+        }
+        let mut segments = Vec::with_capacity(4);
+        for index in 0..4 {
+            let (Some(&start), Some(&end)) = (corners.get(index), corners.get((index + 1) % 4)) else {
+                return Err(PathError::DegenerateRectangle);
+            };
+            if start == end {
+                return Err(PathError::DegenerateRectangle);
+            }
+            segments.push(ContourSegment::line(start, end)?);
+        }
+        Self::new(segments, true).map(|path| path.with_shape(Some(PathShape::Rectangle)))
+    }
+
+    /// A closed regular polygon from its centre, a rim point and a side count.
+    ///
+    /// The rim point gives both the radius and the phase: the first vertex sits on it and the rest
+    /// follow counter-clockwise at `360 / sides` degrees. Between three and [`MAX_POLYGON_SIDES`]
+    /// sides are accepted; the vertices are rounded, so the sides can differ by one micrometre.
+    pub fn regular_polygon(center: [Length; 2], rim: [Length; 2], sides: u32) -> Result<Self, PathError> {
+        check_point(center)?;
+        check_point(rim)?;
+        if !(MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES).contains(&sides) {
+            return Err(PathError::InvalidSides { sides, min: MIN_POLYGON_SIDES, max: MAX_POLYGON_SIDES });
+        }
+        let c = point_to_geometry(center)?;
+        let offset = point_to_geometry(rim)? - c;
+        let radius = offset.length();
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(PathError::DegeneratePolygon);
+        }
+        let first = offset.y.atan2(offset.x);
+        let step = TAU / f64::from(sides);
+        let mut corners = Vec::with_capacity(sides as usize);
+        for index in 0..sides {
+            let angle = first + step * f64::from(index);
+            corners.push(point_to_document(c + DVec2::new(angle.cos(), angle.sin()) * radius)?);
+        }
+        let mut segments = Vec::with_capacity(corners.len());
+        for index in 0..corners.len() {
+            let (Some(&start), Some(&end)) = (corners.get(index), corners.get((index + 1) % corners.len())) else {
+                return Err(PathError::DegeneratePolygon);
+            };
+            if start == end {
+                return Err(PathError::DegeneratePolygon);
+            }
+            segments.push(ContourSegment::line(start, end)?);
+        }
+        Self::new(segments, true).map(|path| path.with_shape(Some(PathShape::RegularPolygon)))
+    }
+
     /// One open or closed chain through `points`, one line per pair.
     ///
     /// Adjacent equal points are refused because they would make a zero-length segment, and a
@@ -2046,7 +2501,7 @@ impl Path {
                 return Err(PathError::NotClosed);
             }
         }
-        Ok(Self { entries, next_segment_id, closed })
+        Ok(Self { entries, next_segment_id, closed, shape: None })
     }
 
     /// The chain elements with their ids, in travel order.
@@ -2127,9 +2582,27 @@ impl Path {
     }
 }
 
+impl From<Contour> for Path {
+    /// The same ring as a closed path, with its segment ids and its id counter.
+    ///
+    /// A ring is a path that already satisfies every path rule, so this conversion loses nothing
+    /// but the contour's ring-only guarantees: it carries no shape tag, because a ring is not a
+    /// figure the drawing tools recognised.
+    fn from(contour: Contour) -> Self {
+        Self { entries: contour.entries, next_segment_id: contour.next_segment_id, closed: true, shape: None }
+    }
+}
+
 /// Whether the end of `current` meets the start of `next` within the joint tolerance.
 fn joints_meet(current: ContourSegment, next: ContourSegment) -> Result<bool, PathError> {
     Ok(within_joint_tolerance(current.end()?, next.start()?))
+}
+
+/// `center - offset` in whole micrometres, refusing a value that does not fit.
+fn mirrored(center: Length, offset: i128) -> Result<Length, PathError> {
+    let value = i128::from(center.micrometres()) - offset;
+    let value = i64::try_from(value).map_err(|_| PathError::Segment(ContourSegmentError::NonFinite))?;
+    Ok(Length::from_micrometres(value))
 }
 
 /// Whether two whole-micrometre points are at most the joint tolerance apart.
@@ -2197,6 +2670,28 @@ pub enum PathError {
     /// The three points of an arc coincide or lie on one line.
     #[error("an arc through three points needs three distinct, non-collinear points")]
     DegenerateArc,
+    /// The three points of a circle coincide or lie on one line.
+    #[error("a circle through three points needs three distinct, non-collinear points")]
+    DegenerateCircle,
+    /// The centre and the rim point of a polygon coincide, or a vertex collapses.
+    #[error("a regular polygon needs a rim point away from its centre")]
+    DegeneratePolygon,
+    /// A polygon asks for a side count the document cannot hold.
+    #[error("a regular polygon needs between {min} and {max} sides, got {sides}")]
+    InvalidSides {
+        /// The requested side count.
+        sides: u32,
+        /// The smallest accepted count.
+        min: u32,
+        /// The largest accepted count.
+        max: u32,
+    },
+    /// The shape tag of a stored path does not describe its segments.
+    #[error("the path is tagged as a {shape:?} but its segments are not that figure")]
+    ShapeMismatch {
+        /// The tag the file carried.
+        shape: PathShape,
+    },
     /// The path is open, so it does not enclose a ring.
     #[error("an open path encloses no ring; close it before it becomes a contour")]
     Open,
@@ -2212,6 +2707,8 @@ struct PathWire {
     segments: Vec<ContourSegmentEntryWire>,
     next_segment_id: ContourSegmentId,
     closed: bool,
+    #[serde(default)]
+    shape: Option<PathShape>,
 }
 
 impl TryFrom<PathWire> for Path {
@@ -2225,7 +2722,13 @@ impl TryFrom<PathWire> for Path {
             };
             entries.push(ContourSegmentEntry::new(id, segment.segment()?));
         }
-        Self::assemble(entries, wire.next_segment_id, wire.closed)
+        let path = Self::assemble(entries, wire.next_segment_id, wire.closed)?;
+        if let Some(shape) = wire.shape
+            && !shape.fits(&path)
+        {
+            return Err(PathError::ShapeMismatch { shape });
+        }
+        Ok(path.with_shape(wire.shape))
     }
 }
 
@@ -2235,6 +2738,7 @@ impl From<Path> for PathWire {
             segments: path.entries.iter().map(|entry| ContourSegmentEntryWire::from(*entry)).collect(),
             next_segment_id: path.next_segment_id,
             closed: path.closed,
+            shape: path.shape,
         }
     }
 }
@@ -2504,7 +3008,7 @@ pub enum ContourError {
         /// The supported maximum.
         max: usize,
     },
-    /// The end of a segment does not meet the start of the next one.
+    /// The end of a segment does not meet the start of the next one, beyond the joint tolerance.
     #[error("contour segment {index} does not meet the next segment")]
     NotClosed {
         /// Index of the segment whose end is checked.

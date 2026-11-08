@@ -563,6 +563,11 @@ pub(crate) struct SnapRequest<'a> {
     pub(crate) axis_lock: bool,
     /// Capture radius around a draft end, in plane millimetres.
     pub(crate) end_radius: f64,
+    /// Alt was held: skip the end and grid snaps and take the pointer as it is.
+    ///
+    /// The axis lock still applies, because Shift is an explicit request for a straight segment
+    /// rather than an implicit snap that Alt should suppress.
+    pub(crate) ignore_snaps: bool,
 }
 
 /// Which plane axis an axis-locked point follows.
@@ -625,14 +630,17 @@ pub(crate) fn snap_axis(point: DVec2, anchor: DVec2) -> (DVec2, SnapAxis) {
 /// the anchor. A free pointer in grid mode rounds both coordinates.
 #[allow(dead_code, reason = "the drawing tools send every plane point through it in U14-U16")]
 pub(crate) fn snap_point(request: SnapRequest<'_>) -> SnappedPoint {
-    if let Some(end) = nearest_end(request.point, request.ends, request.end_radius) {
+    if !request.ignore_snaps
+        && let Some(end) = nearest_end(request.point, request.ends, request.end_radius)
+    {
         return SnappedPoint { point: end, target: SnapTarget::End };
     }
     let lock = match (request.axis_lock, request.anchor) {
         (true, Some(anchor)) => Some(snap_axis(request.point, anchor)),
         _ => None,
     };
-    match (request.mode, lock) {
+    let mode = if request.ignore_snaps { SnapMode::Free } else { request.mode };
+    match (mode, lock) {
         (SnapMode::Grid, Some((point, axis))) => {
             SnappedPoint { point: round_free_coordinate(point, axis), target: SnapTarget::Axis }
         }
@@ -1224,7 +1232,7 @@ mod tests {
             axis_lock: bool,
             end_radius: f64,
         ) -> SnapRequest<'a> {
-            SnapRequest { point, anchor, ends, mode, axis_lock, end_radius }
+            SnapRequest { point, anchor, ends, mode, axis_lock, end_radius, ignore_snaps: false }
         }
         let cases = [
             (
@@ -1267,6 +1275,7 @@ mod tests {
             mode: SnapMode::Free,
             axis_lock: false,
             end_radius: 5.0,
+            ignore_snaps: false,
         };
         let result = snap_point(request);
         assert!(result.point.x.is_nan());
@@ -1280,8 +1289,33 @@ mod tests {
             mode: SnapMode::Grid,
             axis_lock: true,
             end_radius: 5.0,
+            ignore_snaps: false,
         };
         assert!(!snap_point(locked).point.is_finite(), "a non-finite input never becomes a silent zero");
+    }
+
+    #[test]
+    fn alt_skips_the_end_and_grid_snaps_but_keeps_the_axis_lock() {
+        let ends = [DVec2::new(100.0, 100.0)];
+        let free = |point: DVec2, anchor: Option<DVec2>, axis_lock: bool| SnapRequest {
+            point,
+            anchor,
+            ends: &ends,
+            mode: SnapMode::Grid,
+            axis_lock,
+            end_radius: 5.0,
+            ignore_snaps: true,
+        };
+        // The end is close enough to capture, but Alt leaves the pointer where it is.
+        assert_eq!(
+            snap_point(free(DVec2::new(102.0, 101.0), Some(DVec2::ZERO), false)),
+            SnappedPoint { point: DVec2::new(102.0, 101.0), target: SnapTarget::Free }
+        );
+        // The grid is skipped too; only the axis Shift asks for remains.
+        assert_eq!(
+            snap_point(free(DVec2::new(123.0, 55.0), Some(DVec2::new(5.0, 5.0)), true)),
+            SnappedPoint { point: DVec2::new(123.0, 5.0), target: SnapTarget::Axis }
+        );
     }
 
     #[test]

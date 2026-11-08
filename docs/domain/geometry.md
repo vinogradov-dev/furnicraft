@@ -24,18 +24,20 @@ Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-nod
 
 | | Mesh object | Constructive object |
 |---|---|---|
-| Created from | a primitive, or a collapsed payload | a closed flat contour plus features |
-| Source of truth | the mesh itself | the contour and the feature parameters |
-| Edited by | moving vertices and faces | editing the contour or a feature |
+| Created from | a primitive, or a collapsed payload | a closed path plus features |
+| Source of truth | the mesh itself | the path and the feature parameters |
+| Edited by | moving vertices and faces | editing the path or a feature |
 | Mesh editing | yes | no, until `object.collapse` |
 | History | undo only | the feature list, saved in the file |
 | Mesh in the file | yes | no, it is derived |
 
 The two paths are deliberately separate ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 A mesh has no shape history; a primitive keeps its parameters and a constructive object keeps its
-contour, so both have a source of truth that survives an edit. A constructive object has no direct
-mesh editing, so its contour stays the only way to change it. A path object is a further payload: a
-drawing rather than a solid, described in section 6; a primitive is described in section 5.
+path, so both have a source of truth that survives an edit. A constructive object has no direct
+mesh editing, so its path stays the only way to change it, and extruding a drawing makes that
+drawing the body rather than copying it ([0074](../decisions/0074-an-extrusion-owns-the-path-it-grew-from.md)).
+A path object is a further payload: a drawing rather than a solid, described in section 6; a
+primitive is described in section 5.
 
 ## 2. The object node
 
@@ -70,9 +72,16 @@ drawing rather than a solid, described in section 6; a primitive is described in
 
 ## 4. Constructive payload
 
+- `path`: the closed drawing the body grew from, with its segment ids and its optional shape tag.
 - `features`: an ordered list. The first feature is `Extrude`.
-- `Extrude { contour, height }` takes a closed ring in the object's local XY plane and extrudes it
-  along `+Z` from `z = 0` by `height`.
+- `Extrude { height }` extrudes the body's own path in its local XY plane along `+Z` from `z = 0` by
+  `height`. The path is stored once, at the body; the ring the extrusion sweeps is derived on read
+  (`Constructive::contour`). A body that has a second extrusion feature repeats the same path with
+  its own height.
+- The constructor requires a closed path that passes `Path::to_contour`; an open chain is refused
+  before the document changes. Extruding a path object converts that node into the body in place and
+  keeps its id, name, placement, pivot and properties, so the drawing is not left behind as a
+  separate object ([0074](../decisions/0074-an-extrusion-owns-the-path-it-grew-from.md)).
 - A contour is a ring of directed **segments**, at least three. A segment is a straight line between
   two points or a circular arc with a centre, a positive radius, a start angle and a non-zero sweep
   of at most one turn. Every value is stored in document units: micrometres and millidegrees.
@@ -94,7 +103,15 @@ drawing rather than a solid, described in section 6; a primitive is described in
   None of them may reference a face or an edge of the evaluated result
   ([0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md)).
 - The height is positive and capped by the document's size limit. An empty or negative feature list
-  is invalid.
+  is invalid, and a body that stores no path, or names its path twice, is a readable load error.
+- A version 18 file stored the contour inside its extrusion feature; it loads into the body's path,
+  and every later save writes the path once (schema 19).
+- A fresh extrusion opens a **pull arrow** at the contour's bounds centre, on the top face at the
+  current height and pointing along the body's local `+Z`. Dragging it or typing a height writes
+  `object.extrude.height.set`; a released drag commits one command and leaves the pull open, while
+  Enter or a bare click finishes it. The last committed height stays in session view state, so the
+  next extrusion starts there (100 mm at first); Escape drops the pull without touching the
+  document, leaving the height the last command gave the body.
 
 ## 5. Primitive payload
 
@@ -127,11 +144,20 @@ drawing rather than a solid, described in section 6; a primitive is described in
   `z = 0`. It uses the same segment value and the same stable ids as a ring, so a line or an arc
   drawn once keeps its shape and its identity when it becomes a contour
   ([0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md)).
-- The drawing tools build a path from shapes: a rectangle from two opposite corners, a circle as four
-  quarter arcs whose joints sit exactly on the axes, and an arc through three points. A rectangle and
-  a circle are closed; a three-point arc is one open segment. Degenerate input — a rectangle with no
-  width or height, a non-positive radius, or three coincident or collinear points — is an error, not
-  a flat shape.
+- The drawing tools build a path from shapes: a line from two points, a polyline from its clicks, an
+  arc through three points or from a centre with a start and an end, a rectangle from two opposite
+  corners, from its centre, or from a centre plus a side direction, a circle from its centre and a
+  rim point or through three points, and a regular polygon from a centre, a rim point and `3..=128`
+  sides. A rectangle, a circle and a polygon are closed; a line and an arc stay open. Degenerate
+  input — a rectangle with no width or height, a non-positive radius, or three coincident, collinear
+  or otherwise impossible points — is an error, not a flat shape.
+- In a polyline Tab chooses whether the next segment is a straight line or an arc; the closing click
+  uses the same kind and always starts at the stored end of the previous segment. Alt suppresses the
+  draft-end and grid snaps for one click and never changes the gesture, while Shift still locks the
+  point to an axis ([0076](../decisions/0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md)).
+  Escape or the right button commits the figure and Ctrl+Esc or the ribbon's Cancel discards it.
+- A committed figure lands as one `object.path.create` and immediately enters its own contour edit
+  mode, so the grips are on screen without a second selection.
 - Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
   meeting within a micrometre, and a closed chain closing its last joint. Self-intersection and
   enclosed area are ring rules, so they run when the path becomes a ring, not while it is drawn.
@@ -140,6 +166,8 @@ drawing rather than a solid, described in section 6; a primitive is described in
 - A path is a drawing, not a solid: it has no mesh, no feature list and no evaluation. The viewport
   draws it as an unlit line chain and picks it within a few screen points
   ([0018](../decisions/0018-picking-ray-casts-the-scene.md)).
+- Extruding a closed path turns that node into a constructive body that stores this same path, so the
+  drawing is not copied and the body can be reshaped through the contour editor.
 - The document stores the drawing as drawn: direction and orientation are kept, and a clockwise
   closed path becomes a counter-clockwise ring only in `to_contour`.
 - An object payload is `Geometry::Path(Path)` (schema 17). It cannot be collapsed: there is no solid
@@ -163,12 +191,29 @@ in one viewport mode. Its state is view state, not document data
   applies. Leaving the mode without applying drops the draft.
 - A corner handle sits at the start of every segment. Dragging it moves that corner in the node's
   local XY plane through its world placement; the two adjoining segments follow, and the rest of the
-  ring is unchanged.
+  ring is unchanged. The list of handles follows the figure the path was drawn as
+  ([0075](../decisions/0075-a-grip-names-what-its-number-means.md)): a tagged circle adds its centre
+  and four quadrants, a rectangle its side midpoints and centre, a polygon its radius point and
+  centre, and a chain adds the centre and point-on-curve of each arc.
+- A corner drag is **free** by default; the status bar switches it to **along the contour**. Then the
+  segment nearest the pointer at the drag start becomes the support and the edit projects onto its
+  line or circle for the whole drag. The target is resolved once, so crossing the junction does not
+  switch segments half way.
+- A tag constrains a free drag: a rectangle corner pins the opposite corner and keeps the right
+  angles, a rectangle midpoint moves one side and leaves the opposite one, a circle quadrant scales
+  the circle, and a polygon vertex keeps every side equal. A centre handle translates the figure
+  without turning it or changing its size.
+- A small numeric field follows the pointer while a grip is dragged. It is prefilled with the grip's
+  current value and labelled with its dimension: a radius for a circle quadrant, an arc point or a
+  hovered arc curve, an angle for an arc end, `W` or `H` for a rectangle side, the circumradius for a
+  polygon radius point. Enter applies the same model setter the drag uses and keeps the edit mode;
+  Escape restores the value the drag started from. A refused number leaves the field open and the
+  draft untouched.
 - Double-clicking a side splits it at the projected point. A split near a corner is refused so it
   cannot mint a segment a few micrometres long.
-- An arc corner slides along its own circle: the drag point is projected onto the arc first, and the
-  edit trims or extends the sweep. The centre and radius of a stored arc are never redefined; a point
-  that misses the circle by more than a micrometre is rejected by the edit math.
+- A corner next to an arc is projected onto that arc's circle, so a drag trims or extends the sweep
+  instead of redefining the curve. A free corner of a tagged figure takes the shape constraint
+  instead. A point that misses the circle by more than a micrometre is rejected by the edit math.
 - The model edit API is `move_corner`, `trim_segment` and `split_segment`. The viewport uses the first
   and the third; trimming along a supporting line or circle is available to a command but is not a
   gesture yet.
@@ -180,9 +225,9 @@ in one viewport mode. Its state is view state, not document data
   inside the coordinate limit and not self-intersecting. A gesture that would break the ring is
   rejected and leaves the last valid draft in place, so a corner simply stops at the boundary.
 - **Apply** dispatches exactly one command — `panel.outline.set` for a panel outline,
-  `object.contour.replace` for an object, `object.path.replace` for a path and
-  `panel.machining.update` for a cutout ring — and one undo entry is the whole edit. A cutout update
-  keeps the record's anchor and its `CutoutDepth`. Enter applies and Escape cancels. A rejected apply
+  `object.contour.replace` for the path inside a constructive body, `object.path.replace` for a path
+  and `panel.machining.update` for a cutout ring — and one undo entry is the whole edit. A cutout
+  update keeps the record's anchor and its `CutoutDepth`. Enter applies and Escape cancels. A rejected apply
   keeps the draft so the user can fix it or cancel; a successful apply leaves the mode. An untouched
   draft dispatches no command and creates no empty undo entry.
 - A selection change, a deleted target or a target that no longer stores a ring or a chain ends the
@@ -253,8 +298,10 @@ in one viewport mode. Its state is view state, not document data
 |---|---|---|
 | `object.primitive.create` | parent, name, primitive kind, size, placement | creates a parametric primitive with the default tessellation, returns its id |
 | `object.primitive.replace` | object, primitive | replaces the parameters in one revision and keeps the node |
-| `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude` |
-| `object.contour.replace` | object, contour | replaces the contour and rebuilds |
+| `object.extrude.create` | parent, name, contour, height, placement | creates a constructive object with one `Extrude`; the contour becomes the body's path |
+| `object.path.extrude` | object, height | turns a path node into the body that owns it, in place |
+| `object.extrude.height.set` | object, height | replaces the first extrusion's height and keeps the path |
+| `object.contour.replace` | object, path | replaces the body's path and rebuilds |
 | `object.path.create` | parent, name, path, placement | creates a path object, returns its id |
 | `object.path.replace` | object, path | replaces the drawing and keeps the node |
 | `object.collapse` | object | replaces the payload with the evaluated mesh |
@@ -280,6 +327,18 @@ At minimum:
 - an open ring, a ring that does not meet its neighbour and a ring that crosses itself are rejected
   on construction and on load;
 - replacing the contour changes the mesh and keeps the id, name and placement;
+- extruding a path replaces the node in place, leaves no sibling, is one undo entry and is refused on
+  an open chain or a second time;
+- replacing the body's path keeps its height, and setting the height keeps its path;
+- a pull drag writes one height command, raises the body along its own axis, and the next extrusion
+  starts at that height;
+- every drawing tool builds its figure from its own clicks, and a committed figure opens its edit
+  mode;
+- Tab makes a polyline's next segment straight or an arc, and an arc that returns to the stored start
+  closes the chain;
+- a rejected intermediate preview keeps the last valid one and reports why, and the stored chain
+  stays drawn;
+- a version 18 extrusion contour loads as the body's path and a save writes no contour copy;
 - a path is created open or closed and keeps its segments and ids, and replacing it changes only the
   drawing in one revision;
 - a blank name, an unknown parent or a replace on an object that stores no path is refused without
@@ -299,6 +358,11 @@ At minimum:
 - a split keeps the first part's id and the new part takes the next id; untouched segments keep
   theirs;
 - an arc corner slides on its circle, and a corner off the circle is rejected;
+- a circle, a rectangle, a polygon and an arc expose the grips their shape needs, and dragging one
+  keeps the figure (a circle stays round, a rectangle keeps right angles, a polygon keeps its sides);
+- a numeric field parses the grip's dimension and applies it, an angle for an arc end and a length
+  for a radius or a side; Escape restores the drag-start value and a refused number changes nothing;
+- free movement is the default, and an along-contour drag keeps the segment resolved at its start;
 - a draft that would open or cross the ring leaves the last valid shape in place, and cancelling the
   mode changes nothing.
 

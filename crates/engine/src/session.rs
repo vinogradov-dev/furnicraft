@@ -198,7 +198,8 @@ mod tests {
             [Length::ZERO, height],
         ])
         .expect("ring");
-        let constructive = Constructive::extrude(contour, sample_panel_thickness()).expect("constructive object");
+        let constructive =
+            Constructive::extrude(contour.into(), sample_panel_thickness()).expect("constructive object");
         let source = project
             .add_object(project.root().id(), "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("contour source");

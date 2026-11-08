@@ -16,14 +16,15 @@ use furnicraft_engine::{
     ObjectContourReplace, ObjectPathCreate, ObjectPathReplace, PanelMachiningUpdate, PanelOutlineSet, Session,
 };
 use furnicraft_model::{
-    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, Cutout,
-    CutoutShape, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MachiningId, MachiningParams, Path, PathCorner,
-    PathError, Placement, Project,
+    Contour, ContourEditError, ContourSegment, ContourSegmentEntry, ContourSegmentError, ContourSegmentId, CornerMove,
+    Cutout, CutoutShape, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES,
+    MachiningId, MachiningParams, Path, PathCorner, PathError, Placement, Project,
 };
 use furnicraft_units::Length;
 use thiserror::Error;
 
 use crate::command::{dispatch, json};
+use crate::contour_grips::{ContourGrip, GripValue};
 
 /// The node whose contour the editor is changing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,7 +72,7 @@ impl ContourTarget {
     pub fn draft(self, project: &Project) -> Option<ContourDraft> {
         match self {
             Self::Panel(id) => project.panel(id)?.outline_contour().cloned().map(ContourDraft::Ring),
-            Self::Object(id) => project.object_contour(id).ok().cloned().map(ContourDraft::Ring),
+            Self::Object(id) => project.object_contour(id).ok().map(ContourDraft::Ring),
             Self::Path(id) => project.object_path(id).ok().cloned().map(ContourDraft::Chain),
             Self::Cutout { .. } => self.cutout_ring(project).cloned().map(ContourDraft::Ring),
         }
@@ -242,25 +243,68 @@ impl ContourEdit {
 
     /// Moves the corner at the start of `segment` to `point` in the target's local plane.
     pub fn move_corner(&mut self, segment: ContourSegmentId, point: [Length; 2]) -> Result<(), ContourEditError> {
-        self.move_corner_at(PathCorner::Start(segment), point)
+        self.move_corner_at(PathCorner::Start(segment), point, CornerMove::Free)
     }
 
-    /// Moves the corner named by `corner` to `point` in the target's local plane.
+    /// Moves the corner named by `corner` to `point` in the target's local plane, following `motion`.
     ///
     /// A ring addresses a corner by the segment that starts on it, so an end names the next
-    /// segment's start; a chain uses the corner the path edit names.
-    pub fn move_corner_at(&mut self, corner: PathCorner, point: [Length; 2]) -> Result<(), ContourEditError> {
+    /// segment's start; a chain uses the corner the path edit names. A ring and a chain take the
+    /// same two modes, so a grip behaves the same on a panel outline and on a drawn figure.
+    pub fn move_corner_at(
+        &mut self,
+        corner: PathCorner,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
         match &mut self.draft {
             ContourDraft::Ring(contour) => {
                 let segment = ring_corner_segment(contour, corner)?;
-                let moved = contour.move_corner(segment, point)?;
+                let moved = contour.move_corner_with(segment, point, motion)?;
                 *contour = moved;
             }
             ContourDraft::Chain(path) => {
-                let moved = path.move_corner_at(corner, point)?;
+                let moved = path.move_corner_at(corner, point, motion)?;
                 *path = moved;
             }
         }
+        Ok(())
+    }
+
+    /// Every grip the working copy shows, in painting order.
+    pub fn grips(&self) -> Vec<ContourGrip> {
+        self.draft.grips()
+    }
+
+    /// Drags `grip` to `point` in the target's local plane.
+    ///
+    /// A tagged figure keeps its own constraint, so a circle quadrant scales the circle and a
+    /// rectangle midpoint moves one side; a plain chain takes [`CornerMove`] like any corner.
+    pub fn drag_grip(
+        &mut self,
+        grip: ContourGrip,
+        point: [Length; 2],
+        motion: CornerMove,
+    ) -> Result<(), ContourEditError> {
+        let mut draft = self.draft.clone();
+        draft.drag_grip(grip, point, motion)?;
+        self.draft = draft;
+        Ok(())
+    }
+
+    /// The value a numeric field starts with at `grip`, when the grip takes a number.
+    pub fn grip_value(&self, grip: ContourGrip) -> Option<GripValue> {
+        self.draft.grip_value(grip)
+    }
+
+    /// Applies a number typed at `grip`.
+    ///
+    /// The working copy is replaced only when the value builds a legal figure, so a refused number
+    /// leaves the draft as it was and the field can stay open.
+    pub fn set_grip_value(&mut self, grip: ContourGrip, value: GripValue) -> Result<(), ContourEditError> {
+        let mut draft = self.draft.clone();
+        draft.set_grip_value(grip, value)?;
+        self.draft = draft;
         Ok(())
     }
 
@@ -295,7 +339,7 @@ impl ContourEdit {
                 dispatch(session, OUTLINE_SET_ID, &params).map(|_| ())
             }
             (ContourTarget::Object(object), ContourDraft::Ring(contour)) => {
-                let params = json(&ObjectContourReplace { object, contour: contour.clone() })?;
+                let params = json(&ObjectContourReplace { object, path: contour.clone().into() })?;
                 dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
             }
             (ContourTarget::Path(object), ContourDraft::Chain(path)) => {
@@ -339,15 +383,27 @@ fn ring_corner_segment(contour: &Contour, corner: PathCorner) -> Result<ContourS
 pub enum DrawTool {
     /// Two points make one open line.
     Line,
-    /// Two or more points make an open chain, or a closed ring on request.
+    /// Two or more points make an open chain, or a closed ring on request. Tab switches each
+    /// segment between a straight line and an arc.
     #[default]
     Polyline,
     /// Three points make one open arc through the middle point.
     Arc,
+    /// A centre, a start and an end point make one open arc of that radius and sweep.
+    ArcFromCenter,
     /// Two opposite corners make one closed rectangle.
     Rectangle,
+    /// A centre and a corner make one closed rectangle of twice that offset.
+    RectangleFromCenter,
+    /// A centre, a side direction and a corner make one closed rectangle at any angle.
+    RectangleFromCenterDirected,
     /// A centre and a rim point make one closed circle.
     Circle,
+    /// Three points on the rim make one closed circle.
+    CircleThreePoints,
+    /// A centre and a rim point make one closed regular polygon; the side count comes from the
+    /// ribbon.
+    RegularPolygon,
 }
 
 impl DrawTool {
@@ -357,8 +413,8 @@ impl DrawTool {
     /// two points and takes as many more as the ring cap allows.
     pub const fn points(self) -> Option<usize> {
         match self {
-            Self::Line | Self::Rectangle | Self::Circle => Some(2),
-            Self::Arc => Some(3),
+            Self::Line | Self::Rectangle | Self::RectangleFromCenter | Self::Circle | Self::RegularPolygon => Some(2),
+            Self::Arc | Self::ArcFromCenter | Self::CircleThreePoints | Self::RectangleFromCenterDirected => Some(3),
             Self::Polyline => None,
         }
     }
@@ -370,7 +426,15 @@ impl DrawTool {
 
     /// Whether the path is closed by the tool itself, without a close action.
     pub const fn is_closed(self) -> bool {
-        matches!(self, Self::Rectangle | Self::Circle)
+        matches!(
+            self,
+            Self::Rectangle
+                | Self::RectangleFromCenter
+                | Self::RectangleFromCenterDirected
+                | Self::Circle
+                | Self::CircleThreePoints
+                | Self::RegularPolygon
+        )
     }
 
     /// A short user-visible name.
@@ -379,8 +443,13 @@ impl DrawTool {
             Self::Line => "Line",
             Self::Polyline => "Polyline",
             Self::Arc => "Arc",
+            Self::ArcFromCenter => "Arc from centre",
             Self::Rectangle => "Rectangle",
+            Self::RectangleFromCenter => "Rectangle from centre",
+            Self::RectangleFromCenterDirected => "Directed rectangle",
             Self::Circle => "Circle",
+            Self::CircleThreePoints => "Circle through 3 points",
+            Self::RegularPolygon => "Polygon",
         }
     }
 }
@@ -403,8 +472,15 @@ pub struct DrawDraft {
     points: Vec<[Length; 2]>,
     /// An arc through a clicked point, waiting for the point that ends it.
     pending_arc: Option<[Length; 2]>,
+    /// Whether a polyline's next segment is an arc; Tab flips it.
+    arc_mode: bool,
+    /// The side count a regular polygon uses, from the ribbon.
+    sides: u32,
     closed: bool,
 }
+
+/// The side count a regular polygon starts with before the ribbon names another.
+pub const DEFAULT_POLYGON_SIDES: u32 = 6;
 
 impl Default for DrawDraft {
     fn default() -> Self {
@@ -415,12 +491,55 @@ impl Default for DrawDraft {
 impl DrawDraft {
     /// An empty, open draft for `tool`.
     pub const fn new(tool: DrawTool) -> Self {
-        Self { tool, segments: Vec::new(), points: Vec::new(), pending_arc: None, closed: false }
+        Self::with_sides(tool, DEFAULT_POLYGON_SIDES)
+    }
+
+    /// An empty, open draft for `tool`, with the side count a regular polygon uses.
+    ///
+    /// The count is clamped to the model's accepted range, so a bad ribbon value can never build a
+    /// polygon the document refuses.
+    pub const fn with_sides(tool: DrawTool, sides: u32) -> Self {
+        let sides = if sides < MIN_POLYGON_SIDES {
+            MIN_POLYGON_SIDES
+        } else if sides > MAX_POLYGON_SIDES {
+            MAX_POLYGON_SIDES
+        } else {
+            sides
+        };
+        Self {
+            tool,
+            segments: Vec::new(),
+            points: Vec::new(),
+            pending_arc: None,
+            arc_mode: false,
+            sides,
+            closed: false,
+        }
     }
 
     /// The tool this draft belongs to.
     pub const fn tool(&self) -> DrawTool {
         self.tool
+    }
+
+    /// Whether the next polyline segment is an arc.
+    pub const fn arc_mode(&self) -> bool {
+        self.arc_mode
+    }
+
+    /// Flips a polyline between straight and arc input; other tools have no second mode.
+    ///
+    /// Returns the mode after the call, so the status line can name it.
+    pub fn toggle_arc_mode(&mut self) -> bool {
+        if self.tool == DrawTool::Polyline {
+            self.arc_mode = !self.arc_mode;
+        }
+        self.arc_mode
+    }
+
+    /// The side count of the regular polygon this draft would build.
+    pub const fn sides(&self) -> u32 {
+        self.sides
     }
 
     /// The chain built so far, in travel order.
@@ -632,28 +751,36 @@ impl DrawDraft {
         self.path_with(None, self.closed)
     }
 
-    /// The path the draft would have if `next` were appended as a straight segment, or `None` when
-    /// the draft already holds everything the tool takes.
+    /// The path the draft would have if `next` were appended, or `None` when the draft already
+    /// holds everything the tool takes.
     ///
     /// This is the preview: a rectangle shows its fourth side and a circle its whole rim while the
     /// pointer still moves, and a pending arc previews the arc it will become.
     pub fn preview_path(&self, next: [Length; 2]) -> Option<Path> {
+        self.preview(next).ok().flatten()
+    }
+
+    /// The preview, with the reason a click at `next` cannot extend the draft.
+    ///
+    /// The caller keeps the last valid preview when this is an error, so a chain never blinks out
+    /// at an intermediate click; the reason goes to the status line instead.
+    pub fn preview(&self, next: [Length; 2]) -> Result<Option<Path>, DrawDraftError> {
         if self.closed || !point_in_range(next) {
-            return None;
+            return Ok(None);
         }
         if self.pending_arc.is_none()
             && let Some(need) = self.tool.points()
             && self.points.len() >= need
         {
-            return None;
+            return Ok(None);
         }
         if self.segments.len() >= MAX_CONTOUR_SEGMENTS {
-            return None;
+            return Ok(None);
         }
         if self.last_end() == Some(next) {
-            return None;
+            return Ok(None);
         }
-        self.path_with(Some(next), false).ok()
+        self.path_with(Some(next), false).map(Some)
     }
 
     /// The one segment that runs from the last stored end back to the first stored start.
@@ -713,17 +840,48 @@ impl DrawDraft {
                 };
                 Path::arc_through(start, through, end).map_err(DrawDraftError::from)
             }
+            DrawTool::ArcFromCenter => {
+                let (Some(&center), Some(&start), Some(&end)) = (points.first(), points.get(1), points.get(2)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: points.len() });
+                };
+                Path::arc_from_center(center, start, end).map_err(DrawDraftError::from)
+            }
             DrawTool::Rectangle => {
                 let (Some(&first), Some(&second)) = (points.first(), points.get(1)) else {
                     return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
                 };
                 Path::rectangle(first, second).map_err(DrawDraftError::from)
             }
+            DrawTool::RectangleFromCenter => {
+                let (Some(&center), Some(&corner)) = (points.first(), points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
+                };
+                Path::rectangle_from_center(center, corner).map_err(DrawDraftError::from)
+            }
+            DrawTool::RectangleFromCenterDirected => {
+                let (Some(&center), Some(&direction), Some(&corner)) = (points.first(), points.get(1), points.get(2))
+                else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: points.len() });
+                };
+                Path::rectangle_from_center_directed(center, direction, corner).map_err(DrawDraftError::from)
+            }
             DrawTool::Circle => {
                 let (Some(&center), Some(&rim)) = (points.first(), points.get(1)) else {
                     return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
                 };
                 Path::circle_through(center, rim).map_err(DrawDraftError::from)
+            }
+            DrawTool::CircleThreePoints => {
+                let (Some(&first), Some(&second), Some(&third)) = (points.first(), points.get(1), points.get(2)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 3, got: points.len() });
+                };
+                Path::circle_three_points(first, second, third).map_err(DrawDraftError::from)
+            }
+            DrawTool::RegularPolygon => {
+                let (Some(&center), Some(&rim)) = (points.first(), points.get(1)) else {
+                    return Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() });
+                };
+                Path::regular_polygon(center, rim, self.sides).map_err(DrawDraftError::from)
             }
             DrawTool::Polyline => Err(DrawDraftError::TooFewPoints { need: 2, got: points.len() }),
         }
@@ -751,6 +909,13 @@ impl DrawDraft {
         self.pending_arc = None;
         self.segments.push(arc);
         self.points.push(point);
+        // An arc that ends on the chain's first start closes the contour, which is the one way a
+        // closing click in arc mode can make a ring. A ring needs three segments; a shorter chain
+        // stays open so the next click can still extend it.
+        let first_start = self.segments.first().and_then(|segment| segment.start().ok());
+        if self.tool.closes() && first_start == Some(point) && self.segments.len() >= 3 {
+            self.closed = true;
+        }
         Ok(())
     }
 
@@ -908,7 +1073,7 @@ mod tests {
         let mut project = sample_project();
         let root = project.root().id();
         let constructive =
-            Constructive::extrude(rectangle(700, 500), sample_panel_thickness()).expect("constructive object");
+            Constructive::extrude(rectangle(700, 500).into(), sample_panel_thickness()).expect("constructive object");
         let id = project
             .add_object(root, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("object");
@@ -1021,7 +1186,7 @@ mod tests {
         edit.apply(&mut session).expect("apply the contour");
         assert_eq!(
             session.project().object_contour(object).expect("contour"),
-            edit.draft().as_ring().expect("ring"),
+            edit.draft().as_ring().expect("ring").clone(),
             "an object contour is stored exactly as edited"
         );
     }
@@ -1160,7 +1325,8 @@ mod tests {
         assert!(!edit.is_dirty());
 
         let last = edit.draft().entries().last().map(|entry| entry.id()).expect("last segment");
-        edit.move_corner_at(PathCorner::End(last), [millimetres(700), millimetres(500)]).expect("move the free end");
+        edit.move_corner_at(PathCorner::End(last), [millimetres(700), millimetres(500)], CornerMove::Free)
+            .expect("move the free end");
         assert!(edit.is_dirty());
         assert_eq!(
             session.project().object_path(object).expect("path"),
@@ -1307,11 +1473,10 @@ mod tests {
     }
 
     #[test]
-    fn a_one_micrometre_gap_builds_a_path_but_not_a_ring() {
-        // This is the trap U29 has to avoid: a rounded arc end can miss the clicked point, so a
-        // chain that starts its next segment at the click has a one-micrometre gap. `Path` accepts
-        // that, the ring assembler does not, and `to_contour` is the only way to an extrusion — so
-        // the draft follows the stored end instead.
+    fn a_one_micrometre_gap_still_becomes_a_ring() {
+        // A rounded arc end can miss the clicked point by one micrometre. `Path` accepts that joint
+        // and, since ADR 0072, so does the ring assembler, so `to_contour` — the only way to an
+        // extrusion — takes the chain the user drew instead of refusing it.
         let stored = [millimetres(600), millimetres(400)];
         let gap = [stored[0], Length::from_micrometres(stored[1].micrometres() + 1)];
         let chain = |end: [Length; 2], next_start: [Length; 2]| {
@@ -1328,7 +1493,7 @@ mod tests {
             )
         };
         let drawn = chain(gap, stored).expect("a path tolerates one micrometre");
-        assert!(drawn.to_contour().is_err(), "the ring assembler demands an exact joint");
+        assert!(drawn.to_contour().is_ok(), "the ring takes the same tolerance as the path");
         assert!(chain(stored, stored).expect("an exact chain").to_contour().is_ok(), "the exact joint closes");
     }
 
@@ -1375,6 +1540,118 @@ mod tests {
 
         assert_eq!(draft.close(), Err(DrawDraftError::AlreadyClosed));
         assert_eq!(draft.push([millimetres(1), millimetres(1)]), Err(DrawDraftError::AlreadyClosed));
+    }
+
+    #[test]
+    fn tab_switches_a_polyline_between_a_line_and_an_arc() {
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        assert!(!draft.arc_mode(), "a fresh chain draws straight segments");
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("straight run");
+        assert!(draft.toggle_arc_mode());
+        assert!(draft.arc_mode());
+        draft.push_arc_through([millimetres(700), millimetres(100)]).expect("arc through");
+        draft.push([millimetres(600), millimetres(400)]).expect("arc end");
+
+        assert_eq!(draft.len(), 2);
+        assert!(!draft.segments().first().expect("line").is_arc());
+        assert!(draft.segments().get(1).expect("arc").is_arc(), "Tab made the second segment an arc");
+        assert!(!draft.toggle_arc_mode());
+        assert!(!draft.arc_mode());
+
+        // Only a polyline has a second input mode; a circle keeps its own gesture.
+        let mut circle = DrawDraft::new(DrawTool::Circle);
+        assert!(!circle.toggle_arc_mode());
+    }
+
+    #[test]
+    fn an_arc_that_returns_to_the_start_closes_the_chain() {
+        // The radii stay small enough that a millidegree of stored angle lands well inside the
+        // one-micrometre joint tolerance.
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.toggle_arc_mode();
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(40), millimetres(0)]).expect("straight run");
+        draft.push_arc_through([millimetres(50), millimetres(10)]).expect("first arc");
+        draft.push([millimetres(40), millimetres(40)]).expect("first arc end");
+        draft.push_arc_through([millimetres(20), millimetres(50)]).expect("closing arc");
+        draft.push([millimetres(0), millimetres(0)]).expect("the arc ends on the start");
+
+        assert!(draft.is_closed(), "an arc that reaches the first start closes the chain");
+        let path = draft.to_path().expect("a closed path");
+        assert!(path.is_closed());
+        // The stored arc end is derived from rounded angles, so a closing tie joins it to the exact
+        // first start; the ring has the three drawn segments plus that tie.
+        assert_eq!(path.entries().len(), 4, "three drawn segments and the closing tie");
+        assert_eq!(path.entries().iter().filter(|entry| entry.segment().is_arc()).count(), 2);
+    }
+
+    #[test]
+    fn a_degenerate_arc_step_is_refused_and_the_arc_waits() {
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(400), millimetres(0)]).expect("straight run");
+        let through = [millimetres(200), millimetres(100)];
+        draft.push_arc_through(through).expect("arc through");
+        assert_eq!(draft.push(through), Err(DrawDraftError::DuplicatePoint));
+        assert_eq!(draft.pending_arc(), Some(through), "the refused click leaves the arc waiting");
+        assert_eq!(draft.len(), 1, "no segment was stored");
+
+        draft.push([millimetres(400), millimetres(200)]).expect("a valid end finishes the arc");
+        assert_eq!(draft.pending_arc(), None);
+        assert_eq!(draft.len(), 2);
+    }
+
+    #[test]
+    fn every_new_tool_builds_its_own_figure() {
+        let mut arc = DrawDraft::new(DrawTool::ArcFromCenter);
+        for point in [
+            [millimetres(100), millimetres(100)],
+            [millimetres(200), millimetres(100)],
+            [millimetres(100), millimetres(200)],
+        ] {
+            arc.push(point).expect("an arc from centre");
+        }
+        let path = arc.to_path().expect("one open arc");
+        assert!(!path.is_closed());
+        let ContourSegment::Arc { center, radius, .. } = path.entries().first().expect("arc").segment() else {
+            panic!("the figure is one arc");
+        };
+        assert_eq!(center, [millimetres(100), millimetres(100)]);
+        assert_eq!(radius, millimetres(100));
+
+        let mut rectangle = DrawDraft::new(DrawTool::RectangleFromCenter);
+        rectangle.push([millimetres(100), millimetres(100)]).expect("centre");
+        rectangle.push([millimetres(300), millimetres(200)]).expect("corner");
+        let path = rectangle.to_path().expect("a rectangle");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 4);
+
+        let mut directed = DrawDraft::new(DrawTool::RectangleFromCenterDirected);
+        directed.push([millimetres(100), millimetres(100)]).expect("centre");
+        directed.push([millimetres(200), millimetres(100)]).expect("side direction");
+        directed.push([millimetres(200), millimetres(200)]).expect("corner");
+        assert!(directed.to_path().expect("a directed rectangle").is_closed());
+
+        let mut circle = DrawDraft::new(DrawTool::CircleThreePoints);
+        for point in
+            [[millimetres(0), millimetres(0)], [millimetres(100), millimetres(0)], [millimetres(50), millimetres(100)]]
+        {
+            circle.push(point).expect("a circle through three points");
+        }
+        assert!(circle.to_path().expect("a circle").is_closed());
+
+        let mut polygon = DrawDraft::with_sides(DrawTool::RegularPolygon, 5);
+        polygon.push([millimetres(100), millimetres(100)]).expect("centre");
+        polygon.push([millimetres(200), millimetres(100)]).expect("rim");
+        assert_eq!(polygon.sides(), 5);
+        let path = polygon.to_path().expect("a pentagon");
+        assert!(path.is_closed());
+        assert_eq!(path.entries().len(), 5);
+
+        // The ribbon may hand over any number; the draft holds what the model accepts.
+        assert_eq!(DrawDraft::with_sides(DrawTool::RegularPolygon, 2).sides(), MIN_POLYGON_SIDES);
+        assert_eq!(DrawDraft::with_sides(DrawTool::RegularPolygon, 999).sides(), MAX_POLYGON_SIDES);
     }
 
     #[test]
@@ -1572,8 +1849,13 @@ mod tests {
             (DrawTool::Line, Some(2), false, false, "Line"),
             (DrawTool::Polyline, None, true, true, "Polyline"),
             (DrawTool::Arc, Some(3), false, false, "Arc"),
+            (DrawTool::ArcFromCenter, Some(3), false, false, "Arc from centre"),
             (DrawTool::Rectangle, Some(2), false, false, "Rectangle"),
+            (DrawTool::RectangleFromCenter, Some(2), false, false, "Rectangle from centre"),
+            (DrawTool::RectangleFromCenterDirected, Some(3), false, false, "Directed rectangle"),
             (DrawTool::Circle, Some(2), false, false, "Circle"),
+            (DrawTool::CircleThreePoints, Some(3), false, false, "Circle through 3 points"),
+            (DrawTool::RegularPolygon, Some(2), false, false, "Polygon"),
         ];
         for (tool, need, closes, open_ended, label) in cases {
             assert_eq!(tool.points(), need, "{}", tool.label());

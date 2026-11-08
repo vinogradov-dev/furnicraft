@@ -20,16 +20,16 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[render]` An authored camera pins the view and disables navigation, so the only way back to the
   navigable view is clearing the active camera in the inspector; a viewport-level "leave camera view"
   control is not implemented.
-- `[object]` A constructive object supports one `Extrude` feature. The contour is edited as `X, Y` text
-  lines in the object card, not in the viewport, and a ring that holds an arc has no editor at all
-  until the sketch phase; there are no booleans, fillets or other feature kinds yet. Collapse is a
-  one-way door and only undo brings the history back.
+- `[object]` A constructive object supports one `Extrude` feature; there are no booleans, fillets or
+  other feature kinds yet. Collapse is a one-way door and only undo brings the history back. The
+  object card still offers `X, Y` text lines for a line-only ring beside the viewport editor.
 - `[object]` A contour's self-intersection test samples each segment into chords; a crossing finer than
   0.1 mm inside an arc can slip through. An exact segment-pair test can replace it when the sketch
   editor needs the last tenth of a millimetre.
-- `[object]` A corner shared by two arcs moves only to a point both circles reach at millidegree
-  resolution; the ring stores whole endpoints, so `move_corner` rejects such a point with
-  `ArcJointMismatch` instead of bending either curve. The edit mode must place the handle accordingly.
+- `[object]` Along-contour movement at a corner shared by two arcs is refused with `ArcJointMismatch`
+  when no point sits on both circles at millidegree resolution, because neither stored circle may be
+  bent. Free movement rebuilds both arcs and is the default, so the grip only needs to avoid that
+  motion at such a corner.
 - `[mesh]` Vertex markers and face fills are painted over the viewport image without an occlusion test,
   so a vertex on the far side of the mesh is visible and selectable through it. A depth readback or a
   pick pass can hide the back vertices when the first large mesh makes it matter.
@@ -105,9 +105,23 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   `PrimitiveKind` has no `Cone` and `crates/param` builds no cone solid, so the tab draws the three
   primitives the document really has. A cone needs the model variant, the kernel plan and the drawn
   `primitives/cone` asset in one change; drawing the icon alone would offer a tool that cannot build.
-- `[ui]` 47 of the 67 declared icons are zero-byte placeholders: the whole `actions` theme (30,
+- `[ui]` 47 of the 72 declared icons are zero-byte placeholders: the whole `actions` theme (30,
   including undo, redo, delete, save, warning), `primitives/cone`, `bodies/revolve` and
   `bodies/sweep`, and the ten view glyphs U40 added for the floating cluster (orbit, pan, zoom,
   layout, sliders and the five shading styles). The empty-file fallback keeps every surface usable
   with its text label, but the cluster wraps onto several rows in a narrow viewport until U46 draws
   them. See `assets/icons/AUDIT.md` §5 and ADR 0055.
+- `[ui]` The regular polygon's `Sides` field has no refusal state: a value outside `3..=128` is
+  clamped and a non-number falls back to six, while the field keeps the typed text. The tool builds
+  a valid polygon instead of failing, but a typo is not named. A validated field can land with the
+  polygon dialog, if one is ever added.
+- `[ui]` A ring exposes corner grips only: the shape tag lives on `Path`, so a panel outline or a
+  cutout ring has no circle, rectangle or polygon grips and no arc radius handle even when its
+  segments are arcs. Ring-level shape metadata is needed before those handles can exist.
+- `[ui]` The number field opens when a grip drag starts, not when a grip is merely hovered or
+  clicked, so typing a value without moving the pointer first needs a tiny drag. A click-only path
+  would need the field to survive a press that never becomes a drag.
+- `[ui]` The pull arrow opens only when the ribbon's *Extrude* button creates the body: the same
+  `object.path.extrude` from the command palette or an API, and `object.extrude.create` from a
+  contour, leave the body without a pull. The shell reads the height from the command result, so
+  another entry point needs the same signal before it can pull too.

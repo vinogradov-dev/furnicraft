@@ -373,7 +373,7 @@ mod tests {
         let mut project = sample_project();
         let root = project.root().id();
         let constructive =
-            Constructive::extrude(rectangle_contour(100, 50), millimetres(18)).expect("constructive object");
+            Constructive::extrude(rectangle_contour(100, 50).into(), millimetres(18)).expect("constructive object");
         project
             .add_object(root, "Countertop", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("a version 16 file has constructive objects");

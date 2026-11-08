@@ -8,10 +8,10 @@ impl Project {
     ///
     /// A missing node, a mesh object or a node that is not a constructive object is an error the
     /// user can read; nothing is derived when the payload has no extrusion.
-    pub fn object_contour(&self, id: Id) -> Result<&Contour, ProjectError> {
+    pub fn object_contour(&self, id: Id) -> Result<Contour, ProjectError> {
         let object = self.object(id).ok_or(ProjectError::NodeNotFound { id })?;
         let constructive = object.geometry().as_constructive().ok_or(ProjectError::NotConstructiveObject { id })?;
-        constructive.contour().ok_or(ProjectError::NotConstructiveObject { id })
+        constructive.contour().map_err(ConstructiveError::from).map_err(ProjectError::from)
     }
 
     /// Checks whether an object's contour can become a panel outline without changing the document.
@@ -19,7 +19,7 @@ impl Project {
         if !self.is_container(parent) {
             return Err(ProjectError::ContainerNotFound { id: parent });
         }
-        let anchored = Panel::anchored_contour(self.object_contour(source)?)?;
+        let anchored = Panel::anchored_contour(&self.object_contour(source)?)?;
         Panel::contour_size(&anchored)?;
         Ok(())
     }
@@ -97,11 +97,12 @@ impl Project {
         Ok(next_revision)
     }
 
-    /// Replaces the contour of a constructive object and bumps the revision once.
+    /// Replaces the path of a constructive object and bumps the revision once.
     ///
     /// A node that is not a constructive object is [`ProjectError::NotConstructiveObject`]; an
-    /// invalid contour is refused before the document changes.
-    pub fn set_object_contour(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
+    /// invalid path is refused before the document changes. The body owns this path, so a later
+    /// extrusion keeps it and no second ring is stored.
+    pub fn set_object_body_path(&mut self, id: Id, path: Path) -> Result<Revision, ProjectError> {
         let next_revision = self.next_revision()?;
         let Some(node) = find_node_mut(&mut self.root, id) else {
             return Err(ProjectError::NodeNotFound { id });
@@ -112,7 +113,50 @@ impl Project {
         let Some(constructive) = object.geometry_mut().as_constructive_mut() else {
             return Err(ProjectError::NotConstructiveObject { id });
         };
-        constructive.set_contour(contour)?;
+        constructive.set_path(path)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Replaces the extrusion height of a constructive object and bumps the revision once.
+    ///
+    /// The path and every other feature are unchanged; a non-constructive node or an invalid
+    /// height is refused before the document changes.
+    pub fn set_object_extrusion_height(&mut self, id: Id, height: Length) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        let Some(constructive) = object.geometry_mut().as_constructive_mut() else {
+            return Err(ProjectError::NotConstructiveObject { id });
+        };
+        constructive.set_height(height)?;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Turns a path object into the constructive body that owns that path, in place.
+    ///
+    /// The node keeps its id, name, placement, pivot and properties, so the selection, the undo
+    /// entry and the scene tree keep pointing at one node: the drawing becomes the body instead of
+    /// leaving a copy behind. An open chain encloses no ring and is refused before the document
+    /// changes; a node with another payload is [`ProjectError::NotAPathObject`].
+    pub fn extrude_object_path(&mut self, id: Id, height: Length) -> Result<Revision, ProjectError> {
+        let next_revision = self.next_revision()?;
+        let Some(node) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        let Some(object) = node.as_object_mut() else {
+            return Err(ProjectError::NotAPathObject { id });
+        };
+        let Some(path) = object.geometry().as_path().cloned() else {
+            return Err(ProjectError::NotAPathObject { id });
+        };
+        let constructive = Constructive::extrude(path, height)?;
+        *object.geometry_mut() = Geometry::Constructive(constructive);
         self.revision = next_revision;
         Ok(next_revision)
     }

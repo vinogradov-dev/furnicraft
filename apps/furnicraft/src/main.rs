@@ -16,6 +16,7 @@
 
 mod contour_gizmo;
 mod draw_gizmo;
+mod extrude_gizmo;
 mod file_menu;
 mod gizmo;
 mod gizmo_math;
@@ -54,6 +55,7 @@ use furnicraft_units::Length;
 
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::{DrawGizmo, DrawModifiers};
+use crate::extrude_gizmo::{ExtrudeAction, ExtrudeEvent, ExtrudeGizmo};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::header::{HeaderAction, HeaderState};
@@ -128,6 +130,7 @@ struct FurniCraftApp {
     vertex_gizmo: VertexGizmo,
     contour_gizmo: ContourGizmo,
     draw_gizmo: DrawGizmo,
+    extrude_gizmo: ExtrudeGizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
     /// The selected line chains of the frame last uploaded, already carrying any drag preview, so
@@ -225,6 +228,7 @@ impl FurniCraftApp {
             vertex_gizmo: VertexGizmo::default(),
             contour_gizmo: ContourGizmo::default(),
             draw_gizmo: DrawGizmo::new(),
+            extrude_gizmo: ExtrudeGizmo::default(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -548,6 +552,48 @@ impl FurniCraftApp {
         edit.selected_vertices(mesh)
     }
 
+    /// Applies one event from the pull arrow.
+    ///
+    /// A released drag writes the height and keeps the pull open so the user can adjust it again;
+    /// a click or Enter finishes the pull, writing the height only if the drag did not already.
+    fn apply_extrude_event(&mut self, event: ExtrudeEvent) -> Result<(), String> {
+        match event {
+            ExtrudeEvent::Set { object, height } => {
+                self.editor.set_extrude_height(&mut self.session, object, height)?;
+                self.extrude_gizmo.committed_height(height);
+                self.sync_scene()
+            }
+            ExtrudeEvent::Finish { object, height } => self.finish_extrude(object, height),
+        }
+    }
+
+    /// Applies what the pull's numeric field asked for.
+    ///
+    /// Enter writes the typed height and closes the pull; Escape drops the pull without touching
+    /// the document, so the body keeps the height its last committed drag gave it.
+    fn apply_extrude_action(&mut self, action: ExtrudeAction) {
+        match action {
+            ExtrudeAction::Finish(height) => {
+                let Some(object) = self.extrude_gizmo.object() else {
+                    return;
+                };
+                if let Err(error) = self.finish_extrude(object, height) {
+                    self.last_error = Some(error);
+                }
+            }
+            ExtrudeAction::Cancel => self.extrude_gizmo.cancel(),
+        }
+    }
+
+    /// Writes the final height if the document does not hold it yet, then closes the pull.
+    fn finish_extrude(&mut self, object: Id, height: Length) -> Result<(), String> {
+        if self.extrude_gizmo.committed() != Some(height) {
+            self.editor.set_extrude_height(&mut self.session, object, height)?;
+        }
+        self.extrude_gizmo.cancel();
+        self.sync_scene()
+    }
+
     /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
     fn apply_gizmo_commit(&mut self, commit: PlacementCommit) -> Result<(), String> {
         let request = NodePlacementSetMany {
@@ -699,11 +745,20 @@ impl FurniCraftApp {
         let drawing = interactive && self.editor.drawing().is_some();
         // An armed primitive owns the next click: it places a cube, it does not select.
         let placing = interactive && self.editor.pending_primitive().is_some();
+        // The pull arrow is the live gesture after an extrusion. A contour edit, a draft, a
+        // placement or a sub-object mode takes the pointer from it, so the arrow never competes
+        // with a grip, a point or a cube for the same click.
+        if self.extrude_gizmo.is_active()
+            && (contour_editing || drawing || placing || self.editor.mesh_edit().is_some())
+        {
+            self.extrude_gizmo.cancel();
+        }
+        let pulling = interactive && self.extrude_gizmo.is_active();
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = self.cluster.navigation;
-        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing;
-        let mesh_object = if contour_editing || drawing || placing {
+        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling;
+        let mesh_object = if contour_editing || drawing || placing || pulling {
             None
         } else {
             self.editor.mesh_edit().map(|edit| edit.object())
@@ -753,11 +808,11 @@ impl FurniCraftApp {
         }
 
         if drawing {
-            // Shift locks the next segment to an axis; Alt turns a click into an arc through that
-            // point, and the click after it ends the arc. One modifier, one job.
+            // Shift locks the next segment to an axis; Alt drops the end and grid snaps and takes
+            // the pointer as it is. Tab, handled above, chooses straight or arc input.
             let modifiers = DrawModifiers {
                 axis_lock: ui.input(|input| input.modifiers.shift),
-                arc: ui.input(|input| input.modifiers.alt),
+                ignore_snaps: ui.input(|input| input.modifiers.alt),
             };
             let finished = match self.draw_gizmo.update(
                 &response,
@@ -782,8 +837,32 @@ impl FurniCraftApp {
             if finished && let Err(error) = self.commit_drawing() {
                 self.last_error = Some(error);
             }
+            // The right button finishes the figure as Escape does; it is the CAD habit and keeps
+            // the left button free for placing points.
+            if !finished
+                && !pointer_over_widget
+                && response.clicked_by(egui::PointerButton::Secondary)
+                && let Err(error) = self.commit_drawing()
+            {
+                self.last_error = Some(error);
+            }
         } else {
             self.draw_gizmo.reset();
+        }
+
+        if pulling {
+            // The pull reads the pointer itself: a press on the arrow starts a drag, the release
+            // writes the height and keeps pulling, and a click anywhere else finishes. One drag is
+            // one `object.extrude.height.set`, so the whole adjustment is a single undo entry.
+            match self.extrude_gizmo.update(ui, &response, rect, self.scene.camera, self.session.project()) {
+                Ok(Some(event)) => {
+                    if let Err(error) = self.apply_extrude_event(event) {
+                        self.last_error = Some(error);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => self.last_error = Some(error),
+            }
         }
 
         if placing {
@@ -814,7 +893,7 @@ impl FurniCraftApp {
             selection: self.editor.selected_nodes(),
         };
         let update: Result<Option<PlacementCommit>, String> =
-            if contour_editing || drawing || placing || navigating || mesh_object.is_some() {
+            if contour_editing || drawing || placing || pulling || navigating || mesh_object.is_some() {
                 Ok(None)
             } else {
                 match self.mode {
@@ -841,12 +920,14 @@ impl FurniCraftApp {
         let previewed = self.previewed_scene_placements();
         let dragging = if contour_editing {
             self.contour_gizmo.is_dragging()
+        } else if pulling {
+            self.extrude_gizmo.is_dragging()
         } else if mesh_object.is_some() {
             self.vertex_gizmo.is_dragging()
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing || drawing || placing {
+        let consumed_click = if contour_editing || drawing || placing || pulling {
             true
         } else if mesh_object.is_some() {
             self.vertex_gizmo.consumed_click()
@@ -929,6 +1010,8 @@ impl FurniCraftApp {
             ui.ctx().set_cursor_icon(self.contour_gizmo.cursor());
         } else if drawing {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
+        } else if pulling {
+            ui.ctx().set_cursor_icon(self.extrude_gizmo.cursor());
         } else if placing {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
         } else if navigating {
@@ -953,6 +1036,7 @@ impl FurniCraftApp {
         if !contour_editing
             && !drawing
             && !placing
+            && !pulling
             && clicked
             && !pointer_over_gizmo
             && !consumed_click
@@ -1078,7 +1162,17 @@ impl FurniCraftApp {
         };
         // The object gizmo is hidden in mesh mode: it acts on the whole selection, not on vertices.
         if let Some(edit) = self.editor.contour_edit() {
-            self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+            let action = self.contour_gizmo.paint(ui, rect, self.scene.camera, self.session.project(), edit);
+            if let Some(action) = action {
+                let (grip, value) = match action {
+                    contour_gizmo::NumericAction::Apply(grip, value)
+                    | contour_gizmo::NumericAction::Restore(grip, value) => (grip, value),
+                };
+                match self.editor.contour_edit_set_grip_value(grip, value) {
+                    Ok(()) => ui.ctx().request_repaint(),
+                    Err(error) => self.last_error = Some(error.to_string()),
+                }
+            }
         } else if let Some(draft) = self.editor.drawing() {
             self.draw_gizmo.paint(ui, rect, self.scene.camera, draft);
         } else if let Some(object) = mesh_object {
@@ -1089,6 +1183,10 @@ impl FurniCraftApp {
                 vertices: &mesh_vertices,
             };
             self.vertex_gizmo.paint(ui, rect, target);
+        } else if pulling {
+            if let Some(action) = self.extrude_gizmo.paint(ui, rect, self.scene.camera, self.session.project()) {
+                self.apply_extrude_action(action);
+            }
         } else if navigating {
             // The navigation gesture owns the viewport; an axis under the pointer would compete
             // with the camera drag, so the transform gizmo stays hidden until the mode is disarmed.
@@ -1340,9 +1438,17 @@ impl FurniCraftApp {
         if let Some(outcome) = outcome {
             if outcome.started_drawing {
                 self.draw_gizmo.reset();
+                self.extrude_gizmo.cancel();
                 // Starting a drawing tool is a deliberate change of gesture: an armed navigation
                 // mode must not take the primary button back when the draft ends.
                 self.cluster.navigation = None;
+            }
+            if let Some((object, height)) = outcome.extruded {
+                // The body exists at the height the field named; the arrow lets the user pull it
+                // from there, and the ribbon keeps that height for the next extrusion.
+                self.contour_gizmo.reset();
+                self.draw_gizmo.reset();
+                self.extrude_gizmo.start(object, height);
             }
             match outcome.view {
                 Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
@@ -1406,8 +1512,16 @@ impl FurniCraftApp {
             error: self.last_error.clone(),
             notice: self.settings_notice.clone(),
             mode: self.mode,
-            contour: self.editor.contour_edit().map(|edit| (edit.draft().segment_count(), edit.is_dirty())),
-            drawing: self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed())),
+            contour: self
+                .editor
+                .contour_edit()
+                .map(|edit| (edit.draft().segment_count(), edit.is_dirty(), self.contour_gizmo.along())),
+            drawing: self
+                .editor
+                .drawing()
+                .map(|draft| (draft.tool(), draft.len(), draft.is_closed(), draft.arc_mode())),
+            preview_error: self.draw_gizmo.preview_error().map(str::to_owned),
+            extrude: self.extrude_gizmo.height(),
             primitive: self.editor.pending_primitive(),
             grid: self.draw_gizmo.grid(),
             mesh: self.editor.mesh_edit().map(|edit| {
@@ -1434,6 +1548,7 @@ impl FurniCraftApp {
                 }
             }
             Some(StatusAction::CancelContour) => self.cancel_contour_edit(),
+            Some(StatusAction::ToggleContourAlong) => self.contour_gizmo.toggle_along(),
             Some(StatusAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
             Some(StatusAction::CloseDraft) => match self.editor.close_drawing() {
                 Ok(()) => {
@@ -1449,6 +1564,14 @@ impl FurniCraftApp {
                 }
             }
             Some(StatusAction::CancelDraft) => self.cancel_drawing(),
+            Some(StatusAction::FinishExtrude) => {
+                if let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
+                    && let Err(error) = self.finish_extrude(object, height)
+                {
+                    self.last_error = Some(error);
+                }
+            }
+            Some(StatusAction::CancelExtrude) => self.extrude_gizmo.cancel(),
             Some(StatusAction::CancelPrimitive) => self.editor.cancel_primitive(),
             Some(StatusAction::ClearCreationParent) => self.editor.clear_creation_parent(),
             Some(StatusAction::EndNavigation) => self.cluster.navigation = None,
@@ -1564,8 +1687,12 @@ struct StatusInfo {
     /// Why the workspace defaults were used instead of the saved settings, if they were.
     notice: Option<String>,
     mode: TransformMode,
-    contour: Option<(usize, bool)>,
-    drawing: Option<(DrawTool, usize, bool)>,
+    contour: Option<(usize, bool, bool)>,
+    drawing: Option<(DrawTool, usize, bool, bool)>,
+    /// Why the pointer cannot extend the live draft, if it cannot.
+    preview_error: Option<String>,
+    /// The height a live pull arrow shows, if a fresh extrusion is waiting for it.
+    extrude: Option<Length>,
     primitive: Option<(furnicraft_engine::PrimitiveKind, Length)>,
     grid: bool,
     mesh: Option<(MeshElement, usize)>,
@@ -1587,10 +1714,13 @@ struct StatusOut {
 enum StatusAction {
     ApplyContour,
     CancelContour,
+    ToggleContourAlong,
     ToggleGrid,
     CloseDraft,
     FinishDraft,
     CancelDraft,
+    FinishExtrude,
+    CancelExtrude,
     CancelPrimitive,
     ClearCreationParent,
     EndNavigation,
@@ -1621,12 +1751,22 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         }
         theme::divider(ui);
     }
-    if let Some((segments, dirty)) = info.contour {
+    if let Some((segments, dirty, along)) = info.contour {
         ui.label(format!("Contour edit · {segments} segments{}", if dirty { " · modified" } else { "" }));
+        let motion = ui.selectable_label(along, if along { "Along contour" } else { "Free move" }).clicked();
         let apply = ui.button("Apply").clicked();
         let cancel = ui.button("Cancel").clicked();
-        hint(ui, "Drag corners  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel");
-        let action = if apply {
+        hint(
+            ui,
+            if along {
+                "Drag corners along their segment  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
+            } else {
+                "Drag corners freely  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
+            },
+        );
+        let action = if motion {
+            Some(StatusAction::ToggleContourAlong)
+        } else if apply {
             Some(StatusAction::ApplyContour)
         } else if cancel {
             Some(StatusAction::CancelContour)
@@ -1635,17 +1775,24 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         };
         return (action, None);
     }
-    if let Some((tool, points, closed)) = info.drawing {
+    if let Some((tool, points, closed, arc_mode)) = info.drawing {
         ui.label(format!(
-            "Draw · {}{}",
+            "Draw · {}{}{}",
             tool.label(),
-            if points == 0 { String::new() } else { format!(" · {points} points") }
+            if points == 0 { String::new() } else { format!(" · {points} points") },
+            if tool.closes() { if arc_mode { " · arc" } else { " · line" } } else { "" }
         ));
         let grid = ui.selectable_label(info.grid, "Grid 10 mm  (G)").clicked();
         let close = ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
-        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
-        let cancel = ui.button("Cancel  (Esc)").clicked();
-        hint(ui, "LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
+        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Esc)")).clicked();
+        let cancel = ui.button("Cancel  (Ctrl+Esc)").clicked();
+        hint(
+            ui,
+            "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Esc/RMB finish  ·  Ctrl+Esc cancel",
+        );
+        if let Some(reason) = &info.preview_error {
+            hint(ui, reason);
+        }
         let action = if grid {
             Some(StatusAction::ToggleGrid)
         } else if close {
@@ -1654,6 +1801,20 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
             Some(StatusAction::FinishDraft)
         } else if cancel {
             Some(StatusAction::CancelDraft)
+        } else {
+            None
+        };
+        return (action, None);
+    }
+    if let Some(height) = info.extrude {
+        ui.label(format!("Extrude · {height}"));
+        let finish = ui.button("Finish  (Enter)").clicked();
+        let drop = ui.button("Drop  (Esc)").clicked();
+        hint(ui, "Drag the arrow or type a height  ·  Enter finish  ·  Esc drop the pull");
+        let action = if finish {
+            Some(StatusAction::FinishExtrude)
+        } else if drop {
+            Some(StatusAction::CancelExtrude)
         } else {
             None
         };
@@ -2029,21 +2190,43 @@ impl eframe::App for FurniCraftApp {
                 }
             }
         } else if self.editor.drawing().is_some() {
-            // Escape drops the whole draft; Enter closes a polyline, which is the only close action
-            // a keyboard can reach without the strip.
+            // Escape or the right button finishes the figure; Ctrl+Esc (or the Cancel button)
+            // throws the draft away. Enter stays as the keyboard finish the status bar names.
             if !ui.ctx().text_edit_focused() {
-                if escape {
+                let ctrl = ui.input(|input| input.modifiers.ctrl);
+                if escape && ctrl {
                     self.cancel_drawing();
-                } else if enter && let Err(error) = self.commit_drawing() {
+                } else if (escape || enter)
+                    && let Err(error) = self.commit_drawing()
+                {
                     self.last_error = Some(error);
                 }
                 if ui.input(|input| input.key_pressed(egui::Key::G)) {
                     self.draw_gizmo.toggle_grid();
                 }
+                // Tab is the one key that switches the polyline between a straight segment and an
+                // arc; Alt stays the snap override and never changes the gesture.
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                    self.editor.toggle_drawing_arc_mode();
+                }
             }
         } else if self.editor.pending_primitive().is_some() {
             if escape && !ui.ctx().text_edit_focused() {
                 self.editor.cancel_primitive();
+            }
+        } else if self.extrude_gizmo.is_active() {
+            // The field parses a typed height itself and keeps both keys while it has focus.
+            // Outside it, Enter closes the pull and Escape drops it, leaving the height the
+            // document already holds.
+            if !ui.ctx().text_edit_focused() {
+                if escape {
+                    self.extrude_gizmo.cancel();
+                } else if enter
+                    && let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
+                    && let Err(error) = self.finish_extrude(object, height)
+                {
+                    self.last_error = Some(error);
+                }
             }
         } else if escape
             && !self.translate_gizmo.is_dragging()
@@ -2077,11 +2260,13 @@ impl eframe::App for FurniCraftApp {
         // one the toolbar hints show, so the key and the tooltip cannot drift apart.
         if self.editor.contour_edit().is_none() && self.editor.drawing().is_none() && !ui.ctx().text_edit_focused() {
             for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
-                let Some(key) = furnicraft_ui::toolbars::shortcut(tool) else {
+                let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
                     continue;
                 };
-                if ui.input(|input| input.key_pressed(key)) {
-                    if !self.editor.start_drawing(tool) {
+                let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+                if ui.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
+                    let sides = self.editor.polygon_sides();
+                    if !self.editor.start_drawing_with(tool, sides) {
                         self.last_error = Some("A drawing is already in progress.".to_owned());
                     }
                     self.draw_gizmo.reset();
@@ -2532,6 +2717,8 @@ mod tests {
             mode: TransformMode::Move,
             contour: None,
             drawing: None,
+            preview_error: None,
+            extrude: None,
             primitive: None,
             grid: true,
             mesh: None,
@@ -2565,7 +2752,7 @@ mod tests {
     fn the_status_bar_names_the_armed_drawing_tool() {
         let ctx = egui::Context::default();
         furnicraft_ui::theme::install(&ctx);
-        let info = StatusInfo { drawing: Some((DrawTool::Rectangle, 3, false)), ..idle_status() };
+        let info = StatusInfo { drawing: Some((DrawTool::Rectangle, 3, false, false)), ..idle_status() };
         let mut out = StatusOut::default();
         let output = ctx.run_ui(Default::default(), |ui| {
             out.state = status_state_ui(ui, &info).0;

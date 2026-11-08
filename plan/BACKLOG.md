@@ -193,6 +193,93 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U55** a fresh extrusion pulls its height in the viewport: the ribbon creates the body at
+  the last height used in the session (100 mm at first) and reports it, so an arrow runs from the
+  contour's bounds centre along the body's local `+Z`. Dragging it writes one
+  `object.extrude.height.set` on release and keeps the pull open; a bare click or Enter finishes,
+  Escape drops the pull at the height the document already holds, and a typed number applies the
+  same way. The height is session view state until the command, never a document default. Tests: a
+  drag maps to millimetres along the body's own axis, a click finishes at the pull's height, a
+  pulled height becomes the next extrusion's default, and a path has no pull.
+  `5efa195`
+  `files: apps/furnicraft/src/main.rs`
+
+- `[x]` **U54** every figure exposes its grips: a circle its centre and four quadrants, an arc its
+  centre, a midpoint and a radius grip on a hovered curve, a rectangle its corners, four side
+  midpoints and centre, a regular polygon its vertices, centre and radius point. A number field
+  follows a grip drag and names its own dimension — a radius for a circle, arc or polygon, an angle
+  for an arc end, `W` or `H` for a rectangle side; Enter applies it without leaving the edit and Esc
+  restores the drag-start value. Free movement is the default, an HUD toggle switches to the segment
+  the pointer picked at the drag start, and a tagged figure keeps its constraint through every drag.
+  The polygon side count stays in the object card. Tests: a quadrant drag keeps the circle round; an
+  arc centre moves the arc; a rectangle midpoint changes one extent; a polygon vertex keeps every
+  side; a numeric entry parses its kind and applies it.
+  ADR 0075 — `1321fee`
+  `files: apps/furnicraft/src/contour_gizmo.rs`
+
+- `[x]` **U53** the drawing tools that finish a shape: `DrawTool` gains arc from centre (three
+  clicks), circle through three points, rectangle from its centre (two clicks), a directed
+  rectangle as its own button (centre → side direction → corner, `Shift+D`) and a regular polygon
+  (centre plus a rim point, `N` from the ribbon, `3..=128` sides). Tab switches polyline input
+  between a straight segment and an arc and Alt ignores the end and grid snaps; the closing segment
+  of a polyline is an arc when the closing click is taken in arc mode, and it always starts at the
+  stored end. A preview that cannot become a path keeps the last valid preview and the raw chain
+  stays drawn, so a drawing never blinks out at an intermediate click; the status line names the
+  reason instead. Escape or the right button commits, Ctrl+Esc or Cancel discards, and a committed
+  figure opens its own edit mode. Tests: Tab builds a straight then an arc segment; an arc closes
+  the chain; a degenerate arc step is refused; each new tool builds and commits its path; an
+  invalid intermediate preview keeps the previous one; a committed shape is in edit mode.
+  ADR 0076 — `9778d35`
+  `files: crates/ui/src/contour_edit.rs`
+
+- `[x]` **A11** an extrusion owns the path it grew from: `Constructive` stores `{ path, features }`
+  and `Extrude` keeps only its height, so the contour is no longer copied and "absorbed" means the
+  body holds the one path. `object.path.extrude` turns the selected `Path` node into a constructive
+  body in place (no sibling, no orphan), `object.contour.replace` edits the path inside the body and
+  the mesh cache keys on it, and `object.extrude.height.set` drives the pull. Schema 19 migrates a
+  version 18 `extrude.contour` into `constructive.path`. Tests: extruding a path replaces the node
+  and leaves no second object; editing the contour inside the body rebuilds its mesh; the height
+  command keeps the path; an old file loads into the new shape and saves without a contour copy.
+  ADR 0074 — `c98f590`
+  `files: crates/model/src/object.rs`
+
+- `[x]` **A10** a corner moves freely or along the segment picked at drag start: `move_corner_at`
+  takes a `CornerMove` (`Free` or `AlongContour`) plus the target resolved once by the caller from
+  the initial drag vector, so a junction does not change its mind mid-drag. A free arc endpoint takes
+  the point and rebuilds the arc through the other end and its current mid-arc point, so the radius
+  follows the drag and the arc can be shortened; a degenerate step is refused and the grip stays on
+  the last valid arc. Numeric grip values land in the document layer: arc radius and end angle,
+  circle radius, rectangle width and height, polygon radius. Tests: a free arc end changes the
+  radius; the arc can be shortened to its chord; a degenerate target is refused; the along-contour
+  target is the segment chosen at the start; each numeric value keeps the figure's own constraint.
+  `9553175`
+  `files: crates/model/src/contour_edit.rs`
+
+- `[x]` **A9** a path remembers the shape it was drawn as: `Path` gains an optional `PathShape`
+  (`Rectangle`, `Circle`, `RegularPolygon`) at schema 19, an edit-intent tag rather than stored
+  dimensions — the centre, radius and side count are derived from the segments, the tag only says
+  which constraint set the grips apply. Structural constructors land with it: arc from centre
+  (centre, start, end), circle through three points, rectangle from its centre, rectangle from
+  centre plus a side direction, and a regular polygon from centre, rim point and `3..=128` sides.
+  A topology change (split, join, dropped segment) clears the tag; a tag that contradicts the
+  geometry is a readable load error, not a silent reinterpretation. Tests: each constructor sets its
+  tag and its geometry; a rectangle edited by a corner keeps the tag; a split clears it; a version 18
+  file loads without a tag; an unknown tag is an error.
+  ADR 0073 — `9d7476f`
+  `files: crates/model/src/contour.rs`
+
+- `[x]` **A8** one joint tolerance for a ring: `Contour::assemble` compares a joint with the same
+  one-micrometre bound `Path` already uses instead of demanding exact equality. An arc stores its
+  centre, radius and angles, so its endpoints are derived and can miss the drawn point by a
+  micrometre after rounding, while `Path` accepted the joint and `Contour` refused it: a polyline
+  closed with an arc failed with "path segment 2 does not meet the next segment", the arc-arc joint
+  recorded in `plan/debt.md` failed the same way, and `DrawingDraft::closing_segment` could only add
+  a straight line. One rule, stated in ADR 0072, covers the path, the ring and `to_geometry`.
+  Tests: a ring whose arc endpoint misses the next start by one micrometre loads and converts to
+  geometry; two micrometres still fail; an arc that closes a polyline builds.
+  ADR 0072 — `a00cb6f`
+  `files: crates/model/src/contour.rs`
+
 - `[x]` **U44** a ground shadow: every object that rests on the floor casts a soft contact shadow, so
   a cabinet reads as standing on something instead of floating in a grid. `ContactShadow` is frame
   data in `crates/scene` beside `Grid`: a node `Id`, a centre on the ground plane and two half-axes

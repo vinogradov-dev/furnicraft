@@ -193,7 +193,7 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             is_mesh: false,
             vertices: 0,
             faces: 0,
-            contour: constructive.contour().cloned(),
+            contour: constructive.contour().ok(),
             path: None,
             height: constructive.height(),
             primitive: None,
@@ -689,7 +689,7 @@ fn rename_object(session: &mut Session, node: Id, name: String) -> Result<(), St
 }
 
 fn replace_contour(session: &mut Session, object: Id, contour: Contour) -> Result<(), String> {
-    let params = json(&ObjectContourReplace { object, contour })?;
+    let params = json(&ObjectContourReplace { object, path: contour.into() })?;
     dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
 }
 
@@ -967,11 +967,11 @@ mod tests {
         replace_contour(&mut session, id, rectangle(120, 60)).expect("replace");
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
         let object = session.project().object(id).expect("object");
-        assert_eq!(object.geometry().as_constructive().expect("constructive").contour(), Some(&rectangle(120, 60)));
+        assert_eq!(object.geometry().as_constructive().expect("constructive").contour(), Ok(rectangle(120, 60)));
         session.undo().expect("undo");
         assert_eq!(
             session.project().object(id).expect("object").geometry().as_constructive().expect("constructive").contour(),
-            Some(&rectangle(100, 50))
+            Ok(rectangle(100, 50))
         );
     }
 

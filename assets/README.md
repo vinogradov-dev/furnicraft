@@ -18,7 +18,7 @@ assets/icons/<theme>/<name>.svg
 
 | Theme | Icons | Shown by |
 |---|---|---|
-| `contour` | `line`, `polyline`, `arc`, `rectangle`, `circle`, `close`, `cancel` | The ribbon *Sketch* tab |
+| `contour` | `line`, `polyline`, `arc`, `arc-centre`, `rectangle`, `rectangle-centre`, `rectangle-centre-directed`, `circle`, `circle-three-points`, `polygon`, `close`, `cancel` | The ribbon *Sketch* tab |
 | `primitives` | `cube`, `cylinder`, `sphere`, `cone` | The ribbon *Model* tab |
 | `bodies` | `extrude`, `revolve`, `sweep` | The ribbon *Model* tab |
 | `scene` | `panel`, `assembly`, `camera`, `light` | The ribbon *Scene* tab |
