@@ -138,11 +138,20 @@ primitive is described in section 5.
   `z = 0`. It uses the same segment value and the same stable ids as a ring, so a line or an arc
   drawn once keeps its shape and its identity when it becomes a contour
   ([0048](../decisions/0048-a-flat-drawing-is-a-path-of-segments.md)).
-- The drawing tools build a path from shapes: a rectangle from two opposite corners, a circle as four
-  quarter arcs whose joints sit exactly on the axes, and an arc through three points. A rectangle and
-  a circle are closed; a three-point arc is one open segment. Degenerate input — a rectangle with no
-  width or height, a non-positive radius, or three coincident or collinear points — is an error, not
-  a flat shape.
+- The drawing tools build a path from shapes: a line from two points, a polyline from its clicks, an
+  arc through three points or from a centre with a start and an end, a rectangle from two opposite
+  corners, from its centre, or from a centre plus a side direction, a circle from its centre and a
+  rim point or through three points, and a regular polygon from a centre, a rim point and `3..=128`
+  sides. A rectangle, a circle and a polygon are closed; a line and an arc stay open. Degenerate
+  input — a rectangle with no width or height, a non-positive radius, or three coincident, collinear
+  or otherwise impossible points — is an error, not a flat shape.
+- In a polyline Tab chooses whether the next segment is a straight line or an arc; the closing click
+  uses the same kind and always starts at the stored end of the previous segment. Alt suppresses the
+  draft-end and grid snaps for one click and never changes the gesture, while Shift still locks the
+  point to an axis ([0076](../decisions/0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md)).
+  Escape or the right button commits the figure and Ctrl+Esc or the ribbon's Cancel discards it.
+- A committed figure lands as one `object.path.create` and immediately enters its own contour edit
+  mode, so the grips are on screen without a second selection.
 - Chain rules only: at least one segment, the segment and coordinate caps, unique ids, each joint
   meeting within a micrometre, and a closed chain closing its last joint. Self-intersection and
   enclosed area are ring rules, so they run when the path becomes a ring, not while it is drawn.
@@ -298,6 +307,12 @@ At minimum:
 - extruding a path replaces the node in place, leaves no sibling, is one undo entry and is refused on
   an open chain or a second time;
 - replacing the body's path keeps its height, and setting the height keeps its path;
+- every drawing tool builds its figure from its own clicks, and a committed figure opens its edit
+  mode;
+- Tab makes a polyline's next segment straight or an arc, and an arc that returns to the stored start
+  closes the chain;
+- a rejected intermediate preview keeps the last valid one and reports why, and the stored chain
+  stays drawn;
 - a version 18 extrusion contour loads as the body's path and a save writes no contour copy;
 - a path is created open or closed and keeps its segments and ids, and replacing it changes only the
   drawing in one revision;

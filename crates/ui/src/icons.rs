@@ -156,8 +156,13 @@ icons!(Contour, "contour", contour {
     LINE => "line",
     POLYLINE => "polyline",
     ARC => "arc",
+    ARC_CENTRE => "arc-centre",
     RECTANGLE => "rectangle",
+    RECTANGLE_CENTRE => "rectangle-centre",
+    RECTANGLE_CENTRE_DIRECTED => "rectangle-centre-directed",
     CIRCLE => "circle",
+    CIRCLE_THREE_POINTS => "circle-three-points",
+    POLYGON => "polygon",
     CLOSE => "close",
     CANCEL => "cancel",
 });
@@ -702,7 +707,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 67);
+        assert_eq!(seen.len(), 72);
     }
 
     #[test]

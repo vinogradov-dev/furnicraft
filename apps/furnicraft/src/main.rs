@@ -753,11 +753,11 @@ impl FurniCraftApp {
         }
 
         if drawing {
-            // Shift locks the next segment to an axis; Alt turns a click into an arc through that
-            // point, and the click after it ends the arc. One modifier, one job.
+            // Shift locks the next segment to an axis; Alt drops the end and grid snaps and takes
+            // the pointer as it is. Tab, handled above, chooses straight or arc input.
             let modifiers = DrawModifiers {
                 axis_lock: ui.input(|input| input.modifiers.shift),
-                arc: ui.input(|input| input.modifiers.alt),
+                ignore_snaps: ui.input(|input| input.modifiers.alt),
             };
             let finished = match self.draw_gizmo.update(
                 &response,
@@ -780,6 +780,15 @@ impl FurniCraftApp {
                 }
             };
             if finished && let Err(error) = self.commit_drawing() {
+                self.last_error = Some(error);
+            }
+            // The right button finishes the figure as Escape does; it is the CAD habit and keeps
+            // the left button free for placing points.
+            if !finished
+                && !pointer_over_widget
+                && response.clicked_by(egui::PointerButton::Secondary)
+                && let Err(error) = self.commit_drawing()
+            {
                 self.last_error = Some(error);
             }
         } else {
@@ -1407,7 +1416,11 @@ impl FurniCraftApp {
             notice: self.settings_notice.clone(),
             mode: self.mode,
             contour: self.editor.contour_edit().map(|edit| (edit.draft().segment_count(), edit.is_dirty())),
-            drawing: self.editor.drawing().map(|draft| (draft.tool(), draft.len(), draft.is_closed())),
+            drawing: self
+                .editor
+                .drawing()
+                .map(|draft| (draft.tool(), draft.len(), draft.is_closed(), draft.arc_mode())),
+            preview_error: self.draw_gizmo.preview_error().map(str::to_owned),
             primitive: self.editor.pending_primitive(),
             grid: self.draw_gizmo.grid(),
             mesh: self.editor.mesh_edit().map(|edit| {
@@ -1565,7 +1578,9 @@ struct StatusInfo {
     notice: Option<String>,
     mode: TransformMode,
     contour: Option<(usize, bool)>,
-    drawing: Option<(DrawTool, usize, bool)>,
+    drawing: Option<(DrawTool, usize, bool, bool)>,
+    /// Why the pointer cannot extend the live draft, if it cannot.
+    preview_error: Option<String>,
     primitive: Option<(furnicraft_engine::PrimitiveKind, Length)>,
     grid: bool,
     mesh: Option<(MeshElement, usize)>,
@@ -1635,17 +1650,24 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         };
         return (action, None);
     }
-    if let Some((tool, points, closed)) = info.drawing {
+    if let Some((tool, points, closed, arc_mode)) = info.drawing {
         ui.label(format!(
-            "Draw · {}{}",
+            "Draw · {}{}{}",
             tool.label(),
-            if points == 0 { String::new() } else { format!(" · {points} points") }
+            if points == 0 { String::new() } else { format!(" · {points} points") },
+            if tool.closes() { if arc_mode { " · arc" } else { " · line" } } else { "" }
         ));
         let grid = ui.selectable_label(info.grid, "Grid 10 mm  (G)").clicked();
         let close = ui.add_enabled(tool.closes() && points >= 3 && !closed, egui::Button::new("Close")).clicked();
-        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
-        let cancel = ui.button("Cancel  (Esc)").clicked();
-        hint(ui, "LMB add point  ·  Shift axis lock  ·  Enter finish  ·  Esc cancel");
+        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Esc)")).clicked();
+        let cancel = ui.button("Cancel  (Ctrl+Esc)").clicked();
+        hint(
+            ui,
+            "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Esc/RMB finish  ·  Ctrl+Esc cancel",
+        );
+        if let Some(reason) = &info.preview_error {
+            hint(ui, reason);
+        }
         let action = if grid {
             Some(StatusAction::ToggleGrid)
         } else if close {
@@ -2029,16 +2051,24 @@ impl eframe::App for FurniCraftApp {
                 }
             }
         } else if self.editor.drawing().is_some() {
-            // Escape drops the whole draft; Enter closes a polyline, which is the only close action
-            // a keyboard can reach without the strip.
+            // Escape or the right button finishes the figure; Ctrl+Esc (or the Cancel button)
+            // throws the draft away. Enter stays as the keyboard finish the status bar names.
             if !ui.ctx().text_edit_focused() {
-                if escape {
+                let ctrl = ui.input(|input| input.modifiers.ctrl);
+                if escape && ctrl {
                     self.cancel_drawing();
-                } else if enter && let Err(error) = self.commit_drawing() {
+                } else if (escape || enter)
+                    && let Err(error) = self.commit_drawing()
+                {
                     self.last_error = Some(error);
                 }
                 if ui.input(|input| input.key_pressed(egui::Key::G)) {
                     self.draw_gizmo.toggle_grid();
+                }
+                // Tab is the one key that switches the polyline between a straight segment and an
+                // arc; Alt stays the snap override and never changes the gesture.
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
+                    self.editor.toggle_drawing_arc_mode();
                 }
             }
         } else if self.editor.pending_primitive().is_some() {
@@ -2077,11 +2107,13 @@ impl eframe::App for FurniCraftApp {
         // one the toolbar hints show, so the key and the tooltip cannot drift apart.
         if self.editor.contour_edit().is_none() && self.editor.drawing().is_none() && !ui.ctx().text_edit_focused() {
             for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
-                let Some(key) = furnicraft_ui::toolbars::shortcut(tool) else {
+                let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
                     continue;
                 };
-                if ui.input(|input| input.key_pressed(key)) {
-                    if !self.editor.start_drawing(tool) {
+                let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+                if ui.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
+                    let sides = self.editor.polygon_sides();
+                    if !self.editor.start_drawing_with(tool, sides) {
                         self.last_error = Some("A drawing is already in progress.".to_owned());
                     }
                     self.draw_gizmo.reset();
@@ -2532,6 +2564,7 @@ mod tests {
             mode: TransformMode::Move,
             contour: None,
             drawing: None,
+            preview_error: None,
             primitive: None,
             grid: true,
             mesh: None,
@@ -2565,7 +2598,7 @@ mod tests {
     fn the_status_bar_names_the_armed_drawing_tool() {
         let ctx = egui::Context::default();
         furnicraft_ui::theme::install(&ctx);
-        let info = StatusInfo { drawing: Some((DrawTool::Rectangle, 3, false)), ..idle_status() };
+        let info = StatusInfo { drawing: Some((DrawTool::Rectangle, 3, false, false)), ..idle_status() };
         let mut out = StatusOut::default();
         let output = ctx.run_ui(Default::default(), |ui| {
             out.state = status_state_ui(ui, &info).0;

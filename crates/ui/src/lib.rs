@@ -59,6 +59,7 @@ use furnicraft_units::Length;
 use crate::camera_card::CameraCard;
 use crate::command::{dispatch, json};
 use crate::container_card::{ContainerAction, ContainerCard};
+use crate::contour_edit::DEFAULT_POLYGON_SIDES;
 use crate::light_card::LightCard;
 use crate::mesh_edit::is_editable_mesh;
 use crate::object_card::{ObjectAction, ObjectCard};
@@ -340,15 +341,40 @@ impl Editor {
     /// Starts an empty drawing draft with `tool` and leaves the other pointer modes.
     ///
     /// A running draft is never replaced silently; the caller ends or commits it first. Returns
-    /// whether the draft started.
+    /// whether the draft started. The regular polygon uses the default side count; every other
+    /// tool ignores the count, so this is the plain "start" the key handler calls.
     pub fn start_drawing(&mut self, tool: DrawTool) -> bool {
+        self.start_drawing_with(tool, DEFAULT_POLYGON_SIDES)
+    }
+
+    /// Starts an empty drawing draft with `tool` and the regular polygon's side count.
+    ///
+    /// The count is clamped by [`DrawDraft::with_sides`], so a ribbon field can pass anything and
+    /// the document still receives a polygon it accepts.
+    pub fn start_drawing_with(&mut self, tool: DrawTool, sides: u32) -> bool {
         if self.drawing.is_some() {
             return false;
         }
         self.mesh_edit = None;
         self.contour_edit = None;
-        self.drawing = Some(DrawDraft::new(tool));
+        self.drawing = Some(DrawDraft::with_sides(tool, sides));
         true
+    }
+
+    /// The regular polygon side count the ribbon field holds.
+    ///
+    /// The key handler starts a polygon with the same count the ribbon would, so a keyboard
+    /// shortcut and a button click never build different figures.
+    pub fn polygon_sides(&self) -> u32 {
+        self.toolbars.polygon_sides()
+    }
+
+    /// Flips the running polyline between straight and arc input.
+    ///
+    /// Returns the mode after the call, or `None` when no draft is running. Other tools have no
+    /// second mode, so the mode they report stays false.
+    pub fn toggle_drawing_arc_mode(&mut self) -> Option<bool> {
+        self.drawing.as_mut().map(DrawDraft::toggle_arc_mode)
     }
 
     /// Appends a work-plane point to the running draft as a straight segment.
@@ -371,12 +397,13 @@ impl Editor {
         self.drawing.as_mut().is_some_and(DrawDraft::undo)
     }
 
-    /// Commits the running draft as one path object and drops it.
+    /// Commits the running draft as one path object and opens it for editing.
     ///
     /// The drawing lands in the armed container, or at the scene root like every other creation
     /// tool, and is placed on `placement`, which maps the work plane onto the object's local XY. The
-    /// new node becomes the selection, so the tool ends with what it just drew visible in the
-    /// inspector. A refused path leaves the draft and the selection untouched.
+    /// new node becomes the selection and immediately enters contour edit mode with its grips, so
+    /// the figure the user just drew can be reshaped without a second click. Escape or Enter leaves
+    /// that mode. A refused path leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
@@ -389,6 +416,9 @@ impl Editor {
         // A deliberate selection also counts as the first show, so the tree does not replace the
         // freshly drawn node with the first panel on the next frame.
         self.initialized = true;
+        // The new node is selected and editable, so the drawing hands straight over to the grips;
+        // a tool that somehow produced a node without a path simply stays out of edit mode.
+        self.start_contour_edit(session.project(), ContourTarget::Path(object));
         Ok(DrawnPath { object, tool })
     }
 
@@ -570,8 +600,8 @@ impl Editor {
         let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
-                ToolAction::Draw(tool) => {
-                    if !self.start_drawing(tool) {
+                ToolAction::Draw { tool, sides } => {
+                    if !self.start_drawing_with(tool, sides) {
                         return Err("A drawing is already in progress; finish or cancel it first.".to_owned());
                     }
                     outcome.started_drawing = true;
@@ -1287,6 +1317,11 @@ mod tests {
         assert_eq!(drawn.tool, DrawTool::Rectangle);
         assert!(editor.drawing().is_none(), "the tool ends with the commit");
         assert_eq!(editor.selected_nodes(), [drawn.object], "the new node is selected");
+        assert_eq!(
+            editor.contour_edit().map(ContourEdit::target),
+            Some(ContourTarget::Path(drawn.object)),
+            "the committed figure opens its own edit mode"
+        );
         assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
 
         let path = session.project().object_path(drawn.object).expect("a path object");
@@ -1312,6 +1347,38 @@ mod tests {
             .expect("create the assembly")
             .created_id()
             .expect("the assembly id")
+    }
+
+    #[test]
+    fn every_new_tool_commits_its_path_and_opens_the_edit() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        let cases: [(DrawTool, &[(i64, i64)]); 5] = [
+            (DrawTool::ArcFromCenter, &[(0, 0), (50, 0), (0, 50)]),
+            (DrawTool::RectangleFromCenter, &[(0, 0), (60, 40)]),
+            (DrawTool::RectangleFromCenterDirected, &[(0, 0), (50, 0), (40, 30)]),
+            (DrawTool::CircleThreePoints, &[(0, 0), (100, 0), (50, 80)]),
+            (DrawTool::RegularPolygon, &[(0, 0), (80, 0)]),
+        ];
+        for (tool, points) in cases {
+            let mut editor = Editor::new();
+            assert!(editor.start_drawing_with(tool, 6), "{} starts", tool.label());
+            for point in points {
+                editor.drawing_point([mm(point.0), mm(point.1)]).expect("a tool point");
+            }
+            let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("the figure commits");
+            assert_eq!(drawn.tool, tool);
+            let path = session.project().object_path(drawn.object).expect("a path object");
+            assert_eq!(path.is_closed(), tool.is_closed(), "{} keeps its closure", tool.label());
+            assert_eq!(
+                editor.contour_edit().map(ContourEdit::target),
+                Some(ContourTarget::Path(drawn.object)),
+                "{} opens its edit mode",
+                tool.label()
+            );
+            editor.end_contour_edit();
+        }
     }
 
     #[test]
@@ -1677,15 +1744,21 @@ mod tests {
     #[test]
     fn the_drawing_shortcuts_name_their_tool() {
         let cases = [
-            (egui::Key::L, DrawTool::Line),
-            (egui::Key::P, DrawTool::Polyline),
-            (egui::Key::A, DrawTool::Arc),
-            (egui::Key::R, DrawTool::Rectangle),
-            (egui::Key::C, DrawTool::Circle),
+            (egui::Key::L, false, DrawTool::Line),
+            (egui::Key::P, false, DrawTool::Polyline),
+            (egui::Key::A, false, DrawTool::Arc),
+            (egui::Key::A, true, DrawTool::ArcFromCenter),
+            (egui::Key::R, false, DrawTool::Rectangle),
+            (egui::Key::R, true, DrawTool::RectangleFromCenter),
+            (egui::Key::D, true, DrawTool::RectangleFromCenterDirected),
+            (egui::Key::C, false, DrawTool::Circle),
+            (egui::Key::C, true, DrawTool::CircleThreePoints),
+            (egui::Key::N, false, DrawTool::RegularPolygon),
         ];
         let mut editor = Editor::new();
-        for (key, tool) in cases {
-            assert_eq!(crate::toolbars::shortcut(tool), Some(key), "{} starts {}", key.name(), tool.label());
+        for (key, shift, tool) in cases {
+            let shortcut = crate::toolbars::Shortcut { key, shift };
+            assert_eq!(crate::toolbars::shortcut(tool), Some(shortcut), "{} starts {}", key.name(), tool.label());
             assert!(editor.start_drawing(tool));
             assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
             editor.cancel_drawing();
