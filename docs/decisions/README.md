@@ -77,6 +77,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0070](0070-display-styles-are-frame-data.md) | Display styles are frame data | Accepted |
 | [0071](0071-a-contact-shadow-is-one-transparent-ground-ellipse.md) | A contact shadow is one transparent ground ellipse | Accepted |
 | [0072](0072-a-contour-joint-is-judged-with-the-drawing-tolerance.md) | A contour joint is judged with the drawing tolerance | Accepted |
+| [0073](0073-a-drawn-figure-remembers-its-shape.md) | A drawn figure remembers its shape | Accepted |
 
 ## Format
 

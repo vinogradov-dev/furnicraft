@@ -173,7 +173,7 @@ impl Path {
             return Err(ContourEditError::UnknownSegment { segment });
         }
         edited.insert(index + 1, ContourSegmentEntry::new(inserted, second));
-        Ok((self.rebuild(edited)?, inserted))
+        Ok((self.rebuild_topology(edited)?, inserted))
     }
 
     /// Removes `segment` and joins the two neighbours that faced it.
@@ -222,7 +222,7 @@ impl Path {
             return Err(ContourEditError::UnknownSegment { segment });
         }
         edited.remove(index);
-        Ok(self.rebuild(edited)?)
+        Ok(self.rebuild_topology(edited)?)
     }
 
     /// Closes an open chain into a ring, adding one line from the last end to the first start.
@@ -850,6 +850,17 @@ mod tests {
             by_start.segment(id(4)).expect("left").end().expect("end"),
             by_end.segment(id(4)).expect("left").end().expect("end")
         );
+    }
+
+    #[test]
+    fn reshaping_keeps_the_shape_tag_and_a_split_drops_it() {
+        let rectangle = Path::rectangle(point(0, 0), point(100, 60)).expect("rectangle");
+        let moved = rectangle.move_corner_at(PathCorner::End(id(1)), point(120, -10)).expect("move a corner");
+        assert_eq!(moved.shape(), Some(crate::PathShape::Rectangle), "a moved corner is the same figure");
+        let (split, _) = rectangle.split_segment_at(id(1), point(40, 0)).expect("split the bottom side");
+        assert_eq!(split.shape(), None, "a split figure is no longer the rectangle that was drawn");
+        let (restored, _) = split.split_segment_at(id(5), point(60, 0)).expect("split the new side");
+        assert_eq!(restored.shape(), None, "the tag never comes back on its own");
     }
 
     #[test]
