@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U58 state=doing base=6cd7ee6 updated=2026-11-09
+STATE: milestone=M7 phase=A task=U45 state=idle base=8c329ad updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -41,7 +41,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   side panels and moved the view controls into a bottom-centre cluster; U41 added *Settings*, the
   atomic `settings.json` (ADR 0068) and *Home*; U47 added the `Ctrl+K` palette; U42 divided the
   central area into one, two or four views with a split tree, a scissored pass per leaf and an
-  orientation widget with a home button. U43 made the five display styles real (ADR 0070) and X10
+  orientation widget with a home button, a projection toggle and a roll ring. U43 made the five
+  display styles real (ADR 0070) and X10
   made their edges mean the form; X10's stencil slot lets an object show its own inside but never
   the one behind it. U44 gives every floor-standing object a contact shadow (ADR 0071). X11 fixed a
   ring closed by an arc: a joint is `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's
@@ -53,11 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U56 and U57 are done: a flat projection icon under the widget and a camera roll about its own view
-axis (ADR 0078). U58 is next: the four-node ring with its step in the workspace settings; it also
-lands `Leaf::roll_to`/`roll_by` and keeps the ring's drag out of the orbit gesture. U45 remains
-approved but deferred: start it only on a new instruction. It opens one tab per file, each with its
-own `Document`; *Open* opens a new tab and the split layout travels with the tab.
+U56, U57 and U58 are done: the corner widget carries a flat projection icon and a four-node roll
+ring whose hand turn follows the 1–15° step in the workspace settings, over a camera roll about its
+own axis (ADR 0078). U45 is next but deferred: start it only on a new instruction. It opens one tab
+per file, each with its own `Document`; *Open* opens a new tab and the split layout travels with the tab.
 
 ## Index
 

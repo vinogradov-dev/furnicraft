@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U58** the corner widget gains the roll ring and its step setting: the owner wants a
-  functional ring that rotates the camera around the view axis. A screen-space ring on a 52 pt
-  radius in a 124 pt square around the axis balls, always visible with the widget, with four fixed
-  nodes at the top, left, bottom and right carrying 0°, 90°, 180° and 270° and an accent handle at
-  the camera's roll. A node click sets the absolute roll (0° resets); a drag anywhere on the annulus
-  turns the camera with the pointer, quantised to the step from the workspace settings. The drag
-  accumulates the unwrapped visual angle and applies the difference from what was already applied,
-  so a slow drag never loses a step and the ±180° seam does not jump; the axis balls keep their hit
-  squares and win an overlapping hit. A new `Gizmo` struct owns the drag state; `GizmoAction` gains
-  `RollTo(Degrees)` and `RollBy(Degrees)`. The shell passes the step and keeps the ring's drag out of
-  the armed navigation and middle-button orbit. `ViewportSettings.roll_step_degrees: u32` defaults to
-  1, clamps to `1..=15` and is drawn in the Viewport section as a `DragValue`; the settings JSON
-  needs no version bump because the container already has `#[serde(default)]`. Tests: node positions
-  and degrees; a 37° drag at step 1 gives 37° and at step 5 gives 35°; a sub-step drag does nothing;
-  the remainder carries; the seam does not jump; a node click wins over a drag; the ring hit excludes
-  the balls; the handle follows the roll; orbit keeps the roll and a preset resets it; a ring drag
-  does not orbit the viewport; the setting clamps and applies live.
-  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -241,6 +222,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U58** the corner widget gains the roll ring and its step setting: a functional ring on a
+  52 pt radius in a 124 pt square rotates the camera about its view axis, always visible with the
+  widget, with four fixed nodes at the top, left, bottom and right carrying 0°, 90°, 180° and 270°
+  and an accent handle at the camera's roll. A node click sets the absolute roll (0° resets); a drag
+  anywhere on the annulus turns the camera with the pointer, quantised to the step from the workspace
+  settings. The drag accumulates the unwrapped visual angle and applies the difference from what was
+  already applied, so a slow drag never loses a step and the ±180° seam does not jump; the axis balls
+  keep their hit squares and win an overlapping hit, and a press on a node never starts a hand turn.
+  `Gizmo` owns the drag state; `GizmoAction` gains `RollTo(Degrees)` and `RollBy(Degrees)`. The shell
+  passes the step and keeps the ring's drag out of the armed navigation and middle-button orbit.
+  `ViewportSettings.roll_step_degrees: u32` defaults to 1, clamps to `1..=15` and is drawn in the
+  Viewport section as a `DragValue`; the settings JSON needs no version bump because the container
+  already has `#[serde(default)]`. Tests: node positions and degrees; a 37° drag at step 1 gives 37°
+  and at step 5 gives 35°; a sub-step drag does nothing; the remainder carries; the seam does not
+  jump; a node click wins over a drag; the ring hit excludes the balls; the handle follows the roll;
+  orbit keeps the roll and a preset resets it; a ring drag is reported to the shell so it cannot
+  orbit the viewport; the setting clamps and applies live.
+  `8c329ad`
+  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
   horizontal, `up()` follows yaw and pitch only, and the readout's roll is always zero. Add a
