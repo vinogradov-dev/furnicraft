@@ -790,6 +790,26 @@ mod tests {
     }
 
     #[test]
+    fn a_larger_scene_fits_farther_out() {
+        let bounds = |half_extent: f64| {
+            let mut bounds = Bounds::empty();
+            bounds.include_point(DVec3::splat(-half_extent));
+            bounds.include_point(DVec3::splat(half_extent));
+            bounds
+        };
+        let small = home_camera(bounds(100.0)).expect("small fit");
+        let large = home_camera(bounds(1_000.0)).expect("large fit");
+        assert!(
+            large.distance() > small.distance(),
+            "a larger scene frames from farther away: {} vs {}",
+            large.distance(),
+            small.distance()
+        );
+        assert_eq!(small.target(), DVec3::ZERO, "the fit looks at the scene centre");
+        assert_eq!(large.target(), DVec3::ZERO);
+    }
+
+    #[test]
     fn a_drawing_on_the_floor_casts_no_contact_shadow() {
         let millimetres = |value: i64| Length::from_millimetres(value).expect("length");
         let path = Path::new(

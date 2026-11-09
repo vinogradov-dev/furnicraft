@@ -283,17 +283,32 @@ impl Leaf {
 
     /// Fits the leaf on the whole scene, keeping the direction it was looking from.
     ///
-    /// A leaf that still sits in a preset keeps that preset's direction; a leaf the user has orbited
-    /// keeps its own. The projection is untouched, so framing never changes the mode (ADR 0049).
-    pub(crate) fn frame(&mut self, home: Camera) {
-        let Some(preset) = self.preset else {
-            let direction = self.camera.eye() - self.camera.target();
-            self.camera = home;
-            self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
-            return;
-        };
-        self.camera = home;
-        self.apply_preset(preset);
+    /// `fit` is the camera [`crate::scene_build::home_camera`] computes for the scene's bounds. A
+    /// leaf that still sits in a preset keeps that preset's direction; a leaf the user has orbited
+    /// keeps its own. The projection is kept as it was: a perspective view stays perspective, and
+    /// an orthographic view stays orthographic with the height the fit distance shows, so framing
+    /// never changes the mode (ADR 0049).
+    pub(crate) fn frame(&mut self, fit: Camera) {
+        let projection = self.camera.projection();
+        match self.preset {
+            Some(preset) => {
+                self.camera = fit;
+                self.apply_preset(preset);
+            }
+            None => {
+                let direction = self.camera.eye() - self.camera.target();
+                self.camera = fit;
+                self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
+            }
+        }
+        match projection {
+            furnicraft_scene::Projection::Perspective { .. } => {
+                if matches!(self.camera.projection(), furnicraft_scene::Projection::Orthographic { .. }) {
+                    self.camera.toggle_projection();
+                }
+            }
+            furnicraft_scene::Projection::Orthographic { .. } => self.camera.set_orthographic(),
+        }
     }
 
     /// Returns the leaf to *Axonometric* without refitting the scene.
@@ -448,14 +463,14 @@ struct LayoutState {
 impl LayoutState {
     /// The state a layout opens in the first time it is shown.
     ///
-    /// The tree takes the default ratios and every leaf is framed on `camera` and pointed along the
-    /// layout's standard preset. A fresh workspace therefore shows four useful views before the user
-    /// has arranged anything.
-    fn standard(kind: LayoutKind, camera: Camera, opening: OpeningView) -> Self {
+    /// `fit` is the camera framed on the whole scene; every leaf starts from it and is then pointed
+    /// along the layout's standard preset. A fresh workspace therefore shows four useful views
+    /// before the user has arranged anything.
+    fn standard(kind: LayoutKind, fit: Camera, opening: OpeningView) -> Self {
         let mut state = Self { root: Node::Leaf(LeafId(1)), leaves: Vec::new(), active: LeafId(1), next: 1 };
         for index in 0..kind.leaves() {
             let id = state.allocate();
-            let mut leaf = Leaf { id, camera, preset: None };
+            let mut leaf = Leaf { id, camera: fit, preset: None };
             leaf.apply_preset(kind.standard_view(index, opening));
             state.leaves.push(leaf);
         }
@@ -474,11 +489,11 @@ impl LayoutState {
 
     /// Refits every leaf on a new scene and restores the layout's standard presets.
     ///
-    /// The tree and its ratios stay, so opening a file keeps the workspace the user arranged; only
-    /// the cameras move to the new model (ADR 0079).
-    fn reset_cameras(&mut self, kind: LayoutKind, camera: Camera, opening: OpeningView) {
+    /// `fit` is the camera framed on the new scene. The tree and its ratios stay, so opening a file
+    /// keeps the workspace the user arranged; only the cameras move to the new model (ADR 0079).
+    fn reset_cameras(&mut self, kind: LayoutKind, fit: Camera, opening: OpeningView) {
         for (index, leaf) in self.leaves.iter_mut().enumerate() {
-            leaf.camera = camera;
+            leaf.camera = fit;
             leaf.preset = None;
             leaf.apply_preset(kind.standard_view(index, opening));
         }
@@ -516,14 +531,15 @@ pub(crate) struct Layout {
 }
 
 impl Layout {
-    /// One single view holding `camera`, plus the standard state of every other layout.
+    /// One single view built from the fit camera, plus the standard state of every other layout.
     ///
-    /// The single view is the one a new scene starts in, so it takes `opening`; the split layouts
-    /// take their own standard presets and are shown when the user picks them.
-    pub(crate) fn new(camera: Camera, opening: OpeningView) -> Self {
+    /// `fit` is the camera framed on the whole scene and `opening` is the preset of the single view,
+    /// which is the view a new scene starts in; the split layouts take their own standard presets
+    /// and are shown when the user picks them.
+    pub(crate) fn new(fit: Camera, opening: OpeningView) -> Self {
         Self {
             kind: LayoutKind::Single,
-            states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, camera, opening)),
+            states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, fit, opening)),
             drag: None,
         }
     }
@@ -567,11 +583,6 @@ impl Layout {
         self.current_mut().leaf_mut(id)
     }
 
-    /// Every leaf of the shown layout, for an action that fits the whole workspace.
-    pub(crate) fn leaves_mut(&mut self) -> &mut [Leaf] {
-        &mut self.current_mut().leaves
-    }
-
     /// The active leaf, which is always present.
     pub(crate) fn active_leaf(&self) -> &Leaf {
         self.current().active_leaf()
@@ -596,10 +607,10 @@ impl Layout {
     ///
     /// Opening a file must not leave a view looking where the old model was, and must not throw
     /// away the split the user arranged. Every layout therefore keeps its tree and ratios, takes the
-    /// new fit camera, and returns to the standard preset of each of its views (ADR 0079).
-    pub(crate) fn reset_cameras(&mut self, camera: Camera, opening: OpeningView) {
+    /// new `fit` camera, and returns to the standard preset of each of its views (ADR 0079).
+    pub(crate) fn reset_cameras(&mut self, fit: Camera, opening: OpeningView) {
         for (kind, state) in LayoutKind::ALL.into_iter().zip(self.states.iter_mut()) {
-            state.reset_cameras(kind, camera, opening);
+            state.reset_cameras(kind, fit, opening);
         }
         self.drag = None;
     }
@@ -810,9 +821,9 @@ mod tests {
     }
 
     #[test]
-    fn a_fit_moves_every_view_close_and_keeps_its_direction() {
-        let home = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
-        let mut layout = Layout::new(home, OpeningView::Axonometric);
+    fn a_fit_puts_a_view_on_the_scene_and_keeps_its_direction_and_projection() {
+        let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
+        let mut layout = Layout::new(fit, OpeningView::Axonometric);
         layout.set_kind(LayoutKind::TwoColumns);
         let ids: Vec<LeafId> = layout.current().leaves.iter().map(|leaf| leaf.id).collect();
         let first = layout.leaf_mut(ids[0]).expect("first");
@@ -820,21 +831,72 @@ mod tests {
         let second = layout.leaf_mut(ids[1]).expect("second");
         second.look_from(furnicraft_geom::DVec3::new(1.0, 1.0, 1.0));
 
-        for leaf in layout.leaves_mut() {
-            leaf.frame(home);
-        }
+        layout.leaf_mut(ids[0]).expect("first").frame(fit);
+        layout.leaf_mut(ids[1]).expect("second").frame(fit);
 
         let first = layout.leaf(ids[0]).expect("first");
-        assert_eq!(first.camera.target(), home.target(), "the fit puts every view on the scene");
-        assert!((first.camera.distance() - home.distance()).abs() < 1.0e-9);
+        assert_eq!(first.camera.target(), fit.target(), "the fit puts every view on the scene");
+        assert!((first.camera.distance() - fit.distance()).abs() < 1.0e-9);
         assert_eq!(first.preset, Some(OpeningView::Front), "a view in a preset keeps it");
         assert!(first.camera.forward().dot(-furnicraft_geom::DVec3::Y) > 0.999);
+        assert!(
+            matches!(first.camera.projection(), furnicraft_scene::Projection::Orthographic { .. }),
+            "a standard view stays orthographic"
+        );
 
         let second = layout.leaf(ids[1]).expect("second");
-        assert_eq!(second.camera.target(), home.target());
+        assert_eq!(second.camera.target(), fit.target());
         assert_eq!(second.preset, None, "an orbited view stays off every preset");
         let direction = furnicraft_geom::DVec3::new(1.0, 1.0, 1.0).normalize();
         assert!(second.camera.eye().dot(direction) > 0.0, "and keeps the direction it looked from");
+        assert!(
+            matches!(second.camera.projection(), furnicraft_scene::Projection::Perspective { .. }),
+            "a free perspective view stays perspective"
+        );
+    }
+
+    #[test]
+    fn a_fit_keeps_an_orthographic_view_orthographic_at_the_fit_height() {
+        let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
+        let mut layout = Layout::new(fit, OpeningView::Axonometric);
+        let id = layout.active();
+        let leaf = layout.leaf_mut(id).expect("the active leaf");
+        // A free direction, then an orthographic projection: neither belongs to a preset.
+        leaf.look_from(furnicraft_geom::DVec3::new(1.0, 2.0, 3.0));
+        leaf.toggle_projection();
+        assert_eq!(leaf.preset, None);
+
+        let larger = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 1800.0).expect("camera");
+        leaf.frame(larger);
+
+        assert_eq!(leaf.camera.target(), larger.target(), "the fit target is the scene centre");
+        assert!((leaf.camera.distance() - larger.distance()).abs() < 1.0e-9, "the fit distance is the scene fit");
+        let furnicraft_scene::Projection::Orthographic { height } = leaf.camera().projection() else {
+            panic!("an orthographic view stays orthographic");
+        };
+        let expected = 2.0 * larger.distance() * (furnicraft_scene::DEFAULT_FOV_Y * 0.5).tan();
+        assert!((height - expected).abs() < 1.0e-9, "the orthographic height is the fit height");
+        let direction = furnicraft_geom::DVec3::new(1.0, 2.0, 3.0).normalize();
+        assert!(leaf.camera().eye().dot(direction) > 0.0, "and keeps its free direction");
+    }
+
+    #[test]
+    fn a_fit_keeps_a_standard_view_the_user_made_perspective() {
+        let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
+        let mut layout = Layout::new(fit, OpeningView::Axonometric);
+        let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
+        leaf.apply_preset(OpeningView::Front);
+        leaf.toggle_projection();
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
+
+        leaf.frame(fit);
+
+        assert!(
+            matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }),
+            "the user's projection choice survives the fit"
+        );
+        assert!(leaf.camera().forward().dot(-furnicraft_geom::DVec3::Y) > 0.999, "and the preset direction stays");
+        assert!((leaf.camera().distance() - fit.distance()).abs() < 1.0e-9);
     }
 
     #[test]
