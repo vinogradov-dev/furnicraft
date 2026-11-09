@@ -824,6 +824,19 @@ mod tests {
     }
 
     #[test]
+    fn a_projection_toggle_stays_in_its_own_view() {
+        // The ribbon, the Display popover and the corner widget all toggle one leaf; a split must
+        // keep its neighbours in the mode they were drawing with.
+        let mut layout = layout(LayoutKind::Quad);
+        let first = layout.leaves[0].id;
+        layout.leaf_mut(first).expect("the leaf").toggle_projection();
+        for (index, leaf) in layout.leaves.iter().enumerate() {
+            let ortho = matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. });
+            assert_eq!(ortho, index == 0, "only the toggled view changes its projection");
+        }
+    }
+
+    #[test]
     fn the_active_leaf_is_the_one_the_tree_holds() {
         let mut layout = layout(LayoutKind::Quad);
         let last = layout.leaves[3].id;

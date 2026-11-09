@@ -3,9 +3,10 @@
 //! Six world-axis balls are projected onto the viewport with the camera basis, so the widget reads
 //! like the axes in the scene instead of a fixed diagram. Clicking one snaps the camera to look at
 //! its target from that direction; clicking the direction the camera already looks from flips to
-//! the opposite side, so the centre ball remains useful in a top or bottom view. A *home* button
-//! under the cube returns the view to *Axonometric*, and an optional one-line readout under it names
-//! the pitch, the yaw, the roll and the projection the viewport is drawing with.
+//! the opposite side, so the centre ball remains useful in a top or bottom view. A *home* button in
+//! the cube's top-right corner returns the view to *Axonometric*, a flat projection button under the
+//! cube switches orthographic and perspective, and an optional one-line readout under them names the
+//! pitch, the yaw, the roll and the projection the viewport is drawing with.
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2};
 use furnicraft_geom::DVec3;
@@ -36,10 +37,16 @@ const DOT_RADIUS: f32 = 8.5;
 /// Side of the square click target around a ball, in points.
 const HIT_SIZE: f32 = 22.0;
 
-/// Side of the home button under the cube, in points.
+/// Side of the home button in the cube's top-right corner, in points.
 const HOME_SIZE: f32 = 22.0;
 
-/// Gap between the cube and the home button, in points.
+/// Side of the projection button under the cube, in points.
+const BUTTON_SIZE: f32 = 22.0;
+
+/// Point size of the projection glyph, in points.
+const BUTTON_ICON_POINT_SIZE: f32 = 20.0;
+
+/// Gap between the cube, the projection button and the readout, in points.
 const GAP: f32 = 2.0;
 
 /// Height reserved for one line of the readout, in points.
@@ -57,24 +64,26 @@ pub(crate) enum GizmoAction {
     LookFrom(DVec3),
     /// Return the view to the axonometric preset.
     Home,
+    /// Switch the view between the orthographic and the perspective projection.
+    ToggleProjection,
 }
 
 /// The widget rectangle in the top-right corner of `viewport`, if the viewport is large enough.
 ///
-/// The rectangle covers the cube and the home button, because both take clicks; the readout is a
-/// passive label painted below it and is deliberately outside, so it neither blocks a click on the
-/// scene nor widens the area that stops the transform gizmo.
+/// The rectangle covers the cube, the home button in its corner and the projection button under it,
+/// because all three take clicks; the readout is a passive label painted below it and is
+/// deliberately outside, so it neither blocks a click on the scene nor widens the area that stops
+/// the transform gizmo.
 pub(crate) fn widget_rect(viewport: Rect) -> Option<Rect> {
-    let width = SIZE + GAP + HOME_SIZE;
-    let height = SIZE;
-    if viewport.width() < width + 2.0 * MARGIN || viewport.height() < height + 2.0 * MARGIN {
+    let height = SIZE + GAP + BUTTON_SIZE;
+    if viewport.width() < SIZE + 2.0 * MARGIN || viewport.height() < height + 2.0 * MARGIN {
         return None;
     }
     let min = egui::pos2(viewport.right() - SIZE - MARGIN, viewport.top() + MARGIN);
     Some(Rect::from_min_size(min, Vec2::new(SIZE, height)))
 }
 
-/// The home button's rectangle inside the widget.
+/// The home button's rectangle in the cube's top-right corner.
 fn home_rect(widget: Rect) -> Rect {
     Rect::from_center_size(
         egui::pos2(widget.right() - HOME_SIZE / 2.0, widget.top() + HOME_SIZE / 2.0),
@@ -82,9 +91,17 @@ fn home_rect(widget: Rect) -> Rect {
     )
 }
 
+/// The projection button's rectangle, centred under the cube.
+fn projection_rect(widget: Rect) -> Rect {
+    Rect::from_center_size(
+        egui::pos2(widget.center().x, widget.top() + SIZE + GAP + BUTTON_SIZE / 2.0),
+        Vec2::splat(BUTTON_SIZE),
+    )
+}
+
 /// Draws the widget and returns the one action a click asked for.
 ///
-/// `readout` turns the line under the home button on; the numbers are read from the same camera the
+/// `readout` turns the line under the projection button on; the numbers are read from the same camera the
 /// viewport draws with, so the label cannot disagree with the image.
 pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera, readout: bool) -> Option<GizmoAction> {
     let rect = widget_rect(viewport)?;
@@ -153,13 +170,30 @@ pub(crate) fn show(ui: &Ui, viewport: Rect, camera: Camera, readout: bool) -> Op
         action = Some(GizmoAction::Home);
     }
 
+    // The projection button is the third entry point to the one toggle path: the icon draws the
+    // mode the view is in, and the hint names the switch. A click belongs to the view this widget
+    // belongs to, like the axis balls.
+    let (icon, hint) = crate::view_cluster::projection_button(camera.projection());
+    if icons::flat_icon_button_at(
+        ui,
+        projection_rect(rect),
+        ui.scope_id().with("orientation_projection"),
+        icon,
+        BUTTON_ICON_POINT_SIZE,
+        hint,
+    )
+    .clicked()
+    {
+        action = Some(GizmoAction::ToggleProjection);
+    }
+
     if readout {
         paint_readout(ui, rect, camera);
     }
     action
 }
 
-/// The home button under the cube; returns whether it was clicked.
+/// The home button in the cube's top-right corner; returns whether it was clicked.
 fn home_button(ui: &Ui, rect: Rect) -> bool {
     let response = ui.interact(rect, ui.scope_id().with("orientation_home"), Sense::click());
     let visuals = ui.style().interact(&response);
@@ -243,10 +277,83 @@ mod tests {
         assert!((rect.right() - (viewport.right() - MARGIN)).abs() < 1.0e-6);
         assert!((rect.top() - (viewport.top() + MARGIN)).abs() < 1.0e-6);
         assert!((rect.width() - SIZE).abs() < 1.0e-6);
+        assert!((rect.height() - (SIZE + GAP + BUTTON_SIZE)).abs() < 1.0e-6);
         assert!(rect.contains_rect(home_rect(rect)), "the home button is part of the clickable widget");
+        assert!(rect.contains_rect(projection_rect(rect)), "and so is the projection button");
 
         let small = Rect::from_min_size(egui::Pos2::ZERO, Vec2::splat(SIZE));
         assert!(widget_rect(small).is_none());
+    }
+
+    #[test]
+    fn the_projection_button_sits_centred_below_the_cube() {
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let widget = widget_rect(viewport).expect("large enough");
+        let cube = Rect::from_min_size(widget.min, Vec2::splat(SIZE));
+        let button = projection_rect(widget);
+        assert!((button.center().x - cube.center().x).abs() < 1.0e-6, "the button is centred under the cube");
+        assert!(button.top() >= cube.bottom(), "the button starts below the cube: {button:?} vs {cube:?}");
+        assert!(button.bottom() <= widget.bottom() + 1.0e-6, "the widget's height ends with the button");
+        assert!((button.width() - BUTTON_SIZE).abs() < 1.0e-6);
+        assert!(!cube.intersects(button), "the button never covers an axis ball's square");
+    }
+
+    #[test]
+    fn clicking_the_projection_button_asks_for_the_toggle() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let pointer = projection_rect(widget_rect(viewport).expect("large enough")).center();
+
+        let press = |pressed| egui::Event::PointerButton {
+            pos: pointer,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // A hover frame registers the widget, then a press and a release make the click.
+        assert!(run_pointer_frame(&ctx, viewport, 0, vec![egui::Event::PointerMoved(pointer)]).is_none());
+        assert!(run_pointer_frame(&ctx, viewport, 1, vec![press(true)]).is_none());
+        assert_eq!(run_pointer_frame(&ctx, viewport, 2, vec![press(false)]), Some(GizmoAction::ToggleProjection));
+    }
+
+    #[test]
+    fn a_click_away_from_the_projection_button_asks_for_nothing() {
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let pointer = viewport.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: pointer,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = run_pointer_frame(&ctx, viewport, 0, vec![egui::Event::PointerMoved(pointer)]);
+        let _ = run_pointer_frame(&ctx, viewport, 1, vec![press(true)]);
+        assert!(run_pointer_frame(&ctx, viewport, 2, vec![press(false)]).is_none());
+    }
+
+    /// Runs one widget frame with `events`, returning the action a click asked for.
+    fn run_pointer_frame(
+        ctx: &egui::Context,
+        viewport: Rect,
+        frame: u32,
+        events: Vec<egui::Event>,
+    ) -> Option<GizmoAction> {
+        let input = egui::RawInput {
+            screen_rect: Some(viewport),
+            time: Some(f64::from(frame) * 0.1),
+            predicted_dt: 0.1,
+            events,
+            ..Default::default()
+        };
+        let mut action = None;
+        let output = ctx.run_ui(input, |ui| {
+            action = show(ui, viewport, Camera::default(), false);
+        });
+        output.drop_without_applying_deltas();
+        action
     }
 
     #[test]

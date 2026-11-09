@@ -652,6 +652,22 @@ impl FurniCraftApp {
         self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }
 
+    /// Switches one view's projection and refreshes the camera the viewport draws with.
+    ///
+    /// The ribbon, the Display popover and the corner widget all end here, so the three entry points
+    /// cannot disagree. The projection is view state, so this is not a command and leaves no undo
+    /// entry (ADR 0049).
+    fn toggle_view_projection(&mut self, leaf: crate::view_layout::LeafId) {
+        let camera = match self.layout.leaf_mut(leaf) {
+            Some(view) => {
+                view.toggle_projection();
+                view.camera()
+            }
+            None => self.layout.active_camera(),
+        };
+        self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
+    }
+
     /// The view the pointer is over, or the active one.
     ///
     /// *Home* and *Frame all* act on the view under the pointer, because the cluster floats over the
@@ -1221,6 +1237,7 @@ impl FurniCraftApp {
                     }
                 }
                 gizmo::GizmoAction::Home => self.home_view(target_leaf),
+                gizmo::GizmoAction::ToggleProjection => self.toggle_view_projection(target_leaf),
             }
             let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
             self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
@@ -1242,13 +1259,7 @@ impl FurniCraftApp {
                 let leaf = self.pointer_leaf(&regions);
                 self.home_view(leaf);
             }
-            Some(ClusterAction::ToggleProjection) => {
-                if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
-                    leaf.toggle_projection();
-                }
-                let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
-                self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
-            }
+            Some(ClusterAction::ToggleProjection) => self.toggle_view_projection(target_leaf),
             Some(ClusterAction::SetLayout(kind)) => self.set_layout(kind),
             Some(ClusterAction::SetPreset(preset)) => {
                 if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
@@ -1466,11 +1477,7 @@ impl FurniCraftApp {
             match outcome.view {
                 Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
                 Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => {
-                    if let Some(leaf) = self.layout.leaf_mut(self.layout.active()) {
-                        leaf.toggle_projection();
-                    }
-                    let camera = self.layout.active_camera();
-                    self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
+                    self.toggle_view_projection(self.layout.active());
                 }
                 Some(furnicraft_ui::RibbonViewAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
                 None => {}

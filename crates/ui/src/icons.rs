@@ -364,6 +364,87 @@ pub fn tool_button_labelled(ui: &mut Ui, icon: Icon, caption: &str, hint: &str, 
     icon_widget(ui, icon, TOOL_ICON_POINT_SIZE, hint, enabled, on).on_hover_text(hint)
 }
 
+/// A frameless icon button: the glyph alone at rest, a faint wash under the pointer or while pressed.
+///
+/// The corner widget keeps a quiet face, so it cannot use [`icon_button`], whose cell is a plinth.
+/// The cell is still allocated, so the control keeps its rhythm and its hit area; only the paint is
+/// quiet. An empty placeholder asset becomes a frameless text button, so a missing drawing never
+/// leaves a blank click target.
+pub fn flat_icon_button(ui: &mut Ui, icon: Icon, cell: f32, point_size: f32, label: &str, enabled: bool) -> Response {
+    if !icon.is_drawn() {
+        return ui
+            .add_enabled(enabled, Button::new(label).min_size(Vec2::splat(cell)).frame(false))
+            .on_hover_text(label);
+    }
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(cell), Sense::click());
+            paint_flat_icon(ui, rect, &response, icon, point_size, label, enabled);
+            response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), label));
+            response
+        })
+        .inner;
+    if label.is_empty() { response } else { response.on_hover_text(label) }
+}
+
+/// The same flat button at an exact rectangle, for a surface that owns its own layout.
+///
+/// The corner widget computes its controls in viewport coordinates, so the layout cannot place the
+/// button; `id` keeps the interaction stable across frames. A placeholder asset paints its `label`
+/// in the cell instead of a glyph.
+pub fn flat_icon_button_at(
+    ui: &Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    icon: Icon,
+    point_size: f32,
+    label: &str,
+) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    if ui.is_rect_visible(rect) {
+        paint_flat_icon(ui, rect, &response, icon, point_size, label, true);
+    }
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), label));
+    if label.is_empty() { response } else { response.on_hover_text(label) }
+}
+
+/// The flat face: the glyph over a wash that appears only under the hand.
+fn paint_flat_icon(
+    ui: &Ui,
+    rect: egui::Rect,
+    response: &Response,
+    icon: Icon,
+    point_size: f32,
+    label: &str,
+    enabled: bool,
+) {
+    let wash = if !enabled {
+        Color32::TRANSPARENT
+    } else if response.is_pointer_button_down_on() {
+        crate::theme::control_active(ui)
+    } else if response.hovered() {
+        crate::theme::control_hover(ui)
+    } else {
+        Color32::TRANSPARENT
+    };
+    if wash != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, CornerRadius::same(crate::theme::RADIUS), wash);
+    }
+    let ink = if enabled { crate::theme::text(ui) } else { crate::theme::text_dim(ui) };
+    if icon.is_drawn() {
+        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
+        paint_icon(ui, icon, icon_rect, point_size, ink);
+    } else {
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(point_size * 0.75),
+            ink,
+        );
+    }
+}
+
 /// The readable hint of a tool button: the label and, when it has one, its shortcut.
 pub fn tool_hint(label: &str, shortcut: Option<&str>) -> String {
     match shortcut {
@@ -1022,5 +1103,78 @@ mod tests {
         });
         let images = icon_rasters(&images, TOOL_ICON_POINT_SIZE as usize);
         assert_eq!(images.len(), 1, "the second button reuses the cached texture");
+    }
+
+    /// The number of filled rectangles in a frame, the flat button's wash included.
+    fn filled_rects(shapes: &[ClippedShape]) -> usize {
+        fn walk(shape: &Shape, out: &mut usize) {
+            match shape {
+                Shape::Rect(rect) if rect.fill != Color32::TRANSPARENT => *out += 1,
+                Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn a_flat_button_is_a_glyph_with_no_plinth() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let frame = |pointer: egui::Pos2| {
+            let mut rect = egui::Rect::NOTHING;
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events: vec![egui::Event::PointerMoved(pointer)],
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                rect = flat_icon_button(ui, drawn(), 22.0, 20.0, "Projection", true).rect;
+            });
+            let fills = filled_rects(&output.shapes);
+            output.drop_without_applying_deltas();
+            (rect, fills)
+        };
+
+        // The first frame registers the cell with the pointer far away, so nothing is painted twice.
+        let (rect, at_rest) = frame(egui::pos2(screen.right() - 1.0, screen.bottom() - 1.0));
+        assert_eq!(at_rest, 0, "the flat button paints no cell at rest");
+        // A second frame under the pointer adds the hover wash, and only that.
+        let (_, hovered) = frame(rect.center());
+        assert_eq!(hovered, 1, "one rounded wash under the pointer");
+    }
+
+    #[test]
+    fn a_flat_placeholder_draws_its_label() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            flat_icon_button(ui, placeholder(), 22.0, 20.0, "Projection", true);
+        });
+        let has_label = drawn_text(&output.shapes).iter().any(|text| text == "Projection");
+        output.drop_without_applying_deltas();
+        assert!(has_label);
+    }
+
+    #[test]
+    fn a_flat_button_at_a_rect_draws_its_label_when_the_asset_is_empty() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::splat(22.0));
+        let output = ctx.run_ui(Default::default(), |ui| {
+            flat_icon_button_at(ui, rect, egui::Id::unique("flat_probe"), placeholder(), 20.0, "Projection");
+        });
+        let has_label = drawn_text(&output.shapes).iter().any(|text| text == "Projection");
+        output.drop_without_applying_deltas();
+        assert!(has_label);
     }
 }
