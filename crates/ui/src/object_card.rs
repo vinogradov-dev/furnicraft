@@ -13,10 +13,17 @@
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
-use furnicraft_engine::object_cmds::{OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID, OBJECT_PRIMITIVE_REPLACE_ID};
-use furnicraft_engine::{NodeRename, ObjectCollapse, ObjectContourReplace, ObjectPrimitiveReplace, Session};
-use furnicraft_model::{Contour, Geometry, Id, Path, Primitive, Project};
-use furnicraft_units::Length;
+use furnicraft_engine::object_cmds::{
+    OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_REPLACE_ID, OBJECT_PRIMITIVE_REPLACE_ID,
+};
+use furnicraft_engine::{
+    NodeRename, ObjectCollapse, ObjectContourReplace, ObjectPathReplace, ObjectPrimitiveReplace, Session,
+};
+use furnicraft_model::{
+    Contour, ContourSegment, ContourSegmentId, Geometry, Id, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathShape,
+    Primitive, Project,
+};
+use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
 use crate::mesh_edit::{MeshEdit, MeshElement};
@@ -44,6 +51,7 @@ pub(crate) struct ObjectCard {
     draft: Option<Draft>,
     contour_draft: Option<ContourDraft>,
     primitive_draft: Option<PrimitiveDraft>,
+    figure_draft: Option<FigureDraft>,
     confirm_collapse: bool,
     error: Option<String>,
 }
@@ -148,6 +156,173 @@ fn parse_count(text: &str, field: &str) -> Result<u32, String> {
     text.trim().parse::<u32>().map_err(|_| format!("The {field} must be a whole number"))
 }
 
+/// The figure a path was drawn as, and the fields the card exposes for it.
+///
+/// A tagged figure stores its own constraint set rather than a dimension (ADR 0073), so the fields
+/// are read back from the geometry and written through the same setters the grips use. An untagged
+/// path has fields only when it is a single arc, the one figure whose radius and end angle a card
+/// can name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FigureKind {
+    /// A closed circle of four quarter arcs.
+    Circle,
+    /// A closed rectangle.
+    Rectangle,
+    /// A closed regular polygon.
+    Polygon,
+    /// One arc segment, named by its id.
+    Arc(ContourSegmentId),
+}
+
+impl FigureKind {
+    /// The figure `path` carries, when the card has fields for it.
+    fn of(path: &Path) -> Option<Self> {
+        match path.shape() {
+            Some(PathShape::Circle) => Some(Self::Circle),
+            Some(PathShape::Rectangle) => Some(Self::Rectangle),
+            Some(PathShape::RegularPolygon) => Some(Self::Polygon),
+            None => {
+                let [entry] = path.entries() else {
+                    return None;
+                };
+                matches!(entry.segment(), ContourSegment::Arc { .. }).then_some(Self::Arc(entry.id()))
+            }
+        }
+    }
+}
+
+/// The editable text of one figure and the path it was read from.
+///
+/// `base` plays the same role as in [`PrimitiveDraft`]: an edit made elsewhere — by undo, or by the
+/// viewport — re-reads the document instead of leaving stale text in the field.
+#[derive(Clone, Debug)]
+struct FigureDraft {
+    object: Id,
+    base: Path,
+    kind: FigureKind,
+    fields: FigureFields,
+    error: Option<String>,
+}
+
+/// The figure fields as typed text, one per dimension the figure has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FigureFields {
+    radius: String,
+    width: String,
+    height: String,
+    sides: String,
+    end_angle: String,
+}
+
+impl FigureFields {
+    /// Reads the fields the figure has from its own constraint frame.
+    fn read(kind: FigureKind, path: &Path) -> Result<Self, String> {
+        let mut fields = Self::default();
+        match kind {
+            FigureKind::Circle => fields.radius = path.circle_frame().map_err(figure_error)?.radius.to_string(),
+            FigureKind::Rectangle => {
+                let frame = path.rectangle_frame().map_err(figure_error)?;
+                fields.width = frame.width.to_string();
+                fields.height = frame.height.to_string();
+            }
+            FigureKind::Polygon => {
+                let frame = path.polygon_frame().map_err(figure_error)?;
+                fields.sides = frame.corners.len().to_string();
+                fields.radius = frame.radius.to_string();
+            }
+            FigureKind::Arc(segment) => {
+                let frame = path.arc_frame(segment).map_err(figure_error)?;
+                fields.radius = frame.radius.to_string();
+                fields.end_angle = frame.end_angle().map_err(figure_error)?.to_string();
+            }
+        }
+        Ok(fields)
+    }
+}
+
+impl FigureDraft {
+    fn new(object: Id, path: &Path, kind: FigureKind) -> Result<Self, String> {
+        Ok(Self { object, base: path.clone(), kind, fields: FigureFields::read(kind, path)?, error: None })
+    }
+
+    /// The path the fields describe, or a readable reason they do not.
+    ///
+    /// Each setter keeps the shape tag and the ids of the segments it does not re-cut, so applying
+    /// one field leaves the figure what it was.
+    fn parse(&self) -> Result<Path, String> {
+        let mut path = self.base.clone();
+        match self.kind {
+            FigureKind::Circle => {
+                let radius = parse_length(&self.fields.radius, "radius")?;
+                if radius != path.circle_frame().map_err(figure_error)?.radius {
+                    path = path.set_circle_radius(radius).map_err(figure_error)?;
+                }
+            }
+            FigureKind::Rectangle => {
+                let width = parse_length(&self.fields.width, "width")?;
+                let height = parse_length(&self.fields.height, "height")?;
+                let frame = path.rectangle_frame().map_err(figure_error)?;
+                if width != frame.width {
+                    path = path.set_rectangle_width(width).map_err(figure_error)?;
+                }
+                if height != frame.height {
+                    path = path.set_rectangle_height(height).map_err(figure_error)?;
+                }
+            }
+            FigureKind::Polygon => {
+                let sides = parse_sides(&self.fields.sides)?;
+                let radius = parse_length(&self.fields.radius, "radius")?;
+                let frame = path.polygon_frame().map_err(figure_error)?;
+                if usize::try_from(sides).ok() != Some(frame.corners.len()) {
+                    path = path.set_polygon_sides(sides).map_err(figure_error)?;
+                }
+                let current = path.polygon_frame().map_err(figure_error)?.radius;
+                if radius != current {
+                    path = path.set_polygon_radius(radius).map_err(figure_error)?;
+                }
+            }
+            FigureKind::Arc(segment) => {
+                let radius = parse_length(&self.fields.radius, "radius")?;
+                let angle = Degrees::parse_degrees(self.fields.end_angle.trim())
+                    .map_err(|error| format!("The end angle: {error}."))?;
+                let frame = path.arc_frame(segment).map_err(figure_error)?;
+                if radius != frame.radius {
+                    path = path.set_arc_radius(segment, radius).map_err(figure_error)?;
+                }
+                let current = path.arc_frame(segment).map_err(figure_error)?.end_angle().map_err(figure_error)?;
+                if angle != current {
+                    path = path.set_arc_end_angle(segment, angle).map_err(figure_error)?;
+                }
+            }
+        }
+        Ok(path)
+    }
+}
+
+fn figure_error(error: furnicraft_model::ContourEditError) -> String {
+    format!("{error}.")
+}
+
+fn parse_sides(text: &str) -> Result<u32, String> {
+    let sides = text.trim().parse::<u32>().map_err(|_| "The sides must be a whole number".to_owned())?;
+    if (MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES).contains(&sides) {
+        Ok(sides)
+    } else {
+        Err(format!("The sides must be between {MIN_POLYGON_SIDES} and {MAX_POLYGON_SIDES}."))
+    }
+}
+
+/// The path the figure fields describe, or `None` when there is nothing to apply.
+///
+/// A card edit is refused while the viewport owns the working copy: dispatching it would make that
+/// copy stale and lose the drag the user is still making.
+fn figure_replacement(draft: Option<&FigureDraft>, apply: bool, contour_editing: bool) -> Option<Result<Path, String>> {
+    if !apply || contour_editing {
+        return None;
+    }
+    draft.map(FigureDraft::parse)
+}
+
 /// What the card reports about one object, owned so no document borrow outlives the frame.
 #[derive(Clone, Debug, PartialEq)]
 struct ObjectSummary {
@@ -194,7 +369,7 @@ fn object_summary(project: &Project, id: Id) -> Option<ObjectSummary> {
             vertices: 0,
             faces: 0,
             contour: constructive.contour().ok(),
-            path: None,
+            path: Some(constructive.path().clone()),
             height: constructive.height(),
             primitive: None,
         }),
@@ -248,6 +423,7 @@ impl ObjectCard {
             self.confirm_collapse = false;
             self.contour_draft = None;
             self.primitive_draft = None;
+            self.figure_draft = None;
             self.draft = Some(Draft { object: object_id, name: summary.name.clone() });
         }
         let is_constructive = summary.contour.is_some();
@@ -267,9 +443,11 @@ impl ObjectCard {
         } else {
             self.primitive_draft = None;
         }
+        self.sync_figure_draft(object_id, &summary);
 
         let (rename, name_error) = self.name_section(ui, &summary);
         self.geometry_section(ui, &summary);
+        let figure_result = self.figure_section(ui, &summary, contour_editing);
         let mut action = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
         if self.contour_edit_section(ui, &summary, contour_editing, single_selection) {
             action = ObjectAction::StartContour;
@@ -277,7 +455,8 @@ impl ObjectCard {
         // The viewport owns the working copy while the mode is live; a text replacement or a
         // collapse would silently make that copy stale.
         let primitive_result = self.primitive_section(ui, &summary);
-        let contour_result = if contour_editing { None } else { self.contour_section(ui, &summary) };
+        let contour_result =
+            if contour_editing || self.figure_draft.is_some() { None } else { self.contour_section(ui, &summary) };
         let (collapse, cancel) = if (!is_constructive && summary.primitive.is_none()) || contour_editing {
             (false, false)
         } else {
@@ -292,6 +471,17 @@ impl ObjectCard {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
+            ui.ctx().request_repaint();
+            return action;
+        }
+        if let Some(result) = figure_result {
+            match result.and_then(|path| replace_path(session, object_id, path)) {
+                Ok(()) => {
+                    self.error = None;
+                    self.figure_draft = None;
                 }
                 Err(error) => self.error = Some(error),
             }
@@ -400,6 +590,76 @@ impl ObjectCard {
                 ui.label("Editable as a mesh; undo is its only history.".to_owned());
             }
         });
+    }
+
+    /// Keeps the figure draft in step with the path the document holds.
+    ///
+    /// The base path detects an edit made elsewhere — by undo, or by the viewport — so the fields
+    /// never overwrite a restored figure with stale text.
+    fn sync_figure_draft(&mut self, object: Id, summary: &ObjectSummary) {
+        let Some(path) = &summary.path else {
+            self.figure_draft = None;
+            return;
+        };
+        let kind = FigureKind::of(path);
+        let current = self
+            .figure_draft
+            .as_ref()
+            .is_some_and(|draft| draft.object == object && draft.base == *path && Some(draft.kind) == kind);
+        if !current {
+            self.figure_draft = kind.and_then(|kind| FigureDraft::new(object, path, kind).ok());
+        }
+    }
+
+    /// Draws the figure's own dimensions; returns the parsed path when Apply was pressed.
+    ///
+    /// Only the fields the figure has are shown: a circle a radius, a rectangle its width and
+    /// height, a polygon its sides and radius, one arc its radius and end angle. While the viewport
+    /// owns the working copy the fields are drawn disabled and the edit is refused.
+    fn figure_section(
+        &mut self,
+        ui: &mut Ui,
+        summary: &ObjectSummary,
+        contour_editing: bool,
+    ) -> Option<Result<Path, String>> {
+        summary.path.as_ref()?;
+        let draft = self.figure_draft.as_mut()?;
+        let mut apply = false;
+        ui.separator();
+        section(ui, "object.figure", "Figure", true, |ui| {
+            ui.add_enabled_ui(!contour_editing, |ui| {
+                match draft.kind {
+                    FigureKind::Circle => length_field(ui, "Radius", &mut draft.fields.radius),
+                    FigureKind::Rectangle => {
+                        length_field(ui, "Width", &mut draft.fields.width);
+                        length_field(ui, "Height", &mut draft.fields.height);
+                    }
+                    FigureKind::Polygon => {
+                        count_field(ui, "Sides", &mut draft.fields.sides);
+                        length_field(ui, "Radius", &mut draft.fields.radius);
+                    }
+                    FigureKind::Arc(_) => {
+                        length_field(ui, "Radius", &mut draft.fields.radius);
+                        angle_field(ui, "End angle", &mut draft.fields.end_angle);
+                    }
+                }
+                if let Some(error) = &draft.error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+                apply = ui.button("Apply figure").clicked();
+            });
+            if contour_editing {
+                ui.label("Editing the figure in the viewport; finish or cancel it first.");
+            }
+        });
+        let replacement = figure_replacement(self.figure_draft.as_ref(), apply, contour_editing);
+        if let Some(Err(error)) = &replacement {
+            if let Some(draft) = self.figure_draft.as_mut() {
+                draft.error = Some(error.clone());
+            }
+            return None;
+        }
+        replacement
     }
 
     /// Draws the primitive parameters; returns the parsed primitive when Apply was pressed.
@@ -622,6 +882,14 @@ fn count_field(ui: &mut Ui, label: &str, text: &mut String) {
     });
 }
 
+/// A labelled degree text field.
+fn angle_field(ui: &mut Ui, label: &str, text: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.add(TextEdit::singleline(text).desired_width(100.0));
+    });
+}
+
 /// The selected vertices that still exist, with their local positions.
 fn selected_positions(project: &Project, object: Id, vertices: &[u32]) -> Vec<(u32, [Length; 3])> {
     let Some(mesh) = project.object(object).and_then(|object| object.geometry().as_mesh()) else {
@@ -691,6 +959,21 @@ fn rename_object(session: &mut Session, node: Id, name: String) -> Result<(), St
 fn replace_contour(session: &mut Session, object: Id, contour: Contour) -> Result<(), String> {
     let params = json(&ObjectContourReplace { object, path: contour.into() })?;
     dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
+}
+
+/// Replaces the drawing of a path node or the path a constructive body owns.
+///
+/// The two payloads have their own command, and both store the `Path` itself rather than a ring,
+/// so a figure's shape tag and its segment ids survive the edit (ADR 0073, ADR 0074).
+fn replace_path(session: &mut Session, object: Id, path: Path) -> Result<(), String> {
+    let body = session.project().object(object).is_some_and(|object| object.geometry().as_constructive().is_some());
+    if body {
+        let params = json(&ObjectContourReplace { object, path })?;
+        dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
+    } else {
+        let params = json(&ObjectPathReplace { object, path })?;
+        dispatch(session, OBJECT_PATH_REPLACE_ID, &params).map(|_| ())
+    }
 }
 
 fn replace_primitive(session: &mut Session, object: Id, primitive: Primitive) -> Result<(), String> {
@@ -766,6 +1049,11 @@ mod tests {
         let summary = object_summary(session.project(), id).expect("summary");
         assert_eq!(summary.kind, "Constructive");
         assert_eq!(summary.contour, Some(rectangle(100, 50)));
+        assert_eq!(
+            summary.path.as_ref().map(Path::to_contour),
+            Some(Ok(rectangle(100, 50))),
+            "the body carries the path it grew from"
+        );
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
         assert!(summary.contour.as_ref().is_some_and(|contour| contour.segments().len() == 4));
         assert!(offers_contour_edit(&summary), "a constructive object has a ring to reshape");
@@ -1002,5 +1290,179 @@ mod tests {
         let summary = object_summary(session.project(), id).expect("summary");
         assert_eq!(summary.kind, "Constructive");
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
+    }
+
+    fn millimetres(value: i64) -> Length {
+        Length::from_millimetres(value).expect("length")
+    }
+
+    fn path_project(path: Path) -> (Session, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let id = project.add_object(root, "Figure", Placement::IDENTITY, Geometry::Path(path)).expect("add object");
+        (Session::with_catalog(project, sample_catalog()), id)
+    }
+
+    fn figure_draft(id: Id, path: &Path) -> FigureDraft {
+        let kind = FigureKind::of(path).expect("the path has a figure");
+        FigureDraft::new(id, path, kind).expect("draft")
+    }
+
+    #[test]
+    fn the_figure_fields_read_and_parse_a_circle() {
+        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
+        let mut draft = figure_draft(Id::new(1).expect("id"), &path);
+        assert_eq!(draft.fields.radius, millimetres(40).to_string());
+
+        draft.fields.radius = "60".to_owned();
+        let parsed = draft.parse().expect("a wider circle");
+        assert_eq!(parsed.shape(), Some(PathShape::Circle), "the tag survives");
+        assert_eq!(parsed.circle_frame().expect("frame").radius, millimetres(60));
+        assert_eq!(parsed.entries().len(), 4, "a circle keeps its four quarter arcs");
+    }
+
+    #[test]
+    fn the_figure_fields_read_and_parse_a_rectangle() {
+        let path =
+            Path::rectangle([Length::ZERO, Length::ZERO], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let mut draft = figure_draft(Id::new(1).expect("id"), &path);
+        assert_eq!(draft.fields.width, millimetres(100).to_string());
+        assert_eq!(draft.fields.height, millimetres(50).to_string());
+
+        draft.fields.width = "130".to_owned();
+        draft.fields.height = "70".to_owned();
+        let parsed = draft.parse().expect("a wider rectangle");
+        assert_eq!(parsed.shape(), Some(PathShape::Rectangle), "the tag survives");
+        let frame = parsed.rectangle_frame().expect("frame");
+        assert_eq!((frame.width, frame.height), (millimetres(130), millimetres(70)));
+    }
+
+    #[test]
+    fn the_figure_fields_read_and_parse_a_polygon() {
+        let path =
+            Path::regular_polygon([Length::ZERO, Length::ZERO], [millimetres(30), Length::ZERO], 6).expect("hexagon");
+        let mut draft = figure_draft(Id::new(1).expect("id"), &path);
+        assert_eq!(draft.fields.sides, "6");
+        assert_eq!(draft.fields.radius, millimetres(30).to_string());
+
+        draft.fields.sides = "8".to_owned();
+        draft.fields.radius = "50".to_owned();
+        let parsed = draft.parse().expect("an octagon");
+        assert_eq!(parsed.shape(), Some(PathShape::RegularPolygon), "the tag survives");
+        let frame = parsed.polygon_frame().expect("frame");
+        assert_eq!(frame.corners.len(), 8, "the side count is re-cut");
+        assert_eq!(frame.radius, millimetres(50), "the radius follows the typed value");
+    }
+
+    #[test]
+    fn the_figure_fields_read_and_parse_a_single_arc() {
+        let path = Path::arc_from_center(
+            [Length::ZERO, Length::ZERO],
+            [millimetres(50), Length::ZERO],
+            [Length::ZERO, millimetres(50)],
+        )
+        .expect("quarter arc");
+        let segment = path.entries().first().expect("one segment").id();
+        let mut draft = figure_draft(Id::new(1).expect("id"), &path);
+        assert_eq!(draft.fields.radius, millimetres(50).to_string());
+        assert_eq!(draft.fields.end_angle, Degrees::from_millidegrees(90_000).to_string());
+
+        draft.fields.radius = "70".to_owned();
+        draft.fields.end_angle = "45°".to_owned();
+        let parsed = draft.parse().expect("a shorter, wider arc");
+        let frame = parsed.arc_frame(segment).expect("the segment id survives");
+        assert_eq!(frame.radius, millimetres(70));
+        assert_eq!(frame.end_angle().expect("end angle"), Degrees::from_millidegrees(45_000));
+    }
+
+    #[test]
+    fn the_figure_fields_refuse_bad_text_and_out_of_range_values() {
+        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
+        let mut circle = figure_draft(Id::new(1).expect("id"), &path);
+        circle.fields.radius = "wide".to_owned();
+        assert!(circle.parse().is_err(), "radius text must parse");
+        circle.fields.radius = "0".to_owned();
+        assert!(circle.parse().is_err(), "a circle needs a positive radius");
+
+        let polygon =
+            Path::regular_polygon([Length::ZERO, Length::ZERO], [millimetres(30), Length::ZERO], 6).expect("hexagon");
+        let mut draft = figure_draft(Id::new(1).expect("id"), &polygon);
+        draft.fields.sides = "two".to_owned();
+        assert!(draft.parse().is_err(), "sides must be a whole number");
+        draft.fields.sides = "2".to_owned();
+        assert!(draft.parse().is_err(), "two sides are not a polygon");
+        draft.fields.sides = "129".to_owned();
+        assert!(draft.parse().is_err(), "the polygon cap is 128 sides");
+
+        let arc = Path::arc_from_center(
+            [Length::ZERO, Length::ZERO],
+            [millimetres(50), Length::ZERO],
+            [Length::ZERO, millimetres(50)],
+        )
+        .expect("quarter arc");
+        let mut draft = figure_draft(Id::new(1).expect("id"), &arc);
+        draft.fields.end_angle = "wide".to_owned();
+        assert!(draft.parse().is_err(), "the end angle must parse");
+    }
+
+    #[test]
+    fn applying_a_figure_is_one_command_and_one_undo_entry() {
+        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
+        let (mut session, id) = path_project(path.clone());
+        let before = session.project().revision();
+        let mut draft = figure_draft(id, &path);
+        draft.fields.radius = "70".to_owned();
+        replace_path(&mut session, id, draft.parse().expect("parse")).expect("replace the figure");
+
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per apply");
+        assert_eq!(
+            session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
+            millimetres(70)
+        );
+        session.undo().expect("undo");
+        assert_eq!(
+            session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
+            millimetres(40),
+            "one undo restores the figure"
+        );
+    }
+
+    #[test]
+    fn a_constructive_body_keeps_the_tag_of_the_figure_it_owns() {
+        use furnicraft_model::Constructive;
+
+        let path =
+            Path::rectangle([Length::ZERO, Length::ZERO], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let body = Constructive::extrude(path.clone(), millimetres(18)).expect("body");
+        let mut project = sample_project();
+        let root = project.root().id();
+        let id =
+            project.add_object(root, "Top", Placement::IDENTITY, Geometry::Constructive(body)).expect("add the body");
+        let mut session = Session::with_catalog(project, sample_catalog());
+
+        let summary = object_summary(session.project(), id).expect("summary");
+        let stored = summary.path.as_ref().expect("a body carries the path it owns");
+        assert_eq!(stored, &path);
+        assert_eq!(summary.contour.as_ref(), Some(&rectangle(100, 50)), "the ring is still reported");
+
+        let mut draft = figure_draft(id, stored);
+        draft.fields.width = "140".to_owned();
+        replace_path(&mut session, id, draft.parse().expect("parse")).expect("replace the body path");
+        let body = session.project().object(id).expect("object").geometry().as_constructive().expect("body");
+        assert_eq!(body.path().shape(), Some(PathShape::Rectangle), "the tag survives the card edit");
+        assert_eq!(body.contour().expect("ring").bounds_micrometres(), ([-20_000, 0], [120_000, 50_000]));
+    }
+
+    #[test]
+    fn a_figure_edit_is_refused_while_the_viewport_owns_the_copy() {
+        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
+        let draft = figure_draft(Id::new(1).expect("id"), &path);
+        assert!(
+            figure_replacement(Some(&draft), true, true).is_none(),
+            "a running viewport edit owns the working copy"
+        );
+        assert!(figure_replacement(Some(&draft), false, false).is_none(), "nothing was pressed");
+        let replacement = figure_replacement(Some(&draft), true, false).expect("an apply is a replacement");
+        assert_eq!(replacement.expect("parse"), path, "an unchanged figure is the same path");
     }
 }
