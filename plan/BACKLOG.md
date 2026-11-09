@@ -25,21 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
-  widget has no projection control, and its Home button is the only control under the cube, drawn as
-  a filled plate. Add a 20 pt projection icon in a 22 pt cell directly under the cube, centred, with
-  no filled cell at rest — only the glyph — and a faint rounded wash on hover or press; a placeholder
-  asset falls back to a frameless text button. It is absent with the widget while an authored camera
-  is active. `GizmoAction::ToggleProjection` joins `LookFrom` and `Home`; the shell factors the two
-  existing projection arms into one `toggle_view_projection(leaf)` helper, so the ribbon, the
-  Display popover and the new button cannot disagree. The readout moves one row down and
-  `widget_rect` grows by the button row; the stale "Home is under the cube" comments are fixed.
-  Tests: the projection rect is inside the widget and below the cube; a click returns
-  `ToggleProjection`; the icon and hint follow the projection; a flat button paints no filled rect
-  at rest and one on hover; an undrawn placeholder draws its label.
-  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/icons.rs, apps/furnicraft/src/main.rs`
-
-- `[ ]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
+- `[~]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
   horizontal, `up()` follows yaw and pitch only, and the readout's roll is always zero. Add a
   `roll: f64` (radians, view state like yaw and pitch, never document data): rotate the analytic base
   `right`/`up` about `forward` by the roll, keeping `up = right × forward`; a positive roll turns the
@@ -272,6 +258,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
+  widget has no projection control, and its Home button is the only control under the cube, drawn as
+  a filled plate. Add a 20 pt projection icon in a 22 pt cell directly under the cube, centred, with
+  no filled cell at rest — only the glyph — and a faint rounded wash on hover or press; a placeholder
+  asset falls back to a frameless text button. It is absent with the widget while an authored camera
+  is active. `GizmoAction::ToggleProjection` joins `LookFrom` and `Home`; the shell factors the two
+  existing projection arms into one `toggle_view_projection(leaf)` helper, so the ribbon, the
+  Display popover and the new button cannot disagree. The readout moves one row down and
+  `widget_rect` grows by the button row; the stale "Home is under the cube" comments are fixed.
+  Tests: the projection rect is inside the widget and below the cube; a click returns
+  `ToggleProjection`; the icon and hint follow the projection; a flat button paints no filled rect
+  at rest and one on hover; an undrawn placeholder draws its label.
+  `879f456`
+  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/icons.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **X20** a pole view has a canonical up: clicking the top view inherited whatever yaw the
   camera had, so the elevation arrived rolled. `Camera::look_from_oriented(direction, up)` takes the
