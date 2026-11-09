@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U62** the active view expands over the whole workspace and comes back: `Layout` gains
-  `maximized: Option<LeafId>`; `regions()` returns one full-area rectangle for that leaf and
-  `dividers()` is empty, so borders and picking see one surface. `toggle_maximized()` expands the
-  active view and restores the tree unchanged — every ratio and camera stays where the user left
-  it — and `set_kind` clears the mode. The cluster gains a pressed *Expand* / *Restore* button
-  (`view/maximize`, `view/restore` drawn assets), `ClusterAction::ToggleMaximize` and the `Alt+W`
-  shortcut; the settings shortcut table names it. A single-view layout disables the button and the
-  key does nothing. Tests: expand returns one region on the whole area and no borders; restore
-  returns the same four rectangles, ratios and cameras; a layout switch leaves the mode; `Alt+W`
-  is consumed and the single layout refuses it; the icon files pass the existing footprint and
-  coverage tests and the URI count is 74.
-  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs, crates/ui/src/settings.rs, assets/icons/view, crates/ui/src/icons.rs`
-
 - `[ ]` **U63** the display style belongs to one view: `Leaf` carries `ShadingStyle`, the cluster's
   five style buttons read and write the active leaf's style, and `ViewCluster` stops owning a
   global style. `ViewportRenderer::render_views` takes a `ViewSpec { camera, region, shading }` per
@@ -247,6 +234,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U62** the active view expands over the whole workspace and comes back: `Layout` gains
+  `maximized: Option<LeafId>`; `regions()` returns one full-area rectangle for that leaf and
+  `dividers()` is empty, so borders and picking see one surface. `toggle_maximized()` expands the
+  active view and restores the tree unchanged — every ratio and camera stays where the user left
+  it — and `set_kind` clears the mode. The cluster gains a pressed *Expand* / *Restore* button
+  (`view/maximize`, `view/restore` drawn assets), `ClusterAction::ToggleMaximize` and the `Alt+W`
+  shortcut; the settings shortcut table names it. A single-view layout disables the button and the
+  key does nothing. Tests: expand returns one region on the whole area and no borders; restore
+  returns the same four rectangles, ratios and cameras; a layout switch leaves the mode; `Alt+W`
+  is consumed and the single layout refuses it; the icon files pass the existing footprint and
+  coverage tests and the URI count is 74.
+  `2cbc453`
+  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs, crates/ui/src/settings.rs, assets/icons/view, crates/ui/src/icons.rs`
 
 - `[x]` **U61** *Frame all* fits the objects the scene has now: the app stores `scene_bounds` from
   the latest `evaluate`, and `frame_all` computes `scene_build::home_camera(scene_bounds)` on every
