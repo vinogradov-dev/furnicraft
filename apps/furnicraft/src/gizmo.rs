@@ -225,13 +225,13 @@ fn paint_readout(ui: &Ui, widget: Rect, camera: Camera) {
 /// The pitch, yaw, roll and projection line.
 ///
 /// Pitch and yaw are the camera's own orbit angles, wrapped to a signed degree so the line reads as
-/// -51.7° rather than 308.3°; the roll is the tilt of the camera's right vector above the horizon,
-/// which an orbit camera always keeps at zero. The projection is named the way the toggle names it,
+/// -51.7° rather than 308.3°; the roll is the camera's field about its own view axis, presented the
+/// same way, so a 270° roll reads as -90.0°. The projection is named the way the toggle names it,
 /// and every number is formatted through `furnicraft-units` so the readout has one source of truth.
 pub(crate) fn readout(camera: Camera) -> String {
     let pitch = Degrees::from_radians(camera.pitch()).unwrap_or(Degrees::ZERO);
     let yaw = signed_degrees(camera.yaw());
-    let roll = Degrees::from_radians(camera.right().z.clamp(-1.0, 1.0).asin()).unwrap_or(Degrees::ZERO);
+    let roll = signed_degrees(camera.roll());
     let projection = match camera.projection() {
         Projection::Orthographic { .. } => "Ortho",
         Projection::Perspective { .. } => "Persp",
@@ -382,6 +382,9 @@ mod tests {
 
         camera.toggle_projection();
         assert!(readout(camera).ends_with("Ortho"), "an orthographic view names the mode");
+
+        camera.roll_to(std::f64::consts::FRAC_PI_2);
+        assert!(readout(camera).contains("Roll 90.0°"), "the readout shows the camera's roll field");
     }
 
     #[test]

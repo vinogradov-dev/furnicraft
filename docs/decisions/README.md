@@ -61,7 +61,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0054](0054-a-primitive-keeps-the-parameters-that-built-it.md) | A primitive keeps the parameters that built it | Accepted |
 | [0055](0055-the-ui-rasterises-icons-and-emphasis-is-tonal.md) | The UI rasterises icons itself, and emphasis is tonal | Accepted |
 | [0056](0056-creation-tools-land-at-the-scene-root.md) | Creation tools land at the scene root | Accepted |
-| [0057](0057-the-camera-reaches-the-poles.md) | The camera reaches the poles | Accepted |
+| [0057](0057-the-camera-reaches-the-poles.md) | The camera reaches the poles | Accepted; roll added by 0078 |
 | [0058](0058-a-new-drawing-pivots-on-its-own-shape.md) | A new drawing pivots on its own shape | Accepted |
 | [0059](0059-a-selected-line-is-a-screen-space-overlay.md) | A selected line is a screen-space overlay | Accepted |
 | [0060](0060-an-open-path-is-edited-by-its-corners.md) | An open path is edited by its corners | Accepted |
@@ -82,6 +82,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0075](0075-a-grip-names-what-its-number-means.md) | A grip names what its number means | Accepted |
 | [0076](0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md) | A drawing tool separates the segment kind from the snaps | Accepted |
 | [0077](0077-a-pending-arc-is-the-closing-segment.md) | A pending arc is the closing segment | Accepted |
+| [0078](0078-a-view-rolls-about-its-own-axis.md) | A view rolls about its own axis | Accepted |
 
 ## Format
 

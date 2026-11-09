@@ -837,6 +837,32 @@ mod tests {
     }
 
     #[test]
+    fn a_roll_is_view_state_and_a_preset_or_home_resets_it() {
+        let mut layout = Layout::new(Camera::default());
+        let id = layout.active();
+        let leaf = layout.leaf_mut(id).expect("the active leaf");
+        leaf.apply_preset(OpeningView::Front);
+        let forward = leaf.camera().forward();
+
+        leaf.camera.roll_to(std::f64::consts::FRAC_PI_2);
+        assert!((leaf.camera().roll() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-9);
+        assert!((leaf.camera().forward() - forward).length() < 1.0e-9, "the roll does not turn the view");
+
+        // Orbit keeps the roll; Home, a preset and Frame all reset it through their direction snap.
+        leaf.orbit(0.0, 0.0);
+        assert!(leaf.camera().roll() > 0.0, "orbit keeps the roll");
+        leaf.home();
+        assert_eq!(leaf.camera().roll(), 0.0, "Home resets the roll");
+        leaf.camera.roll_by(0.3);
+        assert!(leaf.camera().roll() > 0.0, "a roll can be applied again");
+        leaf.apply_preset(OpeningView::Top);
+        assert_eq!(leaf.camera().roll(), 0.0, "a preset resets the roll");
+        leaf.camera.roll_to(0.4);
+        leaf.frame(Camera::default());
+        assert_eq!(leaf.camera().roll(), 0.0, "Frame all resets the roll");
+    }
+
+    #[test]
     fn the_active_leaf_is_the_one_the_tree_holds() {
         let mut layout = layout(LayoutKind::Quad);
         let last = layout.leaves[3].id;
