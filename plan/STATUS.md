@@ -54,10 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 ## Next
 
 X20 is done: a pole view takes a canonical up — the top `+Y` up and `+X` right, the bottom `+Y` up
-and `-X` right, the sides `+Z` up. U45 is next: several scenes open at once as tabs, each with its
-own session, undo history, selection, camera and dirty marker; it moves `Session`, `Editor`,
-`EvaluationCache`, `FileMenu` and the gizmo state into one `Document` per tab, so it needs a plan the
-owner approves before any code.
+and `-X` right, the sides `+Z` up. U45 is next and its plan is approved in `plan/BACKLOG.md` (owner,
+2026-11-09), but the owner deferred the work: start it only on a new instruction. It opens one tab
+per file, each with its own `Document` (session, undo, selection, layout and cameras, renderer and
+texture); *Open* opens a new tab and re-opening a path activates it; the split layout travels with the tab.
 
 ## Index
 
