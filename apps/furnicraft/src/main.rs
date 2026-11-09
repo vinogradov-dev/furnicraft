@@ -169,6 +169,13 @@ struct FurniCraftApp {
     /// The pointer in viewport points from the previous frame, so a border hover can show its resize
     /// cursor and the wheel can tell whether it is over the active view.
     pointer_position: Option<egui::Pos2>,
+    /// The band the floating ribbon covered on the last drawn frame. The side panels are inset by its
+    /// height and the framing and the orientation widget stay below it (U51, ADR 0080). `None` until
+    /// the first real frame, when the deterministic [`furnicraft_ui::toolbars::height`] stands in.
+    ribbon_rect: Option<egui::Rect>,
+    /// The central area the viewport drew into last frame, so a keyboard *Frame all* knows the view
+    /// it fits into without waiting for the viewport to draw first.
+    viewport_area: Option<egui::Rect>,
     /// Whether a view border owns the primary button until it is released.
     divider_dragging: bool,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
@@ -245,6 +252,8 @@ impl FurniCraftApp {
             home_open: false,
             palette: Palette::new(),
             pointer_position: None,
+            ribbon_rect: None,
+            viewport_area: None,
             divider_dragging: false,
             settings_notice: loaded.notice,
         })
@@ -628,7 +637,8 @@ impl FurniCraftApp {
     ///
     /// The fit camera is computed from the latest evaluation on every press, so *Frame all* follows
     /// objects created or moved since the file opened. Only the active view moves: its direction
-    /// and its projection kind stay as the user left them.
+    /// and its projection kind stay as the user left them. The fit targets the part of the view the
+    /// floating ribbon leaves uncovered, so the scene is never framed under the strip (U51).
     fn frame_all(&mut self) {
         let fit = match home_camera(self.scene_bounds) {
             Ok(fit) => fit,
@@ -637,8 +647,45 @@ impl FurniCraftApp {
                 return;
             }
         };
+        let fit = match self.viewport_area {
+            Some(area) => {
+                let band = self.ribbon_band(area);
+                let view = self
+                    .layout
+                    .regions(area)
+                    .into_iter()
+                    .find(|(leaf, _)| *leaf == self.layout.active())
+                    .map(|(_, rect)| rect)
+                    .unwrap_or(area);
+                match fit_uncovered(fit, view.height(), uncovered(view, band).height()) {
+                    Ok(fit) => fit,
+                    Err(error) => {
+                        self.last_error = Some(error);
+                        return;
+                    }
+                }
+            }
+            None => fit,
+        };
         self.layout.active_leaf_mut().frame(fit);
         self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
+    }
+
+    /// The band the floating ribbon covers at the top of the viewport `area`.
+    ///
+    /// The measured rectangle from this frame wins, because the ribbon's body can be taller than its
+    /// deterministic height in a narrow window; the open state's height stands in on the first frame.
+    fn ribbon_band(&self, area: egui::Rect) -> egui::Rect {
+        let height = self
+            .ribbon_rect
+            .map_or_else(|| furnicraft_ui::toolbars::height(self.editor.ribbon_open()), |rect| rect.height());
+        strip_rect(area, height.min(area.height()))
+    }
+
+    /// The height the side panels start below, so the floating ribbon never hides their header.
+    fn ribbon_inset(&self) -> f32 {
+        self.ribbon_rect
+            .map_or_else(|| furnicraft_ui::toolbars::height(self.editor.ribbon_open()), |rect| rect.height())
     }
 
     /// Returns the active view to *Axonometric* without refitting the scene.
@@ -673,6 +720,10 @@ impl FurniCraftApp {
         if !ui.is_rect_visible(area) {
             return;
         }
+        // The render target covers the whole central area, including the band under the floating
+        // ribbon, so the scene image runs under the strip (U51). Only the overlays that must stay
+        // readable — the orientation widget — move into the uncovered part.
+        self.viewport_area = Some(area);
         self.pointer_position = ui.input(|input| input.pointer.hover_pos());
 
         // The viewport is the whole central area; the layout divides it into views. Every view has
@@ -718,7 +769,10 @@ impl FurniCraftApp {
         // both, exactly as it does for a single view (ADR 0049).
         self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);
         let rect = target_rect;
-        let gizmo_rect = gizmo::widget_rect(rect);
+        // The orientation widget belongs to the part of the view the ribbon leaves uncovered, so the
+        // strip never hides the cube (U51).
+        let visible = uncovered(rect, self.ribbon_band(area));
+        let gizmo_rect = gizmo::widget_rect(visible);
 
         let points_per_pixel = ui.ctx().pixels_per_point();
         let width = (area.width() * points_per_pixel).round().max(1.0) as u32;
@@ -1221,7 +1275,7 @@ impl FurniCraftApp {
         if self.session.project().active_camera().is_none()
             && let Some(action) = self.gizmo.show(
                 ui,
-                rect,
+                visible,
                 target_camera,
                 self.cluster.angles_visible(),
                 self.settings.viewport.roll_step_degrees,
@@ -1417,7 +1471,7 @@ impl FurniCraftApp {
     ///
     /// The panel owns no heading and no tools of its own: the header row names it, counts its nodes
     /// and folds it, and the body is only the tree. Grouping survives in the row context menu.
-    fn scene_tree(&mut self, ui: &mut egui::Ui) {
+    fn scene_tree(&mut self, ui: &mut egui::Ui, inset: f32) {
         let head = PanelHead {
             title: "Scene",
             count: self.node_count,
@@ -1425,19 +1479,20 @@ impl FurniCraftApp {
             default_width: 240.0,
             min_width: 180.0,
         };
-        side_panel(ui, PanelSide::Left, "scene_tree", &mut self.tree_open, head, |ui| {
+        side_panel(ui, PanelSide::Left, "scene_tree", &mut self.tree_open, head, inset, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.editor.show_scene_tree(ui, &mut self.session);
             });
         });
     }
 
-    /// The ribbon under the header: the tabs and the tool groups of the active tab.
+    /// The ribbon over the design space: the tabs and the tool groups of the active tab.
     ///
-    /// The ribbon owns no document state and no viewport state: it returns whether a drawing tool
-    /// started and at most one view action, which the shell performs with the same methods the
-    /// status bar uses. It sits between the header and the side panels, so it spans the window.
-    fn ribbon(&mut self, ui: &mut egui::Ui) {
+    /// The strip floats on the middle layer instead of taking height from the viewport, so the scene
+    /// image runs under it and a translucent ribbon blends with the furniture (U51, ADR 0080). It is
+    /// anchored to `design` — the window below the header — so resizing a side panel never reflows
+    /// it; the side panels are inset by [`Self::ribbon_inset`] instead.
+    fn ribbon(&mut self, ui: &mut egui::Ui, design: egui::Rect) {
         let view = furnicraft_ui::RibbonView {
             perspective: matches!(
                 scene_build::scene_camera(self.session.project(), self.layout.active_camera()).projection(),
@@ -1449,18 +1504,20 @@ impl FurniCraftApp {
         let mut outcome = None;
         // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
         // one that the side panels use behind their content. The settings slider scales that fill's
-        // alpha, letting the window chrome show through without changing any other surface.
-        let frame = egui::Frame::new()
-            .fill(theme::surface(ui).gamma_multiply(self.settings.ribbon.opacity))
-            .inner_margin(egui::Margin::symmetric(6, 2));
-        egui::Panel::top("ribbon").frame(frame).show(ui, |ui| {
-            ui.add_space(theme::STEP);
+        // alpha, letting the scene it covers show through without changing any other surface.
+        let fill = theme::surface(ui).gamma_multiply(self.settings.ribbon.opacity);
+        let height = furnicraft_ui::toolbars::height(self.editor.ribbon_open());
+        let rect = strip_area(ui.ctx(), "ribbon", design, height, fill, |ui| {
             match self.editor.show_ribbon(ui, &mut self.session, view) {
                 Ok(result) => outcome = Some(result),
                 Err(error) => self.last_error = Some(error),
             }
-            ui.add_space(theme::STEP);
         });
+        // The measured strip wins over the deterministic height: a narrow window grows the body with
+        // its scroll bar, and the side panels must start below whatever the ribbon actually covers.
+        if rect.is_some() {
+            self.ribbon_rect = rect;
+        }
         if let Some(outcome) = outcome {
             if outcome.started_drawing {
                 self.draw_gizmo.reset();
@@ -1488,7 +1545,7 @@ impl FurniCraftApp {
     }
 
     /// The inspector, as a folding window over the same header row.
-    fn panel_card(&mut self, ui: &mut egui::Ui) {
+    fn panel_card(&mut self, ui: &mut egui::Ui, inset: f32) {
         let head = PanelHead {
             title: "Inspector",
             count: self.editor.selected_nodes().len(),
@@ -1496,7 +1553,7 @@ impl FurniCraftApp {
             default_width: 300.0,
             min_width: 260.0,
         };
-        side_panel(ui, PanelSide::Right, "panel_card", &mut self.card_open, head, |ui| {
+        side_panel(ui, PanelSide::Right, "panel_card", &mut self.card_open, head, inset, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 self.editor.show_card(ui, &mut self.session);
             });
@@ -1904,18 +1961,86 @@ struct PanelHead {
     min_width: f32,
 }
 
+/// The band a floating tool strip covers at the top of `design`.
+///
+/// The strip spans the design space's width and sits at its top edge; the height is the one the
+/// strip's own state fixes ([`furnicraft_ui::toolbars::height`]) or the rectangle it measured on the
+/// previous frame.
+fn strip_rect(design: egui::Rect, height: f32) -> egui::Rect {
+    egui::Rect::from_min_size(design.min, egui::vec2(design.width().max(0.0), height.max(0.0)))
+}
+
+/// Draws a tool strip over `design` as a floating overlay and returns the rectangle it covered.
+///
+/// The strip spans the design space's width — the window's width — and sits on the middle layer, so
+/// the rendered scene runs under it, a translucent fill blends with the furniture, and a click on the
+/// strip never reaches the viewport behind it (U51, ADR 0080). The height is fixed by the strip's own
+/// state, so the shell reserves the same band before the strip is drawn. `None` is egui's sizing pass,
+/// where the content is measured but not shown.
+fn strip_area(
+    ctx: &egui::Context,
+    id: &str,
+    design: egui::Rect,
+    height: f32,
+    fill: egui::Color32,
+    add: impl FnOnce(&mut egui::Ui),
+) -> Option<egui::Rect> {
+    let [margin_x, margin_y] = furnicraft_ui::toolbars::RIBBON_FRAME_MARGIN;
+    let width = design.width().max(0.0);
+    let mut sizing = false;
+    let response =
+        egui::Area::new(egui::Id::unique(id)).order(egui::Order::Middle).fixed_pos(design.min).show(ctx, |ui| {
+            sizing = ui.is_sizing_pass();
+            egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(margin_x, margin_y)).show(ui, |ui| {
+                ui.set_width((width - 2.0 * f32::from(margin_x)).max(0.0));
+                ui.set_min_height((height - 2.0 * f32::from(margin_y)).max(0.0));
+                add(ui);
+            });
+        });
+    (!sizing).then_some(response.response.rect)
+}
+
+/// The part of `view` the floating strip leaves uncovered: the view below the band `strip` covers.
+///
+/// A view the strip does not reach — a bottom-row leaf of a split, or a strip that has not been
+/// measured yet — is returned unchanged, so framing only shrinks when the strip really covers it.
+fn uncovered(view: egui::Rect, strip: egui::Rect) -> egui::Rect {
+    let covered = (strip.bottom() - view.top()).clamp(0.0, view.height());
+    egui::Rect::from_min_max(egui::pos2(view.left(), view.top() + covered), view.max)
+}
+
+/// Narrows a fit camera so the scene stays inside the part of the view a floating strip leaves
+/// uncovered.
+///
+/// The camera maps the visible world height to the whole view, so the uncovered band shows a share
+/// of it. Scaling the distance by the reciprocal of that share keeps the same scene inside the band,
+/// and panning the target half the covered height puts the scene's centre in the middle of what the
+/// user can see instead of behind the strip. A strip that covers nothing leaves the fit untouched.
+fn fit_uncovered(fit: Camera, view_height: f32, visible_height: f32) -> Result<Camera, String> {
+    if !(view_height > 0.0 && visible_height > 0.0 && visible_height < view_height) {
+        return Ok(fit);
+    }
+    let distance = (fit.eye() - fit.target()).length();
+    let mut camera = Camera::new(fit.target(), distance * f64::from(view_height / visible_height))
+        .map_err(|error| error.to_string())?;
+    camera.pan_pixels(0.0, f64::from(view_height - visible_height) * 0.5, f64::from(view_height));
+    Ok(camera)
+}
+
 /// Draws a side panel that folds to [`theme::COLLAPSED_PANEL_WIDTH`] and keeps its width.
 ///
 /// The expanded and collapsed views are two panels with distinct ids, switched by
 /// [`egui::Panel::show_switched`], so the collapsed view's 26 pt state never overwrites the width the
 /// user dragged the expanded view to. A click on the strip, a double-click on its edge or a drag
-/// outward restores the panel; the chevron in the header folds it.
+/// outward restores the panel; the chevron in the header folds it. `inset` is the band the floating
+/// ribbon covers, so the panel's own header never starts under it (U51).
 fn side_panel(
     ui: &mut egui::Ui,
     side: PanelSide,
     id: &str,
     open: &mut bool,
     head: PanelHead,
+    inset: f32,
     body: impl FnOnce(&mut egui::Ui),
 ) {
     let mut expanded = *open;
@@ -1940,6 +2065,7 @@ fn side_panel(
         .frame(egui::Frame::new().fill(expanded_fill).inner_margin(egui::Margin::ZERO));
 
     egui::Panel::show_switched(ui, &mut expanded, collapsed, expanded_panel, |ui, unfolded| {
+        ui.add_space(inset);
         if unfolded {
             if panel_header(ui, &head) {
                 fold_requested = true;
@@ -2392,9 +2518,11 @@ impl eframe::App for FurniCraftApp {
         if let Some(action) = header_action {
             self.handle_header_action(action);
         }
-        self.ribbon(ui);
-        self.scene_tree(ui);
-        self.panel_card(ui);
+        let design = ui.available_rect_before_wrap();
+        self.ribbon(ui, design);
+        let inset = self.ribbon_inset();
+        self.scene_tree(ui, inset);
+        self.panel_card(ui, inset);
         self.status_bar(ui);
         self.workspace(ui);
         self.command_palette(ui);
@@ -2905,6 +3033,141 @@ mod tests {
         );
     }
 
+    /// Runs a fake shell layout: a header panel, the design space it leaves, then a side panel of
+    /// `panel_width`, and returns the design space, the viewport it leaves and the strip band.
+    fn strip_layout(ctx: &egui::Context, panel_width: f32, open: bool) -> (egui::Rect, egui::Rect, egui::Rect) {
+        let mut design = egui::Rect::ZERO;
+        let mut viewport = egui::Rect::ZERO;
+        let mut strip = egui::Rect::ZERO;
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 840.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input(), |ui| {
+            egui::Panel::top("header").show(ui, |ui| {
+                ui.set_height(theme::HEADER_HEIGHT);
+            });
+            design = ui.available_rect_before_wrap();
+            strip = strip_rect(design, furnicraft_ui::toolbars::height(open));
+            egui::Panel::left("side").exact_size(panel_width).show(ui, |_ui| {});
+            viewport = ui.available_rect_before_wrap();
+        });
+        output.drop_without_applying_deltas();
+        (design, viewport, strip)
+    }
+
+    #[test]
+    fn resizing_a_side_panel_never_reflows_the_floating_ribbon() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let (_, narrow_viewport, narrow_strip) = strip_layout(&ctx, 200.0, true);
+        let (_, wide_viewport, wide_strip) = strip_layout(&ctx, 320.0, true);
+        assert_ne!(narrow_viewport, wide_viewport, "the side panel did change the viewport");
+        assert_eq!(narrow_strip, wide_strip, "the strip is anchored to the window, not to the viewport");
+        assert!((narrow_strip.width() - 1280.0).abs() < 0.5, "the strip spans the window: {narrow_strip:?}");
+        assert!(
+            (narrow_viewport.top() - narrow_strip.top()).abs() < 0.5,
+            "the viewport starts at the strip's top, so the scene runs under it"
+        );
+        assert!(narrow_viewport.intersects(narrow_strip), "the strip covers a part of the rendered scene");
+    }
+
+    #[test]
+    fn a_click_inside_the_ribbon_does_not_reach_the_viewport() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let design = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let height = furnicraft_ui::toolbars::height(true);
+        // One hover, press and release at `pos`; returns whether the viewport and the strip's button
+        // took the click.
+        let click_at = |pos: egui::Pos2| -> (bool, bool) {
+            let press = |pressed: bool| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let mut result = (false, false);
+            for events in [
+                // The first frame is egui's sizing pass for the strip, so the pointer needs one more
+                // frame before the press can land on it.
+                vec![egui::Event::PointerMoved(pos)],
+                vec![egui::Event::PointerMoved(pos)],
+                vec![press(true)],
+                vec![press(false)],
+            ] {
+                let input = egui::RawInput { screen_rect: Some(design), events, ..Default::default() };
+                let output = ctx.run_ui(input, |ui| {
+                    // The viewport stand-in: the whole design space, under the strip.
+                    let (_, response) = ui.allocate_exact_size(design.size(), egui::Sense::click());
+                    result.0 |= response.clicked();
+                    strip_area(ui.ctx(), "ribbon_click_test", design, height, theme::surface(ui), |ui| {
+                        let (_, response) = ui.allocate_exact_size(egui::vec2(200.0, 20.0), egui::Sense::click());
+                        result.1 |= response.clicked();
+                    });
+                });
+                output.drop_without_applying_deltas();
+            }
+            result
+        };
+        // A click on the ribbon's empty chrome: the strip is above the viewport and takes the click.
+        let (viewport, button) = click_at(egui::pos2(500.0, design.top() + 10.0));
+        assert!(!viewport, "a click on the strip must not reach the viewport behind it");
+        assert!(!button, "the click landed on the strip's chrome, not on its button");
+        // The same gesture below the strip still selects in the viewport.
+        let (viewport, _) = click_at(egui::pos2(500.0, design.top() + height + 100.0));
+        assert!(viewport, "the viewport keeps the clicks the strip does not cover");
+    }
+
+    #[test]
+    fn the_strip_overlay_fills_the_design_width_and_its_reserved_height() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let design = egui::Rect::from_min_size(egui::pos2(0.0, 40.0), egui::vec2(1000.0, 600.0));
+        let height = furnicraft_ui::toolbars::height(true);
+        let mut rect = None;
+        // The first frame is egui's sizing pass for the area; the second reports the real rectangle.
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 640.0))),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                rect = strip_area(ui.ctx(), "ribbon_size_test", design, height, theme::surface(ui), |_ui| {});
+            });
+            output.drop_without_applying_deltas();
+        }
+        let rect = rect.expect("a measured strip");
+        assert!((rect.width() - design.width()).abs() < 0.5, "the strip fills the design width: {rect:?}");
+        assert!((rect.height() - height).abs() < 0.5, "the strip is its reserved height: {rect:?}");
+        assert!((rect.min - design.min).length() < 0.5, "the strip is anchored to the design's top-left");
+    }
+
+    #[test]
+    fn framing_keeps_the_scene_inside_the_uncovered_view() {
+        let view = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 600.0));
+        let design = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 700.0));
+        let strip = strip_rect(design, 130.0);
+        let visible = uncovered(view, strip);
+        assert!((visible.top() - (view.top() + 130.0)).abs() < 0.5, "the band is cut off the top");
+        assert!((visible.height() - (view.height() - 130.0)).abs() < 0.5);
+        // A view the strip does not reach keeps its whole height.
+        let bottom = egui::Rect::from_min_size(egui::pos2(0.0, 400.0), egui::vec2(800.0, 300.0));
+        assert_eq!(uncovered(bottom, strip), bottom);
+
+        let radius = 300.0;
+        let fit = Camera::new(DVec3::ZERO, radius / (furnicraft_scene::DEFAULT_FOV_Y * 0.5).tan() * 1.25)
+            .expect("a fit camera");
+        let narrowed = fit_uncovered(fit, view.height(), visible.height()).expect("a narrowed fit");
+        let shown =
+            narrowed.world_per_point(narrowed.distance(), f64::from(view.height())) * f64::from(visible.height());
+        assert!(
+            shown * 0.5 >= radius,
+            "the uncovered band shows {shown} mm of world against a {} mm radius",
+            radius * 2.0
+        );
+    }
+
     #[test]
     fn the_angle_switch_controls_the_readout() {
         let mut cluster = ViewCluster::default();
@@ -2946,7 +3209,7 @@ mod tests {
         let mut open = true;
         let width_open = std::cell::Cell::new(0.0);
         let output = ctx.run_ui(input(), |ui| {
-            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, 0.0, |ui| {
                 width_open.set(ui.max_rect().width());
                 ui.label("BODY-CONTENT");
             });
@@ -2957,7 +3220,7 @@ mod tests {
 
         open = false;
         let folded = ctx.run_ui(input(), |ui| {
-            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, 0.0, |ui| {
                 ui.label("BODY-CONTENT");
             });
         });
@@ -2973,7 +3236,7 @@ mod tests {
         open = true;
         let width_again = std::cell::Cell::new(0.0);
         let output = ctx.run_ui(input(), |ui| {
-            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, |ui| {
+            side_panel(ui, PanelSide::Left, "fold_test", &mut open, head, 0.0, |ui| {
                 width_again.set(ui.max_rect().width());
                 ui.label("BODY-CONTENT");
             });
