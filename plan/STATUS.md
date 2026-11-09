@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U57 state=doing base=879f456 updated=2026-11-09
+STATE: milestone=M7 phase=A task=U58 state=doing base=6cd7ee6 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -53,11 +53,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U56 is done: a flat projection icon under the widget shares `toggle_view_projection` with the
-ribbon and the popover. U57 is next: the camera gains a roll about its own view axis (ADR 0078),
-view state only and no pixels of its own; U58 then adds the four-node ring and its step setting.
-U45 remains approved but deferred: start it only on a new instruction. It opens one tab per file,
-each with its own `Document`; *Open* opens a new tab and the split layout travels with the tab.
+U56 and U57 are done: a flat projection icon under the widget and a camera roll about its own view
+axis (ADR 0078). U58 is next: the four-node ring with its step in the workspace settings; it also
+lands `Leaf::roll_to`/`roll_by` and keeps the ring's drag out of the orbit gesture. U45 remains
+approved but deferred: start it only on a new instruction. It opens one tab per file, each with its
+own `Document`; *Open* opens a new tab and the split layout travels with the tab.
 
 ## Index
 

@@ -25,24 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
-  horizontal, `up()` follows yaw and pitch only, and the readout's roll is always zero. Add a
-  `roll: f64` (radians, view state like yaw and pitch, never document data): rotate the analytic base
-  `right`/`up` about `forward` by the roll, keeping `up = right × forward`; a positive roll turns the
-  image counter-clockwise. `roll()`, `roll_to(f64)` and `roll_by(f64)` normalise into `0..TAU`,
-  ignore non-finite input and refuse a pinned `FixedBasis`, like `orbit`. `look_from` and
-  `look_from_oriented` reset the roll; `orbit`, `pan_pixels`, `zoom`, `toggle_projection` and
-  `with_projection` keep it. `Leaf::roll_to`/`roll_by` clear the preset; presets, Home, Frame all and
-  axis balls reset through `look_from_oriented`, orbit keeps. The readout takes
-  `signed_degrees(camera.roll())`; ADR 0078 records why the field is on the camera rather than a
-  post-multiplied matrix, and ADR 0057 notes that a pole's canonical up is the zero-roll case.
-  Tests: +90° sends `right` into `up` and the image of a world point from right to up; the view
-  matrix stays orthonormal; picking and panning follow the rolled basis; a pole rolls without moving
-  forward, eye or target; snaps reset while orbit keeps; a pinned camera ignores the roll; the
-  readout shows the field.
-  `files: crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/gizmo.rs`
-
-- `[ ]` **U58** the corner widget gains the roll ring and its step setting: the owner wants a
+- `[~]` **U58** the corner widget gains the roll ring and its step setting: the owner wants a
   functional ring that rotates the camera around the view axis. A screen-space ring on a 52 pt
   radius in a 124 pt square around the axis balls, always visible with the widget, with four fixed
   nodes at the top, left, bottom and right carrying 0°, 90°, 180° and 270° and an accent handle at
@@ -258,6 +241,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
+  horizontal, `up()` follows yaw and pitch only, and the readout's roll is always zero. Add a
+  `roll: f64` (radians, view state like yaw and pitch, never document data): rotate the analytic base
+  `right`/`up` about `forward` by the roll, keeping `up = right × forward`; a positive roll turns the
+  image counter-clockwise. `roll()`, `roll_to(f64)` and `roll_by(f64)` normalise into `0..TAU`,
+  ignore non-finite input and refuse a pinned `FixedBasis`, like `orbit`. `look_from` and
+  `look_from_oriented` reset the roll; `orbit`, `pan_pixels`, `zoom`, `toggle_projection` and
+  `with_projection` keep it. Presets, Home, Frame all and axis balls reset through
+  `look_from_oriented`, orbit keeps. The readout takes `signed_degrees(camera.roll())`; ADR 0078
+  records why the field is on the camera rather than a post-multiplied matrix, and ADR 0057 notes
+  that a pole's canonical up is the zero-roll case. `Leaf::roll_to`/`roll_by` land with U58 because
+  they would be dead code until the ring can call them.
+  Tests: +90° sends `right` into `up` and the image of a world point from right to up; the view
+  matrix stays orthonormal; picking and panning follow the rolled basis; a pole rolls without moving
+  forward, eye or target; snaps reset while orbit keeps; a pinned camera ignores the roll; the
+  readout shows the field.
+  `6cd7ee6`
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/gizmo.rs`
 
 - `[x]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
   widget has no projection control, and its Home button is the only control under the cube, drawn as
