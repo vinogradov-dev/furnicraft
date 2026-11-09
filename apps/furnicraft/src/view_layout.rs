@@ -274,6 +274,21 @@ impl Leaf {
         self.preset = None;
     }
 
+    /// Rolls the view about its own axis, which leaves its preset name.
+    ///
+    /// The roll is view state; a preset, Home or Frame all writes the same field back to zero
+    /// through `look_from_oriented` (ADR 0078), so a rolled view is no longer a preset basis.
+    pub(crate) fn roll_to(&mut self, radians: f64) {
+        self.camera.roll_to(radians);
+        self.preset = None;
+    }
+
+    /// Turns the view about its own axis by `radians`, which leaves its preset name.
+    pub(crate) fn roll_by(&mut self, radians: f64) {
+        self.camera.roll_by(radians);
+        self.preset = None;
+    }
+
     /// Pans the leaf; the view direction and its preset name are untouched.
     pub(crate) fn pan_pixels(&mut self, delta_x: f64, delta_y: f64, viewport_height: f64) {
         self.camera.pan_pixels(delta_x, delta_y, viewport_height);
@@ -821,6 +836,46 @@ mod tests {
             matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }),
             "a preset writes yaw and pitch only"
         );
+    }
+
+    #[test]
+    fn a_projection_toggle_stays_in_its_own_view() {
+        // The ribbon, the Display popover and the corner widget all toggle one leaf; a split must
+        // keep its neighbours in the mode they were drawing with.
+        let mut layout = layout(LayoutKind::Quad);
+        let first = layout.leaves[0].id;
+        layout.leaf_mut(first).expect("the leaf").toggle_projection();
+        for (index, leaf) in layout.leaves.iter().enumerate() {
+            let ortho = matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. });
+            assert_eq!(ortho, index == 0, "only the toggled view changes its projection");
+        }
+    }
+
+    #[test]
+    fn a_roll_is_view_state_and_a_preset_or_home_resets_it() {
+        let mut layout = Layout::new(Camera::default());
+        let id = layout.active();
+        let leaf = layout.leaf_mut(id).expect("the active leaf");
+        leaf.apply_preset(OpeningView::Front);
+        let forward = leaf.camera().forward();
+
+        leaf.roll_to(std::f64::consts::FRAC_PI_2);
+        assert!((leaf.camera().roll() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-9);
+        assert_eq!(leaf.preset, None, "a rolled view is no longer the preset's basis");
+        assert!((leaf.camera().forward() - forward).length() < 1.0e-9, "the roll does not turn the view");
+
+        // Orbit keeps the roll; Home, a preset and Frame all reset it through their direction snap.
+        leaf.orbit(0.0, 0.0);
+        assert!(leaf.camera().roll() > 0.0, "orbit keeps the roll");
+        leaf.home();
+        assert_eq!(leaf.camera().roll(), 0.0, "Home resets the roll");
+        leaf.roll_by(0.3);
+        assert!(leaf.camera().roll() > 0.0, "a roll can be applied again");
+        leaf.apply_preset(OpeningView::Top);
+        assert_eq!(leaf.camera().roll(), 0.0, "a preset resets the roll");
+        leaf.roll_to(0.4);
+        leaf.frame(Camera::default());
+        assert_eq!(leaf.camera().roll(), 0.0, "Frame all resets the roll");
     }
 
     #[test]

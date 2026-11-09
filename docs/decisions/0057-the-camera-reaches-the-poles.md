@@ -38,6 +38,9 @@ vector an authored camera pinned with `looked_from`.
 - A top view looks down with `+Y` up and `+X` right, a bottom view up with `+Y` up and `-X` right,
   whatever yaw the camera had when the ball was clicked; the side and front views keep `+Z` up. A
   plain `look_from` still keeps the yaw at a pole, so an orbit that reaches the limit does not snap.
+- The canonical pole basis is the zero-roll case: `Camera` carries a roll about its own view axis
+  since [0078](0078-a-view-rolls-about-its-own-axis.md), and the ring can roll a top or bottom view
+  afterwards without moving its eye, target or forward direction.
 - 0019's pitch clamp is superseded; its widget, look direction and flip rule stand. The clamp notes
   in [0049](0049-the-viewport-toggles-its-own-projection.md) and
   [0050](0050-the-work-plane-follows-the-view.md) describe behaviour that no longer exists.

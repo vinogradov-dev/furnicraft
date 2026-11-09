@@ -122,14 +122,16 @@ struct FixedBasis {
 /// An orbit camera in a right-handed, Z-up world.
 ///
 /// The camera looks at `target` from a point on a sphere described by `yaw` (around world Z) and
-/// `pitch` (above the XY plane). Physical lengths are millimetres; the camera lives in view state,
-/// never in the document. An authored camera pins an explicit basis with [`Camera::looked_from`];
-/// orbit, pan, zoom and `look_from` then leave it alone.
+/// `pitch` (above the XY plane). A `roll` turns the view about its own axis without moving the eye,
+/// the target or the forward direction. Physical lengths are millimetres; the camera lives in view
+/// state, never in the document. An authored camera pins an explicit basis with
+/// [`Camera::looked_from`]; orbit, pan, zoom and `look_from` then leave it alone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     target: DVec3,
     yaw: f64,
     pitch: f64,
+    roll: f64,
     distance: f64,
     projection: Projection,
     near: f64,
@@ -143,6 +145,7 @@ impl Default for Camera {
             target: DVec3::ZERO,
             yaw: 2.8 * FRAC_PI_8,
             pitch: 30.0 * PI / 180.0,
+            roll: 0.0,
             distance: 1200.0,
             projection: Projection::Perspective { fov_y: DEFAULT_FOV_Y },
             near: 1.0,
@@ -177,6 +180,14 @@ impl Camera {
     /// The vertical orbit angle in radians.
     pub const fn pitch(self) -> f64 {
         self.pitch
+    }
+
+    /// The view roll about the camera's own forward axis, in radians, in `0..TAU`.
+    ///
+    /// A positive roll turns the image counter-clockwise. The roll is view state like yaw and
+    /// pitch, never document data (ADR 0029, 0078).
+    pub const fn roll(self) -> f64 {
+        self.roll
     }
 
     /// The distance from the target in millimetres.
@@ -261,13 +272,17 @@ impl Camera {
 
     /// The camera's right vector in world space.
     ///
-    /// It depends on yaw alone, so it is the exact limit of `forward × Z` and stays unit and
-    /// horizontal at both poles, where the view direction is parallel to `Z`.
+    /// The base vector depends on yaw alone, so it is the exact limit of `forward × Z` and stays
+    /// unit and horizontal at both poles, where the view direction is parallel to `Z`. The roll then
+    /// turns it about `forward`, so a rolled view's right vector leaves the horizon while `up`
+    /// stays `right × forward` (ADR 0078).
     pub fn right(self) -> DVec3 {
         if let Some(fixed) = self.fixed {
             return fixed.right;
         }
-        DVec3::new(-self.yaw.sin(), self.yaw.cos(), 0.0)
+        let (sin, cos) = self.roll.sin_cos();
+        let (base_right, base_up) = self.base_basis();
+        base_right * cos - base_up * sin
     }
 
     /// The camera's up vector in world space.
@@ -275,7 +290,15 @@ impl Camera {
         if let Some(fixed) = self.fixed {
             return fixed.up;
         }
-        self.right().cross(self.forward())
+        let (sin, cos) = self.roll.sin_cos();
+        let (base_right, base_up) = self.base_basis();
+        base_right * sin + base_up * cos
+    }
+
+    /// The unrolled right and up vectors, before the roll turns them about `forward`.
+    fn base_basis(self) -> (DVec3, DVec3) {
+        let right = DVec3::new(-self.yaw.sin(), self.yaw.cos(), 0.0);
+        (right, right.cross(self.forward()))
     }
 
     /// The world-to-view matrix.
@@ -375,6 +398,28 @@ impl Camera {
         self.pitch = (self.pitch + delta_pitch).clamp(MIN_PITCH, MAX_PITCH);
     }
 
+    /// Sets the view roll about the camera's own forward axis, in radians.
+    ///
+    /// The angle wraps into `0..TAU`; non-finite input is ignored, and a camera pinned to an
+    /// authored view keeps its own basis and ignores the call, exactly as [`Camera::orbit`] does.
+    pub fn roll_to(&mut self, roll: f64) {
+        if self.fixed.is_some() || !roll.is_finite() {
+            return;
+        }
+        self.roll = roll.rem_euclid(TAU);
+    }
+
+    /// Turns the view about its own forward axis by `delta` radians.
+    ///
+    /// Non-finite input is ignored and a pinned camera does not move; a multi-turn delta is
+    /// normalised into `0..TAU`.
+    pub fn roll_by(&mut self, delta: f64) {
+        if !delta.is_finite() {
+            return;
+        }
+        self.roll_to(self.roll + delta);
+    }
+
     /// A world-space ray through normalized device coordinates.
     ///
     /// `(-1, -1)` is the bottom-left corner of the viewport and `(1, 1)` the top-right. Coordinates
@@ -462,7 +507,8 @@ impl Camera {
     /// `direction` is the offset from the target to the eye, not the viewing direction. A zero or
     /// non-finite direction leaves the camera unchanged. Pitch is clamped to the poles, so a top or
     /// bottom view looks straight down or up the view plane; at a pole the direction alone does not
-    /// fix yaw, so the current yaw is kept.
+    /// fix yaw, so the current yaw is kept. A valid direction resets the roll: a standard view is
+    /// upright (ADR 0078).
     pub fn look_from(&mut self, direction: DVec3) {
         if self.fixed.is_some() || !direction.is_finite() {
             return;
@@ -474,6 +520,7 @@ impl Camera {
             self.yaw = direction.y.atan2(direction.x).rem_euclid(TAU);
         }
         self.pitch = direction.z.clamp(MIN_PITCH.sin(), MAX_PITCH.sin()).asin();
+        self.roll = 0.0;
     }
 
     /// Points the camera at its target from `direction`, taking the roll at a pole from `up`.
@@ -1459,6 +1506,140 @@ mod tests {
         assert!((camera.pitch() - (FRAC_PI_2 - 0.1)).abs() < 1.0e-12);
         assert!((camera.forward() - before).length() > 0.05, "an orbit leaves the pole");
         assert!((camera.up().length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn a_roll_turns_the_basis_about_the_view_axis() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::new(0.6, 0.8, 0.3));
+        let (eye, target, forward) = (camera.eye(), camera.target(), camera.forward());
+        let (right, up) = (camera.right(), camera.up());
+
+        camera.roll_to(FRAC_PI_2);
+        assert!((camera.eye() - eye).length() < 1.0e-9, "the eye does not move");
+        assert!((camera.target() - target).length() < 1.0e-9, "nor the target");
+        assert!((camera.forward() - forward).length() < 1.0e-9, "nor the view direction");
+        assert_close(camera.up(), right);
+        assert_close(camera.right(), -up);
+        assert!((camera.up() - camera.right().cross(camera.forward())).length() < 1.0e-9, "up stays right × forward");
+        assert!((camera.right().length() - 1.0).abs() < 1.0e-9);
+        assert!((camera.up().length() - 1.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_roll_moves_a_world_point_from_screen_right_to_screen_up() {
+        let mut camera = Camera::default();
+        let aspect = 16.0 / 9.0;
+        let point = camera.target() + camera.right() * 300.0;
+        let before = camera.project_ndc(point, aspect).expect("the point is in front");
+        assert!(before.x > 0.3 && before.y.abs() < 0.01, "the point starts on screen right: {before:?}");
+
+        camera.roll_to(FRAC_PI_2);
+        let after = camera.project_ndc(point, aspect).expect("the point is still in front");
+        assert!(after.y > 0.3 && after.x.abs() < 0.01, "the image turned counter-clockwise: {after:?}");
+    }
+
+    #[test]
+    fn a_ray_follows_the_rolled_basis() {
+        let mut camera = Camera::default();
+        camera.roll_to(FRAC_PI_2);
+        let right_ray = camera.ray_ndc(1.0, 0.0, 1.0);
+        assert!(right_ray.direction().dot(camera.right()) > 0.3, "the right edge follows the rolled right vector");
+        assert!(right_ray.direction().dot(camera.up()).abs() < 1.0e-9, "and has no up component");
+        let up_ray = camera.ray_ndc(0.0, 1.0, 1.0);
+        assert!(up_ray.direction().dot(camera.up()) > 0.3, "the top edge follows the rolled up vector");
+        assert!(up_ray.direction().dot(camera.right()).abs() < 1.0e-9, "and has no right component");
+    }
+
+    #[test]
+    fn the_view_matrix_stays_orthonormal_under_a_roll() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::new(0.4, 0.7, 0.5));
+        camera.roll_to(0.9);
+        let columns = camera.view_matrix().to_cols_array();
+        let right = DVec3::new(columns[0], columns[4], columns[8]);
+        let up = DVec3::new(columns[1], columns[5], columns[9]);
+        let back = DVec3::new(columns[2], columns[6], columns[10]);
+        for pair in [(right, up), (right, back), (up, back)] {
+            assert!(pair.0.dot(pair.1).abs() < 1.0e-9, "the basis is orthogonal");
+            assert!((pair.0.length() - 1.0).abs() < 1.0e-9);
+        }
+        assert!((right.cross(up).dot(back) - 1.0).abs() < 1.0e-9, "the view basis is right-handed");
+    }
+
+    #[test]
+    fn a_rolled_pole_view_stays_straight_down_and_rolls() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::Z);
+        let (eye, target, forward) = (camera.eye(), camera.target(), camera.forward());
+        camera.roll_to(0.7);
+        assert!((camera.eye() - eye).length() < 1.0e-9);
+        assert!((camera.target() - target).length() < 1.0e-9);
+        assert!((camera.forward() - forward).length() < 1.0e-9, "the pole still looks straight down");
+        assert!((camera.up().length() - 1.0).abs() < 1.0e-9);
+        assert!(camera.up().dot(camera.forward()).abs() < 1.0e-9);
+        assert!((camera.up() - DVec3::Y).length() > 0.1, "the roll leaves the canonical up");
+    }
+
+    #[test]
+    fn look_from_resets_the_roll_and_navigation_keeps_it() {
+        let mut camera = Camera::default();
+        camera.roll_to(0.8);
+        camera.orbit(0.0, 0.0);
+        assert!((camera.roll() - 0.8).abs() < 1.0e-12, "orbit keeps the roll");
+        camera.pan_pixels(10.0, 0.0, 800.0);
+        assert!((camera.roll() - 0.8).abs() < 1.0e-12, "pan keeps the roll");
+        camera.zoom(1.1);
+        assert!((camera.roll() - 0.8).abs() < 1.0e-12, "zoom keeps the roll");
+        camera.toggle_projection();
+        assert!((camera.roll() - 0.8).abs() < 1.0e-12, "the projection toggle keeps the roll");
+
+        camera.look_from(DVec3::new(0.3, 0.4, 0.5));
+        assert_eq!(camera.roll(), 0.0, "a standard direction resets the roll");
+        camera.roll_to(0.9);
+        camera.look_from_oriented(DVec3::Z, DVec3::Y);
+        assert_eq!(camera.roll(), 0.0, "the oriented pole snap resets the roll too");
+    }
+
+    #[test]
+    fn a_roll_wraps_and_ignores_hostile_input() {
+        let mut camera = Camera::default();
+        camera.roll_to(-FRAC_PI_2);
+        assert!((camera.roll() - (TAU - FRAC_PI_2)).abs() < 1.0e-12, "a negative roll wraps into 0..TAU");
+        camera.roll_by(TAU);
+        assert!((camera.roll() - (TAU - FRAC_PI_2)).abs() < 1.0e-12, "a full turn changes nothing");
+        camera.roll_by(0.1);
+        assert!((camera.roll() - (TAU - FRAC_PI_2 + 0.1)).abs() < 1.0e-12);
+
+        let roll = camera.roll();
+        camera.roll_to(f64::NAN);
+        camera.roll_to(f64::INFINITY);
+        camera.roll_by(f64::NEG_INFINITY);
+        assert_eq!(camera.roll(), roll, "non-finite input changes nothing");
+    }
+
+    #[test]
+    fn a_pinned_camera_ignores_the_roll() {
+        let mut rolled = Camera::default().looked_from(DVec3::new(0.0, 0.0, 100.0), DVec3::X, DVec3::Y, -DVec3::Z);
+        let pinned = rolled;
+        rolled.roll_to(FRAC_PI_2);
+        rolled.roll_by(0.4);
+        assert_eq!(rolled, pinned, "a pinned basis ignores the roll and keeps every field");
+        assert_close(rolled.right(), DVec3::X);
+        assert_close(rolled.up(), DVec3::Y);
+    }
+
+    #[test]
+    fn panning_follows_the_rolled_axes() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::new(0.5, 0.5, 0.4));
+        let unrolled_right = camera.right();
+        camera.roll_to(FRAC_PI_2);
+        let before = camera.target();
+        camera.pan_pixels(100.0, 0.0, 800.0);
+        let moved = camera.target() - before;
+        assert!(moved.dot(camera.right()) < 0.0, "a rightward drag moves along the rolled right");
+        assert!(moved.dot(unrolled_right).abs() < 1.0e-9, "and not along the unrolled right");
     }
 
     #[test]
