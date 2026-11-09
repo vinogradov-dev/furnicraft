@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=009a73f updated=2026-11-09
+STATE: milestone=M7 phase=A task=U45 state=idle base=f5270e2 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -44,10 +44,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   central area into one, two or four views with a split tree, a scissored pass per leaf and an
   orientation widget with a home button, a projection toggle and a roll ring; U60 gives every layout
   its own tree, cameras, presets and active view (ADR 0079), U61 makes *Frame all* fit the scene's
-  current bounds, and U62 expands any view with *Expand* / *Restore* or `Alt+W`. U43 made the five
-  display styles real (ADR 0070) and U63 gives each view its own style: a leaf owns it, the cluster
-  edits the active leaf, and the renderer derives its passes per view. X10 made their edges mean the
-  form; X10's stencil slot lets an object show its own inside but never the one behind it. U44 gives
+  current bounds, U62 expands any view with *Expand* / *Restore* or `Alt+W`, and U51 floats the
+  ribbon over the design space (ADR 0080). U43 made the five display styles real (ADR 0070) and U63
+  gives each view its own style; X10 made their edges mean the form, and its stencil slot lets an
+  object show its own inside but never the one behind it. U44 gives
   every floor-standing object a contact shadow (ADR 0071). X11 fixed a ring closed by an arc: a joint
   is `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's derived end closes, reaches a
   contour and extrudes, and the preview never blanks (ADR 0072). X12 makes a tool switch: another
@@ -57,7 +57,7 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U45 opens several scenes at once, each with its own session, undo history, selection, camera and dirty marker, as tabs in the header.
+U45 opens several scenes at once: one tab per open file, each with its own session, undo history, selection, camera and dirty marker; activating a tab swaps the workspace, and closing the last one leaves an empty *Untitled*.
 
 ## Index
 
