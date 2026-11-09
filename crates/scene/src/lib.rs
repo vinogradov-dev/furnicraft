@@ -230,6 +230,21 @@ impl Camera {
         self
     }
 
+    /// Makes the view orthographic without moving it.
+    ///
+    /// A perspective view becomes orthographic with the height it shows at the target plane, so the
+    /// image keeps its size; an orthographic view keeps its visible height. The target, orbit angles
+    /// and distance are untouched. An authored camera is pinned to its document projection and is
+    /// left unchanged.
+    pub fn set_orthographic(&mut self) {
+        if self.fixed.is_some() {
+            return;
+        }
+        if let Projection::Perspective { fov_y } = self.projection {
+            self.projection = Projection::Orthographic { height: 2.0 * self.distance * (fov_y * 0.5).tan() };
+        }
+    }
+
     /// Switches between a perspective and an orthographic view.
     ///
     /// The visible height at the target is preserved: a perspective view becomes orthographic with
@@ -240,16 +255,14 @@ impl Camera {
         if self.fixed.is_some() {
             return;
         }
-        self.projection = match self.projection {
-            Projection::Perspective { fov_y } => {
-                Projection::Orthographic { height: 2.0 * self.distance * (fov_y * 0.5).tan() }
-            }
+        match self.projection {
+            Projection::Perspective { .. } => self.set_orthographic(),
             Projection::Orthographic { height } => {
                 let fov_y = DEFAULT_FOV_Y;
                 self.distance = (height / (2.0 * (fov_y * 0.5).tan())).clamp(MIN_DISTANCE_MM, MAX_DISTANCE_MM);
-                Projection::Perspective { fov_y }
+                self.projection = Projection::Perspective { fov_y };
             }
-        };
+        }
     }
 
     /// The camera position in world space.
@@ -1684,6 +1697,43 @@ mod tests {
         assert_eq!(camera.target(), perspective.target());
         assert_eq!(camera.yaw(), perspective.yaw());
         assert_eq!(camera.pitch(), perspective.pitch());
+    }
+
+    #[test]
+    fn set_orthographic_keeps_the_visible_height_and_the_framing() {
+        let mut camera = Camera::default();
+        camera.orbit(0.3, 0.1);
+        camera.zoom(1.4);
+        let perspective = camera;
+        camera.set_orthographic();
+        let Projection::Orthographic { height } = camera.projection() else {
+            panic!("a perspective view becomes orthographic");
+        };
+        let expected = 2.0 * perspective.distance() * (DEFAULT_FOV_Y * 0.5).tan();
+        assert!((height - expected).abs() < 1.0e-9, "the height is the frame at the target");
+        assert_eq!(camera.target(), perspective.target(), "the target stays");
+        assert_eq!(camera.distance(), perspective.distance(), "the distance stays");
+        assert_eq!(camera.yaw(), perspective.yaw());
+        assert_eq!(camera.pitch(), perspective.pitch());
+
+        // A second call is a no-op: a standard view that is already orthographic keeps its height.
+        camera.zoom(0.5);
+        let Projection::Orthographic { height: zoomed } = camera.projection() else {
+            panic!("zooming keeps the projection");
+        };
+        camera.set_orthographic();
+        let Projection::Orthographic { height: kept } = camera.projection() else {
+            panic!("the view is still orthographic");
+        };
+        assert!((kept - zoomed).abs() < 1.0e-9, "an orthographic view keeps its visible height");
+
+        // An authored camera is pinned to its document projection.
+        let authored = Camera::default()
+            .looked_from(DVec3::new(0.0, 0.0, 100.0), DVec3::X, DVec3::Y, -DVec3::Z)
+            .with_projection(Projection::Perspective { fov_y: DEFAULT_FOV_Y });
+        let mut pinned = authored;
+        pinned.set_orthographic();
+        assert_eq!(pinned, authored, "a pinned camera is not view state the viewport may change");
     }
 
     #[test]
