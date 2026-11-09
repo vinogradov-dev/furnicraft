@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X18 state=idle base=fc2d1f3 updated=2026-11-09
+STATE: milestone=M7 phase=A task=X19 state=idle base=073fdb6 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -50,12 +50,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X17 is done: an along-contour drag shows a length from the far end (line distance,
-arc length), cannot pass the opposite node, and records a collapse that Apply turns
-into one segment removal and one undo entry; a ring of three refuses.
-X18 is next: a figure's geometry is editable in its card — circle radius, rectangle
-width and height, polygon sides and radius, a single arc's radius and end angle —
-for a `Path` node and for the constructive body that owns a path.
+X18 is done: a figure's geometry is editable in its object card — circle radius, rectangle width
+and height, polygon sides and radius, and a single arc's radius and end angle — for a `Path` node
+and for the constructive body that owns a path, as one command and one undo entry.
+X19 is next: the extrusion pull shows a ghost of the body at the preview height, draws it as a
+wireframe prism, and writes the height only on release.
 
 ## Index
 
