@@ -47,7 +47,6 @@ use furnicraft_model::{CornerMove, Id, NodeQuery, Placement, Project, Revision, 
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
-use furnicraft_ui::display::OpeningView;
 use furnicraft_ui::settings::{Settings, SettingsSection, ViewportSettings};
 use furnicraft_ui::ui_scale;
 use furnicraft_ui::{
@@ -62,7 +61,7 @@ use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
 use crate::header::{HeaderAction, HeaderState};
 use crate::rotate_gizmo::RotateGizmo;
-use crate::scene_build::{empty_session, evaluate, home_camera, sample_session};
+use crate::scene_build::{Bounds, empty_session, evaluate, home_camera, sample_session};
 use crate::settings_store::SettingsStore;
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
@@ -120,9 +119,9 @@ struct FurniCraftApp {
     /// The workspace's views: their cameras, presets and the tree that lays them out. View state in
     /// the shell; the document never sees it (ADR 0029).
     layout: Layout,
-    /// The camera a fresh view opens with, framed on the scene from the chosen direction. *Frame all*
-    /// puts every view back here.
-    home_camera: Camera,
+    /// World-space bounds of the latest evaluation, so *Frame all* fits the objects the scene has
+    /// now instead of the ones it had when the file opened.
+    scene_bounds: Bounds,
     scene_revision: Revision,
     renderer: ViewportRenderer,
     render_state: egui_wgpu::RenderState,
@@ -188,8 +187,9 @@ impl FurniCraftApp {
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
         let node_count = session.project().query(&NodeQuery::any()).len();
-        let home_camera = opening_camera(evaluated.bounds, settings.viewport.opening_view)?;
-        let layout = Layout::new(home_camera, settings.viewport.opening_view);
+        let scene_bounds = evaluated.bounds;
+        let fit = home_camera(scene_bounds)?;
+        let layout = Layout::new(fit, settings.viewport.opening_view);
         let mut scene = evaluated.frame;
         scene.shading = settings.viewport.style;
         scene.all_edges = settings.viewport.all_edges;
@@ -220,7 +220,7 @@ impl FurniCraftApp {
             cache,
             scene,
             layout,
-            home_camera,
+            scene_bounds,
             renderer,
             render_state,
             texture_id,
@@ -263,7 +263,8 @@ impl FurniCraftApp {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
-        let home_camera = opening_camera(evaluated.bounds, self.settings.viewport.opening_view)?;
+        let scene_bounds = evaluated.bounds;
+        let fit = home_camera(scene_bounds)?;
         let mut scene = evaluated.frame;
         scene.shading = self.settings.viewport.style;
         scene.all_edges = self.settings.viewport.all_edges;
@@ -272,7 +273,7 @@ impl FurniCraftApp {
         // A new document keeps the split the user arranged: every stored layout is refitted on the
         // new scene and returns to its standard presets, so a four-view workspace opens the new
         // model framed in every view and never points at where the old one was (ADR 0079).
-        self.layout.reset_cameras(home_camera, self.settings.viewport.opening_view);
+        self.layout.reset_cameras(fit, self.settings.viewport.opening_view);
         scene.camera = scene_build::scene_camera(session.project(), self.layout.active_camera());
 
         self.session = session;
@@ -280,7 +281,7 @@ impl FurniCraftApp {
         self.kernel = kernel;
         self.cache = cache;
         self.scene = scene;
-        self.home_camera = home_camera;
+        self.scene_bounds = scene_bounds;
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
         self.cluster = ViewCluster::default();
@@ -406,6 +407,7 @@ impl FurniCraftApp {
         }
         self.node_count = self.session.project().query(&NodeQuery::any()).len();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
+        self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
         scene.shading = self.cluster.style;
         scene.all_edges = self.cluster.all_edges;
@@ -626,15 +628,20 @@ impl FurniCraftApp {
         self.sync_scene()
     }
 
-    /// Refits every view on the scene, keeping the split and each view's direction.
+    /// Fits the active view on the scene's current bounds.
     ///
-    /// *Frame all* fits the workspace: with one view it is the only fit there is, and with several
-    /// it is the one command that puts the whole scene in front of the user in every view.
-    fn reset_view(&mut self) {
-        let home = self.home_camera;
-        for leaf in self.layout.leaves_mut() {
-            leaf.frame(home);
-        }
+    /// The fit camera is computed from the latest evaluation on every press, so *Frame all* follows
+    /// objects created or moved since the file opened. Only the active view moves: its direction
+    /// and its projection kind stay as the user left them.
+    fn frame_all(&mut self) {
+        let fit = match home_camera(self.scene_bounds) {
+            Ok(fit) => fit,
+            Err(error) => {
+                self.last_error = Some(error);
+                return;
+            }
+        };
+        self.layout.active_leaf_mut().frame(fit);
         self.scene.camera = scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }
 
@@ -1246,7 +1253,7 @@ impl FurniCraftApp {
             preset: self.layout.preset(target_leaf),
         };
         match view_cluster::show(ui, area, &mut self.cluster, view) {
-            Some(ClusterAction::FrameAll) => self.reset_view(),
+            Some(ClusterAction::FrameAll) => self.frame_all(),
             Some(ClusterAction::Home) => self.home_view(),
             Some(ClusterAction::ToggleProjection) => self.toggle_view_projection(),
             Some(ClusterAction::SetLayout(kind)) => self.set_layout(kind),
@@ -1462,7 +1469,7 @@ impl FurniCraftApp {
                 self.extrude_gizmo.start(object, height);
             }
             match outcome.view {
-                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.reset_view(),
+                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.frame_all(),
                 Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => {
                     self.toggle_view_projection();
                 }
@@ -2117,18 +2124,6 @@ fn preview_vertex_mesh(frame: SceneFrame, project: &Project, preview: VertexPrev
     Ok(frame.with_drawable_mesh(preview.object, Arc::new(data)))
 }
 
-/// The camera a fresh viewport opens with: framed on the scene from the chosen direction.
-///
-/// The fit distance and the projection stay what [`home_camera`] computed, so choosing *Top* never
-/// moves the model or changes its size; only the eye direction follows the setting.
-fn opening_camera(bounds: crate::scene_build::Bounds, view: OpeningView) -> Result<Camera, String> {
-    let mut camera = home_camera(bounds)?;
-    let [x, y, z] = view.direction();
-    let direction = furnicraft_geom::DVec3::new(x, y, z);
-    camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
-    Ok(camera)
-}
-
 /// Copies the workspace viewport defaults into a frame's floor grid.
 ///
 /// The grid is view state, not document data, so the shell writes it here after every evaluation
@@ -2352,7 +2347,7 @@ impl eframe::App for FurniCraftApp {
                 self.last_error = Some(error.to_string());
             }
             if shortcuts.frame {
-                self.reset_view();
+                self.frame_all();
             }
             if shortcuts.projection {
                 self.layout.active_leaf_mut().toggle_projection();
@@ -2424,6 +2419,7 @@ mod tests {
     use furnicraft_geom::{DMat4, DQuat, DVec3};
     use furnicraft_model::{CameraProjection, LightKind};
     use furnicraft_testkit::sample_project;
+    use furnicraft_ui::display::OpeningView;
     use furnicraft_units::Length;
 
     use super::*;
