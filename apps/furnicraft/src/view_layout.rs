@@ -231,11 +231,16 @@ impl Leaf {
     /// Points the leaf along a preset direction.
     ///
     /// A preset writes yaw and pitch only: the target and the distance stay, so switching presets
-    /// never moves the model or changes its size (ADR 0049 keeps the projection too).
+    /// never moves the model or changes its size. A standard view is orthographic by default and
+    /// converts a perspective view by the visible-height rule, while the axonometric view keeps the
+    /// projection the camera already had (ADR 0049).
     pub(crate) fn apply_preset(&mut self, preset: OpeningView) {
         let [x, y, z] = preset.direction();
         let direction = furnicraft_geom::DVec3::new(x, y, z);
         self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
+        if preset.is_standard() {
+            self.camera.set_orthographic();
+        }
         self.preset = Some(preset);
     }
 
@@ -268,9 +273,14 @@ impl Leaf {
     /// Looks from an arbitrary direction, which leaves its preset name.
     ///
     /// A pole direction takes the canonical up, so clicking the top ball never keeps the yaw the
-    /// camera happened to have (X20).
+    /// camera happened to have (X20). A click on a world axis is a standard view, so it makes the
+    /// camera orthographic by the same visible-height rule as a standard preset; a free direction
+    /// keeps the projection.
     pub(crate) fn look_from(&mut self, direction: furnicraft_geom::DVec3) {
         self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
+        if along_world_axis(direction) {
+            self.camera.set_orthographic();
+        }
         self.preset = None;
     }
 
@@ -303,6 +313,19 @@ impl Leaf {
     pub(crate) fn toggle_projection(&mut self) {
         self.camera.toggle_projection();
     }
+}
+
+/// Whether `direction` points along one world axis, as the corner widget's axis balls do.
+///
+/// An axis ball snaps to an exact `±X`, `±Y` or `±Z` eye offset; a free orbit direction, even one
+/// that happens to be near an axis, is not a standard view and keeps the projection. Non-finite or
+/// zero input is never an axis.
+fn along_world_axis(direction: furnicraft_geom::DVec3) -> bool {
+    let Some(unit) = direction.try_normalize() else {
+        return false;
+    };
+    let components = [unit.x.abs(), unit.y.abs(), unit.z.abs()];
+    components.iter().filter(|component| **component > 1.0e-9).count() == 1
 }
 
 /// One border between two views, as the shell paints and grabs it.
@@ -641,7 +664,7 @@ mod tests {
         assert_eq!(first.camera.target(), home.target(), "the fit puts every view on the scene");
         assert!((first.camera.distance() - home.distance()).abs() < 1.0e-9);
         assert_eq!(first.preset, Some(OpeningView::Front), "a view in a preset keeps it");
-        assert!(first.camera.forward().dot(furnicraft_geom::DVec3::Y) > 0.999);
+        assert!(first.camera.forward().dot(-furnicraft_geom::DVec3::Y) > 0.999);
 
         let second = layout.leaf(ids[1]).expect("second");
         assert_eq!(second.camera.target(), home.target());
@@ -737,10 +760,13 @@ mod tests {
         let target = leaf.camera().target();
         let distance = leaf.camera().distance();
 
-        for (preset, forward) in [
-            (OpeningView::Front, furnicraft_geom::DVec3::Y),
-            (OpeningView::Right, -furnicraft_geom::DVec3::X),
-            (OpeningView::Top, -furnicraft_geom::DVec3::Z),
+        // The owner's eye convention: the eye offset is the camera's `-forward`.
+        for (preset, forward, right, up) in [
+            (OpeningView::Front, -furnicraft_geom::DVec3::Y, -furnicraft_geom::DVec3::X, furnicraft_geom::DVec3::Z),
+            (OpeningView::Left, -furnicraft_geom::DVec3::X, furnicraft_geom::DVec3::Y, furnicraft_geom::DVec3::Z),
+            (OpeningView::Right, furnicraft_geom::DVec3::X, -furnicraft_geom::DVec3::Y, furnicraft_geom::DVec3::Z),
+            (OpeningView::Top, -furnicraft_geom::DVec3::Z, furnicraft_geom::DVec3::X, furnicraft_geom::DVec3::Y),
+            (OpeningView::Bottom, furnicraft_geom::DVec3::Z, -furnicraft_geom::DVec3::X, furnicraft_geom::DVec3::Y),
         ] {
             let mut leaf = leaf.clone();
             leaf.apply_preset(preset);
@@ -748,18 +774,17 @@ mod tests {
             assert_eq!(camera.target(), target, "{preset:?} keeps the target");
             assert!((camera.distance() - distance).abs() < 1.0e-9, "{preset:?} keeps the distance");
             assert!(camera.forward().dot(forward) > 0.999, "{preset:?} looks along {forward:?}");
-            assert!((camera.right().length() - 1.0).abs() < 1.0e-9);
-            assert!((camera.up().length() - 1.0).abs() < 1.0e-9);
-            assert!(camera.right().dot(camera.forward()).abs() < 1.0e-9);
-            assert!(camera.up().dot(camera.forward()).abs() < 1.0e-9);
+            assert!(camera.right().dot(right) > 0.999, "{preset:?} has {right:?} to the right");
+            assert!(camera.up().dot(up) > 0.999, "{preset:?} has {up:?} up");
+            assert!(matches!(camera.projection(), furnicraft_scene::Projection::Orthographic { .. }));
             assert_eq!(leaf.preset, Some(preset));
         }
 
-        // A front elevation is right-handed: screen right is world +X and screen up is world +Z.
-        let mut front = layout.leaves[0].clone();
-        front.apply_preset(OpeningView::Front);
-        assert!(front.camera().right().dot(furnicraft_geom::DVec3::X) > 0.999);
-        assert!(front.camera().up().dot(furnicraft_geom::DVec3::Z) > 0.999);
+        // The axonometric default is the only preset that is not a standard view.
+        let mut axonometric = leaf.clone();
+        axonometric.apply_preset(OpeningView::Axonometric);
+        assert!(matches!(axonometric.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
+        assert_eq!(axonometric.preset, Some(OpeningView::Axonometric));
     }
 
     #[test]
@@ -826,16 +851,59 @@ mod tests {
     }
 
     #[test]
-    fn a_preset_leaves_the_projection_alone() {
+    fn a_standard_preset_and_an_axis_snap_are_orthographic() {
+        let mut layout = Layout::new(Camera::default());
+        let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
+
+        // A standard preset converts the perspective view without moving its framing.
+        let target = leaf.camera().target();
+        let distance = leaf.camera().distance();
+        leaf.apply_preset(OpeningView::Left);
+        let furnicraft_scene::Projection::Orthographic { height } = leaf.camera().projection() else {
+            panic!("a standard preset is orthographic");
+        };
+        assert!((height - 2.0 * distance * (furnicraft_scene::DEFAULT_FOV_Y * 0.5).tan()).abs() < 1.0e-9);
+        assert_eq!(leaf.camera().target(), target);
+        assert!((leaf.camera().distance() - distance).abs() < 1.0e-9);
+
+        // The corner widget's axis balls are standard views, so they do the same.
+        leaf.look_from(furnicraft_geom::DVec3::X);
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
+        assert_eq!(leaf.preset, None, "a ball snap is a direction, not a named preset");
+    }
+
+    #[test]
+    fn an_axonometric_preset_and_a_free_direction_keep_the_projection() {
         let mut layout = Layout::new(Camera::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.toggle_projection();
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
-        leaf.apply_preset(OpeningView::Front);
-        assert!(
-            matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }),
-            "a preset writes yaw and pitch only"
-        );
+
+        leaf.apply_preset(OpeningView::Axonometric);
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
+
+        // Return to perspective and take a free direction: no axis, no projection change.
+        let mut perspective = Layout::new(Camera::default());
+        let leaf = perspective.leaf_mut(perspective.active()).expect("the active leaf");
+        leaf.look_from(furnicraft_geom::DVec3::new(1.0, 1.0, 1.0));
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
+    }
+
+    #[test]
+    fn the_projection_toggle_works_in_a_standard_view_and_keeps_its_name() {
+        let mut layout = Layout::new(Camera::default());
+        let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
+        leaf.apply_preset(OpeningView::Top);
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
+
+        leaf.toggle_projection();
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
+        assert_eq!(leaf.preset, Some(OpeningView::Top), "the toggle is not a change of direction");
+
+        leaf.toggle_projection();
+        assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
+        assert_eq!(leaf.preset, Some(OpeningView::Top), "the preset name survives both ways");
     }
 
     #[test]

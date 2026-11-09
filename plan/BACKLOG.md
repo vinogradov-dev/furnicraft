@@ -25,6 +25,59 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **U60** every layout remembers its own views: `Layout` holds one `LayoutState` per
+  `LayoutKind` (tree, leaves, active, next id) instead of one tree that `set_kind` reshapes. First
+  use of a layout builds its standard state: `Quad` = top-left `Front`, bottom-left `Top`,
+  top-right `Left`, bottom-right `Axonometric`; `TwoColumns` = left `Front`, right `Axonometric`;
+  `TwoRows` = top `Front`, bottom `Axonometric`; `Single` = the settings opening view. Switching
+  away and back restores the cameras, presets, active view and every split ratio the user left;
+  opening a file refits every stored layout with `reset_cameras(home, opening_view)` while keeping
+  each layout's standard presets. The active view is the only target: `main.rs` drops
+  `pointer_leaf`/`target_leaf = hovered`; orbit, pan, zoom, `O`, `Home`, presets, selection, gizmos
+  and the cluster act on `layout.active()`, a press of any button over a view activates it, a
+  border press still resizes without changing it, and the wheel only zooms when the pointer is over
+  the active view. Tests: the three split layouts carry their standard views and ortho; a layout
+  round-trip restores camera, preset, ratio and active; opening a scene refits every layout; a
+  gesture over an inactive view is ignored until a press activates it; a border drag keeps the
+  active view. ADR 0079 records the layout state.
+  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/main.rs`
+
+- `[ ]` **U61** *Frame all* fits the objects the scene has now: the app stores `scene_bounds` from
+  the latest `evaluate`, and `frame_all` computes `scene_build::home_camera(scene_bounds)` on every
+  press, then frames only the active view. `Leaf::frame` keeps the view's projection kind: a
+  perspective view stays perspective and an orthographic view stays orthographic with the fit
+  height, while the direction and roll follow the existing rule. The one-shot `home_camera` field
+  and `opening_camera` helper go away; `Layout::new`/`reset_cameras` take the fit camera and the
+  opening view, so a standard `Single` view is still the opening preset. Tests: a larger scene
+  gives a larger fit distance; a custom orthographic view stays orthographic and fits; a standard
+  view keeps its direction and ortho; an empty scene still yields a usable camera.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/scene_build.rs`
+
+- `[ ]` **U62** the active view expands over the whole workspace and comes back: `Layout` gains
+  `maximized: Option<LeafId>`; `regions()` returns one full-area rectangle for that leaf and
+  `dividers()` is empty, so borders and picking see one surface. `toggle_maximized()` expands the
+  active view and restores the tree unchanged — every ratio and camera stays where the user left
+  it — and `set_kind` clears the mode. The cluster gains a pressed *Expand* / *Restore* button
+  (`view/maximize`, `view/restore` drawn assets), `ClusterAction::ToggleMaximize` and the `Alt+W`
+  shortcut; the settings shortcut table names it. A single-view layout disables the button and the
+  key does nothing. Tests: expand returns one region on the whole area and no borders; restore
+  returns the same four rectangles, ratios and cameras; a layout switch leaves the mode; `Alt+W`
+  is consumed and the single layout refuses it; the icon files pass the existing footprint and
+  coverage tests and the URI count is 74.
+  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs, crates/ui/src/settings.rs, assets/icons/view, crates/ui/src/icons.rs`
+
+- `[ ]` **U63** the display style belongs to one view: `Leaf` carries `ShadingStyle`, the cluster's
+  five style buttons read and write the active leaf's style, and `ViewCluster` stops owning a
+  global style. `ViewportRenderer::render_views` takes a `ViewSpec { camera, region, shading }` per
+  view and builds `StylePasses` inside the pass loop, so *Edges*, *Shaded*, *Wire*, *Hidden* and
+  *Ghost* differ between neighbours while one texture and one edge buffer still serve the
+  workspace. The diagnostic `all_edges` switch stays global. `SceneFrame::shading` remains the
+  single-view fallback and follows the active leaf. Tests: two views keep different styles through
+  a frame build and a style change reaches only the active leaf; the renderer's per-view pass
+  mapping matches `StylePasses`; opening a scene keeps each layout's styles; the settings default
+  applies to a new view and to the active one when changed.
+  `files: crates/render/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs`
+
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -50,7 +103,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   re-opening a path already open activates that tab instead of a second copy; the split layout travels
   with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
   behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
-  close and per-tab textures; (4) ADR 0079, the map row, the plan close and the gate.
+  close and per-tab textures; (4) ADR 0080, the map row, the plan close and the gate.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
 
 - `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
@@ -222,6 +275,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
+  `Bottom` and takes the owner's eye convention — `Front` looks from `+Y` to `-Y`, `Left` from `+X`
+  to `-X`, `Top` from `+Z` down, `Bottom` from `-Z` up, `Right` from `-X` to `+X` — while
+  `Axonometric` stays the three-quarter default. `ALL`, `label()` and `direction()` carry all six;
+  `is_standard()` names the five non-axonometric views. Applying a standard preset sets the camera
+  orthographic without moving its target, distance or visible height (`Camera::set_orthographic`
+  converts a perspective view by the same height rule as the toggle); the corner widget's axis balls
+  do the same through `Leaf::look_from`, so a click on a world axis is an orthographic view. Standard
+  views are defaults, not modes: `O` still toggles projection in every view and leaves the preset
+  name alone. Tests: every direction and label; `ALL` has six; a standard preset and an axis snap
+  are orthographic; an axonometric preset and a free direction keep the projection; the toggle works
+  in a standard view and the preset stays; `set_orthographic` preserves the visible height.
+  `7dc71d1`
+  `files: crates/ui/src/display.rs, crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs`
 
 - `[x]` **U58** the corner widget gains the roll ring and its step setting: a functional ring on a
   52 pt radius in a 124 pt square rotates the camera about its view axis, always visible with the

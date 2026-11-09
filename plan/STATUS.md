@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=8c329ad updated=2026-11-09
+STATE: milestone=M7 phase=A task=U60 state=idle base=7dc71d1 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -30,7 +30,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   container is armed, the armed tool draws pressed, the pole views look down their plane, a drawing
   pivots on its own shape, a selected chain is a screen-space stroke, every contour kind edits as one draft.
 - X20 gives a pole view a canonical up: the top is `+Y` up and `+X` right, the bottom `+Y` up and
-  `-X` right, and the side and front views keep `+Z` up (ADR 0057).
+  `-X` right, and the side and front views keep `+Z` up (ADR 0057). U59 names the six standard views
+  with the owner's eye convention and makes a preset or axis snap ortho; `O` still toggles.
 - X1, X2 and X7 are fixed: a legal ring past the 1024-vertex cap follows the shape (ADR 0062), and
   a ribbon tool is one measured cell with an elided caption (ADR 0067). The icon pipeline was audited
   against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`): U27 rasterises each white master
@@ -54,10 +55,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U56, U57 and U58 are done: the corner widget carries a flat projection icon and a four-node roll
-ring whose hand turn follows the 1–15° step in the workspace settings, over a camera roll about its
-own axis (ADR 0078). U45 is next but deferred: start it only on a new instruction. It opens one tab
-per file, each with its own `Document`; *Open* opens a new tab and the split layout travels with the tab.
+U60–U63 record the multi-area viewport work: U60 one remembered state per layout with only the
+active view targeted (ADR 0079), U61 *Frame all* on current bounds in the active view, U62
+expand/restore (`Alt+W`), U63 a display style per view. U45 is deferred to after U60–U63.
 
 ## Index
 

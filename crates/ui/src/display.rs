@@ -43,34 +43,44 @@ pub const fn shading_icon(style: ShadingStyle) -> icons::Icon {
 
 /// The preset a viewport opens with.
 ///
-/// A preset only names an eye direction; the fit distance and the projection stay what the scene
-/// computed, so choosing *Top* never moves the model or changes its size. U42 wires the same
-/// presets to the split-view bar.
+/// A preset only names an eye direction and, for the five standard views, the orthographic
+/// projection. Applying one never moves the target or changes the distance, so choosing *Top*
+/// never moves the model or changes its size. U42 wires the same presets to the split-view bar.
+///
+/// The standard directions follow the owner's eye convention: `Front` is the view from `+Y`
+/// looking towards `-Y`, so screen right is `-X`; `Left` looks from `+X` to `-X`; `Right` looks from
+/// `-X` to `+X`; `Top` looks down from `+Z`; `Bottom` looks up from `-Z`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpeningView {
     /// The familiar three-quarter view.
     #[default]
     Axonometric,
-    /// Looking along `-Y`, from the front.
+    /// Looking from `+Y` towards `-Y`.
     Front,
+    /// Looking from `+X` towards `-X`.
+    Left,
     /// Looking down from `+Z`.
     Top,
-    /// Looking from `+X`.
+    /// Looking from `-X` towards `+X`.
     Right,
+    /// Looking up from `-Z`.
+    Bottom,
 }
 
 impl OpeningView {
     /// Every preset in the order the settings window lists them.
-    pub const ALL: [Self; 4] = [Self::Axonometric, Self::Front, Self::Top, Self::Right];
+    pub const ALL: [Self; 6] = [Self::Axonometric, Self::Front, Self::Left, Self::Top, Self::Right, Self::Bottom];
 
     /// The user-visible name.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Axonometric => "Axonometric",
             Self::Front => "Front",
+            Self::Left => "Left",
             Self::Top => "Top",
             Self::Right => "Right",
+            Self::Bottom => "Bottom",
         }
     }
 
@@ -82,9 +92,60 @@ impl OpeningView {
     pub const fn direction(self) -> [f64; 3] {
         match self {
             Self::Axonometric => [0.393, 0.772, 0.500],
-            Self::Front => [0.0, -1.0, 0.0],
+            Self::Front => [0.0, 1.0, 0.0],
+            Self::Left => [1.0, 0.0, 0.0],
             Self::Top => [0.0, 0.0, 1.0],
-            Self::Right => [1.0, 0.0, 0.0],
+            Self::Right => [-1.0, 0.0, 0.0],
+            Self::Bottom => [0.0, 0.0, -1.0],
         }
+    }
+
+    /// Whether this is one of the five standard views rather than the axonometric default.
+    ///
+    /// A standard view is orthographic by default and a click on a world axis snap is the same
+    /// kind of view; the axonometric view keeps the projection the camera already had.
+    pub const fn is_standard(self) -> bool {
+        !matches!(self, Self::Axonometric)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_preset_has_a_label_and_an_eye_direction() {
+        assert_eq!(OpeningView::ALL.len(), 6, "the six views the owner names");
+        let mut labels = Vec::new();
+        for view in OpeningView::ALL {
+            assert!(!view.label().is_empty(), "{view:?} has a name");
+            assert!(!labels.contains(&view.label()), "{view:?} owns its name");
+            labels.push(view.label());
+            let [x, y, z] = view.direction();
+            let length = (x * x + y * y + z * z).sqrt();
+            // The axonometric direction is the three-quarter default, given to three decimals;
+            // the standard views are exact axes.
+            let tolerance = if view.is_standard() { 1.0e-9 } else { 1.0e-2 };
+            assert!((length - 1.0).abs() < tolerance, "{view:?} names a unit direction: {length}");
+        }
+        assert_eq!(labels, ["Axonometric", "Front", "Left", "Top", "Right", "Bottom"]);
+    }
+
+    #[test]
+    fn the_standard_views_follow_the_owner_eye_convention() {
+        assert_eq!(OpeningView::Front.direction(), [0.0, 1.0, 0.0], "Front looks from +Y to -Y");
+        assert_eq!(OpeningView::Left.direction(), [1.0, 0.0, 0.0], "Left looks from +X to -X");
+        assert_eq!(OpeningView::Right.direction(), [-1.0, 0.0, 0.0], "Right looks from -X to +X");
+        assert_eq!(OpeningView::Top.direction(), [0.0, 0.0, 1.0], "Top looks down from +Z");
+        assert_eq!(OpeningView::Bottom.direction(), [0.0, 0.0, -1.0], "Bottom looks up from -Z");
+        assert_eq!(OpeningView::Axonometric.direction(), [0.393, 0.772, 0.500]);
+    }
+
+    #[test]
+    fn the_five_axis_views_are_standard_and_axonometric_is_not() {
+        for view in OpeningView::ALL {
+            assert_eq!(view.is_standard(), view != OpeningView::Axonometric);
+        }
+        assert_eq!(OpeningView::ALL.iter().filter(|view| view.is_standard()).count(), 5);
     }
 }
