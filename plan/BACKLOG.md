@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
+- `[~]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
   widget has no projection control, and its Home button is the only control under the cube, drawn as
   a filled plate. Add a 20 pt projection icon in a 22 pt cell directly under the cube, centred, with
   no filled cell at rest — only the glyph — and a faint rounded wash on hover or press; a placeholder

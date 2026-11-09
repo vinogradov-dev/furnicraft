@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U56 state=idle base=3eb7fc0 updated=2026-11-09
+STATE: milestone=M7 phase=A task=U56 state=doing base=9e41445 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
