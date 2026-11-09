@@ -1,11 +1,13 @@
 //! The central area as a tree of views.
 //!
 //! One view is the default; the bar turns it into two vertical, two horizontal or four, and every
-//! border between two views is draggable. Each leaf owns a camera and the preset it is in, and the
-//! active leaf is the one *Home*, *Frame all* and the inspector-style view actions act on.
+//! border between two views is draggable. Each layout keeps its own tree, cameras, presets, split
+//! ratios and active leaf, so switching away and back restores exactly the workspace the user left
+//! (ADR 0079). Each leaf owns a camera and the preset it is in, and the active leaf is the only
+//! target of orbit, pan, zoom, the presets, selection and the gizmos.
 //!
-//! Everything here is view state: the tree, the ratios, the cameras and the active leaf never reach
-//! the document (ADR 0029). The regions are plain rectangles in points, so a test can tile them
+//! Everything here is view state: the trees, the ratios, the cameras and the active leaves never
+//! reach the document (ADR 0029). The regions are plain rectangles in points, so a test can tile them
 //! without a window or a GPU, and the shell turns each one into a scissored render pass.
 
 use eframe::egui;
@@ -113,6 +115,41 @@ impl LayoutKind {
             Self::Single => 1,
             Self::TwoColumns | Self::TwoRows => 2,
             Self::Quad => 4,
+        }
+    }
+
+    /// The slot this layout's remembered state occupies.
+    const fn index(self) -> usize {
+        match self {
+            Self::Single => 0,
+            Self::TwoColumns => 1,
+            Self::TwoRows => 2,
+            Self::Quad => 3,
+        }
+    }
+
+    /// The standard preset of the leaf at `index`, in depth-first order.
+    ///
+    /// The split layouts open on the views their names promise: the front elevation first and the
+    /// axonometric view last, with a top and a left view in the four-view corners. Only the single
+    /// view follows the workspace's opening preference, because it is the view a new scene starts in
+    /// (ADR 0079).
+    const fn standard_view(self, index: usize, opening: OpeningView) -> OpeningView {
+        match self {
+            Self::Single => opening,
+            Self::TwoColumns | Self::TwoRows => {
+                if index == 0 {
+                    OpeningView::Front
+                } else {
+                    OpeningView::Axonometric
+                }
+            }
+            Self::Quad => match index {
+                0 => OpeningView::Front,
+                1 => OpeningView::Top,
+                2 => OpeningView::Left,
+                _ => OpeningView::Axonometric,
+            },
         }
     }
 }
@@ -396,67 +433,153 @@ struct DividerDrag {
     raw: f32,
 }
 
-/// The workspace's views: the tree, the leaves, the active leaf and any live border drag.
+/// One layout's remembered state: its tree, its leaves, the active leaf and the next free id.
+///
+/// The state is per kind, so switching layouts never reshapes another layout's tree: a view the
+/// user split, dragged or orbited is exactly where they left it when they come back (ADR 0079).
 #[derive(Clone, Debug)]
-pub(crate) struct Layout {
+struct LayoutState {
     root: Node,
     leaves: Vec<Leaf>,
     active: LeafId,
-    kind: LayoutKind,
     next: u32,
+}
+
+impl LayoutState {
+    /// The state a layout opens in the first time it is shown.
+    ///
+    /// The tree takes the default ratios and every leaf is framed on `camera` and pointed along the
+    /// layout's standard preset. A fresh workspace therefore shows four useful views before the user
+    /// has arranged anything.
+    fn standard(kind: LayoutKind, camera: Camera, opening: OpeningView) -> Self {
+        let mut state = Self { root: Node::Leaf(LeafId(1)), leaves: Vec::new(), active: LeafId(1), next: 1 };
+        for index in 0..kind.leaves() {
+            let id = state.allocate();
+            let mut leaf = Leaf { id, camera, preset: None };
+            leaf.apply_preset(kind.standard_view(index, opening));
+            state.leaves.push(leaf);
+        }
+        let ids: Vec<LeafId> = state.leaves.iter().map(|leaf| leaf.id).collect();
+        state.root = Node::of(kind, &ids).unwrap_or_else(|| Node::Leaf(ids.first().copied().unwrap_or(LeafId(1))));
+        state.active = ids.first().copied().unwrap_or(LeafId(1));
+        state
+    }
+
+    /// The next free leaf id, which a new view in this layout would take.
+    fn allocate(&mut self) -> LeafId {
+        let id = LeafId(self.next);
+        self.next = self.next.saturating_add(1);
+        id
+    }
+
+    /// Refits every leaf on a new scene and restores the layout's standard presets.
+    ///
+    /// The tree and its ratios stay, so opening a file keeps the workspace the user arranged; only
+    /// the cameras move to the new model (ADR 0079).
+    fn reset_cameras(&mut self, kind: LayoutKind, camera: Camera, opening: OpeningView) {
+        for (index, leaf) in self.leaves.iter_mut().enumerate() {
+            leaf.camera = camera;
+            leaf.preset = None;
+            leaf.apply_preset(kind.standard_view(index, opening));
+        }
+    }
+
+    fn leaf(&self, id: LeafId) -> Option<&Leaf> {
+        self.leaves.iter().find(|leaf| leaf.id == id)
+    }
+
+    fn leaf_mut(&mut self, id: LeafId) -> Option<&mut Leaf> {
+        self.leaves.iter_mut().find(|leaf| leaf.id == id)
+    }
+
+    fn active_leaf(&self) -> &Leaf {
+        // `active` is only ever set to an id the leaves hold, and `set_active` keeps it that way.
+        self.leaves.iter().find(|leaf| leaf.id == self.active).unwrap_or(&self.leaves[0])
+    }
+
+    fn active_leaf_mut(&mut self) -> &mut Leaf {
+        let active = self.active;
+        if let Some(index) = self.leaves.iter().position(|leaf| leaf.id == active) {
+            &mut self.leaves[index]
+        } else {
+            &mut self.leaves[0]
+        }
+    }
+}
+
+/// The workspace's views: one remembered state per layout and any live border drag.
+#[derive(Clone, Debug)]
+pub(crate) struct Layout {
+    kind: LayoutKind,
+    states: [LayoutState; LayoutKind::ALL.len()],
     drag: Option<DividerDrag>,
 }
 
 impl Layout {
-    /// A single view holding `camera`.
-    pub(crate) fn new(camera: Camera) -> Self {
-        let id = LeafId(1);
+    /// One single view holding `camera`, plus the standard state of every other layout.
+    ///
+    /// The single view is the one a new scene starts in, so it takes `opening`; the split layouts
+    /// take their own standard presets and are shown when the user picks them.
+    pub(crate) fn new(camera: Camera, opening: OpeningView) -> Self {
         Self {
-            root: Node::Leaf(id),
-            leaves: vec![Leaf { id, camera, preset: None }],
-            active: id,
             kind: LayoutKind::Single,
-            next: 2,
+            states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, camera, opening)),
             drag: None,
         }
     }
 
-    /// The layout the tree currently holds.
+    /// The state of the layout currently shown.
+    fn current(&self) -> &LayoutState {
+        &self.states[self.kind.index()]
+    }
+
+    /// The state of the layout currently shown, for editing.
+    fn current_mut(&mut self) -> &mut LayoutState {
+        let index = self.kind.index();
+        &mut self.states[index]
+    }
+
+    /// The layout the workspace is showing.
     pub(crate) const fn kind(&self) -> LayoutKind {
         self.kind
     }
 
-    /// The active leaf.
-    pub(crate) const fn active(&self) -> LeafId {
-        self.active
+    /// The active leaf of the shown layout.
+    pub(crate) fn active(&self) -> LeafId {
+        self.current().active
     }
 
-    /// Makes `leaf` active, ignoring an id the tree no longer holds.
+    /// Makes `leaf` active, ignoring an id the shown layout no longer holds.
     pub(crate) fn set_active(&mut self, leaf: LeafId) {
-        if self.leaves.iter().any(|candidate| candidate.id == leaf) {
-            self.active = leaf;
+        let state = self.current_mut();
+        if state.leaves.iter().any(|candidate| candidate.id == leaf) {
+            state.active = leaf;
         }
     }
 
-    /// One leaf by id.
+    /// One leaf of the shown layout by id.
     pub(crate) fn leaf(&self, id: LeafId) -> Option<&Leaf> {
-        self.leaves.iter().find(|leaf| leaf.id == id)
+        self.current().leaf(id)
     }
 
-    /// One leaf by id, for navigation.
+    /// One leaf of the shown layout by id, for navigation.
     pub(crate) fn leaf_mut(&mut self, id: LeafId) -> Option<&mut Leaf> {
-        self.leaves.iter_mut().find(|leaf| leaf.id == id)
+        self.current_mut().leaf_mut(id)
     }
 
-    /// Every leaf, for an action that fits the whole workspace.
+    /// Every leaf of the shown layout, for an action that fits the whole workspace.
     pub(crate) fn leaves_mut(&mut self) -> &mut [Leaf] {
-        &mut self.leaves
+        &mut self.current_mut().leaves
     }
 
     /// The active leaf, which is always present.
     pub(crate) fn active_leaf(&self) -> &Leaf {
-        // `active` is only ever set to an id the tree holds, and `set_kind` keeps it that way.
-        self.leaves.iter().find(|leaf| leaf.id == self.active).unwrap_or(&self.leaves[0])
+        self.current().active_leaf()
+    }
+
+    /// The active leaf, for a gesture that acts on it alone.
+    pub(crate) fn active_leaf_mut(&mut self) -> &mut Leaf {
+        self.current_mut().active_leaf_mut()
     }
 
     /// The preset a leaf is in, if it has not been orbited since.
@@ -469,47 +592,39 @@ impl Layout {
         self.active_leaf().camera
     }
 
-    /// Replaces every leaf's camera, as opening a scene or refitting the workspace does.
-    pub(crate) fn reset_cameras(&mut self, camera: Camera) {
-        for leaf in &mut self.leaves {
-            leaf.camera = camera;
-            leaf.preset = None;
-        }
-    }
-
-    /// Turns the workspace into `kind`, keeping the leaves it already has in order and giving a new
-    /// leaf the active view's camera.
-    pub(crate) fn set_kind(&mut self, kind: LayoutKind) {
-        self.kind = kind;
-        let wanted = kind.leaves();
-        let source = self.active_camera();
-        while self.leaves.len() < wanted {
-            let id = LeafId(self.next);
-            self.next = self.next.saturating_add(1);
-            self.leaves.push(Leaf { id, camera: source, preset: None });
-        }
-        self.leaves.truncate(wanted);
-        let ids: Vec<LeafId> = self.leaves.iter().map(|leaf| leaf.id).collect();
-        if let Some(root) = Node::of(kind, &ids) {
-            self.root = root;
-        }
-        if !self.leaves.iter().any(|leaf| leaf.id == self.active) {
-            self.active = self.leaves[0].id;
+    /// Refits every remembered layout on a new scene and restores its standard presets.
+    ///
+    /// Opening a file must not leave a view looking where the old model was, and must not throw
+    /// away the split the user arranged. Every layout therefore keeps its tree and ratios, takes the
+    /// new fit camera, and returns to the standard preset of each of its views (ADR 0079).
+    pub(crate) fn reset_cameras(&mut self, camera: Camera, opening: OpeningView) {
+        for (kind, state) in LayoutKind::ALL.into_iter().zip(self.states.iter_mut()) {
+            state.reset_cameras(kind, camera, opening);
         }
         self.drag = None;
     }
 
-    /// The rectangles of every view, in depth-first order.
+    /// Shows `kind`, restoring the state that layout last had.
+    ///
+    /// Every layout keeps its own tree, cameras, presets, ratios and active leaf, so a switch is a
+    /// change of which state is shown, not a reshape. The split the user leaves is the split they
+    /// get back (ADR 0079).
+    pub(crate) fn set_kind(&mut self, kind: LayoutKind) {
+        self.kind = kind;
+        self.drag = None;
+    }
+
+    /// The rectangles of every view of the shown layout, in depth-first order.
     pub(crate) fn regions(&self, area: egui::Rect) -> Vec<(LeafId, egui::Rect)> {
-        let mut regions = Vec::with_capacity(self.leaves.len());
-        self.root.regions(area, &mut regions);
+        let mut regions = Vec::with_capacity(self.current().leaves.len());
+        self.current().root.regions(area, &mut regions);
         regions
     }
 
-    /// Every border between two views.
+    /// Every border between two views of the shown layout.
     pub(crate) fn dividers(&self, area: egui::Rect) -> Vec<Divider> {
         let mut dividers = Vec::new();
-        self.root.dividers(area, &mut Vec::new(), &mut dividers);
+        self.current().root.dividers(area, &mut Vec::new(), &mut dividers);
         dividers
     }
 
@@ -523,12 +638,30 @@ impl Layout {
         self.dividers(area).into_iter().find(|divider| divider.is_hit(point)).map(|divider| divider.axis)
     }
 
+    /// Handles a press of `primary` at `point` in the workspace.
+    ///
+    /// A primary press on a border starts a resize and leaves the active view alone; a press
+    /// anywhere else over a view makes that view active, whichever button it is. Returns whether
+    /// the press started a border drag. Only the active view ever receives a gesture, so a press is
+    /// how the user points a gesture at a neighbour (ADR 0079).
+    pub(crate) fn press(&mut self, area: egui::Rect, point: egui::Pos2, primary: bool) -> bool {
+        if primary && self.begin_drag(area, point) {
+            return true;
+        }
+        if self.border_at(area, point).is_none()
+            && let Some((leaf, _)) = self.regions(area).into_iter().find(|(_, rect)| rect.contains(point))
+        {
+            self.set_active(leaf);
+        }
+        false
+    }
+
     /// Starts a border drag when `point` grabs one, returning whether it did.
     pub(crate) fn begin_drag(&mut self, area: egui::Rect, point: egui::Pos2) -> bool {
         let Some(divider) = self.dividers(area).into_iter().find(|divider| divider.is_hit(point)) else {
             return false;
         };
-        let raw = self.root.split_at(&divider.path).map(|(_, ratio)| ratio).unwrap_or(divider.ratio);
+        let raw = self.current().root.split_at(&divider.path).map(|(_, ratio)| ratio).unwrap_or(divider.ratio);
         self.drag = Some(DividerDrag { path: divider.path, axis: divider.axis, raw });
         true
     }
@@ -548,7 +681,7 @@ impl Layout {
         };
         drag.raw += split.axis.along(delta) / extent;
         let ratio = drag.raw.clamp(minimum, maximum);
-        self.root.set_ratio(&path, ratio);
+        self.current_mut().root.set_ratio(&path, ratio);
     }
 
     /// Ends a border drag.
@@ -590,7 +723,7 @@ mod tests {
     }
 
     fn layout(kind: LayoutKind) -> Layout {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         layout.set_kind(kind);
         layout
     }
@@ -611,24 +744,55 @@ mod tests {
         // border press must not steal the click that selects an object.
         let area = area();
         let mut layout = layout(LayoutKind::TwoColumns);
-        let first = layout.leaves[0].id;
-        let second = layout.leaves[1].id;
+        let first = layout.current().leaves[0].id;
+        let second = layout.current().leaves[1].id;
         assert_eq!(layout.active(), first);
 
-        // A press in the right view activates it and grabs no border.
-        assert!(!layout.begin_drag(area, egui::pos2(700.0, 300.0)));
-        layout.set_active(second);
+        // A press in the right view activates it and grabs no border, whichever button it is.
+        assert!(!layout.press(area, egui::pos2(700.0, 300.0), false), "a secondary press activates too");
+        assert_eq!(layout.active(), second);
+        layout.press(area, egui::pos2(700.0, 300.0), true);
+        assert_eq!(layout.active(), second, "a primary press keeps the view it activates");
         assert_eq!(layout.active(), second);
 
-        // A press on the shared edge grabs the border and leaves the active view alone.
-        assert!(layout.begin_drag(area, egui::pos2(400.0, 300.0)));
+        // A primary press on the shared edge grabs the border and leaves the active view alone.
+        assert!(layout.press(area, egui::pos2(400.0, 300.0), true));
         assert_eq!(layout.active(), second, "a resize does not change the active view");
         layout.end_drag();
 
+        // A secondary press on a border does neither: it is not a resize and not an activation.
+        layout.set_active(first);
+        assert!(!layout.press(area, egui::pos2(400.0, 60.0), false));
+        assert_eq!(layout.active(), first, "a border swallows a press instead of activating a view");
+
         // The band is wider than the line, so a press a few points away still catches it.
-        assert!(layout.begin_drag(area, egui::pos2(403.0, 40.0)));
+        assert!(layout.press(area, egui::pos2(403.0, 40.0), true));
         layout.end_drag();
-        assert!(!layout.begin_drag(area, egui::pos2(420.0, 40.0)));
+        assert!(!layout.press(area, egui::pos2(420.0, 40.0), true));
+    }
+
+    #[test]
+    fn a_gesture_only_reaches_the_active_view_until_a_press_moves_the_target() {
+        let area = area();
+        let mut layout = layout(LayoutKind::Quad);
+        let regions = layout.regions(area);
+        let first = regions[0].0;
+        let (second, second_rect) = regions[1];
+        assert_eq!(layout.active(), first);
+        let neighbour = layout.leaf(second).expect("second").camera();
+
+        // A navigation gesture is written through the active leaf, so an inactive view never moves.
+        layout.active_leaf_mut().orbit(0.4, 0.2);
+        assert_eq!(layout.leaf(second).expect("second").camera(), neighbour, "the neighbour is untouched");
+        assert_ne!(layout.active_leaf().camera(), neighbour, "the active view moved");
+
+        // A press over the neighbour makes it the target; the gesture now moves it and not the first.
+        assert!(!layout.press(area, second_rect.center(), true));
+        assert_eq!(layout.active(), second);
+        let first_camera = layout.leaf(first).expect("first").camera();
+        layout.active_leaf_mut().orbit(-0.4, -0.2);
+        assert_ne!(layout.leaf(second).expect("second").camera(), neighbour);
+        assert_eq!(layout.leaf(first).expect("first").camera(), first_camera, "the press moved the target");
     }
 
     #[test]
@@ -648,9 +812,9 @@ mod tests {
     #[test]
     fn a_fit_moves_every_view_close_and_keeps_its_direction() {
         let home = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
-        let mut layout = Layout::new(home);
+        let mut layout = Layout::new(home, OpeningView::Axonometric);
         layout.set_kind(LayoutKind::TwoColumns);
-        let ids: Vec<LeafId> = layout.leaves.iter().map(|leaf| leaf.id).collect();
+        let ids: Vec<LeafId> = layout.current().leaves.iter().map(|leaf| leaf.id).collect();
         let first = layout.leaf_mut(ids[0]).expect("first");
         first.apply_preset(OpeningView::Front);
         let second = layout.leaf_mut(ids[1]).expect("second");
@@ -675,24 +839,126 @@ mod tests {
 
     #[test]
     fn a_split_and_a_join_round_trip() {
-        let mut layout = Layout::new(Camera::default());
-        let first = layout.active();
-        assert_eq!(layout.leaves.len(), 1);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let single = layout.active();
+        assert_eq!(layout.current().leaves.len(), 1);
 
+        // A split has its own leaves; the single view is still there when its layout returns.
         layout.set_kind(LayoutKind::TwoColumns);
-        assert_eq!(layout.leaves.len(), 2);
-        assert_eq!(layout.leaves[0].id, first, "the first view keeps its identity and its camera");
-
+        assert_eq!(layout.current().leaves.len(), 2);
         layout.set_kind(LayoutKind::Single);
-        assert_eq!(layout.leaves.len(), 1, "a join leaves one view");
-        assert_eq!(layout.leaves[0].id, first);
-        assert_eq!(layout.active(), first, "the join keeps the first view active");
+        assert_eq!(layout.current().leaves.len(), 1, "the single layout still holds one view");
+        assert_eq!(layout.active(), single);
+        assert_eq!(layout.preset(single), Some(OpeningView::Axonometric), "and its own preset");
 
         layout.set_kind(LayoutKind::Quad);
-        assert_eq!(layout.leaves.len(), 4);
+        assert_eq!(layout.current().leaves.len(), 4);
         assert_eq!(layout.regions(area()).len(), 4);
         layout.set_kind(LayoutKind::Single);
         assert_eq!(layout.regions(area()).len(), 1, "the single view fills the area again");
+    }
+
+    #[test]
+    fn every_split_layout_opens_with_its_standard_views() {
+        // A layout the user has never arranged is still useful: the standard presets are the views
+        // the names promise, the five standard views are orthographic, and the axonometric one keeps
+        // the camera's perspective (U59, ADR 0079).
+        let expected: [(LayoutKind, &[(OpeningView, bool)]); 3] = [
+            (LayoutKind::TwoColumns, &[(OpeningView::Front, true), (OpeningView::Axonometric, false)]),
+            (LayoutKind::TwoRows, &[(OpeningView::Front, true), (OpeningView::Axonometric, false)]),
+            (
+                LayoutKind::Quad,
+                &[
+                    (OpeningView::Front, true),
+                    (OpeningView::Top, true),
+                    (OpeningView::Left, true),
+                    (OpeningView::Axonometric, false),
+                ],
+            ),
+        ];
+        for (kind, views) in expected {
+            let layout = layout(kind);
+            assert_eq!(layout.current().leaves.len(), views.len(), "{kind:?} has its number of views");
+            for (index, (preset, orthographic)) in views.iter().enumerate() {
+                let leaf = &layout.current().leaves[index];
+                assert_eq!(layout.preset(leaf.id), Some(*preset), "{kind:?} view {index} opens on {preset:?}");
+                let ortho = matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. });
+                assert_eq!(ortho, *orthographic, "{kind:?} view {index} has the right projection");
+                let [x, y, z] = preset.direction();
+                let direction = -furnicraft_geom::DVec3::new(x, y, z).normalize();
+                assert!(leaf.camera().forward().dot(direction) > 0.999, "{kind:?} view {index} looks from {preset:?}");
+            }
+        }
+
+        // The single view is the settings opening view, not a fixed preset.
+        let mut single = Layout::new(Camera::default(), OpeningView::Top);
+        assert_eq!(single.preset(single.active()), Some(OpeningView::Top));
+        assert!(matches!(
+            single.active_leaf().camera().projection(),
+            furnicraft_scene::Projection::Orthographic { .. }
+        ));
+        single.set_kind(LayoutKind::Quad);
+        assert_eq!(single.preset(single.active()), Some(OpeningView::Front), "a split has its own presets");
+    }
+
+    #[test]
+    fn a_layout_round_trip_restores_camera_preset_ratio_and_active() {
+        let area = area();
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        layout.set_kind(LayoutKind::Quad);
+        let regions = layout.regions(area);
+        let second = regions[1].0;
+
+        // Arrange the four-view layout: a free camera, a non-default active view and a split ratio.
+        layout.leaf_mut(second).expect("second").look_from(furnicraft_geom::DVec3::new(1.0, 2.0, 3.0));
+        layout.set_active(second);
+        assert!(layout.press(area, egui::pos2(400.0, 60.0), true), "the central border is grabbed");
+        layout.drag_by(area, egui::vec2(60.0, 0.0));
+        layout.end_drag();
+        let arranged = layout.regions(area);
+        let camera = layout.leaf(second).expect("second").camera();
+        let width = arranged[1].1.width();
+        assert!((width - 400.0).abs() > 1.0, "the drag changed the ratio");
+
+        // Leaving and returning restores the tree, its ratio, the camera and the active view.
+        layout.set_kind(LayoutKind::Single);
+        layout.set_kind(LayoutKind::Quad);
+        assert_eq!(layout.active(), second, "the active view survives the round trip");
+        assert_eq!(layout.leaf(second).expect("second").camera(), camera, "the camera survives");
+        assert_eq!(layout.preset(second), None, "and its preset state");
+        let restored = layout.regions(area);
+        assert!((restored[1].1.width() - width).abs() < 1.0e-4, "the split ratio survives");
+        assert_eq!(layout.preset(restored[3].0), Some(OpeningView::Axonometric), "the presets survive");
+    }
+
+    #[test]
+    fn opening_a_scene_refits_every_layout_and_keeps_its_standard_presets() {
+        let area = area();
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        // Arrange two layouts, so the reset has more than the shown layout to refit.
+        layout.set_kind(LayoutKind::Quad);
+        layout.set_active(layout.current().leaves[3].id);
+        layout.leaf_mut(layout.active()).expect("leaf").orbit(0.3, 0.1);
+        layout.set_kind(LayoutKind::TwoRows);
+
+        let home = Camera::new(furnicraft_geom::DVec3::new(100.0, 200.0, 300.0), 950.0).expect("camera");
+        layout.reset_cameras(home, OpeningView::Top);
+
+        for kind in LayoutKind::ALL {
+            layout.set_kind(kind);
+            let active = layout.active();
+            assert!(layout.leaf(active).is_some(), "{kind:?} keeps a valid active view");
+            for (index, leaf) in layout.current().leaves.iter().enumerate() {
+                assert_eq!(leaf.camera().target(), home.target(), "{kind:?} view {index} frames the new scene");
+                assert!((leaf.camera().distance() - home.distance()).abs() < 1.0e-9);
+                assert_eq!(
+                    layout.preset(leaf.id),
+                    Some(kind.standard_view(index, OpeningView::Top)),
+                    "{kind:?} view {index} returns to its standard preset"
+                );
+            }
+            assert_eq!(layout.regions(area).len(), kind.leaves(), "{kind:?} keeps its tree");
+        }
     }
 
     #[test]
@@ -755,8 +1021,8 @@ mod tests {
 
     #[test]
     fn a_preset_turns_the_view_and_never_moves_the_model() {
-        let layout = Layout::new(Camera::default());
-        let leaf = layout.leaves[0].clone();
+        let layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let leaf = layout.current().leaves[0].clone();
         let target = leaf.camera().target();
         let distance = leaf.camera().distance();
 
@@ -789,7 +1055,7 @@ mod tests {
 
     #[test]
     fn a_pole_view_takes_the_canonical_up_from_the_widget_and_the_presets() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         // A yaw the pole must not inherit; the target and the distance are what a snap keeps.
@@ -818,7 +1084,7 @@ mod tests {
 
     #[test]
     fn a_side_view_keeps_z_up() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         for preset in [OpeningView::Front, OpeningView::Right] {
             leaf.apply_preset(preset);
@@ -832,7 +1098,7 @@ mod tests {
 
     #[test]
     fn the_home_button_restores_the_axonometric_preset() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         leaf.apply_preset(OpeningView::Top);
@@ -852,7 +1118,7 @@ mod tests {
 
     #[test]
     fn a_standard_preset_and_an_axis_snap_are_orthographic() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
 
@@ -875,7 +1141,7 @@ mod tests {
 
     #[test]
     fn an_axonometric_preset_and_a_free_direction_keep_the_projection() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.toggle_projection();
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
@@ -884,7 +1150,7 @@ mod tests {
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
 
         // Return to perspective and take a free direction: no axis, no projection change.
-        let mut perspective = Layout::new(Camera::default());
+        let mut perspective = Layout::new(Camera::default(), OpeningView::Axonometric);
         let leaf = perspective.leaf_mut(perspective.active()).expect("the active leaf");
         leaf.look_from(furnicraft_geom::DVec3::new(1.0, 1.0, 1.0));
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
@@ -892,7 +1158,7 @@ mod tests {
 
     #[test]
     fn the_projection_toggle_works_in_a_standard_view_and_keeps_its_name() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.apply_preset(OpeningView::Top);
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
@@ -911,17 +1177,25 @@ mod tests {
         // The ribbon, the Display popover and the corner widget all toggle one leaf; a split must
         // keep its neighbours in the mode they were drawing with.
         let mut layout = layout(LayoutKind::Quad);
-        let first = layout.leaves[0].id;
+        let first = layout.current().leaves[0].id;
+        assert!(matches!(
+            layout.leaf(first).expect("the leaf").camera().projection(),
+            furnicraft_scene::Projection::Orthographic { .. }
+        ));
         layout.leaf_mut(first).expect("the leaf").toggle_projection();
-        for (index, leaf) in layout.leaves.iter().enumerate() {
+        for (index, leaf) in layout.current().leaves.iter().enumerate() {
             let ortho = matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. });
-            assert_eq!(ortho, index == 0, "only the toggled view changes its projection");
+            assert_eq!(
+                ortho,
+                index != 0 && index != 3,
+                "only the toggled view changes its projection; the standard views keep theirs"
+            );
         }
     }
 
     #[test]
     fn a_roll_is_view_state_and_a_preset_or_home_resets_it() {
-        let mut layout = Layout::new(Camera::default());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         leaf.apply_preset(OpeningView::Front);
@@ -949,16 +1223,17 @@ mod tests {
     #[test]
     fn the_active_leaf_is_the_one_the_tree_holds() {
         let mut layout = layout(LayoutKind::Quad);
-        let last = layout.leaves[3].id;
+        let last = layout.current().leaves[3].id;
         layout.set_active(last);
         assert_eq!(layout.active(), last);
         assert_eq!(layout.active_leaf().id, last);
 
-        // A join that drops the active leaf falls back to the view that remains.
-        layout.set_active(last);
+        // Each layout keeps its own active view; switching away and back restores the one picked.
         layout.set_kind(LayoutKind::Single);
-        assert_eq!(layout.active(), layout.leaves[0].id);
+        assert_eq!(layout.active(), layout.current().leaves[0].id, "the single layout has its own active view");
+        layout.set_kind(LayoutKind::Quad);
+        assert_eq!(layout.active(), last, "the four-view layout remembered it");
         layout.set_active(LeafId(999));
-        assert_eq!(layout.active(), layout.leaves[0].id, "an unknown id is ignored");
+        assert_eq!(layout.active(), last, "an unknown id is ignored");
     }
 }

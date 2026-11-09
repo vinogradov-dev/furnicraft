@@ -83,6 +83,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0076](0076-a-drawing-tool-separates-the-segment-kind-from-the-snaps.md) | A drawing tool separates the segment kind from the snaps | Accepted |
 | [0077](0077-a-pending-arc-is-the-closing-segment.md) | A pending arc is the closing segment | Accepted |
 | [0078](0078-a-view-rolls-about-its-own-axis.md) | A view rolls about its own axis | Accepted |
+| [0079](0079-every-layout-remembers-its-own-views.md) | Every layout remembers its own views | Accepted |
 
 ## Format
 
