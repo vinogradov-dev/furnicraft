@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U60** every layout remembers its own views: `Layout` holds one `LayoutState` per
-  `LayoutKind` (tree, leaves, active, next id) instead of one tree that `set_kind` reshapes. First
-  use of a layout builds its standard state: `Quad` = top-left `Front`, bottom-left `Top`,
-  top-right `Left`, bottom-right `Axonometric`; `TwoColumns` = left `Front`, right `Axonometric`;
-  `TwoRows` = top `Front`, bottom `Axonometric`; `Single` = the settings opening view. Switching
-  away and back restores the cameras, presets, active view and every split ratio the user left;
-  opening a file refits every stored layout with `reset_cameras(home, opening_view)` while keeping
-  each layout's standard presets. The active view is the only target: `main.rs` drops
-  `pointer_leaf`/`target_leaf = hovered`; orbit, pan, zoom, `O`, `Home`, presets, selection, gizmos
-  and the cluster act on `layout.active()`, a press of any button over a view activates it, a
-  border press still resizes without changing it, and the wheel only zooms when the pointer is over
-  the active view. Tests: the three split layouts carry their standard views and ortho; a layout
-  round-trip restores camera, preset, ratio and active; opening a scene refits every layout; a
-  gesture over an inactive view is ignored until a press activates it; a border drag keeps the
-  active view. ADR 0079 records the layout state.
-  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U61** *Frame all* fits the objects the scene has now: the app stores `scene_bounds` from
   the latest `evaluate`, and `frame_all` computes `scene_build::home_camera(scene_bounds)` on every
   press, then frames only the active view. `Leaf::frame` keeps the view's projection kind: a
@@ -275,6 +258,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U60** every layout remembers its own views: `Layout` holds one `LayoutState` per
+  `LayoutKind` (tree, leaves, active, next id) instead of one tree that `set_kind` reshapes. First
+  use of a layout builds its standard state: `Quad` = top-left `Front`, bottom-left `Top`,
+  top-right `Left`, bottom-right `Axonometric`; `TwoColumns` = left `Front`, right `Axonometric`;
+  `TwoRows` = top `Front`, bottom `Axonometric`; `Single` = the settings opening view. Switching
+  away and back restores the cameras, presets, active view and every split ratio the user left;
+  opening a file refits every stored layout with `reset_cameras(home, opening_view)` while keeping
+  each layout's standard presets. The active view is the only target: `main.rs` drops
+  `pointer_leaf`/`target_leaf = hovered`; orbit, pan, zoom, `O`, `Home`, presets, selection, gizmos
+  and the cluster act on `layout.active()`, a press of any button over a view activates it, a
+  border press still resizes without changing it, and the wheel only zooms when the pointer is over
+  the active view. Tests: the three split layouts carry their standard views and ortho; a layout
+  round-trip restores camera, preset, ratio and active; opening a scene refits every layout; a
+  gesture over an inactive view is ignored until a press activates it; a border drag keeps the
+  active view. ADR 0079 records the layout state.
+  `c014bf9`
+  `files: apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
   `Bottom` and takes the owner's eye convention — `Front` looks from `+Y` to `-Y`, `Left` from `+X`
