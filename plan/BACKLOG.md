@@ -34,11 +34,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   fields of the application into one `Document` per tab with its own renderer target, so it gets a
   plan of its own and lands last. Tests: a tab keeps its own undo stack and dirty flag; switching
   tabs restores the selection and the camera; a close with unsaved changes asks and a discard drops only that tab.
-  Session notes: the move is `Session`, `Editor`, `EvaluationCache`, `FileMenu`,
-  `PreservedSections`, the gizmos, `renderer`, `texture_id`, `scene`, `view_camera` and `home_camera`
-  into a per-tab `Document`. Write a plan and get approval first. `register_native_texture` returns one
-  id per `TextureView`, so a closed tab must `free_texture`. `HeaderAction::CloseTab` already reaches
-  the shell.
+  Plan (approved by the owner 2026-11-09; not started): `apps/furnicraft/src/tabs.rs` is the pure
+  policy — `TabId`, `Tabs` with the order, the active tab, `activate`, and `close` returning
+  `CloseOutcome { Closed, NeedsConfirmation, LastTab }` — testable without a window or a GPU like
+  `view_layout`. `apps/furnicraft/src/document.rs` holds the scene-bound payload: `Session`, `Editor`,
+  `TruckKernel`, `EvaluationCache`, `SceneFrame`, `scene_revision`, `Layout` (its cameras),
+  `home_camera`, `renderer`, `texture_id`, `FileMenu`, `PreservedSections`, the gizmos, `highlighted`,
+  `selected_chains`, `uploaded_preview`, `node_count` and `last_error`; `sync_scene`, `upload_scene`,
+  `viewport` and the `apply_*` handlers move onto it. `FurniCraftApp` stays the shell: the tabs, the
+  settings and store, Settings/Home, the palette, the panel folds, the viewport cluster, the transform
+  mode and the pointer. Every tab registers its own `TextureId` from its own `TextureView` and a close
+  calls `Renderer::free_texture` for that id; the last close leaves one empty *Untitled*, never zero.
+  `header.rs` gains the tab row and the `ActivateTab` / `NewTab` / `CloseTab` actions, and the dirty
+  close reuses the `FileMenu` confirm dialog. Owner decisions: *Open* and *New* open a new tab and
+  re-opening a path already open activates that tab instead of a second copy; the split layout travels
+  with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
+  behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
+  close and per-tab textures; (4) ADR 0078, the map row, the plan close and the gate.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
 
 - `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
