@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X18** a figure's geometry is editable in its card: the object card has no radius for a
-  circle, no width and height for a rectangle and no side count for a polygon, and a constructive
-  body's drawn path is not in the summary at all. Expectation: the card shows the fields the figure
-  has — circle radius, rectangle width and height, polygon sides (`3..=128`) and radius, a single
-  arc's radius and end angle — for a `Path` node and for the constructive body that owns a path,
-  and Apply writes one command with one undo entry. Suspected cause:
-  `object_card::geometry_section` reports only segment and arc counts, the contour editor is text
-  for a line-only ring, and `Constructive` has no `path()` accessor, so its path never reaches
-  `ObjectSummary`. Fix: add `Constructive::path()`, carry the path in the summary, add a *Figure*
-  section built from `circle_frame`/`rectangle_frame`/`polygon_frame`/`arc_frame` and the existing
-  model setters, dispatch `object.path.replace` or `object.contour.replace` so the tag survives, and
-  disable the fields while the viewport owns the working copy. Tests: each field reshapes the path
-  and keeps its tag; a constructive body keeps its tag; a card edit during a viewport edit is
-  refused; one undo restores the figure.
-  `files: crates/ui/src/object_card.rs, crates/model/src/object.rs, crates/engine/src/object_cmds.rs`
-
 - `[ ]` **X19** the extrusion pulls a phantom body: the arrow detaches from the body while the pull
   is open and the body only appears after release. Expectation: a ghost of the extrusion at the
   preview height is drawn, the arrow sits on its top face and moves with it, and the document still
@@ -253,6 +237,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X18** a figure's geometry is editable in its card: the object card had no radius for a
+  circle, no width and height for a rectangle and no side count for a polygon, and a constructive
+  body's drawn path was not in the summary at all. The card now shows the fields the figure has —
+  circle radius, rectangle width and height, polygon sides (`3..=128`) and radius, a single arc's
+  radius and end angle — for a `Path` node and for the constructive body that owns a path, and Apply
+  writes one command with one undo entry. `Constructive::path()` already existed; the summary now
+  carries it, and a *Figure* section reads the fields through
+  `circle_frame`/`rectangle_frame`/`polygon_frame`/`arc_frame` and writes them through the existing
+  model setters. The edit dispatches `object.contour.replace` for a body and `object.path.replace`
+  for a path node, both of which store the `Path` itself, so the shape tag and the segment ids
+  survive; the fields are disabled while the viewport owns the working copy. Tests: each field
+  reshapes the path and keeps its tag; a constructive body keeps its tag; a card edit during a
+  viewport edit is refused; one undo restores the figure.
+  `073fdb6`
+  `files: crates/ui/src/object_card.rs, crates/model/src/object.rs, crates/engine/src/object_cmds.rs`
 
 - `[x]` **X17** along-contour movement has a length, a stop and a collapse: the mode shows no length
   field, the node can pass the opposite node, and a zero-length segment cannot be finished.
