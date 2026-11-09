@@ -1,10 +1,11 @@
 //! The central area as a tree of views.
 //!
 //! One view is the default; the bar turns it into two vertical, two horizontal or four, and every
-//! border between two views is draggable. Each layout keeps its own tree, cameras, presets, split
-//! ratios and active leaf, so switching away and back restores exactly the workspace the user left
-//! (ADR 0079). Each leaf owns a camera and the preset it is in, and the active leaf is the only
-//! target of orbit, pan, zoom, the presets, selection and the gizmos.
+//! border between two views is draggable. Any view can expand over the whole workspace and return,
+//! which changes only the rectangle it is given, never the tree. Each layout keeps its own tree,
+//! cameras, presets, split ratios and active leaf, so switching away and back restores exactly the
+//! workspace the user left (ADR 0079). Each leaf owns a camera and the preset it is in, and the
+//! active leaf is the only target of orbit, pan, zoom, the presets, selection and the gizmos.
 //!
 //! Everything here is view state: the trees, the ratios, the cameras and the active leaves never
 //! reach the document (ADR 0029). The regions are plain rectangles in points, so a test can tile them
@@ -528,6 +529,11 @@ pub(crate) struct Layout {
     kind: LayoutKind,
     states: [LayoutState; LayoutKind::ALL.len()],
     drag: Option<DividerDrag>,
+    /// The view filling the whole workspace, or `None` while the tree is shown.
+    ///
+    /// The mode is temporary: it never reshapes the tree, so every ratio and camera stays where the
+    /// user left it, and switching layouts leaves it (ADR 0079).
+    maximized: Option<LeafId>,
 }
 
 impl Layout {
@@ -541,6 +547,7 @@ impl Layout {
             kind: LayoutKind::Single,
             states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, fit, opening)),
             drag: None,
+            maximized: None,
         }
     }
 
@@ -563,6 +570,11 @@ impl Layout {
     /// The active leaf of the shown layout.
     pub(crate) fn active(&self) -> LeafId {
         self.current().active
+    }
+
+    /// Whether one view fills the whole workspace.
+    pub(crate) fn maximized(&self) -> bool {
+        self.maximized.is_some()
     }
 
     /// Makes `leaf` active, ignoring an id the shown layout no longer holds.
@@ -623,17 +635,46 @@ impl Layout {
     pub(crate) fn set_kind(&mut self, kind: LayoutKind) {
         self.kind = kind;
         self.drag = None;
+        self.maximized = None;
+    }
+
+    /// Expands the active view over the whole workspace, or returns the tree.
+    ///
+    /// The tree is untouched: expanding only changes which rectangle the views are given, so
+    /// restoring shows the same four rectangles, ratios and cameras the user left (ADR 0079). A
+    /// single view already fills the workspace, so it refuses the mode instead of entering a state it
+    /// cannot leave.
+    pub(crate) fn toggle_maximized(&mut self) {
+        if self.current().leaves.len() < 2 {
+            self.maximized = None;
+            return;
+        }
+        let active = self.active();
+        self.maximized = if self.maximized == Some(active) { None } else { Some(active) };
+        self.drag = None;
     }
 
     /// The rectangles of every view of the shown layout, in depth-first order.
+    ///
+    /// An expanded view owns the whole area and is the only region, so picking and the border
+    /// handling see one surface instead of a hidden tree.
     pub(crate) fn regions(&self, area: egui::Rect) -> Vec<(LeafId, egui::Rect)> {
+        if let Some(leaf) = self.maximized {
+            return vec![(leaf, area)];
+        }
         let mut regions = Vec::with_capacity(self.current().leaves.len());
         self.current().root.regions(area, &mut regions);
         regions
     }
 
     /// Every border between two views of the shown layout.
+    ///
+    /// An expanded view leaves no border: the workspace is one view, so there is nothing to resize
+    /// and nothing to grab.
     pub(crate) fn dividers(&self, area: egui::Rect) -> Vec<Divider> {
+        if self.maximized.is_some() {
+            return Vec::new();
+        }
         let mut dividers = Vec::new();
         self.current().root.dividers(area, &mut Vec::new(), &mut dividers);
         dividers
@@ -897,6 +938,57 @@ mod tests {
         );
         assert!(leaf.camera().forward().dot(-furnicraft_geom::DVec3::Y) > 0.999, "and the preset direction stays");
         assert!((leaf.camera().distance() - fit.distance()).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn an_expanded_view_fills_the_area_and_restore_returns_the_same_tree() {
+        // Expanding is a change of rectangles, not of the tree: every split ratio, camera and preset
+        // survives the round trip, so an accidental expand costs the user nothing (ADR 0079).
+        let area = area();
+        let mut layout = layout(LayoutKind::Quad);
+        let active = layout.current().leaves[1].id;
+        layout.set_active(active);
+        layout.leaf_mut(active).expect("the active leaf").look_from(furnicraft_geom::DVec3::new(1.0, 2.0, 3.0));
+        assert!(layout.press(area, egui::pos2(400.0, 60.0), true), "the central border is grabbed");
+        layout.drag_by(area, egui::vec2(40.0, 0.0));
+        layout.end_drag();
+        let regions = layout.regions(area);
+        let dividers = layout.dividers(area);
+        let cameras: Vec<Camera> = layout.current().leaves.iter().map(Leaf::camera).collect();
+
+        layout.toggle_maximized();
+        assert!(layout.maximized());
+        assert_eq!(layout.regions(area), vec![(active, area)], "the active view owns the whole area");
+        assert!(layout.dividers(area).is_empty(), "an expanded view has no borders");
+        assert_eq!(layout.border_at(area, egui::pos2(400.0, 60.0)), None, "nothing is left to grab");
+
+        layout.toggle_maximized();
+        assert!(!layout.maximized());
+        assert_eq!(layout.regions(area), regions, "the same four rectangles return");
+        assert_eq!(layout.dividers(area), dividers, "with the same ratios");
+        let restored: Vec<Camera> = layout.current().leaves.iter().map(Leaf::camera).collect();
+        assert_eq!(restored, cameras, "and every camera stays where the user left it");
+    }
+
+    #[test]
+    fn a_layout_switch_leaves_the_expanded_mode() {
+        let area = area();
+        let mut layout = layout(LayoutKind::Quad);
+        layout.toggle_maximized();
+        assert_eq!(layout.regions(area).len(), 1);
+
+        layout.set_kind(LayoutKind::TwoColumns);
+        assert!(!layout.maximized(), "the mode belongs to the layout it was entered in");
+        assert_eq!(layout.regions(area).len(), 2, "the new layout shows its own tree");
+    }
+
+    #[test]
+    fn a_single_view_refuses_to_expand() {
+        let area = area();
+        let mut layout = layout(LayoutKind::Single);
+        layout.toggle_maximized();
+        assert!(!layout.maximized(), "one view is already the whole workspace");
+        assert_eq!(layout.regions(area), vec![(layout.active(), area)], "the refusal keeps the single view");
     }
 
     #[test]

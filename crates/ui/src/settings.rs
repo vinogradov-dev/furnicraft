@@ -476,6 +476,7 @@ pub fn shortcut_table() -> Vec<(String, String)> {
         ("Ctrl+K".to_owned(), "Command palette".to_owned()),
         ("F".to_owned(), "Frame all".to_owned()),
         ("O".to_owned(), "Perspective / orthographic".to_owned()),
+        ("Alt+W".to_owned(), "Expand / restore the active view".to_owned()),
         ("G".to_owned(), "Toggle the drawing grid".to_owned()),
         ("Esc".to_owned(), "Cancel the current tool".to_owned()),
         ("MMB".to_owned(), "Orbit".to_owned()),
