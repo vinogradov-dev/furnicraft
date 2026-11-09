@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
+- `[~]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
   `Bottom` and takes the owner's eye convention — `Front` looks from `+Y` to `-Y`, `Left` from `+X`
   to `-X`, `Top` from `+Z` down, `Bottom` from `-Z` up, `Right` from `-X` to `+X` — while
   `Axonometric` stays the three-quarter default. `ALL`, `label()` and `direction()` carry all six;
