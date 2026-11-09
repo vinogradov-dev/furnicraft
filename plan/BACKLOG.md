@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
-  `Bottom` and takes the owner's eye convention — `Front` looks from `+Y` to `-Y`, `Left` from `+X`
-  to `-X`, `Top` from `+Z` down, `Bottom` from `-Z` up, `Right` from `-X` to `+X` — while
-  `Axonometric` stays the three-quarter default. `ALL`, `label()` and `direction()` carry all six;
-  `is_standard()` names the five non-axonometric views. Applying a standard preset sets the camera
-  orthographic without moving its target, distance or visible height (`Camera::set_orthographic`
-  converts a perspective view by the same height rule as the toggle); the corner widget's axis balls
-  do the same through `Leaf::look_from`, so a click on a world axis is an orthographic view. Standard
-  views are defaults, not modes: `O` still toggles projection in every view and leaves the preset
-  name alone. Tests: every direction and label; `ALL` has six; a standard preset and an axis snap
-  are orthographic; an axonometric preset and a free direction keep the projection; the toggle works
-  in a standard view and the preset stays; `set_orthographic` preserves the visible height.
-  `files: crates/ui/src/display.rs, crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs`
-
 - `[ ]` **U60** every layout remembers its own views: `Layout` holds one `LayoutState` per
   `LayoutKind` (tree, leaves, active, next id) instead of one tree that `set_kind` reshapes. First
   use of a layout builds its standard state: `Quad` = top-left `Front`, bottom-left `Top`,
@@ -289,6 +275,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U59** the standard views become the six the owner names: `OpeningView` gains `Left` and
+  `Bottom` and takes the owner's eye convention — `Front` looks from `+Y` to `-Y`, `Left` from `+X`
+  to `-X`, `Top` from `+Z` down, `Bottom` from `-Z` up, `Right` from `-X` to `+X` — while
+  `Axonometric` stays the three-quarter default. `ALL`, `label()` and `direction()` carry all six;
+  `is_standard()` names the five non-axonometric views. Applying a standard preset sets the camera
+  orthographic without moving its target, distance or visible height (`Camera::set_orthographic`
+  converts a perspective view by the same height rule as the toggle); the corner widget's axis balls
+  do the same through `Leaf::look_from`, so a click on a world axis is an orthographic view. Standard
+  views are defaults, not modes: `O` still toggles projection in every view and leaves the preset
+  name alone. Tests: every direction and label; `ALL` has six; a standard preset and an axis snap
+  are orthographic; an axonometric preset and a free direction keep the projection; the toggle works
+  in a standard view and the preset stays; `set_orthographic` preserves the visible height.
+  `7dc71d1`
+  `files: crates/ui/src/display.rs, crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs`
 
 - `[x]` **U58** the corner widget gains the roll ring and its step setting: a functional ring on a
   52 pt radius in a 124 pt square rotates the camera about its view axis, always visible with the
