@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U61 state=idle base=c014bf9 updated=2026-11-09
+STATE: milestone=M7 phase=A task=U62 state=idle base=33c2275 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -43,7 +43,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   atomic `settings.json` (ADR 0068) and *Home*; U47 added the `Ctrl+K` palette; U42 divided the
   central area into one, two or four views with a split tree, a scissored pass per leaf and an
   orientation widget with a home button, a projection toggle and a roll ring; U60 gives every layout
-  its own remembered tree, cameras, presets and active view (ADR 0079). U43 made the five display
+  its own remembered tree, cameras, presets and active view (ADR 0079), and U61 makes *Frame all* fit
+  the scene's current bounds in the active view while keeping its projection. U43 made the five display
   styles real (ADR 0070) and X10 made their edges mean the form; X10's stencil slot lets an object
   show its own inside but never the one behind it. U44 gives every floor-standing object a contact
   shadow (ADR 0071). X11 fixed a ring closed by an arc: a joint is `1 µm + arc_slack(first) +
@@ -55,9 +56,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U61 fits *Frame all* on the scene's current bounds and frames only the active view. Then U62
-expands the active view (`Alt+W`) without touching the tree and U63 gives each view its own display
-style. U45 is deferred to after U60–U63.
+U62 expands the active view over the whole workspace with `Alt+W` and restores the tree unchanged.
+Then U63 gives each view its own display style. U45 is deferred to after U60–U63.
 
 ## Index
 

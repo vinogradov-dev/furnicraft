@@ -25,17 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U61** *Frame all* fits the objects the scene has now: the app stores `scene_bounds` from
-  the latest `evaluate`, and `frame_all` computes `scene_build::home_camera(scene_bounds)` on every
-  press, then frames only the active view. `Leaf::frame` keeps the view's projection kind: a
-  perspective view stays perspective and an orthographic view stays orthographic with the fit
-  height, while the direction and roll follow the existing rule. The one-shot `home_camera` field
-  and `opening_camera` helper go away; `Layout::new`/`reset_cameras` take the fit camera and the
-  opening view, so a standard `Single` view is still the opening preset. Tests: a larger scene
-  gives a larger fit distance; a custom orthographic view stays orthographic and fits; a standard
-  view keeps its direction and ortho; an empty scene still yields a usable camera.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/scene_build.rs`
-
 - `[ ]` **U62** the active view expands over the whole workspace and comes back: `Layout` gains
   `maximized: Option<LeafId>`; `regions()` returns one full-area rectangle for that leaf and
   `dividers()` is empty, so borders and picking see one surface. `toggle_maximized()` expands the
@@ -258,6 +247,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U61** *Frame all* fits the objects the scene has now: the app stores `scene_bounds` from
+  the latest `evaluate`, and `frame_all` computes `scene_build::home_camera(scene_bounds)` on every
+  press, then frames only the active view. `Leaf::frame` keeps the view's projection kind: a
+  perspective view stays perspective and an orthographic view stays orthographic with the fit
+  height, while the direction and roll follow the existing rule. The one-shot `home_camera` field
+  and `opening_camera` helper go away; `Layout::new`/`reset_cameras` take the fit camera and the
+  opening view, so a standard `Single` view is still the opening preset. Tests: a larger scene
+  gives a larger fit distance; a custom orthographic view stays orthographic and fits; a standard
+  view keeps its direction and ortho; an empty scene still yields a usable camera. A standard view
+  the user made perspective also keeps that projection.
+  `33c2275`
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/scene_build.rs`
 
 - `[x]` **U60** every layout remembers its own views: `Layout` holds one `LayoutState` per
   `LayoutKind` (tree, leaves, active, next id) instead of one tree that `set_kind` reshapes. First
