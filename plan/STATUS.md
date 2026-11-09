@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X20 state=idle base=efb153c updated=2026-11-09
+STATE: milestone=M7 phase=A task=U45 state=idle base=b6a974f updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -29,6 +29,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   the projection button draws the view it is in, a creation lands at the scene root unless a
   container is armed, the armed tool draws pressed, the pole views look down their plane, a drawing
   pivots on its own shape, a selected chain is a screen-space stroke, every contour kind edits as one draft.
+- X20 gives a pole view a canonical up: the top is `+Y` up and `+X` right, the bottom `+Y` up and
+  `-X` right, and the side and front views keep `+Z` up (ADR 0057).
 - X1, X2 and X7 are fixed: a legal ring past the 1024-vertex cap follows the shape (ADR 0062), and
   a ribbon tool is one measured cell with an elided caption (ADR 0067). The icon pipeline was audited
   against a neighbour CAD project (ADR 0055, `assets/icons/AUDIT.md`): U27 rasterises each white master
@@ -51,10 +53,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X19 is done: the extrusion pull draws a wireframe prism at the preview height, the arrow sits on its
-top face, the document changes once on release, and Escape drops the preview at the committed height.
-X20 is next: a pole view takes a canonical up — the top view looks down with `+Y` up and `+X` right,
-the bottom view with `+Y` up and `-X` right — while the side and front views keep `+Z` up.
+X20 is done: a pole view takes a canonical up — the top `+Y` up and `+X` right, the bottom `+Y` up
+and `-X` right, the sides `+Z` up. U45 is next: several scenes open at once as tabs, each with its
+own session, undo history, selection, camera and dirty marker; it moves `Session`, `Editor`,
+`EvaluationCache`, `FileMenu` and the gizmo state into one `Document` per tab, so it needs a plan the
+owner approves before any code.
 
 ## Index
 
