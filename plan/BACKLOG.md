@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U63** the display style belongs to one view: `Leaf` carries `ShadingStyle`, the cluster's
-  five style buttons read and write the active leaf's style, and `ViewCluster` stops owning a
-  global style. `ViewportRenderer::render_views` takes a `ViewSpec { camera, region, shading }` per
-  view and builds `StylePasses` inside the pass loop, so *Edges*, *Shaded*, *Wire*, *Hidden* and
-  *Ghost* differ between neighbours while one texture and one edge buffer still serve the
-  workspace. The diagnostic `all_edges` switch stays global. `SceneFrame::shading` remains the
-  single-view fallback and follows the active leaf. Tests: two views keep different styles through
-  a frame build and a style change reaches only the active leaf; the renderer's per-view pass
-  mapping matches `StylePasses`; opening a scene keeps each layout's styles; the settings default
-  applies to a new view and to the active one when changed.
-  `files: crates/render/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -234,6 +222,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U63** the display style belongs to one view: `Leaf` carries `ShadingStyle`, the cluster's
+  five style buttons read and write the active leaf's style, and `ViewCluster` stops owning a
+  global style. `ViewportRenderer::render_views` takes a `ViewSpec { camera, region, shading }` per
+  view and builds `StylePasses` inside the pass loop, so *Edges*, *Shaded*, *Wire*, *Hidden* and
+  *Ghost* differ between neighbours while one texture and one edge buffer still serve the
+  workspace. The diagnostic `all_edges` switch stays global. `SceneFrame::shading` remains the
+  single-view fallback and follows the active leaf. Tests: two views keep different styles through
+  a frame build and a style change reaches only the active leaf; the renderer's per-view pass
+  mapping matches `StylePasses`; opening a scene keeps each layout's styles; the settings default
+  applies to a new view and to the active one when changed.
+  `009a73f`
+  `files: crates/render/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/main.rs`
 
 - `[x]` **U62** the active view expands over the whole workspace and comes back: `Layout` gains
   `maximized: Option<LeafId>`; `regions()` returns one full-area rectangle for that leaf and

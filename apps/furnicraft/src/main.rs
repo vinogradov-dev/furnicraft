@@ -189,9 +189,9 @@ impl FurniCraftApp {
         let node_count = session.project().query(&NodeQuery::any()).len();
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
-        let layout = Layout::new(fit, settings.viewport.opening_view);
+        let layout = Layout::new(fit, settings.viewport.opening_view, settings.viewport.style);
         let mut scene = evaluated.frame;
-        scene.shading = settings.viewport.style;
+        layout.apply_frame_style(&mut scene);
         scene.all_edges = settings.viewport.all_edges;
         apply_viewport_defaults(&mut scene.grid, &settings.viewport);
         scene.camera = scene_build::scene_camera(session.project(), layout.active_camera());
@@ -205,11 +205,7 @@ impl FurniCraftApp {
         };
         renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
 
-        let cluster = ViewCluster {
-            style: settings.viewport.style,
-            all_edges: settings.viewport.all_edges,
-            ..ViewCluster::default()
-        };
+        let cluster = ViewCluster { all_edges: settings.viewport.all_edges, ..ViewCluster::default() };
         scene.contact_shadows = cluster.shadow_settings();
 
         Ok(Self {
@@ -266,7 +262,8 @@ impl FurniCraftApp {
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
         let mut scene = evaluated.frame;
-        scene.shading = self.settings.viewport.style;
+        // Opening a file keeps every layout's display styles; only the cameras are refitted.
+        self.layout.apply_frame_style(&mut scene);
         scene.all_edges = self.settings.viewport.all_edges;
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
 
@@ -285,7 +282,6 @@ impl FurniCraftApp {
         self.scene_revision = self.session.project().revision();
         self.editor = Editor::new();
         self.cluster = ViewCluster::default();
-        self.cluster.style = self.settings.viewport.style;
         self.cluster.all_edges = self.settings.viewport.all_edges;
         self.scene.contact_shadows = self.cluster.shadow_settings();
         self.translate_gizmo = TranslateGizmo::default();
@@ -409,7 +405,7 @@ impl FurniCraftApp {
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
-        scene.shading = self.cluster.style;
+        self.layout.apply_frame_style(&mut scene);
         scene.all_edges = self.cluster.all_edges;
         scene.contact_shadows = self.cluster.shadow_settings();
         apply_viewport_defaults(&mut scene.grid, &self.settings.viewport);
@@ -1107,7 +1103,7 @@ impl FurniCraftApp {
         // changes the next frame without re-uploading a buffer. The edge list is not: switching
         // between form edges and the full triangulation reads a different cached list, so the last
         // upload is replayed when the switch flips.
-        self.scene.shading = self.cluster.style;
+        self.layout.apply_frame_style(&mut self.scene);
         self.scene.contact_shadows = self.cluster.shadow_settings();
         if self.scene.all_edges != self.cluster.all_edges {
             self.scene.all_edges = self.cluster.all_edges;
@@ -1127,12 +1123,16 @@ impl FurniCraftApp {
         // One pass per view into the same target: the camera comes from the view, the region from
         // its rectangle, and the aspect ratio from the region, so a narrow view is not stretched
         // by the workspace's shape.
-        let views: Vec<(Camera, furnicraft_render::ViewRegion)> = regions
+        let views: Vec<furnicraft_render::ViewSpec> = regions
             .iter()
             .filter_map(|(leaf, view_rect)| {
                 let leaf = self.layout.leaf(*leaf)?;
                 let camera = scene_build::scene_camera(self.session.project(), leaf.camera());
-                Some((camera, view_region(area, *view_rect, points_per_pixel)))
+                Some(furnicraft_render::ViewSpec {
+                    camera,
+                    region: view_region(area, *view_rect, points_per_pixel),
+                    shading: leaf.style(),
+                })
             })
             .collect();
         self.renderer.render_views(&self.render_state.device, &self.render_state.queue, &self.scene, &lighting, &views);
@@ -1252,6 +1252,7 @@ impl FurniCraftApp {
             layout: self.layout.kind(),
             maximized: self.layout.maximized(),
             preset: self.layout.preset(target_leaf),
+            style: self.layout.active_style(),
         };
         match view_cluster::show(ui, area, &mut self.cluster, view) {
             Some(ClusterAction::FrameAll) => self.frame_all(),
@@ -1263,6 +1264,11 @@ impl FurniCraftApp {
                 self.layout.active_leaf_mut().apply_preset(preset);
                 let camera = self.layout.active_camera();
                 self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
+            }
+            Some(ClusterAction::SetStyle(style)) => {
+                self.layout.set_active_style(style);
+                // The style is frame data the renderer reads per view at draw time, so no upload.
+                self.layout.apply_frame_style(&mut self.scene);
             }
             None => {}
         }
@@ -1653,9 +1659,10 @@ impl FurniCraftApp {
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
         }
         if self.settings.viewport != before.viewport {
-            self.cluster.style = self.settings.viewport.style;
+            // The style default applies to the active view at once; the other views keep theirs.
+            self.layout.set_active_style(self.settings.viewport.style);
             self.cluster.all_edges = self.settings.viewport.all_edges;
-            self.scene.shading = self.cluster.style;
+            self.layout.apply_frame_style(&mut self.scene);
             self.scene.all_edges = self.cluster.all_edges;
             let geometry_changed = self.settings.viewport.grid != before.viewport.grid
                 || self.settings.viewport.grid_step_mm != before.viewport.grid_step_mm
@@ -2426,7 +2433,7 @@ mod tests {
     use furnicraft_geom::{DMat4, DQuat, DVec3};
     use furnicraft_model::{CameraProjection, LightKind};
     use furnicraft_testkit::sample_project;
-    use furnicraft_ui::display::OpeningView;
+    use furnicraft_ui::display::{OpeningView, ShadingStyle};
     use furnicraft_units::Length;
 
     use super::*;
@@ -2695,7 +2702,8 @@ mod tests {
         // view from the same rectangle unchanged. A flip on one side alone would draw one camera
         // under another view's pointer, so this pins the two together.
         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let mut layout = crate::view_layout::Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout =
+            crate::view_layout::Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         layout.set_kind(crate::view_layout::LayoutKind::Quad);
         let regions = layout.regions(area);
         assert_eq!(regions.len(), 4);
@@ -3090,7 +3098,8 @@ mod tests {
         assert_eq!(read, Shortcuts::default());
 
         // One view already fills the workspace, so the key is a no-op in the single layout.
-        let mut layout = crate::view_layout::Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout =
+            crate::view_layout::Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         layout.toggle_maximized();
         assert!(!layout.maximized());
     }

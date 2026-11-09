@@ -19,10 +19,15 @@ could only be tested by looking at a window.
 
 - `ShadingStyle` lives in `crates/scene` and is a field of `SceneFrame`, beside the camera, grid and
   lighting. It is frame data, never document data: a `.fcs` does not carry it (ADR 0029). The
-  settings file stores the default and the cluster stores the live choice; both are view state.
+  settings file stores the default and each view leaf stores the live choice; both are view state.
+  The cluster reads and writes the active leaf's style and owns none of its own (U63).
 - The style alone decides the passes. `ShadingStyle` promises `draws_faces`, `draws_edges`,
   `edges_through_faces` and `is_translucent`; the renderer turns those into `StylePasses` without a
   device, and a test asserts the mapping. The separate `edges` flag is retired.
+- The style travels **per view**. `ViewportRenderer::render_views` takes a `ViewSpec { camera,
+  region, shading }` and derives `StylePasses` inside the pass loop, so two neighbours draw
+  different passes from the same uploaded geometry and edge buffer. `SceneFrame::shading` remains
+  the fallback for a caller that draws the frame whole and follows the active leaf (U63).
 - An edge list is derived data. `crates/mesh` computes one edge list per mesh, keyed by quantised
   vertex position so a flat-shaded mesh still yields one edge per geometric edge, and caches it in
   `NodeGeometry` beside the mesh under the same derivation inputs (ADR 0053). `Drawable` carries the
@@ -57,8 +62,9 @@ could only be tested by looking at a window.
 ## Consequences
 
 The style is testable as data, and `cargo test -p furnicraft-render` covers the pass mapping, the
-translucent depth state, the hidden-edge stencil gate, the face depth bias and the back-to-front order
-without a GPU; `cargo test -p furnicraft-mesh` covers the form-edge classification.
+per-view mapping, the translucent depth state, the hidden-edge stencil gate, the face depth bias and
+the back-to-front order without a GPU; `cargo test -p furnicraft-mesh` covers the form-edge
+classification.
 
 Sorting whole cabinet panels by centre is honest for flat panels and wrong for interpenetrating
 solids; a per-triangle sort would need a different pipeline and is not attempted. The edge list is

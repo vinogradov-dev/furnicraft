@@ -4,9 +4,9 @@
 //! and not at a wall of labels (U40). It is anchored to the bottom centre of the viewport it belongs
 //! to and follows that view when a side panel folds or the workspace splits; nothing here is
 //! document data. The shell owns the cameras, the gizmos and the drawing tools, so the cluster only
-//! reports the actions it cannot perform itself — framing, the projection toggle and the layout
-//! choice. Its own settings, the armed navigation mode and the display style are view state on
-//! [`ViewCluster`].
+//! reports the actions it cannot perform itself — framing, the projection toggle, the layout choice
+//! and the display style, which belongs to the active leaf. Its own settings and the armed
+//! navigation mode are view state on [`ViewCluster`].
 
 use eframe::egui;
 use furnicraft_scene::Projection;
@@ -69,15 +69,14 @@ impl NavigationMode {
 
 /// The cluster's view state.
 ///
-/// The three strengths are the display-settings sliders. They are view state like the style: the
-/// grid, edge and contact-shadow passes read them as those passes land (U43 and U44), and no value
-/// ever reaches the scene file.
+/// The three strengths are the display-settings sliders. They are view state: the grid, edge and
+/// contact-shadow passes read them as those passes land (U43 and U44), and no value ever reaches the
+/// scene file. The display style is not here: it belongs to the active leaf, so two views can differ
+/// (U63).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewCluster {
     /// The navigation gesture armed for the next primary-button drag, or `None`.
     pub(crate) navigation: Option<NavigationMode>,
-    /// The display style the viewport draws with.
-    pub(crate) style: ShadingStyle,
     /// Whether the display-settings popover is open.
     pub(crate) settings_open: bool,
     /// Whether the split-view choices are open.
@@ -103,7 +102,6 @@ impl Default for ViewCluster {
     fn default() -> Self {
         Self {
             navigation: None,
-            style: ShadingStyle::default(),
             settings_open: false,
             layout_open: false,
             show_angles: false,
@@ -149,6 +147,8 @@ pub(crate) struct ClusterView {
     pub(crate) maximized: bool,
     /// The preset the target view is in, if it has not been orbited since.
     pub(crate) preset: Option<OpeningView>,
+    /// The display style of the target view; the style buttons draw it pressed.
+    pub(crate) style: ShadingStyle,
 }
 
 /// What the cluster asks the shell to do; everything else it changes on its own state.
@@ -166,6 +166,8 @@ pub(crate) enum ClusterAction {
     ToggleMaximize,
     /// Point the target view along a standard preset.
     SetPreset(OpeningView),
+    /// Draw the target view with this display style.
+    SetStyle(ShadingStyle),
 }
 
 /// The point the cluster's bottom centre is pinned to: the bottom centre of `viewport`, raised by
@@ -211,7 +213,9 @@ pub(crate) fn show(
                         action = Some(ClusterAction::Home);
                     }
                     theme::divider(ui);
-                    style_buttons(ui, state);
+                    if let Some(style) = style_buttons(ui, view.style) {
+                        action = Some(ClusterAction::SetStyle(style));
+                    }
                     theme::divider(ui);
                     let open = state.layout_open;
                     if icons::tool_button(ui, icons::view::LAYOUT, "Layout", None, true, open).clicked() {
@@ -277,16 +281,18 @@ const fn navigation_caption(mode: NavigationMode) -> &'static str {
     }
 }
 
-/// The five display styles; the active one draws pressed.
-fn style_buttons(ui: &mut egui::Ui, state: &mut ViewCluster) {
+/// The five display styles; the view's own style draws pressed and a click asks for a change.
+fn style_buttons(ui: &mut egui::Ui, current: ShadingStyle) -> Option<ShadingStyle> {
+    let mut asked = None;
     for style in ShadingStyle::ALL {
-        let on = state.style == style;
+        let on = current == style;
         if icons::tool_button_labelled(ui, shading_icon(style), shading_caption(style), shading_label(style), true, on)
             .clicked()
         {
-            state.style = style;
+            asked = Some(style);
         }
     }
+    asked
 }
 
 /// The split-view choices above the cluster: one view, two vertical, two horizontal and four.
