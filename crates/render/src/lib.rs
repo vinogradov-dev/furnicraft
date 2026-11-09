@@ -297,6 +297,30 @@ impl ViewRegion {
     }
 }
 
+/// One view's camera, rectangle and display style.
+///
+/// The style travels per view, so two neighbours in one workspace can draw the same scene with
+/// different passes while one texture and one edge buffer still serve them (ADR 0070).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewSpec {
+    /// The camera this view looks through.
+    pub camera: Camera,
+    /// The rectangle it owns in the shared target, in physical pixels.
+    pub region: ViewRegion,
+    /// The display style it draws with.
+    pub shading: ShadingStyle,
+}
+
+impl ViewSpec {
+    /// The passes this view's style turns on.
+    ///
+    /// The renderer asks each view for its own passes inside the pass loop; a test can assert the
+    /// mapping without a device.
+    pub const fn passes(self) -> StylePasses {
+        StylePasses::new(self.shading)
+    }
+}
+
 /// An offscreen scene renderer for one viewport.
 ///
 /// The shell owns the window and the egui integration; this type owns the GPU scene resources and
@@ -538,7 +562,8 @@ impl ViewportRenderer {
         lighting: &Lighting,
     ) {
         let region = ViewRegion { x: 0, y: 0, width: self.size[0], height: self.size[1] };
-        self.render_views(device, queue, frame, lighting, &[(frame.camera, region)]);
+        let view = ViewSpec { camera: frame.camera, region, shading: frame.shading };
+        self.render_views(device, queue, frame, lighting, &[view]);
     }
 
     /// Draws the frame once per view into one target, each pass scissored to its own rectangle.
@@ -548,6 +573,9 @@ impl ViewportRenderer {
     /// attachment: the first clears the colour and depth, every other pass loads them, and each
     /// draws inside its own viewport and scissor so a view never writes over its neighbour.
     ///
+    /// Each view carries its own camera, rectangle and display style, so a split workspace draws a
+    /// neighbour with a different pass set without a second target or edge buffer.
+    ///
     /// At most [`MAX_VIEWS`] views are drawn; a longer slice is truncated. An empty slice clears the
     /// target and draws nothing.
     pub fn render_views(
@@ -556,7 +584,7 @@ impl ViewportRenderer {
         queue: &wgpu::Queue,
         frame: &SceneFrame,
         lighting: &Lighting,
-        views: &[(Camera, ViewRegion)],
+        views: &[ViewSpec],
     ) {
         let background = sanitize_color(frame.background);
         let clear = wgpu::Color {
@@ -569,9 +597,10 @@ impl ViewportRenderer {
         let views = &views[..views.len().min(MAX_VIEWS)];
         let mut offsets = Vec::with_capacity(views.len());
         let mut uniforms = Vec::with_capacity(views.len());
-        for (index, (camera, region)) in views.iter().enumerate() {
+        for (index, view) in views.iter().enumerate() {
+            let region = view.region;
             let aspect = f64::from(region.width.max(1)) / f64::from(region.height.max(1));
-            uniforms.push(self.camera_uniform(*camera, lighting, aspect, &frame.contact_shadows));
+            uniforms.push(self.camera_uniform(view.camera, lighting, aspect, &frame.contact_shadows));
             offsets.push((index as u64 * self.camera_stride) as u32);
             let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
             debug_assert!(x.saturating_add(width) <= self.size[0] && y.saturating_add(height) <= self.size[1]);
@@ -606,10 +635,14 @@ impl ViewportRenderer {
             });
         }
 
-        let passes = StylePasses::new(frame.shading);
         // The shared clear resets depth and stencil together. The stencil slot is what tells the
         // hidden-edge pass whose inside it is looking at.
-        for ((camera, region), offset) in views.iter().zip(offsets) {
+        for (view, offset) in views.iter().zip(offsets) {
+            let camera = view.camera;
+            let region = view.region;
+            // Each view derives its own passes, so a neighbour may draw wireframe while this one
+            // draws shaded faces with hidden edges.
+            let passes = view.passes();
             let (x, y, width, height) = region.scissor(self.size[0], self.size[1]);
             let color_attachment = Some(wgpu::RenderPassColorAttachment {
                 view: &self.targets.color_view,
@@ -1635,6 +1668,20 @@ mod tests {
         assert!(ghost.translucent_faces);
         assert!(!ghost.opaque_faces, "one face pass, blended, not two");
         assert!(!ghost.visible_edges && !ghost.through_edges);
+    }
+
+    #[test]
+    fn each_view_derives_its_own_passes_from_its_style() {
+        // The pass loop asks each view for its own style, so two neighbours in one target may draw
+        // different passes from the same uploaded geometry and edge buffer (U63).
+        let region = ViewRegion { x: 0, y: 0, width: 100, height: 100 };
+        let views = [
+            ViewSpec { camera: Camera::default(), region, shading: ShadingStyle::Wireframe },
+            ViewSpec { camera: Camera::default(), region, shading: ShadingStyle::Shaded },
+        ];
+        assert_eq!(views[0].passes(), StylePasses::new(ShadingStyle::Wireframe));
+        assert_eq!(views[1].passes(), StylePasses::new(ShadingStyle::Shaded));
+        assert_ne!(views[0].passes(), views[1].passes(), "different styles turn on different passes");
     }
 
     #[test]

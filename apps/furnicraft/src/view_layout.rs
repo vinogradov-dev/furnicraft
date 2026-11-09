@@ -3,17 +3,18 @@
 //! One view is the default; the bar turns it into two vertical, two horizontal or four, and every
 //! border between two views is draggable. Any view can expand over the whole workspace and return,
 //! which changes only the rectangle it is given, never the tree. Each layout keeps its own tree,
-//! cameras, presets, split ratios and active leaf, so switching away and back restores exactly the
-//! workspace the user left (ADR 0079). Each leaf owns a camera and the preset it is in, and the
-//! active leaf is the only target of orbit, pan, zoom, the presets, selection and the gizmos.
+//! cameras, presets, display styles, split ratios and active leaf, so switching away and back
+//! restores exactly the workspace the user left (ADR 0079). Each leaf owns a camera, the preset it
+//! is in and the display style it draws with, and the active leaf is the only target of orbit, pan,
+//! zoom, the presets, the style buttons, selection and the gizmos.
 //!
 //! Everything here is view state: the trees, the ratios, the cameras and the active leaves never
 //! reach the document (ADR 0029). The regions are plain rectangles in points, so a test can tile them
 //! without a window or a GPU, and the shell turns each one into a scissored render pass.
 
 use eframe::egui;
-use furnicraft_scene::Camera;
-use furnicraft_ui::display::OpeningView;
+use furnicraft_scene::{Camera, SceneFrame};
+use furnicraft_ui::display::{OpeningView, ShadingStyle};
 
 /// Smallest side a view may have, in points.
 ///
@@ -251,19 +252,31 @@ impl Node {
     }
 }
 
-/// One view: its own camera and the preset it is in.
+/// One view: its own camera, the preset it is in and the display style it draws with.
 #[derive(Clone, Debug)]
 pub(crate) struct Leaf {
     id: LeafId,
     camera: Camera,
     /// The preset the camera is in, or `None` once the user has looked elsewhere.
     preset: Option<OpeningView>,
+    /// The display style this view draws with (ADR 0070).
+    style: ShadingStyle,
 }
 
 impl Leaf {
     /// The leaf's camera.
     pub(crate) const fn camera(&self) -> Camera {
         self.camera
+    }
+
+    /// The display style this view draws with.
+    pub(crate) const fn style(&self) -> ShadingStyle {
+        self.style
+    }
+
+    /// Changes the display style of this view alone.
+    pub(crate) fn set_style(&mut self, style: ShadingStyle) {
+        self.style = style;
     }
 
     /// Points the leaf along a preset direction.
@@ -467,11 +480,11 @@ impl LayoutState {
     /// `fit` is the camera framed on the whole scene; every leaf starts from it and is then pointed
     /// along the layout's standard preset. A fresh workspace therefore shows four useful views
     /// before the user has arranged anything.
-    fn standard(kind: LayoutKind, fit: Camera, opening: OpeningView) -> Self {
+    fn standard(kind: LayoutKind, fit: Camera, opening: OpeningView, style: ShadingStyle) -> Self {
         let mut state = Self { root: Node::Leaf(LeafId(1)), leaves: Vec::new(), active: LeafId(1), next: 1 };
         for index in 0..kind.leaves() {
             let id = state.allocate();
-            let mut leaf = Leaf { id, camera: fit, preset: None };
+            let mut leaf = Leaf { id, camera: fit, preset: None, style };
             leaf.apply_preset(kind.standard_view(index, opening));
             state.leaves.push(leaf);
         }
@@ -539,13 +552,14 @@ pub(crate) struct Layout {
 impl Layout {
     /// One single view built from the fit camera, plus the standard state of every other layout.
     ///
-    /// `fit` is the camera framed on the whole scene and `opening` is the preset of the single view,
-    /// which is the view a new scene starts in; the split layouts take their own standard presets
-    /// and are shown when the user picks them.
-    pub(crate) fn new(fit: Camera, opening: OpeningView) -> Self {
+    /// `fit` is the camera framed on the whole scene, `opening` is the preset of the single view,
+    /// which is the view a new scene starts in, and `style` is the display style every fresh view
+    /// opens with. The split layouts take their own standard presets and are shown when the user
+    /// picks them (ADR 0079).
+    pub(crate) fn new(fit: Camera, opening: OpeningView, style: ShadingStyle) -> Self {
         Self {
             kind: LayoutKind::Single,
-            states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, fit, opening)),
+            states: LayoutKind::ALL.map(|kind| LayoutState::standard(kind, fit, opening, style)),
             drag: None,
             maximized: None,
         }
@@ -615,11 +629,30 @@ impl Layout {
         self.active_leaf().camera
     }
 
+    /// The display style of the active leaf.
+    pub(crate) fn active_style(&self) -> ShadingStyle {
+        self.active_leaf().style
+    }
+
+    /// Changes the display style of the active leaf alone.
+    pub(crate) fn set_active_style(&mut self, style: ShadingStyle) {
+        self.active_leaf_mut().set_style(style);
+    }
+
+    /// Writes the active leaf's style into a frame's single-view fallback.
+    ///
+    /// A frame carries one style for the caller that draws it whole; the split workspace passes a
+    /// style per view instead (U63).
+    pub(crate) fn apply_frame_style(&self, frame: &mut SceneFrame) {
+        frame.shading = self.active_style();
+    }
+
     /// Refits every remembered layout on a new scene and restores its standard presets.
     ///
     /// Opening a file must not leave a view looking where the old model was, and must not throw
-    /// away the split the user arranged. Every layout therefore keeps its tree and ratios, takes the
-    /// new `fit` camera, and returns to the standard preset of each of its views (ADR 0079).
+    /// away the split or the display style the user arranged. Every layout therefore keeps its tree,
+    /// ratios and styles, takes the new `fit` camera, and returns to the standard preset of each of
+    /// its views (ADR 0079).
     pub(crate) fn reset_cameras(&mut self, fit: Camera, opening: OpeningView) {
         for (kind, state) in LayoutKind::ALL.into_iter().zip(self.states.iter_mut()) {
             state.reset_cameras(kind, fit, opening);
@@ -775,7 +808,7 @@ mod tests {
     }
 
     fn layout(kind: LayoutKind) -> Layout {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         layout.set_kind(kind);
         layout
     }
@@ -864,7 +897,7 @@ mod tests {
     #[test]
     fn a_fit_puts_a_view_on_the_scene_and_keeps_its_direction_and_projection() {
         let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
-        let mut layout = Layout::new(fit, OpeningView::Axonometric);
+        let mut layout = Layout::new(fit, OpeningView::Axonometric, ShadingStyle::default());
         layout.set_kind(LayoutKind::TwoColumns);
         let ids: Vec<LeafId> = layout.current().leaves.iter().map(|leaf| leaf.id).collect();
         let first = layout.leaf_mut(ids[0]).expect("first");
@@ -899,7 +932,7 @@ mod tests {
     #[test]
     fn a_fit_keeps_an_orthographic_view_orthographic_at_the_fit_height() {
         let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
-        let mut layout = Layout::new(fit, OpeningView::Axonometric);
+        let mut layout = Layout::new(fit, OpeningView::Axonometric, ShadingStyle::default());
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         // A free direction, then an orthographic projection: neither belongs to a preset.
@@ -924,7 +957,7 @@ mod tests {
     #[test]
     fn a_fit_keeps_a_standard_view_the_user_made_perspective() {
         let fit = Camera::new(furnicraft_geom::DVec3::new(10.0, 20.0, 30.0), 900.0).expect("camera");
-        let mut layout = Layout::new(fit, OpeningView::Axonometric);
+        let mut layout = Layout::new(fit, OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.apply_preset(OpeningView::Front);
         leaf.toggle_projection();
@@ -993,7 +1026,7 @@ mod tests {
 
     #[test]
     fn a_split_and_a_join_round_trip() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let single = layout.active();
         assert_eq!(layout.current().leaves.len(), 1);
 
@@ -1045,7 +1078,7 @@ mod tests {
         }
 
         // The single view is the settings opening view, not a fixed preset.
-        let mut single = Layout::new(Camera::default(), OpeningView::Top);
+        let mut single = Layout::new(Camera::default(), OpeningView::Top, ShadingStyle::default());
         assert_eq!(single.preset(single.active()), Some(OpeningView::Top));
         assert!(matches!(
             single.active_leaf().camera().projection(),
@@ -1058,7 +1091,7 @@ mod tests {
     #[test]
     fn a_layout_round_trip_restores_camera_preset_ratio_and_active() {
         let area = area();
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         layout.set_kind(LayoutKind::Quad);
         let regions = layout.regions(area);
         let second = regions[1].0;
@@ -1086,9 +1119,88 @@ mod tests {
     }
 
     #[test]
+    fn two_views_keep_their_own_display_style_and_only_the_active_one_changes() {
+        // The display style is view state per leaf: a neighbour may be wireframe while the active
+        // view is a ghost, and a style button writes the active view alone (U63).
+        let mut layout = layout(LayoutKind::TwoColumns);
+        let ids: Vec<LeafId> = layout.current().leaves.iter().map(|leaf| leaf.id).collect();
+        layout.leaf_mut(ids[0]).expect("first").set_style(ShadingStyle::Wireframe);
+        layout.leaf_mut(ids[1]).expect("second").set_style(ShadingStyle::Translucent);
+        assert_eq!(layout.leaf(ids[0]).expect("first").style(), ShadingStyle::Wireframe);
+        assert_eq!(layout.leaf(ids[1]).expect("second").style(), ShadingStyle::Translucent);
+
+        layout.set_active(ids[1]);
+        assert_eq!(layout.active_style(), ShadingStyle::Translucent, "the cluster reads the active leaf");
+        layout.set_active_style(ShadingStyle::Shaded);
+        assert_eq!(layout.leaf(ids[1]).expect("second").style(), ShadingStyle::Shaded);
+        assert_eq!(
+            layout.leaf(ids[0]).expect("first").style(),
+            ShadingStyle::Wireframe,
+            "a style change never reaches the neighbour"
+        );
+
+        // The styles travel with the rest of the layout state.
+        layout.set_kind(LayoutKind::Single);
+        layout.set_kind(LayoutKind::TwoColumns);
+        assert_eq!(layout.leaf(ids[0]).expect("first").style(), ShadingStyle::Wireframe);
+        assert_eq!(layout.leaf(ids[1]).expect("second").style(), ShadingStyle::Shaded);
+    }
+
+    #[test]
+    fn a_frame_fallback_follows_the_active_leaf_while_a_neighbour_keeps_its_style() {
+        // `SceneFrame::shading` is the single-view fallback; a split workspace passes a style per
+        // view, so the fallback follows whichever view the cluster is editing (U63).
+        let mut layout = layout(LayoutKind::TwoColumns);
+        let ids: Vec<LeafId> = layout.current().leaves.iter().map(|leaf| leaf.id).collect();
+        layout.leaf_mut(ids[0]).expect("first").set_style(ShadingStyle::Wireframe);
+        layout.leaf_mut(ids[1]).expect("second").set_style(ShadingStyle::Translucent);
+
+        let mut frame = SceneFrame::default();
+        layout.set_active(ids[0]);
+        layout.apply_frame_style(&mut frame);
+        assert_eq!(frame.shading, ShadingStyle::Wireframe);
+
+        layout.set_active(ids[1]);
+        layout.apply_frame_style(&mut frame);
+        assert_eq!(frame.shading, ShadingStyle::Translucent, "the fallback follows the active leaf");
+        assert_eq!(layout.leaf(ids[0]).expect("first").style(), ShadingStyle::Wireframe, "the neighbour is untouched");
+    }
+
+    #[test]
+    fn a_fresh_workspace_takes_the_settings_style_in_every_layout() {
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::Wireframe);
+        for kind in LayoutKind::ALL {
+            layout.set_kind(kind);
+            for leaf in &layout.current().leaves {
+                assert_eq!(leaf.style(), ShadingStyle::Wireframe, "{kind:?} opens on the settings style");
+            }
+        }
+        assert_eq!(layout.active_style(), ShadingStyle::Wireframe, "the cluster reads the same default");
+    }
+
+    #[test]
+    fn opening_a_scene_keeps_each_layouts_display_styles() {
+        let mut layout = layout(LayoutKind::Quad);
+        layout.leaf_mut(layout.current().leaves[0].id).expect("first").set_style(ShadingStyle::Wireframe);
+        layout.set_kind(LayoutKind::Single);
+        layout.set_active_style(ShadingStyle::Translucent);
+
+        let home = Camera::new(furnicraft_geom::DVec3::new(100.0, 200.0, 300.0), 950.0).expect("camera");
+        layout.reset_cameras(home, OpeningView::Top);
+
+        assert_eq!(layout.active_style(), ShadingStyle::Translucent, "the shown layout keeps its style");
+        layout.set_kind(LayoutKind::Quad);
+        assert_eq!(
+            layout.current().leaves[0].style(),
+            ShadingStyle::Wireframe,
+            "a layout the user arranged keeps its styles too"
+        );
+    }
+
+    #[test]
     fn opening_a_scene_refits_every_layout_and_keeps_its_standard_presets() {
         let area = area();
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         // Arrange two layouts, so the reset has more than the shown layout to refit.
         layout.set_kind(LayoutKind::Quad);
         layout.set_active(layout.current().leaves[3].id);
@@ -1175,7 +1287,7 @@ mod tests {
 
     #[test]
     fn a_preset_turns_the_view_and_never_moves_the_model() {
-        let layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.current().leaves[0].clone();
         let target = leaf.camera().target();
         let distance = leaf.camera().distance();
@@ -1209,7 +1321,7 @@ mod tests {
 
     #[test]
     fn a_pole_view_takes_the_canonical_up_from_the_widget_and_the_presets() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         // A yaw the pole must not inherit; the target and the distance are what a snap keeps.
@@ -1238,7 +1350,7 @@ mod tests {
 
     #[test]
     fn a_side_view_keeps_z_up() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         for preset in [OpeningView::Front, OpeningView::Right] {
             leaf.apply_preset(preset);
@@ -1252,7 +1364,7 @@ mod tests {
 
     #[test]
     fn the_home_button_restores_the_axonometric_preset() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         leaf.apply_preset(OpeningView::Top);
@@ -1272,7 +1384,7 @@ mod tests {
 
     #[test]
     fn a_standard_preset_and_an_axis_snap_are_orthographic() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
 
@@ -1295,7 +1407,7 @@ mod tests {
 
     #[test]
     fn an_axonometric_preset_and_a_free_direction_keep_the_projection() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.toggle_projection();
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
@@ -1304,7 +1416,7 @@ mod tests {
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
 
         // Return to perspective and take a free direction: no axis, no projection change.
-        let mut perspective = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut perspective = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = perspective.leaf_mut(perspective.active()).expect("the active leaf");
         leaf.look_from(furnicraft_geom::DVec3::new(1.0, 1.0, 1.0));
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Perspective { .. }));
@@ -1312,7 +1424,7 @@ mod tests {
 
     #[test]
     fn the_projection_toggle_works_in_a_standard_view_and_keeps_its_name() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
         leaf.apply_preset(OpeningView::Top);
         assert!(matches!(leaf.camera().projection(), furnicraft_scene::Projection::Orthographic { .. }));
@@ -1349,7 +1461,7 @@ mod tests {
 
     #[test]
     fn a_roll_is_view_state_and_a_preset_or_home_resets_it() {
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric);
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
         let id = layout.active();
         let leaf = layout.leaf_mut(id).expect("the active leaf");
         leaf.apply_preset(OpeningView::Front);
