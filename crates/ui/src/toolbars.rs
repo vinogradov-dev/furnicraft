@@ -583,12 +583,46 @@ fn tab_is_drawn(tab: RibbonTab) -> bool {
 pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
     ui.scope(|ui| {
         ui.set_width(ui.available_width());
+        ui.add_space(crate::theme::STEP);
         retain_tab(state);
         tab_row(ui, state);
         if state.is_open() {
             ribbon_body(ui, state, context, actions);
         }
+        ui.add_space(crate::theme::STEP);
     });
+}
+
+/// The outer margin of the ribbon's overlay frame, in points (horizontal, vertical).
+///
+/// The ribbon floats over the design space instead of taking height from it (U51), so its height and
+/// the band the shell reserves for it must agree exactly: this constant is the single source the
+/// frame the ribbon draws and [`height`] both read.
+pub const RIBBON_FRAME_MARGIN: [i8; 2] = [6, 2];
+
+/// The inner margin of the ribbon body below the tab row, in points (horizontal, vertical).
+const RIBBON_BODY_MARGIN: [i8; 2] = [6, 4];
+
+/// The height the ribbon overlay covers over the design space, in points.
+///
+/// The shell reserves this band for the ribbon and never lets the scene, the side panels or the
+/// framing use it, so a translucent ribbon blends with the furniture it covers (U51). It is
+/// deterministic from the open state so the strip and the reserved inset agree without a frame of
+/// lag when the body opens or closes.
+pub fn height(open: bool) -> f32 {
+    let outer = 2.0 * f32::from(RIBBON_FRAME_MARGIN[1]);
+    // The air band above and below plus the one gap the vertical rhythm puts before the tab row;
+    // the body adds its own gap, its margins and the tool row with its caption band.
+    let top = 3.0 * crate::theme::STEP;
+    let body = if open {
+        crate::theme::STEP
+            + 2.0 * f32::from(RIBBON_BODY_MARGIN[1])
+            + crate::theme::RIBBON_ROW_HEIGHT
+            + crate::theme::RIBBON_CAPTION_HEIGHT
+    } else {
+        0.0
+    };
+    outer + top + crate::theme::RIBBON_TAB_HEIGHT + body
 }
 
 /// Keeps the active tab on a tab that is drawn.
@@ -689,25 +723,28 @@ fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, action
     // group shares it (ADR 0067): a caption never sizes its own button. It is measured on the widest
     // tab, not the active one, so switching tab does not move the cells.
     let columns = RibbonTab::ALL.into_iter().map(RibbonTab::columns).max().unwrap_or(1);
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(6, 4)).show(ui, |ui| {
-        let cell = crate::theme::RibbonMetrics::measure(ui, columns).cell;
-        // One row for the tools and the caption band under it; the divider between two groups is
-        // drawn at the height of both, so a group boundary runs the whole body.
-        let body_height = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
-        // A cell has a floor, so a tab of seven tools is wider than a small window; the body scrolls
-        // sideways rather than losing its last group to the window edge.
-        egui::ScrollArea::horizontal().id_salt("ribbon_body").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.set_height(body_height);
-                for (index, group) in groups.iter().enumerate() {
-                    if index > 0 {
-                        crate::theme::divider_of_height(ui, body_height);
+    egui::Frame::new().inner_margin(egui::Margin::symmetric(RIBBON_BODY_MARGIN[0], RIBBON_BODY_MARGIN[1])).show(
+        ui,
+        |ui| {
+            let cell = crate::theme::RibbonMetrics::measure(ui, columns).cell;
+            // One row for the tools and the caption band under it; the divider between two groups is
+            // drawn at the height of both, so a group boundary runs the whole body.
+            let body_height = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
+            // A cell has a floor, so a tab of seven tools is wider than a small window; the body scrolls
+            // sideways rather than losing its last group to the window edge.
+            egui::ScrollArea::horizontal().id_salt("ribbon_body").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_height(body_height);
+                    for (index, group) in groups.iter().enumerate() {
+                        if index > 0 {
+                            crate::theme::divider_of_height(ui, body_height);
+                        }
+                        show_group(ui, cell, *group, state, context, actions);
                     }
-                    show_group(ui, cell, *group, state, context, actions);
-                }
+                });
             });
-        });
-    });
+        },
+    );
 }
 
 /// One group: its row of labelled buttons over the caption that names it.
@@ -1081,9 +1118,34 @@ mod tests {
         output.drop_without_applying_deltas();
         assert!(body_top.is_some());
         let one_row = crate::theme::RIBBON_ROW_HEIGHT + crate::theme::RIBBON_CAPTION_HEIGHT;
-        // The tab row, the body row and caption, and the two 4 pt margins at most.
-        let budget = crate::theme::RIBBON_TAB_HEIGHT + one_row + 4.0 * crate::theme::STEP;
+        // The tab row, the body row and caption, the air bands above and below the content, and the
+        // body's own margins.
+        let budget = crate::theme::RIBBON_TAB_HEIGHT + one_row + 6.0 * crate::theme::STEP;
         assert!(height <= budget, "the ribbon body is {height} pt, over its {budget} pt budget");
+    }
+
+    #[test]
+    fn the_reserved_height_is_the_ribbon_it_draws() {
+        // The shell reserves `height(open)` for the floating ribbon and the strip draws inside it;
+        // a mismatch would leave a side panel header under the strip or a gap above it (U51).
+        for open in [false, true] {
+            let mut state = Toolbars::new();
+            state.set_open(open);
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut height = 0.0;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                let before = ui.min_rect().bottom();
+                show(ui, &mut state, full_context(), &mut Vec::new());
+                height = ui.min_rect().bottom() - before;
+            });
+            output.drop_without_applying_deltas();
+            let expected = self::height(open) - 2.0 * f32::from(RIBBON_FRAME_MARGIN[1]);
+            assert!(
+                (height - expected).abs() < 0.01,
+                "the ribbon draws {height} pt inside its frame but reserves {expected} pt (open: {open})"
+            );
+        }
     }
 
     #[test]

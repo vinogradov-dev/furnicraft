@@ -50,7 +50,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   re-opening a path already open activates that tab instead of a second copy; the split layout travels
   with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
   behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
-  close and per-tab textures; (4) ADR 0080, the map row, the plan close and the gate.
+  close and per-tab textures; (4) ADR 0081, the map row, the plan close and the gate.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
 
 - `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
@@ -138,21 +138,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   on, so the chevron side follows from it.
   `files: apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
 
-- `[ ]` **U51** the toolbars float over the design space: the ribbon and every other tool strip
-  become overlay areas over the viewport instead of top panels that take height from it, so the scene
-  image runs under them, a translucent ribbon blends with the furniture instead of the window
-  background, and resizing a side panel never reflows or jumps the strip. The ribbon keeps its own
-  clicks and scroll; the viewport keeps orbit, pan and zoom outside it. The viewport's fit and its
-  picking rectangle account for the covered area, so a framed scene is not hidden under the ribbon.
-  ADR needed.
-  Tests: a ribbon with alpha below 1 over a frame samples the scene, not the chrome; resizing a side
-  panel leaves the strip's anchor and width unchanged; a click inside the ribbon does not reach the
-  viewport; frame-all keeps the bounds inside the uncovered rectangle.
-  Session notes: `ribbon()` currently builds an `egui::Panel::top`; the view cluster already proves
-  the `Order::Middle` overlay path (`view_cluster::cluster_anchor`). The render target must cover the
-  full central rect; the pick rectangle is `viewport()`'s `available_rect_before_wrap`.
-  `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs`
-
 - `[ ]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
   field that changes while the pointer is held and moved left or right, with the cursor hidden for
   the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.
@@ -222,6 +207,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U51** the toolbars float over the design space: the ribbon is an `Order::Middle` overlay
+  anchored to the window below the header instead of a top panel, so the scene image runs under it,
+  a translucent ribbon blends with the furniture, and resizing a side panel never reflows or jumps
+  the strip. The side panels are inset by the reserved band; the orientation widget and *Frame all*
+  use the uncovered part of the view, the fit distance scaled by the covered share and the target
+  panned half the covered height. The reserved height is deterministic from the open state
+  (`toolbars::height`) and the measured rectangle takes over once egui has sized the area. Tests: the
+  strip keeps its anchor and width across side-panel resizes and covers the rendered rect; a click on
+  it never reaches the viewport; the drawn band equals the reserved one; frame-all keeps the bounds
+  inside the uncovered view. ADR 0080.
+  `f5270e2`
+  `files: apps/furnicraft/src/main.rs, crates/ui/src/toolbars.rs, crates/ui/src/theme.rs`
 
 - `[x]` **U63** the display style belongs to one view: `Leaf` carries `ShadingStyle`, the cluster's
   five style buttons read and write the active leaf's style, and `ViewCluster` stops owning a

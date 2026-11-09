@@ -437,7 +437,7 @@ fn ribbon_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
         settings.ribbon.opacity = (percent / 100.0).clamp(0.0, 1.0);
     }
     ui.label(
-        egui::RichText::new("Lower values let the window chrome show through the ribbon body.")
+        egui::RichText::new("Lower values let the scene under the ribbon show through its body.")
             .small()
             .color(theme::text_dim(ui)),
     );
