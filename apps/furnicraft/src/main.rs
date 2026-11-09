@@ -133,6 +133,8 @@ struct FurniCraftApp {
     contour_gizmo: ContourGizmo,
     draw_gizmo: DrawGizmo,
     extrude_gizmo: ExtrudeGizmo,
+    /// The corner orientation widget, which owns the roll-ring drag across frames.
+    gizmo: gizmo::Gizmo,
     mode: TransformMode,
     highlighted: Vec<Id>,
     /// The selected line chains of the frame last uploaded, already carrying any drag preview, so
@@ -231,6 +233,7 @@ impl FurniCraftApp {
             contour_gizmo: ContourGizmo::default(),
             draw_gizmo: DrawGizmo::new(),
             extrude_gizmo: ExtrudeGizmo::default(),
+            gizmo: gizmo::Gizmo::default(),
             mode: TransformMode::Move,
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -296,6 +299,7 @@ impl FurniCraftApp {
         self.vertex_gizmo = VertexGizmo::default();
         self.contour_gizmo = ContourGizmo::default();
         self.draw_gizmo = DrawGizmo::new();
+        self.gizmo = gizmo::Gizmo::default();
         self.highlighted.clear();
         self.selected_chains.clear();
         self.uploaded_preview = None;
@@ -974,7 +978,12 @@ impl FurniCraftApp {
         let drag = response.drag_delta();
         // An armed navigation mode turns the primary button into the camera gesture; the gizmo is
         // neither updated nor painted then, so the drag cannot move an axis under the user's hand.
-        if navigable && !dragging && navigating && response.dragged_by(egui::PointerButton::Primary) {
+        if navigable
+            && !dragging
+            && !self.gizmo.is_dragging()
+            && navigating
+            && response.dragged_by(egui::PointerButton::Primary)
+        {
             match navigation {
                 Some(NavigationMode::Orbit) => {
                     if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
@@ -999,7 +1008,7 @@ impl FurniCraftApp {
         }
         // An axis drag owns the pointer; rotating the camera mid-drag would move the axis under the
         // pointer and change the drag parameter under the user's hand.
-        if navigable && !dragging && response.dragged_by(egui::PointerButton::Middle) {
+        if navigable && !dragging && !self.gizmo.is_dragging() && response.dragged_by(egui::PointerButton::Middle) {
             let modifiers = ui.input(|input| input.modifiers);
             if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
                 if modifiers.shift {
@@ -1015,6 +1024,7 @@ impl FurniCraftApp {
             }
         } else if navigable
             && !dragging
+            && !self.gizmo.is_dragging()
             && response.dragged_by(egui::PointerButton::Secondary)
             && let Some(leaf) = self.layout.leaf_mut(target_leaf)
         {
@@ -1228,7 +1238,13 @@ impl FurniCraftApp {
         // The widget belongs to the view under the pointer, so clicking an axis snaps that view and
         // the readout names the camera it draws with.
         if self.session.project().active_camera().is_none()
-            && let Some(action) = gizmo::show(ui, rect, target_camera, self.cluster.angles_visible())
+            && let Some(action) = self.gizmo.show(
+                ui,
+                rect,
+                target_camera,
+                self.cluster.angles_visible(),
+                self.settings.viewport.roll_step_degrees,
+            )
         {
             match action {
                 gizmo::GizmoAction::LookFrom(direction) => {
@@ -1238,6 +1254,16 @@ impl FurniCraftApp {
                 }
                 gizmo::GizmoAction::Home => self.home_view(target_leaf),
                 gizmo::GizmoAction::ToggleProjection => self.toggle_view_projection(target_leaf),
+                gizmo::GizmoAction::RollTo(degrees) => {
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.roll_to(degrees.radians_f64());
+                    }
+                }
+                gizmo::GizmoAction::RollBy(degrees) => {
+                    if let Some(leaf) = self.layout.leaf_mut(target_leaf) {
+                        leaf.roll_by(degrees.radians_f64());
+                    }
+                }
             }
             let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or(target_camera);
             self.scene.camera = scene_build::scene_camera(self.session.project(), target_camera);

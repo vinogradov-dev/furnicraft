@@ -274,6 +274,21 @@ impl Leaf {
         self.preset = None;
     }
 
+    /// Rolls the view about its own axis, which leaves its preset name.
+    ///
+    /// The roll is view state; a preset, Home or Frame all writes the same field back to zero
+    /// through `look_from_oriented` (ADR 0078), so a rolled view is no longer a preset basis.
+    pub(crate) fn roll_to(&mut self, radians: f64) {
+        self.camera.roll_to(radians);
+        self.preset = None;
+    }
+
+    /// Turns the view about its own axis by `radians`, which leaves its preset name.
+    pub(crate) fn roll_by(&mut self, radians: f64) {
+        self.camera.roll_by(radians);
+        self.preset = None;
+    }
+
     /// Pans the leaf; the view direction and its preset name are untouched.
     pub(crate) fn pan_pixels(&mut self, delta_x: f64, delta_y: f64, viewport_height: f64) {
         self.camera.pan_pixels(delta_x, delta_y, viewport_height);
@@ -844,8 +859,9 @@ mod tests {
         leaf.apply_preset(OpeningView::Front);
         let forward = leaf.camera().forward();
 
-        leaf.camera.roll_to(std::f64::consts::FRAC_PI_2);
+        leaf.roll_to(std::f64::consts::FRAC_PI_2);
         assert!((leaf.camera().roll() - std::f64::consts::FRAC_PI_2).abs() < 1.0e-9);
+        assert_eq!(leaf.preset, None, "a rolled view is no longer the preset's basis");
         assert!((leaf.camera().forward() - forward).length() < 1.0e-9, "the roll does not turn the view");
 
         // Orbit keeps the roll; Home, a preset and Frame all reset it through their direction snap.
@@ -853,11 +869,11 @@ mod tests {
         assert!(leaf.camera().roll() > 0.0, "orbit keeps the roll");
         leaf.home();
         assert_eq!(leaf.camera().roll(), 0.0, "Home resets the roll");
-        leaf.camera.roll_by(0.3);
+        leaf.roll_by(0.3);
         assert!(leaf.camera().roll() > 0.0, "a roll can be applied again");
         leaf.apply_preset(OpeningView::Top);
         assert_eq!(leaf.camera().roll(), 0.0, "a preset resets the roll");
-        leaf.camera.roll_to(0.4);
+        leaf.roll_to(0.4);
         leaf.frame(Camera::default());
         assert_eq!(leaf.camera().roll(), 0.0, "Frame all resets the roll");
     }

@@ -83,8 +83,9 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
 - `[gizmo]` The pivot is edited only in the inspector; there is no viewport pivot-pick tool yet.
 - `[gizmo]` Move and Rotate act on the top-most selected nodes; the viewport has no Ctrl+click
   multi-select yet, so a multi-selection comes from the scene tree.
-- `[gizmo]` The orientation widget is hidden in a viewport smaller than its own size plus margins;
-  there is no menu fallback for the six views yet.
+- `[gizmo]` The orientation widget is hidden in a viewport smaller than 124 pt wide plus margins
+  (148 pt), or 148 pt tall plus margins; there is no menu fallback for the six views or the roll
+  ring yet.
 - `[gizmo]` An extrusion pull previews its new height as a wireframe prism, not a shaded solid. A
   solid preview needs the evaluation cache to accept a previewed height without a document write.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a

@@ -28,6 +28,12 @@ pub const MIN_GRID_STEP_MM: u32 = 1;
 /// The largest grid step the settings offer, in millimetres.
 pub const MAX_GRID_STEP_MM: u32 = 10_000;
 
+/// The smallest hand-turn step of the roll ring, in degrees.
+pub const MIN_ROLL_STEP_DEGREES: u32 = 1;
+
+/// The largest hand-turn step of the roll ring, in degrees.
+pub const MAX_ROLL_STEP_DEGREES: u32 = 15;
+
 /// How many recent files the workspace remembers.
 pub const MAX_RECENT: usize = 10;
 
@@ -110,6 +116,8 @@ pub struct ViewportSettings {
     pub all_edges: bool,
     /// The direction a viewport opens from.
     pub opening_view: OpeningView,
+    /// The step of a hand turn on the corner widget's roll ring, in degrees.
+    pub roll_step_degrees: u32,
 }
 
 impl Default for ViewportSettings {
@@ -120,6 +128,7 @@ impl Default for ViewportSettings {
             grid_step_mm: 100,
             all_edges: false,
             opening_view: OpeningView::default(),
+            roll_step_degrees: 1,
         }
     }
 }
@@ -214,6 +223,8 @@ impl Settings {
         self.version = SETTINGS_VERSION;
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(ui_scale::MIN_PERCENT, ui_scale::MAX_PERCENT);
         self.viewport.grid_step_mm = self.viewport.grid_step_mm.clamp(MIN_GRID_STEP_MM, MAX_GRID_STEP_MM);
+        self.viewport.roll_step_degrees =
+            self.viewport.roll_step_degrees.clamp(MIN_ROLL_STEP_DEGREES, MAX_ROLL_STEP_DEGREES);
         self.ribbon.opacity = if self.ribbon.opacity.is_finite() {
             self.ribbon.opacity.clamp(0.0, 1.0)
         } else {
@@ -384,6 +395,18 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
             });
     });
     ui.add_space(theme::STEP);
+    ui.horizontal(|ui| {
+        ui.label("Roll ring step");
+        changed |= ui
+            .add(
+                egui::DragValue::new(&mut settings.viewport.roll_step_degrees)
+                    .range(MIN_ROLL_STEP_DEGREES..=MAX_ROLL_STEP_DEGREES)
+                    .suffix(" °")
+                    .speed(0.2),
+            )
+            .on_hover_text("Degrees per step when the ring under the corner widget is turned by hand.")
+            .changed();
+    });
     changed |= ui.checkbox(&mut settings.viewport.grid, "Show the floor grid").changed();
     changed |= ui
         .add(
@@ -485,6 +508,7 @@ mod tests {
                 grid_step_mm: 25,
                 all_edges: true,
                 opening_view: OpeningView::Top,
+                roll_step_degrees: 5,
             },
             ribbon: RibbonSettings { opacity: 0.6 },
             recent: vec![PathBuf::from("/tmp/cabinet.fcs"), PathBuf::from("/tmp/shelf.fcs")],
@@ -517,12 +541,24 @@ mod tests {
 
     #[test]
     fn a_value_outside_its_range_is_clamped_on_read() {
-        let json =
-            r#"{"version":1,"appearance":{"ui_scale":900},"viewport":{"grid_step_mm":0},"ribbon":{"opacity":7.0}}"#;
+        let json = r#"{"version":1,"appearance":{"ui_scale":900},"viewport":{"grid_step_mm":0,"roll_step_degrees":0},"ribbon":{"opacity":7.0}}"#;
         let settings = Settings::from_json(json).expect("parse and repair");
         assert_eq!(settings.appearance.ui_scale, ui_scale::MAX_PERCENT);
         assert_eq!(settings.viewport.grid_step_mm, MIN_GRID_STEP_MM);
+        assert_eq!(settings.viewport.roll_step_degrees, MIN_ROLL_STEP_DEGREES);
         assert_eq!(settings.ribbon.opacity, 1.0);
+    }
+
+    #[test]
+    fn the_roll_step_defaults_to_one_and_is_clamped_to_the_ring_range() {
+        assert_eq!(ViewportSettings::default().roll_step_degrees, 1);
+        let json = r#"{"version":1,"viewport":{"roll_step_degrees":100}}"#;
+        let settings = Settings::from_json(json).expect("parse and repair");
+        assert_eq!(settings.viewport.roll_step_degrees, MAX_ROLL_STEP_DEGREES);
+
+        let json = r#"{"version":1,"viewport":{"roll_step_degrees":7}}"#;
+        let settings = Settings::from_json(json).expect("parse");
+        assert_eq!(settings.viewport.roll_step_degrees, 7, "a value in range is kept");
     }
 
     #[test]
@@ -557,7 +593,7 @@ mod tests {
         let root = Container::new(Id::new(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
         let project = Project::new(root).expect("project");
         let document = serde_json::to_string(&project).expect("serialise");
-        for key in ["ui_scale", "grid_step_mm", "opacity", "accent", "theme", "recent"] {
+        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent"] {
             assert!(!document.contains(key), "`{key}` is workspace state and must stay out of the .fcs");
         }
     }
