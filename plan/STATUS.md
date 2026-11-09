@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=8c329ad updated=2026-11-09
+STATE: milestone=M7 phase=A task=U59 state=idle base=1ef8034 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -54,10 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U56, U57 and U58 are done: the corner widget carries a flat projection icon and a four-node roll
-ring whose hand turn follows the 1–15° step in the workspace settings, over a camera roll about its
-own axis (ADR 0078). U45 is next but deferred: start it only on a new instruction. It opens one tab
-per file, each with its own `Document`; *Open* opens a new tab and the split layout travels with the tab.
+U59–U63 record the multi-area viewport work: U59 the six standard views with ortho defaults (owner's
+eye convention), U60 one remembered state per layout, only the active view targeted (ADR 0079), U61
+*Frame all* on current bounds in the active view, U62 expand/restore (`Alt+W`), U63 a display style
+per view. U45 is deferred to after U59–U63.
 
 ## Index
 
