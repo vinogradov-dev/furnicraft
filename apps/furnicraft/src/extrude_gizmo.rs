@@ -5,9 +5,12 @@
 //! only change the height this file remembers, and one `object.extrude.height.set` runs when a drag
 //! is released or the pull is finished, so a whole adjustment is one undo entry.
 //!
-//! The arrow sits on the top face of the body, at the contour's bounds centre, and points along the
-//! body's local `+Z`. A drag is read as a position on that axis rather than as a screen distance, so
-//! the same gesture near the camera and far from it produces the same number of millimetres.
+//! The body stays where the last command put it, so the preview is a wireframe prism at the height
+//! the arrow shows: the sampled contour at the base and at the preview, joined by a vertical edge at
+//! every sampled corner. The arrow sits on the prism's top face, at the contour's bounds centre, and
+//! points along the body's local `+Z`. A drag is read as a position on that axis rather than as a
+//! screen distance, so the same gesture near the camera and far from it produces the same number of
+//! millimetres.
 
 use eframe::egui::{self, Pos2, Response, Stroke, Ui, Vec2};
 use furnicraft_geom::{DVec2, DVec3};
@@ -27,9 +30,19 @@ const CLICK_SLOP: f32 = 3.0;
 const MIN_HEIGHT_MM: f64 = 1.0;
 /// How far from the arrow tip the numeric field sits, in points.
 const NUMBER_OFFSET: Vec2 = Vec2::new(16.0, 12.0);
+/// Chord tolerance for the prism's sampled contour, in micrometres.
+///
+/// The prism is a screen-space outline, so 0.05 mm is already below a pixel at a normal view
+/// distance; a finer sampling would only draw chords the viewport cannot show.
+const GHOST_SAMPLE_TOLERANCE_MICROMETRES: f64 = 50.0;
+/// Stroke width of the previewed prism, in points.
+const GHOST_WIDTH: f32 = 1.4;
 
 /// Colour of the arrow when the pointer is elsewhere.
 const ARROW_COLOR: egui::Color32 = egui::Color32::from_rgb(120, 200, 255);
+
+/// Colour of the previewed prism: the arrow's accent at 59 % alpha, premultiplied.
+const GHOST_COLOR: egui::Color32 = egui::Color32::from_rgba_premultiplied(70, 118, 150, 150);
 
 /// The body a pull is adjusting, with the height the document holds and the previewed one.
 #[derive(Clone, Copy, Debug)]
@@ -84,12 +97,14 @@ pub(crate) enum ExtrudeAction {
 }
 
 /// Where the body sits: its frame, the contour centre and the axis the arrow follows.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Body {
     /// The node's world placement.
     placement: Placement,
     /// The contour's bounds centre in the node's local XY plane, in millimetres.
     centre: DVec2,
+    /// The contour sampled into a closed polyline, in the node's local millimetres.
+    contour: Vec<DVec2>,
     /// The point on the contour plane that the axis runs through, in world millimetres.
     axis_origin: DVec3,
     /// The world direction of the body's local `+Z`.
@@ -97,7 +112,7 @@ struct Body {
 }
 
 impl Body {
-    /// Reads the frame and contour centre of an extruded body.
+    /// Reads the frame, contour centre and sampled contour of an extruded body.
     fn read(project: &Project, object: Id) -> Option<Self> {
         let node = project.object(object)?;
         let body = node.geometry().as_constructive()?;
@@ -108,16 +123,55 @@ impl Body {
         if !centre.is_finite() {
             return None;
         }
+        let sampled = contour.sampled_points(GHOST_SAMPLE_TOLERANCE_MICROMETRES).ok()?;
+        if sampled.len() < 3 {
+            return None;
+        }
+        let contour: Vec<DVec2> =
+            sampled.iter().map(|[x, y]| DVec2::new(x.millimetres_f64(), y.millimetres_f64())).collect();
+        if !contour.iter().all(|point| point.is_finite()) {
+            return None;
+        }
         let placement = project.world_placement(object)?;
         let axis_origin = placement.transform_point(DVec3::new(centre.x, centre.y, 0.0));
         let axis = placement.transform_vector(DVec3::Z).try_normalize()?;
-        Some(Self { placement, centre, axis_origin, axis })
+        Some(Self { placement, centre, contour, axis_origin, axis })
     }
 
     /// The centre of the top face at `height`.
-    fn top(self, height: Length) -> DVec3 {
+    fn top(&self, height: Length) -> DVec3 {
         self.placement.transform_point(DVec3::new(self.centre.x, self.centre.y, height.millimetres_f64()))
     }
+
+    /// The previewed prism at `height`, as world-space segments.
+    fn ghost(&self, height: Length) -> Vec<[DVec3; 2]> {
+        ghost_edges(&self.contour, height)
+            .into_iter()
+            .map(|[start, end]| [self.placement.transform_point(start), self.placement.transform_point(end)])
+            .collect()
+    }
+}
+
+/// The wireframe prism a pull previews: the sampled ring at the base and at `height`, joined by a
+/// vertical edge at every sampled corner, in the body's local millimetres.
+///
+/// An empty contour has no edges rather than a panic; [`Body::read`] never hands one over.
+fn ghost_edges(contour: &[DVec2], height: Length) -> Vec<[DVec3; 2]> {
+    let top = height.millimetres_f64();
+    let mut edges = Vec::with_capacity(contour.len().saturating_mul(3));
+    for (index, start) in contour.iter().enumerate() {
+        let Some(next) = contour.get((index + 1) % contour.len()) else {
+            continue;
+        };
+        let base = DVec3::new(start.x, start.y, 0.0);
+        let base_next = DVec3::new(next.x, next.y, 0.0);
+        let top_start = DVec3::new(start.x, start.y, top);
+        let top_next = DVec3::new(next.x, next.y, top);
+        edges.push([base, base_next]);
+        edges.push([top_start, top_next]);
+        edges.push([base, top_start]);
+    }
+    edges
 }
 
 /// Pointer and keyboard state of the pull.
@@ -301,6 +355,7 @@ impl ExtrudeGizmo {
         };
         let color = if self.hover || self.drag.is_some() { ACTIVE_COLOR } else { ARROW_COLOR };
         let painter = ui.painter().with_clip_rect(viewport);
+        paint_ghost(&painter, camera, viewport, &body.ghost(pull.height));
         paint_arrow(&painter, base, tip, color);
         let position = Pos2::new(
             (tip.x + NUMBER_OFFSET.x).min(viewport.max.x - 200.0),
@@ -389,6 +444,18 @@ fn dragged_height(start: Length, start_parameter: f64, parameter: f64) -> Option
     Length::from_millimetres(whole as i64)
 }
 
+/// Paints the previewed prism, skipping any edge that leaves the view behind the camera.
+fn paint_ghost(painter: &egui::Painter, camera: Camera, viewport: egui::Rect, edges: &[[DVec3; 2]]) {
+    let stroke = Stroke::new(GHOST_WIDTH, GHOST_COLOR);
+    for [start, end] in edges {
+        let (Some(start), Some(end)) = (screen_point(camera, viewport, *start), screen_point(camera, viewport, *end))
+        else {
+            continue;
+        };
+        painter.line_segment([start, end], stroke);
+    }
+}
+
 /// Paints one arrow with a solid head.
 fn paint_arrow(painter: &egui::Painter, base: Pos2, tip: Pos2, color: egui::Color32) {
     let direction = (tip - base).normalized();
@@ -410,6 +477,7 @@ fn paint_arrow(painter: &egui::Painter, base: Pos2, tip: Pos2, color: egui::Colo
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use furnicraft_engine::{ObjectExtrudeHeightSet, Session, object_cmds::OBJECT_EXTRUDE_HEIGHT_SET_ID};
     use furnicraft_model::{Constructive, Extrude, Feature, Geometry, Path};
 
     use super::*;
@@ -440,8 +508,34 @@ mod tests {
         let body = Body::read(&project, id).expect("a body");
         assert_eq!(body.centre, DVec2::new(70.0, 35.0), "the centre of the bounds");
         assert!((body.axis - DVec3::Z).length() < 1.0e-9);
+        assert_eq!(body.contour.len(), 4, "the rectangle keeps its four corners");
         let top = body.top(millimetres(100));
         assert!((top - DVec3::new(70.0, 35.0, 100.0)).length() < 1.0e-9, "the arrow starts on the top face");
+    }
+
+    #[test]
+    fn the_ghost_prism_puts_its_top_at_the_preview_and_its_base_at_zero() {
+        let (project, id) = body_project();
+        let body = Body::read(&project, id).expect("a body");
+        let preview = millimetres(250);
+        let edges = ghost_edges(&body.contour, preview);
+        assert_eq!(edges.len(), body.contour.len() * 3, "a top and a base edge plus a vertical per corner");
+        let top = preview.millimetres_f64();
+        let mut tops = 0;
+        let mut bases = 0;
+        let mut verticals = 0;
+        for [start, end] in &edges {
+            assert!(
+                (start.z == 0.0 || start.z == top) && (end.z == 0.0 || end.z == top),
+                "an edge leaves the prism at {start:?}–{end:?}"
+            );
+            tops += usize::from(start.z == top && end.z == top);
+            bases += usize::from(start.z == 0.0 && end.z == 0.0);
+            verticals += usize::from(start.z != end.z);
+        }
+        assert_eq!(tops, body.contour.len(), "one top edge per sampled corner");
+        assert_eq!(bases, body.contour.len(), "one base edge per sampled corner");
+        assert_eq!(verticals, body.contour.len(), "one vertical edge per sampled corner");
     }
 
     #[test]
@@ -493,88 +587,153 @@ mod tests {
         assert!(!arrow_hit(camera, viewport(), &body, millimetres(100), mid + Vec2::new(60.0, 0.0)));
     }
 
-    /// Runs the gizmo over three frames — hover, press, release — and returns the last event.
+    /// Runs the gizmo over one frame with the pointer at `pointer` and an optional button change.
+    fn run_frame(
+        ctx: &egui::Context,
+        gizmo: &mut ExtrudeGizmo,
+        project: &Project,
+        frame: u32,
+        pointer: Pos2,
+        button: Option<(Pos2, bool)>,
+    ) -> Option<ExtrudeEvent> {
+        let mut events = vec![egui::Event::PointerMoved(pointer)];
+        if let Some((pos, pressed)) = button {
+            events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        let input = egui::RawInput {
+            screen_rect: Some(viewport()),
+            time: Some(f64::from(frame) * 0.1),
+            predicted_dt: 0.1,
+            events,
+            ..Default::default()
+        };
+        let mut event = None;
+        let output = ctx.run_ui(input, |ui| {
+            let (_, response) = ui.allocate_exact_size(viewport().size(), egui::Sense::click_and_drag());
+            event = gizmo.update(ui, &response, viewport(), Camera::default(), project).expect("update");
+        });
+        output.drop_without_applying_deltas();
+        event
+    }
+
+    /// Starts a pull and runs three frames — hover, press, release — returning the last event.
     fn click_frames(project: &Project, object: Id, pointer: Pos2) -> Option<ExtrudeEvent> {
         let mut gizmo = ExtrudeGizmo::default();
         gizmo.start(object, millimetres(100));
         let ctx = egui::Context::default();
-        let mut event = None;
-        for (frame, pressed) in [(0, None), (1, Some(true)), (2, Some(false))] {
-            let mut events = vec![egui::Event::PointerMoved(pointer)];
-            if let Some(pressed) = pressed {
-                events.push(egui::Event::PointerButton {
-                    pos: pointer,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                });
-            }
-            let input = egui::RawInput {
-                screen_rect: Some(viewport()),
-                time: Some(f64::from(frame) * 0.1),
-                predicted_dt: 0.1,
-                events,
-                ..Default::default()
-            };
-            let output = ctx.run_ui(input, |ui| {
-                let (_, response) = ui.allocate_exact_size(viewport().size(), egui::Sense::click_and_drag());
-                event = gizmo.update(ui, &response, viewport(), Camera::default(), project).expect("update");
-            });
-            output.drop_without_applying_deltas();
-        }
-        event
+        run_frame(&ctx, &mut gizmo, project, 0, pointer, None);
+        run_frame(&ctx, &mut gizmo, project, 1, pointer, Some((pointer, true)));
+        run_frame(&ctx, &mut gizmo, project, 2, pointer, Some((pointer, false)))
     }
 
-    /// Runs the gizmo over four frames: hover, press, move and release.
-    fn drag_frames(project: &Project, object: Id, start: Pos2, end: Pos2) -> Option<ExtrudeEvent> {
-        let mut gizmo = ExtrudeGizmo::default();
-        gizmo.start(object, millimetres(100));
-        let ctx = egui::Context::default();
-        let mut event = None;
-        let steps = [(start, None), (start, Some((start, true))), (end, None), (end, Some((end, false)))];
-        for (frame, (pointer, button)) in steps.into_iter().enumerate() {
-            let mut events = vec![egui::Event::PointerMoved(pointer)];
-            if let Some((pos, pressed)) = button {
-                events.push(egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed,
-                    modifiers: egui::Modifiers::NONE,
-                });
-            }
-            let input = egui::RawInput {
-                screen_rect: Some(viewport()),
-                time: Some(f64::from(frame as u32) * 0.1),
-                predicted_dt: 0.1,
-                events,
-                ..Default::default()
-            };
-            let output = ctx.run_ui(input, |ui| {
-                let (_, response) = ui.allocate_exact_size(viewport().size(), egui::Sense::click_and_drag());
-                event = gizmo.update(ui, &response, viewport(), Camera::default(), project).expect("update");
-            });
-            output.drop_without_applying_deltas();
-        }
-        event
+    /// The height the document holds for an extruded body.
+    fn committed_height(project: &Project, object: Id) -> Option<Length> {
+        project.object(object).and_then(|node| node.geometry().as_constructive()).and_then(Constructive::height)
     }
 
     #[test]
-    fn a_drag_on_the_arrow_writes_the_height_it_reaches() {
+    fn a_drag_moves_the_ghost_without_touching_the_document() {
         let (project, id) = body_project();
-        let body = Body::read(&project, id).expect("a body");
+        let session = Session::new(project);
+        let revision = session.project().revision();
+        let body = Body::read(session.project(), id).expect("a body");
         let (base, tip) = arrow_screen(Camera::default(), viewport(), &body, millimetres(100)).expect("an arrow");
         let direction = (tip - base).normalized();
-        let event = drag_frames(&project, id, base + direction * 40.0, base + direction * 120.0);
-        match event {
-            Some(ExtrudeEvent::Set { object, height }) => {
-                assert_eq!(object, id);
-                assert!(
-                    height.micrometres() > millimetres(100).micrometres(),
-                    "pulling along the axis raises the height, got {height}"
-                );
-            }
-            other => panic!("a released drag writes the height, got {other:?}"),
-        }
+        let start = base + direction * 40.0;
+        let end = base + direction * 120.0;
+
+        let mut gizmo = ExtrudeGizmo::default();
+        gizmo.start(id, millimetres(100));
+        let ctx = egui::Context::default();
+        assert_eq!(run_frame(&ctx, &mut gizmo, session.project(), 0, start, None), None);
+        assert_eq!(
+            run_frame(&ctx, &mut gizmo, session.project(), 1, start, Some((start, true))),
+            None,
+            "a press starts the drag"
+        );
+        assert_eq!(
+            run_frame(&ctx, &mut gizmo, session.project(), 2, end, None),
+            None,
+            "a drag writes nothing while the button is down"
+        );
+
+        let preview = gizmo.height().expect("a preview height");
+        assert!(preview > millimetres(100), "the drag raised the preview, got {preview}");
+        let body = Body::read(session.project(), id).expect("a body");
+        let ghost = body.ghost(preview);
+        let top = preview.millimetres_f64();
+        assert!(ghost.iter().any(|[start, _]| (start.z - top).abs() < 1.0e-9), "the ghost reaches the preview height");
+        assert!(ghost.iter().any(|[start, _]| start.z.abs() < 1.0e-9), "the ghost is anchored on the base plane");
+        assert_eq!(committed_height(session.project(), id), Some(millimetres(100)), "the body did not move");
+        assert_eq!(session.project().revision(), revision, "a drag does not revise the document");
+        assert!(!session.can_undo(), "a drag is not an undo entry");
+    }
+
+    #[test]
+    fn releasing_the_drag_writes_one_height_command() {
+        let (project, id) = body_project();
+        let mut session = Session::new(project);
+        let body = Body::read(session.project(), id).expect("a body");
+        let (base, tip) = arrow_screen(Camera::default(), viewport(), &body, millimetres(100)).expect("an arrow");
+        let direction = (tip - base).normalized();
+        let start = base + direction * 40.0;
+        let end = base + direction * 120.0;
+
+        let mut gizmo = ExtrudeGizmo::default();
+        gizmo.start(id, millimetres(100));
+        let ctx = egui::Context::default();
+        run_frame(&ctx, &mut gizmo, session.project(), 0, start, None);
+        run_frame(&ctx, &mut gizmo, session.project(), 1, start, Some((start, true)));
+        run_frame(&ctx, &mut gizmo, session.project(), 2, end, None);
+
+        let Some(ExtrudeEvent::Set { object, height }) =
+            run_frame(&ctx, &mut gizmo, session.project(), 3, end, Some((end, false)))
+        else {
+            panic!("a released drag asks for the height it reached");
+        };
+        assert_eq!(object, id);
+        assert!(height > millimetres(100));
+
+        let params = serde_json::to_value(ObjectExtrudeHeightSet { object, height }).expect("params");
+        session.dispatch(OBJECT_EXTRUDE_HEIGHT_SET_ID, &params).expect("write the height");
+        assert_eq!(committed_height(session.project(), id), Some(height));
+        assert!(session.can_undo(), "the release is the one undo entry");
+
+        session.undo().expect("undo the release");
+        assert_eq!(committed_height(session.project(), id), Some(millimetres(100)), "one command, one undo step");
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn escape_drops_the_ghost_at_the_committed_height() {
+        let (project, id) = body_project();
+        let session = Session::new(project);
+        let revision = session.project().revision();
+        let body = Body::read(session.project(), id).expect("a body");
+        let (base, tip) = arrow_screen(Camera::default(), viewport(), &body, millimetres(100)).expect("an arrow");
+        let direction = (tip - base).normalized();
+        let start = base + direction * 40.0;
+        let end = base + direction * 160.0;
+
+        let mut gizmo = ExtrudeGizmo::default();
+        gizmo.start(id, millimetres(100));
+        let ctx = egui::Context::default();
+        run_frame(&ctx, &mut gizmo, session.project(), 0, start, None);
+        run_frame(&ctx, &mut gizmo, session.project(), 1, start, Some((start, true)));
+        run_frame(&ctx, &mut gizmo, session.project(), 2, end, None);
+        assert!(gizmo.height().is_some_and(|height| height > millimetres(100)));
+
+        gizmo.cancel();
+        assert!(!gizmo.is_active());
+        assert_eq!(gizmo.height(), None, "the ghost is gone with the pull");
+        assert_eq!(committed_height(session.project(), id), Some(millimetres(100)), "Escape keeps the body");
+        assert_eq!(session.project().revision(), revision);
+        assert!(!session.can_undo(), "dropping a pull is not an undo entry");
     }
 
     #[test]

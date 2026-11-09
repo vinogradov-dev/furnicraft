@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X19 state=idle base=073fdb6 updated=2026-11-09
+STATE: milestone=M7 phase=A task=X20 state=idle base=efb153c updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -15,7 +15,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   turns into a ring, a drawn figure carries a `PathShape` tag at schema 19 (ADR 0073), and an
   extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054); every figure
   shows its grips, a corner moves freely or along the segment picked at the drag start, a grip keeps
-  its figure (ADR 0075), and a fresh extrusion pulls its height from an arrow.
+  its figure (ADR 0075), and a fresh extrusion pulls its height from an arrow that previews the body
+  as a wireframe prism while the document keeps the last committed height (X19).
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards
@@ -50,11 +51,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X18 is done: a figure's geometry is editable in its object card — circle radius, rectangle width
-and height, polygon sides and radius, and a single arc's radius and end angle — for a `Path` node
-and for the constructive body that owns a path, as one command and one undo entry.
-X19 is next: the extrusion pull shows a ghost of the body at the preview height, draws it as a
-wireframe prism, and writes the height only on release.
+X19 is done: the extrusion pull draws a wireframe prism at the preview height, the arrow sits on its
+top face, the document changes once on release, and Escape drops the preview at the committed height.
+X20 is next: a pole view takes a canonical up — the top view looks down with `+Y` up and `+X` right,
+the bottom view with `+Y` up and `-X` right — while the side and front views keep `+Z` up.
 
 ## Index
 
