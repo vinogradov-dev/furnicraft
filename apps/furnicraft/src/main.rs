@@ -1250,6 +1250,7 @@ impl FurniCraftApp {
             projection: self.scene.camera.projection(),
             work_plane: WorkPlane::from_camera(target_camera).label(),
             layout: self.layout.kind(),
+            maximized: self.layout.maximized(),
             preset: self.layout.preset(target_leaf),
         };
         match view_cluster::show(ui, area, &mut self.cluster, view) {
@@ -1257,6 +1258,7 @@ impl FurniCraftApp {
             Some(ClusterAction::Home) => self.home_view(),
             Some(ClusterAction::ToggleProjection) => self.toggle_view_projection(),
             Some(ClusterAction::SetLayout(kind)) => self.set_layout(kind),
+            Some(ClusterAction::ToggleMaximize) => self.layout.toggle_maximized(),
             Some(ClusterAction::SetPreset(preset)) => {
                 self.layout.active_leaf_mut().apply_preset(preset);
                 let camera = self.layout.active_camera();
@@ -2157,7 +2159,7 @@ fn view_region(area: egui::Rect, view: egui::Rect, points_per_pixel: f32) -> fur
 ///
 /// The list is the one the Settings window draws; a key added there has to be added here, and a key
 /// removed here must leave the table. The drawing tools read their own keys, so only the modified
-/// pair and the two view keys live at this level.
+/// pair and the view keys live at this level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Shortcuts {
     save: bool,
@@ -2165,6 +2167,7 @@ struct Shortcuts {
     redo: bool,
     frame: bool,
     projection: bool,
+    maximize: bool,
     palette: bool,
 }
 
@@ -2198,6 +2201,7 @@ fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
         redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
         frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),
         projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
+        maximize: input.consume_key(egui::Modifiers::ALT, egui::Key::W),
         palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
     })
 }
@@ -2353,6 +2357,9 @@ impl eframe::App for FurniCraftApp {
                 self.layout.active_leaf_mut().toggle_projection();
                 let camera = self.layout.active_camera();
                 self.scene.camera = scene_build::scene_camera(self.session.project(), camera);
+            }
+            if shortcuts.maximize {
+                self.layout.toggle_maximized();
             }
         }
         let dirty = self.session.is_dirty();
@@ -3063,5 +3070,28 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         assert_eq!(read, Shortcuts { palette: true, ..Shortcuts::default() });
+    }
+
+    #[test]
+    fn alt_w_is_consumed_and_a_single_layout_refuses_it() {
+        let ctx = egui::Context::default();
+        let mut read = Shortcuts::default();
+        let output = ctx.run_ui(key_input(egui::Key::W, egui::Modifiers::ALT), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { maximize: true, ..Shortcuts::default() });
+
+        // A plain `W` is a different key and must not expand anything.
+        let output = ctx.run_ui(key_input(egui::Key::W, egui::Modifiers::NONE), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts::default());
+
+        // One view already fills the workspace, so the key is a no-op in the single layout.
+        let mut layout = crate::view_layout::Layout::new(Camera::default(), OpeningView::Axonometric);
+        layout.toggle_maximized();
+        assert!(!layout.maximized());
     }
 }

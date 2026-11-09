@@ -145,6 +145,8 @@ pub(crate) struct ClusterView {
     pub(crate) work_plane: &'static str,
     /// The layout the workspace is in.
     pub(crate) layout: LayoutKind,
+    /// Whether one view fills the whole workspace.
+    pub(crate) maximized: bool,
     /// The preset the target view is in, if it has not been orbited since.
     pub(crate) preset: Option<OpeningView>,
 }
@@ -160,6 +162,8 @@ pub(crate) enum ClusterAction {
     ToggleProjection,
     /// Divide the workspace into this layout.
     SetLayout(LayoutKind),
+    /// Expand the active view over the whole workspace, or return the tree.
+    ToggleMaximize,
     /// Point the target view along a standard preset.
     SetPreset(OpeningView),
 }
@@ -213,6 +217,18 @@ pub(crate) fn show(
                     if icons::tool_button(ui, icons::view::LAYOUT, "Layout", None, true, open).clicked() {
                         state.layout_open = !state.layout_open;
                         state.settings_open = false;
+                    }
+                    // A single view already fills the workspace, so there is nothing to expand: the
+                    // button is drawn disabled instead of entering a mode it cannot leave.
+                    let (icon, label) = if view.maximized {
+                        (icons::view::RESTORE, "Restore")
+                    } else {
+                        (icons::view::MAXIMIZE, "Expand")
+                    };
+                    if icons::tool_button(ui, icon, label, Some("Alt+W"), view.layout.leaves() > 1, view.maximized)
+                        .clicked()
+                    {
+                        action = Some(ClusterAction::ToggleMaximize);
                     }
                     let open = state.settings_open;
                     if icons::tool_button(ui, icons::view::SLIDERS, "Display settings", None, true, open).clicked() {

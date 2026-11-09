@@ -191,6 +191,8 @@ icons!(View, "view", view {
     ORTHOGRAPHIC => "orthographic",
     PERSPECTIVE => "perspective",
     FRAME_ALL => "frame-all",
+    MAXIMIZE => "maximize",
+    RESTORE => "restore",
     HOME => "home",
     GRID_SNAP => "grid-snap",
     ORBIT => "orbit",
@@ -788,7 +790,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 72);
+        assert_eq!(seen.len(), 74);
     }
 
     #[test]
