@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X20** a pole view has a canonical up: clicking the top view does not change the camera's
-  roll and the view inherits whatever yaw the camera had. Expectation: a top view looks down with
-  `+Y` up and `+X` right, a bottom view looks up with `+Y` up, and the side and front views keep
-  `+Z` up. Suspected cause: `Camera::look_from` keeps the current yaw at a pole, and both
-  `OpeningView::Top` and the widget's `+Z` ball call it. Fix: `look_from_oriented(direction, up)`
-  (or a `snap_pole` flag) sets the pole yaw from the requested up — `-π/2` for top, `+π/2` for
-  bottom — while a non-pole direction keeps the current rule; the shell's `GizmoAction::LookFrom`
-  and `Leaf::apply_preset` use it. Tests: from an arbitrary yaw the top view has `up ≈ +Y` and
-  `right ≈ +X`; the bottom has `up ≈ +Y` and `right ≈ -X`; the target and distance do not move; the
-  presets agree with the widget.
-  `files: crates/scene/src/lib.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/view_layout.rs`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -222,6 +210,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X20** a pole view has a canonical up: clicking the top view inherited whatever yaw the
+  camera had, so the elevation arrived rolled. `Camera::look_from_oriented(direction, up)` takes the
+  roll from a world up when the direction is a pole and keeps the existing yaw rule otherwise, and
+  `canonical_up` is `+Y` for the top and bottom views and `+Z` for the rest. The widget's
+  `GizmoAction::LookFrom`, `Leaf::apply_preset`, `Leaf::look_from`, `Leaf::frame` and
+  `opening_camera` use it, so a top view looks down with `+Y` up and `+X` right, a bottom view looks
+  up with `+Y` up and `-X` right, and the side and front views keep `+Z` up; the target, the distance
+  and the projection do not move. ADR 0057 records the snap. Tests: an arbitrary yaw still lands on
+  the canonical basis at both poles; a side view ignores the requested up; a pole with an up
+  parallel to the view keeps its yaw; a preset and the widget produce the same camera.
+  `b6a974f`
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs`
 
 - `[x]` **X19** the extrusion pulls a phantom body: the arrow detached from the body while the pull
   was open and the body only appeared after release. The pull now draws a wireframe prism at the
