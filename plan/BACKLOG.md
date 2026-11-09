@@ -25,6 +25,56 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **U56** the projection toggle joins the corner widget as a flat icon: the corner orientation
+  widget has no projection control, and its Home button is the only control under the cube, drawn as
+  a filled plate. Add a 20 pt projection icon in a 22 pt cell directly under the cube, centred, with
+  no filled cell at rest — only the glyph — and a faint rounded wash on hover or press; a placeholder
+  asset falls back to a frameless text button. It is absent with the widget while an authored camera
+  is active. `GizmoAction::ToggleProjection` joins `LookFrom` and `Home`; the shell factors the two
+  existing projection arms into one `toggle_view_projection(leaf)` helper, so the ribbon, the
+  Display popover and the new button cannot disagree. The readout moves one row down and
+  `widget_rect` grows by the button row; the stale "Home is under the cube" comments are fixed.
+  Tests: the projection rect is inside the widget and below the cube; a click returns
+  `ToggleProjection`; the icon and hint follow the projection; a flat button paints no filled rect
+  at rest and one on hover; an undrawn placeholder draws its label.
+  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/icons.rs, apps/furnicraft/src/main.rs`
+
+- `[ ]` **U57** the camera rolls about its own view axis: `Camera` has no roll, so `right()` is
+  horizontal, `up()` follows yaw and pitch only, and the readout's roll is always zero. Add a
+  `roll: f64` (radians, view state like yaw and pitch, never document data): rotate the analytic base
+  `right`/`up` about `forward` by the roll, keeping `up = right × forward`; a positive roll turns the
+  image counter-clockwise. `roll()`, `roll_to(f64)` and `roll_by(f64)` normalise into `0..TAU`,
+  ignore non-finite input and refuse a pinned `FixedBasis`, like `orbit`. `look_from` and
+  `look_from_oriented` reset the roll; `orbit`, `pan_pixels`, `zoom`, `toggle_projection` and
+  `with_projection` keep it. `Leaf::roll_to`/`roll_by` clear the preset; presets, Home, Frame all and
+  axis balls reset through `look_from_oriented`, orbit keeps. The readout takes
+  `signed_degrees(camera.roll())`; ADR 0078 records why the field is on the camera rather than a
+  post-multiplied matrix, and ADR 0057 notes that a pole's canonical up is the zero-roll case.
+  Tests: +90° sends `right` into `up` and the image of a world point from right to up; the view
+  matrix stays orthonormal; picking and panning follow the rolled basis; a pole rolls without moving
+  forward, eye or target; snaps reset while orbit keeps; a pinned camera ignores the roll; the
+  readout shows the field.
+  `files: crates/scene/src/lib.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/gizmo.rs`
+
+- `[ ]` **U58** the corner widget gains the roll ring and its step setting: the owner wants a
+  functional ring that rotates the camera around the view axis. A screen-space ring on a 52 pt
+  radius in a 124 pt square around the axis balls, always visible with the widget, with four fixed
+  nodes at the top, left, bottom and right carrying 0°, 90°, 180° and 270° and an accent handle at
+  the camera's roll. A node click sets the absolute roll (0° resets); a drag anywhere on the annulus
+  turns the camera with the pointer, quantised to the step from the workspace settings. The drag
+  accumulates the unwrapped visual angle and applies the difference from what was already applied,
+  so a slow drag never loses a step and the ±180° seam does not jump; the axis balls keep their hit
+  squares and win an overlapping hit. A new `Gizmo` struct owns the drag state; `GizmoAction` gains
+  `RollTo(Degrees)` and `RollBy(Degrees)`. The shell passes the step and keeps the ring's drag out of
+  the armed navigation and middle-button orbit. `ViewportSettings.roll_step_degrees: u32` defaults to
+  1, clamps to `1..=15` and is drawn in the Viewport section as a `DragValue`; the settings JSON
+  needs no version bump because the container already has `#[serde(default)]`. Tests: node positions
+  and degrees; a 37° drag at step 1 gives 37° and at step 5 gives 35°; a sub-step drag does nothing;
+  the remainder carries; the seam does not jump; a node click wins over a drag; the ring hit excludes
+  the balls; the handle follows the roll; orbit keeps the roll and a preset resets it; a ring drag
+  does not orbit the viewport; the setting clamps and applies live.
+  `files: apps/furnicraft/src/gizmo.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
+
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -50,7 +100,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   re-opening a path already open activates that tab instead of a second copy; the split layout travels
   with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
   behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
-  close and per-tab textures; (4) ADR 0078, the map row, the plan close and the gate.
+  close and per-tab textures; (4) ADR 0079, the map row, the plan close and the gate.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
 
 - `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a

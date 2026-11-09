@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=b6a974f updated=2026-11-09
+STATE: milestone=M7 phase=A task=U56 state=idle base=3eb7fc0 updated=2026-11-09
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -53,11 +53,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X20 is done: a pole view takes a canonical up — the top `+Y` up and `+X` right, the bottom `+Y` up
-and `-X` right, the sides `+Z` up. U45 is next and its plan is approved in `plan/BACKLOG.md` (owner,
-2026-11-09), but the owner deferred the work: start it only on a new instruction. It opens one tab
-per file, each with its own `Document` (session, undo, selection, layout and cameras, renderer and
-texture); *Open* opens a new tab and re-opening a path activates it; the split layout travels with the tab.
+U56, U57 and U58 are queued ahead of U45: a flat projection toggle on the corner widget, a camera
+roll about its own view axis (ADR 0078), and a four-node roll ring with a step in the workspace
+settings. All three are view state only; U57 ships no pixels and lands before U58. U45 remains
+approved but deferred: start it only on a new instruction. It opens one tab per file, each with its
+own `Document`; *Open* opens a new tab and re-opening a path activates it; the split layout travels with the tab.
 
 ## Index
 
