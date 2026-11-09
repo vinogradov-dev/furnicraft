@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X19** the extrusion pulls a phantom body: the arrow detaches from the body while the pull
-  is open and the body only appears after release. Expectation: a ghost of the extrusion at the
-  preview height is drawn, the arrow sits on its top face and moves with it, and the document still
-  changes once on release. Owner decision: the ghost is a wireframe prism drawn by the gizmo — the
-  bottom and top outlines and the vertical edges at the sampled corners — not a translucent solid.
-  Suspected cause: the body is created at the ribbon height while `ExtrudeGizmo` only changes
-  `Pull.height` and writes it on release, and `arrow_screen` puts the arrow base at the preview
-  height, so the arrow floats over the committed body. Fix: `Body` keeps the contour's sampled
-  points, `ghost_edges(contour, height)` returns the prism, `paint` draws it before the arrow in a
-  translucent accent, no document write during the drag, and Escape drops the ghost at the
-  committed height. Tests: the ghost top is at the preview height and the bottom at zero; a drag
-  changes the ghost with no revision or undo entry; release writes one height command; Escape keeps
-  the committed height. A solid preview is recorded in `plan/debt.md`.
-  `files: apps/furnicraft/src/extrude_gizmo.rs`
-
 - `[ ]` **X20** a pole view has a canonical up: clicking the top view does not change the camera's
   roll and the view inherits whatever yaw the camera had. Expectation: a top view looks down with
   `+Y` up and `+X` right, a bottom view looks up with `+Y` up, and the side and front views keep
@@ -237,6 +222,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X19** the extrusion pulls a phantom body: the arrow detached from the body while the pull
+  was open and the body only appeared after release. The pull now draws a wireframe prism at the
+  preview height — the sampled contour at the base and at the preview, joined by a vertical edge at
+  every sampled corner — and the arrow sits on its top face, so the preview moves with the pointer
+  while the document keeps the last committed height. `Body` keeps the contour's sampled points,
+  `ghost_edges` builds the prism, `paint` draws it before the arrow in a translucent accent, and
+  Escape drops the pull without touching the body. Tests: the ghost top is at the preview height
+  and the base at zero; a drag changes the ghost with no revision or undo entry; release writes one
+  height command and one undo restores it; Escape keeps the committed height. A solid preview is
+  recorded in `plan/debt.md`.
+  `efb153c`
+  `files: apps/furnicraft/src/extrude_gizmo.rs`
 
 - `[x]` **X18** a figure's geometry is editable in its card: the object card had no radius for a
   circle, no width and height for a rectangle and no side count for a polygon, and a constructive

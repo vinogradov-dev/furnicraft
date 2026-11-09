@@ -85,6 +85,8 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   multi-select yet, so a multi-selection comes from the scene tree.
 - `[gizmo]` The orientation widget is hidden in a viewport smaller than its own size plus margins;
   there is no menu fallback for the six views yet.
+- `[gizmo]` An extrusion pull previews its new height as a wireframe prism, not a shaded solid. A
+  solid preview needs the evaluation cache to accept a previewed height without a document write.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a
   straight connector; only the band strips are intersected analytically.
 - `[panel]` Band trimming relies on 3D booleans; when truck finds no solid the earlier band is rebuilt
