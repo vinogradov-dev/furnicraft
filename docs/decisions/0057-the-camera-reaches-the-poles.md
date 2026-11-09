@@ -26,15 +26,18 @@ vector an authored camera pinned with `looked_from`.
   authored camera's pinned up vector survives the matrix.
 - At a pole, `look_from` keeps the current yaw, because the eye direction alone does not determine
   it; orbiting with a yaw delta still turns the view about the vertical axis.
+  `look_from_oriented(direction, up)` is the same camera with the roll taken from a world `up` when
+  the direction is a pole, and the shell passes `canonical_up`: `+Y` for the top and bottom views,
+  `+Z` for every other view. The orientation widget and the presets both use it (X20).
 - The work plane and the orientation widget recognise a pole by the pitch at its limit.
 
 ## Consequences
 
 - The top and bottom views are true elevations: a drawing maps square to the grid, and picking and
   screen projection use the same perpendicular axis.
-- The up vector at a pole follows the orbit yaw instead of a canonical world axis, so a top view
-  entered from an oblique view is turned about Z. A later canonical snap can set yaw for the Z ball
-  without touching the limits.
+- A top view looks down with `+Y` up and `+X` right, a bottom view up with `+Y` up and `-X` right,
+  whatever yaw the camera had when the ball was clicked; the side and front views keep `+Z` up. A
+  plain `look_from` still keeps the yaw at a pole, so an orbit that reaches the limit does not snap.
 - 0019's pitch clamp is superseded; its widget, look direction and flip rule stand. The clamp notes
   in [0049](0049-the-viewport-toggles-its-own-projection.md) and
   [0050](0050-the-work-plane-follows-the-view.md) describe behaviour that no longer exists.

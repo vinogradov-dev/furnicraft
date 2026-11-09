@@ -49,6 +49,22 @@ pub const LINE_PICK_RADIUS_POINTS: f64 = 6.0;
 /// unselected path.
 pub const SELECTION_LINE_COLOR: [f32; 4] = [0.15, 0.85, 1.0, 1.0];
 
+/// Below this horizontal length an eye direction counts as a pole, in millimetres.
+///
+/// A pole is a top or bottom view: the direction is parallel to `Z`, so it does not say which way
+/// is up. The bound matches the one [`Camera::look_from`] uses to leave the yaw alone.
+pub const POLE_TOLERANCE: f64 = 1.0e-9;
+
+/// The canonical up of a standard view, as a world direction.
+///
+/// A top or bottom view looks along `±Z`, where a `+Z` up is parallel to the view and undefined, so
+/// the elevation takes `+Y` up; every other view keeps `+Z` up. The shell passes this to
+/// [`Camera::look_from_oriented`], so clicking the orientation widget and choosing a preset land on
+/// the same basis.
+pub fn canonical_up(direction: DVec3) -> DVec3 {
+    if direction.x.abs() <= POLE_TOLERANCE && direction.y.abs() <= POLE_TOLERANCE { DVec3::Y } else { DVec3::Z }
+}
+
 /// Closest camera distance from its target, in millimetres.
 pub const MIN_DISTANCE_MM: f64 = 10.0;
 
@@ -454,10 +470,40 @@ impl Camera {
         let Some(direction) = direction.try_normalize() else {
             return;
         };
-        if direction.x.hypot(direction.y) > 1.0e-9 {
+        if direction.x.hypot(direction.y) > POLE_TOLERANCE {
             self.yaw = direction.y.atan2(direction.x).rem_euclid(TAU);
         }
         self.pitch = direction.z.clamp(MIN_PITCH.sin(), MAX_PITCH.sin()).asin();
+    }
+
+    /// Points the camera at its target from `direction`, taking the roll at a pole from `up`.
+    ///
+    /// A non-pole direction fixes the yaw on its own, so `up` is ignored there and the rule stays
+    /// the one [`Camera::look_from`] uses. A top or bottom view cannot be rolled by its direction:
+    /// the yaw comes from the world direction `up` should point along, so the camera's own up is that
+    /// direction projected onto the horizontal plane. A zero or non-finite `direction` leaves the
+    /// camera unchanged; a `up` parallel to the view direction has no roll to offer, so the current
+    /// yaw stays.
+    pub fn look_from_oriented(&mut self, direction: DVec3, up: DVec3) {
+        self.look_from(direction);
+        if self.fixed.is_some() || !direction.is_finite() || !up.is_finite() {
+            return;
+        }
+        let Some(direction) = direction.try_normalize() else {
+            return;
+        };
+        if direction.x.hypot(direction.y) > POLE_TOLERANCE {
+            return;
+        }
+        // `right = forward × up`, and `right = (-sin yaw, cos yaw, 0)`, so the requested up names the
+        // one yaw that puts the camera's own up on it.
+        let Some(right) = (-direction).cross(up).try_normalize() else {
+            return;
+        };
+        if right.x.hypot(right.y) <= POLE_TOLERANCE {
+            return;
+        }
+        self.yaw = (-right.x).atan2(right.y).rem_euclid(TAU);
     }
 
     /// Scales the orbit distance by `factor`.
@@ -1346,6 +1392,62 @@ mod tests {
         assert_eq!(camera.pitch(), MIN_PITCH);
         assert!((camera.forward() - DVec3::Z).length() < 1.0e-12, "forward was {:?}", camera.forward());
         assert!((camera.up().length() - 1.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn a_pole_view_takes_the_canonical_up() {
+        // Start from a yaw the pole must not keep, so a camera that still inherits it fails here.
+        let mut camera = Camera::default();
+        camera.orbit(0.9, 0.0);
+        let target = camera.target();
+        let distance = camera.distance();
+
+        camera.look_from_oriented(DVec3::Z, canonical_up(DVec3::Z));
+        assert_eq!(camera.pitch(), MAX_PITCH);
+        assert!(camera.up().dot(DVec3::Y) > 1.0 - 1.0e-9, "the top view is +Y up, got {:?}", camera.up());
+        assert!(camera.right().dot(DVec3::X) > 1.0 - 1.0e-9, "and +X right, got {:?}", camera.right());
+        assert_eq!(camera.target(), target, "the target does not move");
+        assert_eq!(camera.distance(), distance, "nor the distance");
+
+        camera.look_from_oriented(-DVec3::Z, canonical_up(-DVec3::Z));
+        assert_eq!(camera.pitch(), MIN_PITCH);
+        assert!(camera.up().dot(DVec3::Y) > 1.0 - 1.0e-9, "the bottom view is +Y up, got {:?}", camera.up());
+        assert!(camera.right().dot(-DVec3::X) > 1.0 - 1.0e-9, "and -X right, got {:?}", camera.right());
+        assert_eq!(camera.target(), target);
+    }
+
+    #[test]
+    fn a_non_pole_direction_ignores_the_requested_up() {
+        let mut camera = Camera::default();
+        camera.look_from_oriented(DVec3::X, DVec3::Y);
+        assert!(camera.up().dot(DVec3::Z) > 1.0 - 1.0e-9, "a side view keeps +Z up, got {:?}", camera.up());
+        assert!(camera.right().dot(DVec3::Y) > 1.0 - 1.0e-9, "and turns with its yaw, got {:?}", camera.right());
+    }
+
+    #[test]
+    fn a_pole_without_a_usable_up_keeps_the_yaw() {
+        let mut camera = Camera::default();
+        camera.look_from(DVec3::X);
+        let yaw = camera.yaw();
+
+        // An up parallel to the view direction names no roll, so the pole keeps the yaw it had.
+        camera.look_from_oriented(DVec3::Z, DVec3::Z);
+        assert_eq!(camera.pitch(), MAX_PITCH);
+        assert_eq!(camera.yaw(), yaw);
+
+        // A zero direction is not a view at all and must not move the camera.
+        camera.look_from_oriented(DVec3::ZERO, DVec3::Y);
+        assert_eq!(camera.pitch(), MAX_PITCH);
+        assert_eq!(camera.yaw(), yaw);
+    }
+
+    #[test]
+    fn the_canonical_up_is_y_at_a_pole_and_z_elsewhere() {
+        assert_eq!(canonical_up(DVec3::Z), DVec3::Y);
+        assert_eq!(canonical_up(-DVec3::Z), DVec3::Y);
+        assert_eq!(canonical_up(DVec3::X), DVec3::Z);
+        assert_eq!(canonical_up(-DVec3::Y), DVec3::Z);
+        assert_eq!(canonical_up(DVec3::new(0.3, 0.7, 0.5)), DVec3::Z);
     }
 
     #[test]

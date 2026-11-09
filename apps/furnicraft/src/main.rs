@@ -2130,7 +2130,8 @@ fn preview_vertex_mesh(frame: SceneFrame, project: &Project, preview: VertexPrev
 fn opening_camera(bounds: crate::scene_build::Bounds, view: OpeningView) -> Result<Camera, String> {
     let mut camera = home_camera(bounds)?;
     let [x, y, z] = view.direction();
-    camera.look_from(furnicraft_geom::DVec3::new(x, y, z));
+    let direction = furnicraft_geom::DVec3::new(x, y, z);
+    camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
     Ok(camera)
 }
 

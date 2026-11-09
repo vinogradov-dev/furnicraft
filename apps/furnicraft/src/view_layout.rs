@@ -234,7 +234,8 @@ impl Leaf {
     /// never moves the model or changes its size (ADR 0049 keeps the projection too).
     pub(crate) fn apply_preset(&mut self, preset: OpeningView) {
         let [x, y, z] = preset.direction();
-        self.camera.look_from(furnicraft_geom::DVec3::new(x, y, z));
+        let direction = furnicraft_geom::DVec3::new(x, y, z);
+        self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
         self.preset = Some(preset);
     }
 
@@ -246,7 +247,7 @@ impl Leaf {
         let Some(preset) = self.preset else {
             let direction = self.camera.eye() - self.camera.target();
             self.camera = home;
-            self.camera.look_from(direction);
+            self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
             return;
         };
         self.camera = home;
@@ -265,8 +266,11 @@ impl Leaf {
     }
 
     /// Looks from an arbitrary direction, which leaves its preset name.
+    ///
+    /// A pole direction takes the canonical up, so clicking the top ball never keeps the yaw the
+    /// camera happened to have (X20).
     pub(crate) fn look_from(&mut self, direction: furnicraft_geom::DVec3) {
-        self.camera.look_from(direction);
+        self.camera.look_from_oriented(direction, furnicraft_scene::canonical_up(direction));
         self.preset = None;
     }
 
@@ -741,6 +745,49 @@ mod tests {
         front.apply_preset(OpeningView::Front);
         assert!(front.camera().right().dot(furnicraft_geom::DVec3::X) > 0.999);
         assert!(front.camera().up().dot(furnicraft_geom::DVec3::Z) > 0.999);
+    }
+
+    #[test]
+    fn a_pole_view_takes_the_canonical_up_from_the_widget_and_the_presets() {
+        let mut layout = Layout::new(Camera::default());
+        let id = layout.active();
+        let leaf = layout.leaf_mut(id).expect("the active leaf");
+        // A yaw the pole must not inherit; the target and the distance are what a snap keeps.
+        leaf.orbit(1.3, 0.0);
+        let target = leaf.camera().target();
+        let distance = leaf.camera().distance();
+
+        // The top preset and the widget's `+Z` ball land on the same basis: +Y up, +X right.
+        leaf.apply_preset(OpeningView::Top);
+        let preset = leaf.camera();
+        leaf.look_from(furnicraft_geom::DVec3::Z);
+        let widget = leaf.camera();
+        assert_eq!(preset, widget, "a preset and the widget agree on the top view");
+        assert_eq!(widget.target(), target, "the snap does not move the target");
+        assert!((widget.distance() - distance).abs() < 1.0e-9, "nor the distance");
+        assert!(widget.up().dot(furnicraft_geom::DVec3::Y) > 0.999, "the top view is +Y up");
+        assert!(widget.right().dot(furnicraft_geom::DVec3::X) > 0.999, "and +X right");
+
+        // The widget's bottom ball is +Y up and -X right.
+        leaf.look_from(-furnicraft_geom::DVec3::Z);
+        let bottom = leaf.camera();
+        assert_eq!(bottom.target(), target);
+        assert!(bottom.up().dot(furnicraft_geom::DVec3::Y) > 0.999, "the bottom view is +Y up");
+        assert!(bottom.right().dot(-furnicraft_geom::DVec3::X) > 0.999, "and -X right");
+    }
+
+    #[test]
+    fn a_side_view_keeps_z_up() {
+        let mut layout = Layout::new(Camera::default());
+        let leaf = layout.leaf_mut(layout.active()).expect("the active leaf");
+        for preset in [OpeningView::Front, OpeningView::Right] {
+            leaf.apply_preset(preset);
+            assert!(
+                leaf.camera().up().dot(furnicraft_geom::DVec3::Z) > 0.999,
+                "{preset:?} keeps +Z up, got {:?}",
+                leaf.camera().up()
+            );
+        }
     }
 
     #[test]
