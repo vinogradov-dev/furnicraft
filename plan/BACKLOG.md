@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S5** one operation chooses a node's frame: a new `crates/model/src/frame.rs` holds
-  `rebase_at_anchor(strategy)` and the three strategies the owner approved — `CreationPivot` (an open
-  chain's first point, a closed ring's bounds centre), `BBoxBaseCorner` (the local min-X/min-Y corner,
-  or a named corner on request) and `CenterOfBounds` (the centre of a group's children). One rule with
-  a small adapter per content kind (a `Path`, a `Contour`, a container's children): move the content by
-  `-anchor`, keep the rotation, set the translation to where the anchor was, and leave the pivot at
-  zero. `Path::translated([Length; 2])` mirrors `Contour::translated` — both ends of a line move, an
-  arc moves by its centre, ids and angles stay — and `Placement::inverse` inverts a rigid frame (the
-  conjugate quaternion and `-R⁻¹t`), so `inverse(parent) ∘ world` is the parent-frame placement of a
-  world frame; it is the missing half of the existing `Placement::compose`.
-  No command calls the new code in this step, so nothing visible moves. Tests: an open chain anchored
-  at its first point and a closed ring at its bounds centre keep every world point within a
-  micrometre; a rebased contour keeps its segment ids, centres and angles; `inverse` round-trips
-  through `compose` and maps a world point back to its local one under a rotated parent;
-  `BBoxBaseCorner` answers min-X/min-Y by default and a named corner on request; `CenterOfBounds` of
-  mixed panels and objects is the centre of their union. ADR 0082 records the strategies and the rule
-  that a frame is chosen only at creation.
-  `files: crates/model/src, crates/model/src/placement.rs, crates/model/src/contour.rs`
-
 - `[ ]` **X24** a drawing is born at its own zero: a line drawn at (600, 400) stores
   `translation = (0, 0, 0)` and puts (600, 400) into `pivot_local`, so the card honestly reports a
   translation of zero and the node cannot be moved to the world origin by its translation; a drawing
@@ -358,6 +339,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S5** one operation chooses a node's frame: a new `crates/model/src/frame.rs` holds
+  `rebase_at_anchor(strategy)` and the three strategies the owner approved — `CreationPivot` (an open
+  chain's first point, a closed ring's bounds centre), `BBoxBaseCorner` (the local min-X/min-Y corner,
+  or a named corner on request) and `CenterOfBounds` (the centre of a group's children). One rule with
+  a small adapter per content kind (a `Path`, a `Contour`, a container's children): move the content by
+  `-anchor`, keep the rotation, set the translation to where the anchor was, and leave the pivot at
+  zero. `Path::translated([Length; 2])` mirrors `Contour::translated` — both ends of a line move, an
+  arc moves by its centre, ids and angles stay — and `Placement::inverse` inverts a rigid frame (the
+  conjugate quaternion and `-R⁻¹t`), so `inverse(parent) ∘ world` is the parent-frame placement of a
+  world frame; it is the missing half of the existing `Placement::compose`.
+  No command calls the new code in this step, so nothing visible moves. Tests: an open chain anchored
+  at its first point and a closed ring at its bounds centre keep every world point within a
+  micrometre; a rebased contour keeps its segment ids, centres and angles; `inverse` round-trips
+  through `compose` and maps a world point back to its local one under a rotated parent;
+  `BBoxBaseCorner` answers min-X/min-Y by default and a named corner on request; `CenterOfBounds` of
+  mixed panels and objects is the centre of their union. ADR 0082 records the strategies and the rule
+  that a frame is chosen only at creation.
+  `d6a09a5`
+  `files: crates/model/src, crates/model/src/placement.rs, crates/model/src/contour.rs`
 
 - `[x]` **X23** the ribbon's *Close* leaves the ring a draft: a polyline closed from the floating
   tool strip becomes a ring on screen but is never committed, so the closed chain stays a draft with
