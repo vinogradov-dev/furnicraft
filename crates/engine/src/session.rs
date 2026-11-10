@@ -303,6 +303,75 @@ mod tests {
     }
 
     #[test]
+    fn contour_panel_create_lands_exactly_over_its_source_in_a_turned_container() {
+        use furnicraft_model::{EulerAngles, Placement};
+        use furnicraft_units::Degrees;
+
+        let mm = |value: i64| Length::from_millimetres(value).expect("millimetres");
+        let mut project = sample_project();
+        let root = project.root().id();
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [mm(700), Length::ZERO],
+            [mm(700), mm(500)],
+            [Length::ZERO, mm(500)],
+        ])
+        .expect("ring");
+        let body = Constructive::extrude(ring.into(), sample_panel_thickness()).expect("body");
+        let source_world = Placement::IDENTITY
+            .with_translation(mm(50), mm(20), Length::ZERO)
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(90_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let source = project.add_object(root, "Counter", source_world, Geometry::Constructive(body)).expect("source");
+        let parent_world = Placement::IDENTITY
+            .with_translation(mm(-320), mm(150), mm(700))
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let parent = project.add_component(root, "Frame", parent_world).expect("container");
+        let mut session = Session::with_catalog(project, sample_catalog());
+
+        let create = PanelContourCreate {
+            parent,
+            name: "Top".to_owned(),
+            source,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY,
+        };
+        let params = json_params(&create);
+        let registry = CommandRegistry::new();
+        assert!(registry.get("panel.contour.create").expect("registered").enabled(&session, &params));
+
+        let before = session.project().revision();
+        let panel = session
+            .dispatch("panel.contour.create", &params)
+            .expect("create contour panel")
+            .created_id()
+            .expect("a panel");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(session.project().parent_of(panel), Some(parent));
+        assert_eq!(session.project().pivot(panel), Some(Pivot::ZERO), "the base corner is the pivot");
+
+        let source_world = session.project().world_placement(source).expect("source world");
+        let world = session.project().world_placement(panel).expect("panel world");
+        assert!(
+            (world.translation() - source_world.translation()).length() < 1e-9,
+            "the panel's base corner is the source's: {:?} vs {:?}",
+            world.translation(),
+            source_world.translation()
+        );
+        assert!(world.rotation().dot(source_world.rotation()).abs() >= 1.0 - 1e-12, "the source's turn is kept");
+        assert!(
+            !world.same_transform(session.project().panel(panel).expect("panel").placement()),
+            "the stored placement is relative to the turned container"
+        );
+
+        session.undo().expect("one undo removes the panel");
+        assert!(session.project().panel(panel).is_none());
+    }
+
+    #[test]
     fn panel_outline_set_edits_a_contour_panel_in_one_undo_step() {
         let (mut session, source) = session_with_contour_source();
         let create = json_params(&contour_panel_create(&session, source, "Top"));
