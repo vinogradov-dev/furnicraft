@@ -14,6 +14,9 @@ const INDENT: &str = "  ";
 /// The width a field body is wrapped at, so a long `Why:` stays a readable diff.
 const FIELD_WIDTH: usize = 95;
 
+/// The width a section paragraph is wrapped at, so `## Next` stays as narrow as the rest of the plan.
+const PROSE_WIDTH: usize = 100;
+
 /// The three status markers, as the file spells them.
 pub const OPEN: &str = "[ ]";
 /// A task in progress.
@@ -340,7 +343,7 @@ pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, Stri
     let at = layout.heading(heading)?;
     let end = layout.sections.iter().map(|(_, at)| *at).filter(|start| *start > at).min().unwrap_or(layout.lines.len());
     let mut replacement: Vec<String> = vec![String::new()];
-    replacement.extend(body.lines().map(str::trim_end).filter(|line| !line.is_empty()).map(str::to_owned));
+    replacement.extend(wrap_prose(body));
     if end < layout.lines.len() {
         replacement.push(String::new());
     }
@@ -377,6 +380,32 @@ pub fn set_state(status: &str, values: &[(String, String)]) -> Result<String, St
         text.push('\n');
     }
     Ok(text)
+}
+
+/// The prose of a section, wrapped at [`PROSE_WIDTH`] with the blank lines between paragraphs kept.
+fn wrap_prose(body: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in body.lines().map(str::trim) {
+        if paragraph.is_empty() {
+            continue;
+        }
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if !current.is_empty()
+                && current.chars().count().saturating_add(1).saturating_add(word.chars().count()) > PROSE_WIDTH
+            {
+                lines.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    lines
 }
 
 /// The wrapped lines of one labelled field, `Label: body` on the first.
