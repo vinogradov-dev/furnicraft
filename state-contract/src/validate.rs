@@ -3,7 +3,7 @@
 //! Everything here is pure: text in, violations out. The filesystem and git live in [`crate::check`].
 
 use crate::parse::{
-    STATE_PREFIX, backlog_entries, parse_backlog, parse_session, parse_state, parse_task_line, session_field,
+    STATE_PREFIX, backlog_entries, parse_backlog, parse_map, parse_session, parse_state, parse_task_line, session_field,
 };
 use crate::{Summary, Task, TaskStatus};
 
@@ -27,6 +27,9 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     violations.extend(unparsed_task_lines(backlog));
 
     if let Some(violation) = updated_format_violation(&state.updated) {
+        violations.push(violation);
+    }
+    if let Some(violation) = next_violation(status, &state.task) {
         violations.push(violation);
     }
 
@@ -106,10 +109,125 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     }
 
     if violations.is_empty() {
-        Ok(Summary { state, tasks, session: session.map(parse_session), head: None })
+        Ok(Summary { state, tasks, session: session.map(parse_session), head: None, interrupted: false })
     } else {
         Err(violations)
     }
+}
+
+/// The `## Next` paragraph of `plan/STATUS.md` must name the task `STATE:` does: it is the first
+/// prose a fresh session reads, and a paragraph about another task sends it to the wrong place.
+///
+/// The check is silent when the section is absent, because a minimal plan may not have one.
+pub(crate) fn next_violation(status: &str, task: &str) -> Option<String> {
+    let mut in_next = false;
+    let mut paragraph = String::new();
+    for line in status.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            in_next = trimmed.get(3..).is_some_and(|heading| heading.trim().eq_ignore_ascii_case("next"));
+            if !in_next && !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if in_next {
+            paragraph.push(' ');
+            paragraph.push_str(trimmed);
+        }
+    }
+    if paragraph.trim().is_empty() {
+        return None;
+    }
+    match first_id(&paragraph) {
+        Some(found) if found == task => None,
+        Some(found) => {
+            Some(format!("`plan/STATUS.md` › `## Next` names {found}, but `STATE: task={task}` is the current task"))
+        }
+        None => Some(format!("`plan/STATUS.md` › `## Next` must name the current task {task}")),
+    }
+}
+
+/// The first task id in `text`: capital letters followed by digits, as the backlog spells them.
+fn first_id(text: &str) -> Option<&str> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let letter = bytes[index].is_ascii_uppercase();
+        let boundary = index == 0 || !bytes[index - 1].is_ascii_alphanumeric();
+        if letter && boundary {
+            let mut end = index;
+            while bytes.get(end).is_some_and(u8::is_ascii_uppercase) {
+                end += 1;
+            }
+            let digits = end;
+            while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+            }
+            let closed = bytes.get(end).is_none_or(|next| !next.is_ascii_alphanumeric());
+            if end > digits && closed {
+                return text.get(index..end);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Every `plan/map.md` row must name paths that exist: a stale row sends the reader to a file that
+/// is gone, which is worse than no row at all.
+///
+/// A token with a source extension is a file; a token without one is a directory. A token that does
+/// not contain a `/` is prose or an anchor, never a path.
+pub(crate) fn map_violations<F: Fn(&str) -> bool>(map: &str, exists: F) -> Vec<String> {
+    let mut violations = Vec::new();
+    for row in parse_map(map) {
+        for path in row.paths() {
+            if !path.contains('/') || exists(&path) {
+                continue;
+            }
+            violations.push(format!(
+                "`plan/map.md` row `{}` names `{path}`, which does not exist; fix the row or add the file",
+                row.feature
+            ));
+        }
+    }
+    violations
+}
+
+/// Every tag a `plan/debt.md` entry carries must be declared in the file's `Tags:` line, so a typo
+/// cannot silently drop an entry out of the task report's selection.
+pub(crate) fn debt_violations(debt: &str) -> Vec<String> {
+    let declared: Vec<String> =
+        debt.lines().take_while(|line| !line.trim_start().starts_with("- ")).flat_map(bracketed).collect();
+    let used: Vec<String> =
+        debt.lines().filter_map(|line| line.trim_start().strip_prefix("- ")).flat_map(bracketed).collect();
+    if used.is_empty() {
+        return Vec::new();
+    }
+    if declared.is_empty() {
+        return vec!["`plan/debt.md` uses tags but has no `Tags:` line that declares them".to_owned()];
+    }
+    used.into_iter()
+        .filter(|tag| !declared.contains(tag))
+        .map(|tag| format!("`plan/debt.md` uses `[{tag}]`, which the `Tags:` line does not declare"))
+        .collect()
+}
+
+/// The bracketed tags of one line: `[engine]` reads as `engine`.
+fn bracketed(line: &str) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('[') {
+        let after = rest.get(start.saturating_add(1)..).unwrap_or_default();
+        let Some(end) = after.find(']') else { break };
+        let tag = after.get(..end).unwrap_or_default();
+        if !tag.is_empty() && tag.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-') {
+            tags.push(tag.to_owned());
+        }
+        rest = after.get(end.saturating_add(1)..).unwrap_or_default();
+    }
+    tags
 }
 
 /// The first task in `## Now` that is not finished, in file order.
@@ -618,5 +736,51 @@ mod tests {
         let error = analyze(&HEADER.replace("task=A3", "task=A2"), backlog(), None)
             .expect_err("a finished task cannot be the current one");
         assert!(error.iter().any(|violation| violation.contains("is done")), "{error:?}");
+    }
+
+    #[test]
+    fn the_next_paragraph_must_name_the_current_task() {
+        let status = "STATE: milestone=M7 phase=A task=A3 state=idle base=32c659f updated=2026-10-30\n\
+                      ## Next\n\nA3 is next: the card.\n";
+        assert!(next_violation(status, "A3").is_none());
+
+        let wrong = status.replace("A3 is next", "A4 is next");
+        let violation = next_violation(&wrong, "A3").expect("another task is named");
+        assert!(violation.contains("names A4"), "{violation}");
+
+        let silent = "STATE: milestone=M7 task=A3 state=idle base=32c659f updated=2026-10-30\n";
+        assert!(next_violation(silent, "A3").is_none(), "a plan without `## Next` is not a violation");
+
+        let unnamed = status.replace("A3 is next: the card.", "the card comes next.");
+        assert!(next_violation(&unnamed, "A3").is_some_and(|violation| violation.contains("must name")));
+    }
+
+    #[test]
+    fn a_map_row_naming_a_missing_path_is_reported() {
+        let map = "# Map\n\n| Feature | Where | Notes |\n|---|---|---|\n\
+                   | Ring | `crates/model/src/contour.rs` (`Contour`) | whole file |\n\
+                   | Gone | `crates/model/src/gone.rs` (`Gone`) | moved |\n\
+                   | Anchors | `crates/model/src/contour.rs` (Line/Arc) | prose stays prose |\n";
+        let violations = map_violations(map, |path| path == "crates/model/src/contour.rs");
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("gone.rs") && violations[0].contains("Gone"), "{violations:?}");
+    }
+
+    #[test]
+    fn a_debt_tag_the_header_does_not_declare_is_reported() {
+        let debt = "# Known debt\n\nGaps.\n\nTags: `[engine]` commands, `[panel]` panels.\n\n\
+                    - `[engine]` a gap\n- `[engin]` a typo\n- `[panel]` another gap\n";
+        let violations = debt_violations(debt);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("[engin]"), "{violations:?}");
+
+        let silent = "# Known debt\n\nProse without entries.\n";
+        assert!(debt_violations(silent).is_empty());
+        let undeclared = "# Known debt\n\n- `[engine]` a gap\n";
+        assert!(
+            debt_violations(undeclared).iter().any(|violation| violation.contains("no `Tags:` line")),
+            "{:?}",
+            debt_violations(undeclared)
+        );
     }
 }

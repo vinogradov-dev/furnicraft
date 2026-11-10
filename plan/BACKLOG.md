@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
-  Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
-  (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
-  `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
-  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; `panel_cmds.rs`
-  becomes `panel_cmds/mod.rs` that declares its submodules and re-exports every id and spec, so the
-  `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> ~600.
-  Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
-  re-exports only (B3) and `banding.rs` states its one reason to change (H5).
-  Commits: one move.
-  `files: crates/engine/src/panel_cmds.rs, crates/engine/src/commands.rs`
-
 - `[ ]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
   Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
   ray, picking, the grid, the lights, the contact shadows and the frame (F5).
@@ -81,13 +69,13 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   picking and creation-target rules (C7: the UI never holds a document default).
   Shape: `placement_in_parent` becomes `Project::placement_in_parent` beside `world_placement` in
   `crates/model/src/project/query.rs`; `default_panel_size` becomes
-  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds.rs` and the UI asks it; the
+  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds/panel.rs` and the UI asks it; the
   pick and target helpers move to `crates/ui/src/target.rs` (~90); `ui/lib.rs` 1159 -> ~1090, still
   over the ceiling, so S19 follows.
   Done: a model test for a rotated parent and for the root's identity frame; a created panel is still
   600 x 400; suite unchanged; the palette builds the same params.
   Commits: one move.
-  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds.rs`
+  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds/panel.rs`
 
 - `[ ]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
   B1, B3, B4, B5, B8.
@@ -338,6 +326,115 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
+  Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
+  (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
+  `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
+  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; the eleven that
+  remain divide by value family into `panel.rs` (creation, outline, name, size, material) and
+  `machining.rs` (the four records), because `mod.rs` holds declarations and re-exports only (B3)
+  and 580 lines of logic is not one family (B1); `panel_cmds/mod.rs` re-exports every id and spec,
+  so the `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> mod.rs 44 +
+  panel.rs 411 + banding.rs 547 + machining.rs 172 production lines, none past 600.
+  Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
+  re-exports only (B3) and `banding.rs` states its one reason to change (H5).
+  Commits: one move.
+  `files: crates/engine/src/panel_cmds/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/banding.rs, crates/engine/src/panel_cmds/machining.rs` — `4e6d535`
+
+- `[x]` **P9** the tool documents itself — rules: B1, C7.
+  Why: the contract is written three times (`AGENTS.md` §1/§6.1, `templates/AGENTS.section.md`, the
+  crate README), `plan/state.conf` does not exist although a second project needs its layout, and the
+  usage blocks are hand-written.
+  Shape: `cli::Config` with defaults (`runner`, `decisions`, `notes`) overridable from
+  `plan/state.conf`; `agents` prints the embedded `templates/AGENTS.section.md` with the placeholders
+  filled, `init` scaffolds a plan that passes the gate; `AGENTS.md` and the root `README.md` keep the
+  invariants and point at the tool instead of repeating it.
+  Done: a fresh `state-contract init` in an empty directory passes `check`; `agents` prints the
+  section with the project's runner; `AGENTS.md` loses the duplicated command list; suite and
+  `cargo xtask ci` green.
+  Commits: one.
+  `files: state-contract/src/main.rs, state-contract/README.md, AGENTS.md` — `c27002f`
+
+- `[x]` **P8** the plan tool is one crate a project imports, not code in `xtask` — rules: B1, B3, B7, C7.
+  Why: the write verbs, `list`, the agent form (`--md`/`--paths`), the code facts and the ADR index
+  check live in `xtask` — 1 500 lines a second project would have to copy — while the crate that owns
+  the format exposes only three read commands and two hand-written usage blocks that already differ.
+  Shape: `state-contract/src/cli/` gains `table` (a `Command` list that drives dispatch, `--help` and
+  `help <verb>`), `read` (status, dashboard, task, list, `--md`, `--paths`), `write` (the ten verbs),
+  `facts` (production and test lines, the last commit, the ADR titles) and `docs`; the crate's own
+  binary runs the whole table, and `xtask` keeps only its product rules (`layers`, the C-vendoring
+  check, the `ci` step list) registered into the same table.
+  Done: `cargo xtask <every command it has today>` prints the same output; `cargo xtask help` and
+  `cargo xtask help task` are generated from the table; `cargo run -p state-contract -- help` lists
+  the same commands minus the product ones; `xtask/src` holds no plan logic; the suite moves with the
+  code and `cargo xtask ci` is green.
+  Commits: one or two.
+  `files: state-contract/src/main.rs, state-contract/src/lib.rs, xtask/src/main.rs` — `123afcb`
+
+- `[x]` **P7** the gate checks the plan it already parses — rules: B1, C7.
+  Why: `plan/map.md` is unchecked although a stale row sends a reader to a file that no longer exists;
+  `## Next` in `plan/STATUS.md` is the first prose a session reads and can name another task than
+  `STATE`; a debt tag with a typo silently drops out of the task report's selection; the ADR index can
+  miss a new decision.
+  Shape: `validate.rs` gains three checks — a map row naming a path that does not exist (only
+  `.rs`/`.md`/`.toml` tokens and existing directories count), the first task id of `## Next` equal to
+  `STATE: task=`, and every debt tag declared in the `Tags:` line; `xtask docs` compares
+  `docs/decisions/README.md` with the files it indexes.
+  Done: each check has a fixture that fails and the current plan still passes; `cargo xtask ci` green.
+  Commits: one.
+  `files: state-contract/src/validate.rs, state-contract/src/lib.rs, xtask/src/main.rs` — `5df8549`
+
+- `[x]` **P6** the agent writes the plan through the tool, never by hand — rules: B1, B8, C7.
+  Why: 194 commits touched `plan/BACKLOG.md` by hand, and a close is five edits — the marker, the
+  hash, the move to `## Done`, `STATE` and deleting `SESSION.md` — each one a chance to break the
+  order the gate enforces.
+  Shape: `state-contract/src/edit.rs` splices line ranges in `plan/BACKLOG.md` and `plan/STATUS.md`,
+  so a command rewrites only its own lines and the rest of the file stays byte-identical;
+  `xtask task add|start|set|step|note|close|reopen|drop` and `xtask state set` build the new text,
+  validate it with the gate in memory and write it through a temp file and a rename. Every verb takes
+  `--dry-run` and prints its diff; `plan/.lock` keeps two writers apart.
+  Done: each verb has a test that a refused command writes nothing; a round-trip test proves
+  `parse(edit(parse(x)))` and that untouched bytes stay; `AGENTS.md` says the plan is written only
+  through `cargo xtask`.
+  Commits: one per verb family.
+  `files: state-contract/src/parse.rs, xtask/src/task.rs, xtask/src/main.rs` — `a35f3d5`
+
+- `[x]` **P5** a session start needs no reasoning the tool can do — rules: B1, B7, C7.
+  Why: `status` drops `resume:` and prints no interrupted flag, so `AGENTS.md` §1.1 case 1 makes the
+  reader compare `base`/`HEAD` and inspect `steps` by hand; `task` prints only its own note, so
+  research on another task that touched the same files is invisible; there is no way to enumerate
+  tasks, the report does not say how many debt or question entries it filtered out, and a done task
+  does not say which commit closed it. `next:` is also computed for a task outside `## Now`, where it
+  means nothing.
+  Shape: `Summary` carries `interrupted`, computed once in `check_with` (the dashboard stops deriving
+  it); `render` prints `goal`, `resume` and the flag. `TaskView` gains `related` — other tasks' notes
+  whose text meets the same `touches` needles — and `closed` (hash, date and subject of a done task).
+  `xtask task list` filters by section, status, phase and text; the human and `--md` forms print how
+  many entries were filtered out; `next` is `None` outside `## Now`; `state-contract` denies the
+  panic lints at the crate root.
+  Done: a session start prints `interrupted: yes` and `resume:` while the note has open steps; another
+  task's note that names one of this task's files appears under `RELATED`; `list --phase X
+  --status open` prints one line per task; the report says `+N other entries (--all)`; a done task
+  shows `closed:`; the suite covers each; `cargo xtask ci` green.
+  Commits: one or two. `[x]` `c884b81`
+  `files: state-contract/src/lib.rs, state-contract/src/task.rs, xtask/src/task.rs`
+
+- `[x]` **P4** `cargo xtask task` prints one task in full — rules: B1, B7, C7, C10.
+  Why: starting S14 costs `status`, then a grep of `plan/BACKLOG.md`, `plan/map.md`, `plan/debt.md`,
+  `docs/decisions/` and `git log`, plus the production-line loop in `plan/refactor.md`; the gate
+  already parses every one of those files, so the reads are one command's work, not the agent's.
+  Shape: `state-contract` parses the labelled fields of an entry (`Rules`, `Why`, `Shape`, `Done`,
+  `Commits`), reads a per-task note `plan/notes/<ID>.md`, and renders one task as a block a human
+  reads (`task`, and `dashboard --task <ID>`); `xtask` adds what the plan does not carry — production
+  and test lines per hinted file, the last commit that touched it, the ADR titles — and an agent
+  form (`--md`, `--paths`) that needs no grep. The gate checks a note's id, staleness and budget.
+  Done: `cargo xtask task S14` prints the entry with its fields, both files' line counts and last
+  commits, the map row, matching debt, the ADRs, the note and the next task; `--md` carries no box
+  drawing and `--paths` one path per line; a note for an unknown or finished task fails `plan`;
+  `status` prints the lead sentence instead of the whole entry; the suite covers the new parse.
+  Commits: one. `[x]` `7df9401`
+  `files: state-contract/src/lib.rs, state-contract/src/parse.rs, xtask/src/main.rs`
 
 - `[x]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
   Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving

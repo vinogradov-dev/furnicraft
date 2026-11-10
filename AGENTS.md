@@ -13,20 +13,32 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
 
 1. `plan/STATUS.md` — the `STATE:` line and the `Next` section.
 2. `plan/SESSION.md` — only when `state=doing`; it names the live step and the next command.
-3. `plan/BACKLOG.md` — the task id in `STATE:` and the files its `files:` hint names. Read those
-   files and their direct callers. **Do not scan the workspace**; if the hint is wrong, fix the hint.
+3. `cargo xtask task` — the task `STATE:` names, in full; `task <ID>` for any task, `--md` for the
+   agent form, `--paths` for one file per line, `task list` to enumerate the work order. **Read it
+   instead of grepping `plan/*.md`, `docs/` or `git log`**, then read the files it names and their
+   direct callers. Do not scan the workspace; if the hint is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
 Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the
 whole file. If the anchor is wrong or missing, fix the row — the map is a contract, not a suggestion.
 
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
-area, never read them at start. `plan/rename.md` is the same kind of file: it holds the measured
+area, never read them at start — the task report already quotes the entries that name the task's
+files. `plan/notes/<ID>.md` is the research note of one task: it is where a session writes what it
+measured, decided and ruled out, and the task report prints it, so the next session does not repeat
+the search. Template: `state-contract/templates/NOTE.md`. `plan/rename.md` is the same kind of file: it holds the measured
 inventory and the procedure for the pre-release rename (task R1). `plan/refactor.md` is the third:
 the design rules, the audit procedure and the subtask template for the design-rules refactor
 (task S7). `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
 Answering the next step has its own procedure (§1.1); it never re-derives the state from the code.
+
+**Writing the plan is a command too.** The agent changes `plan/BACKLOG.md`, `plan/STATUS.md`,
+`plan/SESSION.md` and `plan/notes/<ID>.md` with `cargo xtask task add|start|set|step|note|close|
+reopen|drop` and `cargo xtask state set`, never with a text edit. The commands splice only the lines
+they own, validate the result with the gate *before* writing, take `--dry-run`, and refuse instead
+of leaving a broken plan (ADR 0085). The owner may still edit a file by hand; the format is the
+same.
 
 | Read | Why |
 |---|---|
@@ -82,8 +94,8 @@ crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tes
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials
 crates/units, geom     L0  lengths (micrometres), angles (millidegrees), vectors, frames, bounds, meshes
 crates/testkit         dev-only test helpers (may depend on anything)
-state-contract         tool  plan gate: parses and checks STATUS/BACKLOG/SESSION, reusable
-xtask                  workspace checks; not part of the product
+state-contract         tool  plan gate, report, writer and CLI; a project imports it, reusable
+xtask                  the host's rules and the ci gate; no plan logic
 ```
 
 - **Layering is enforced** by `cargo xtask layers`. A crate may depend only on crates in **lower** layers, and the same table lists per-crate forbidden dependencies. A new crate must be registered in `xtask/src/main.rs` and in `PROJECT.md` in the same change.
@@ -219,12 +231,12 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo xtask layers` and `cargo xtask plan`, in that order, stopping at the
-first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
+`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan` and `cargo xtask docs`, in that
+order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
 formatting, the gate only checks it.
 
-`cargo xtask plan` fails when the plan files contradict each other: `STATE` naming a task the backlog
-does not have, has finished, keeps outside `## Now`, or that is not the first unfinished task there;
+`cargo xtask plan` fails when the plan files, the notes, `plan/map.md`, the debt tags or the `base`
+contradict each other, and it names the mismatch in a sentence you can act on;
 `state=doing` without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`,
 `goal:`, `now:` and `run:`; `state=idle` with a `[~]` task or a leftover session note; a duplicated
 task id; a `[x]` task outside `## Done`, or a `## Done` entry that is not `[x]`; a finished task
@@ -263,7 +275,9 @@ Commit after every coherent, fully verified unit of work — not at the end of a
 The commit closes the operation; the plan files close it too, in the same change:
 
 1. Mark the task `[x]` in `plan/BACKLOG.md` with the short hash of the commit that delivers it. When a
-   task needs several commits, mark it on the last one.
+   task needs several commits, mark it on the last one. `cargo xtask task close <ID> --commit <hash>
+   --next <text>` does this, rewrites `plan/STATUS.md` and deletes `plan/SESSION.md` in one gated
+   write; do it by hand only when the tool refuses a shape the plan has never had.
 2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `updated` = today, `base` =
    the commit whose tree the plan describes — `HEAD` when the plan edit is its own commit, the parent
    when the edit rides in the commit it describes) and a new `Next` paragraph. Never append to it.
@@ -273,9 +287,14 @@ The commit closes the operation; the plan files close it too, in the same change
 5. If the feature moved (a new module, a rename), update its row in `plan/map.md`; if the feature is
    new, add a row. A stale row is a defect the reader fixes.
 
-Starting a task is the mirror image: copy `plan/SESSION.template.md` to `plan/SESSION.md`, fill it in,
-set `state=doing` and `[~]` on that one task, and update `SESSION.md` after every meaningful step and
-after every green gate run — a session that dies must not lose more than the current sub-step.
+Starting a task is the mirror image: `cargo xtask task start <ID>` sets `[~]`, `state=doing` and
+writes `plan/SESSION.md` from the entry in one validated step (the manual fallback is the template
+beside it). Keep `now:`, `run:` and `resume:` current with `cargo xtask task step` and
+`cargo xtask task set` after every meaningful step and every green gate run — a session that dies
+must not lose more than the current sub-step — and close the task with
+`cargo xtask task close <ID> --commit <hash>`, which marks it `[x]`, records the hash, moves it to
+`## Done`, points `STATE:` at the next task, takes the new `## Next` paragraph (`--next`) and deletes
+the note.
 
 ### 6.2 Branch workflow
 
@@ -321,10 +340,11 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
   (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
-- `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
+- `plan/BACKLOG.md` — one entry per task with a stable id, its order, its labelled fields and a `files:` hint; the single list of what is done, in progress and next.
+- `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
-- `cargo xtask dashboard` prints the state with the file each section comes from.
+- `cargo xtask help` — every command with a one-line summary, generated from the command table. The plan is read with `task`/`status`, written with the `task` verbs and `state`, and `agents` prints the session contract below, versioned with the tool.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
   measured procedure and its gotchas. Read only when R1 is taken.

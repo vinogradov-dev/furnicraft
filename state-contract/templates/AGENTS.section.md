@@ -6,13 +6,18 @@ session continues from them instead of reconstructing the state.
 A session starts by reading:
 
 1. `plan/STATUS.md` — the `STATE:` line and its `Next` paragraph.
-2. `plan/BACKLOG.md` — the `## Now` section.
-3. `plan/SESSION.md` — only while `state=doing`.
-4. The files the current task's `files:` hint names, and their direct callers.
+2. `plan/SESSION.md` — only while `state=doing`.
+3. `{{TASK_COMMAND}}` — the task `STATE:` names, in full: its fields, its `files:` hint with the
+   production and test lines and the last commit that touched each file, the `plan/map.md` rows that
+   name those paths, the debt and questions the task touches, the ADRs it cites and
+   `plan/notes/<ID>.md`, the research note a previous session left. `{{TASK_COMMAND}} <ID>` answers
+   the same for any task. Prompt it instead of grepping `plan/*.md`, `docs/` or `git log`.
+4. The files the report names, and their direct callers.
 
 It does not read the workspace at large, the conversation history, `git diff` or `git log`. The diff
 is a fallback for one case only — `SESSION.md` is missing or contradicts `STATE` — and even then only
-for the paths the task names.
+for the paths the task names. Research a session had to do goes into `plan/notes/<ID>.md`
+(`templates/NOTE.md`): the task report prints it, so the next session does not repeat the search.
 
 A request for the next step is answered from the plan files alone, in this order. Stop at the first
 case that applies.

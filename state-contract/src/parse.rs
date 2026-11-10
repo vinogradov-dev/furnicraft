@@ -1,9 +1,15 @@
 //! Parsing of the three plan files: text in, data out. No filesystem, no git.
 
-use crate::{State, Task, TaskStatus};
+use crate::{Field, State, Task, TaskStatus};
 
 /// The marker that starts the state line.
 pub(crate) const STATE_PREFIX: &str = "STATE:";
+
+/// The labels a long backlog entry carries, in the order the template writes them.
+///
+/// Matching ignores case — `— rules: B1` closes the lead line — and needs a word start, so a body
+/// that merely mentions the word keeps it.
+pub(crate) const ENTRY_LABELS: &[&str] = &["Rules", "Why", "Shape", "Done", "Commits"];
 
 /// Parses the `STATE:` line and its required fields.
 pub(crate) fn parse_state(status: &str) -> Result<State, Vec<String>> {
@@ -67,9 +73,81 @@ pub fn parse_backlog(backlog: &str) -> Vec<Task> {
         .into_iter()
         .filter_map(|entry| {
             let task = parse_task_line(&entry.text)?;
-            Some(Task { id: task.id, status: task.status, section: entry.section, text: task.text, files: task.files })
+            let (lead, fields) = split_fields(&task.text);
+            let paths = task.files.as_deref().map(hint_paths).unwrap_or_default();
+            Some(Task {
+                id: task.id,
+                status: task.status,
+                section: entry.section,
+                text: task.text,
+                lead,
+                fields,
+                files: task.files,
+                paths,
+            })
         })
         .collect()
+}
+
+/// Splits one entry into its opening sentence and its labelled fields.
+///
+/// The lead keeps everything before the first label, so `— rules: B1` becomes a field and the lead
+/// stays one short sentence. Each field runs from its label to the next one, so the order of the
+/// file is the order of the result.
+pub(crate) fn split_fields(text: &str) -> (String, Vec<Field>) {
+    let mut cuts: Vec<(usize, usize, &'static str)> = Vec::new();
+    for label in ENTRY_LABELS {
+        let mut from = 0;
+        while let Some(found) = find_label(text.get(from..).unwrap_or_default(), label) {
+            let start = from.saturating_add(found);
+            cuts.push((start, start.saturating_add(label.len()).saturating_add(1), label));
+            from = start.saturating_add(label.len()).saturating_add(1);
+        }
+    }
+    cuts.sort_by_key(|(start, _, _)| *start);
+    let lead_end = cuts.first().map_or(text.len(), |(start, _, _)| *start);
+    let lead = clean_lead(text.get(..lead_end).unwrap_or_default());
+    let mut fields = Vec::new();
+    for (index, (_, body_start, label)) in cuts.iter().enumerate() {
+        let end = cuts.get(index.saturating_add(1)).map_or(text.len(), |(start, _, _)| *start);
+        let body = text.get(*body_start..end).unwrap_or_default().trim();
+        if !body.is_empty() {
+            fields.push(Field { label: (*label).to_owned(), body: body.to_owned() });
+        }
+    }
+    (lead, fields)
+}
+
+/// The byte offset of `label:` in `haystack`, when the label starts a word and is written in any
+/// case. `None` when the entry does not carry that label at all.
+fn find_label(haystack: &str, label: &str) -> Option<usize> {
+    for (colon, _) in haystack.match_indices(':') {
+        let word_start = haystack
+            .get(..colon)
+            .unwrap_or_default()
+            .char_indices()
+            .rev()
+            .take_while(|(_, ch)| ch.is_ascii_alphabetic())
+            .last()
+            .map(|(start, _)| start);
+        let Some(word_start) = word_start else { continue };
+        if !haystack.get(word_start..colon).unwrap_or_default().eq_ignore_ascii_case(label) {
+            continue;
+        }
+        let boundary = haystack
+            .get(..word_start)
+            .and_then(|before| before.chars().next_back())
+            .is_none_or(|ch| !ch.is_alphanumeric());
+        if boundary {
+            return Some(word_start);
+        }
+    }
+    None
+}
+
+/// The lead sentence without the dash or colon that introduced the first label.
+fn clean_lead(text: &str) -> String {
+    text.trim().trim_end_matches(['—', '–', '-', '·', ':', ' ']).trim_end().to_owned()
 }
 
 /// One logical backlog entry: the section it sits in and its wrapped text joined into one line.
@@ -128,8 +206,11 @@ pub(crate) fn parse_task_line(line: &str) -> Option<TaskLine> {
     let id = bold(rest)?;
     let files = files_hint(rest);
     let text = strip_files(rest);
-    let text =
-        text.trim_start().strip_prefix("**").and_then(|text| text.split_once("**")).map_or(text, |(_, text)| text);
+    let text: &str = text
+        .trim_start()
+        .strip_prefix("**")
+        .and_then(|text| text.split_once("**"))
+        .map_or(text.as_str(), |(_, text)| text);
     let text = text.trim_start().trim_start_matches(['—', '-', '·']).trim().to_owned();
     Some(TaskLine { status, id, text, files })
 }
@@ -166,24 +247,72 @@ fn bold(text: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_owned())
 }
 
-/// The `files:` hint at the end of a task line.
+/// The `files:` hint of a task, which is the comma-separated path list that follows the label.
+///
+/// The list ends at the first character a path cannot hold, so an inline hint is followed by the
+/// rest of the line (`— \`hash\``, a field) instead of swallowing it.
 pub(crate) fn files_hint(text: &str) -> Option<String> {
     let (_, hint) = text.rsplit_once("files:")?;
-    let hint = hint.trim().trim_end_matches('`').trim();
+    let hint = hint.get(..hint_len(hint)).unwrap_or_default().trim().trim_end_matches(['`', '.', ',']).trim();
     (!hint.is_empty()).then(|| hint.to_owned())
 }
 
-/// The task text without its trailing `files:` hint.
-pub(crate) fn strip_files(text: &str) -> &str {
-    match text.rsplit_once("files:") {
-        Some((text, _)) => text.trim_end().trim_end_matches('`').trim_end(),
-        None => text,
+/// The byte length of the path list that starts `hint`: paths, commas, spaces and inline-code ticks.
+fn hint_len(hint: &str) -> usize {
+    let mut end = 0;
+    for (index, ch) in hint.char_indices() {
+        let allowed = ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-' | ',' | ' ' | '\t' | '`');
+        if !allowed {
+            break;
+        }
+        end = index.saturating_add(ch.len_utf8());
     }
+    end
+}
+
+/// The task text without its `files:` hint. Whatever follows the hint survives, so a done entry that
+/// writes its commit after the hint keeps it.
+pub(crate) fn strip_files(text: &str) -> String {
+    let Some((before, hint)) = text.rsplit_once("files:") else { return text.trim_end().to_owned() };
+    let head = before.trim_end().trim_end_matches('`').trim_end();
+    let tail = hint.get(hint_len(hint)..).unwrap_or_default().trim();
+    if tail.is_empty() { head.to_owned() } else { format!("{head} {tail}") }
+}
+
+/// The `files:` hint split into paths, in the order it names them.
+pub(crate) fn hint_paths(hint: &str) -> Vec<String> {
+    hint.split(',').map(clean_path).filter(|path| !path.is_empty()).map(str::to_owned).collect()
 }
 
 /// The paths of a `files:` hint that the predicate rejects.
 pub(crate) fn missing_paths<F: Fn(&str) -> bool>(hint: &str, exists: F) -> Vec<String> {
-    hint.split(',').map(clean_path).filter(|path| !path.is_empty() && !exists(path)).map(str::to_owned).collect()
+    hint_paths(hint).into_iter().filter(|path| !exists(path)).collect()
+}
+
+/// The path-like tokens of a map cell: a lower-case run that holds a `/`, so an anchor name or a
+/// prose pair like `Line/Arc` never matches.
+pub(crate) fn map_paths(cell: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut current = String::new();
+    for ch in cell.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-') {
+            current.push(ch);
+        } else {
+            flush_path(&mut current, &mut paths);
+        }
+    }
+    flush_path(&mut current, &mut paths);
+    paths
+}
+
+/// Pushes the run collected so far when it reads as a path, then starts a new run.
+fn flush_path(current: &mut String, paths: &mut Vec<String>) {
+    let trimmed = current.trim_end_matches(['.', '-', '/']).trim_start_matches(['.', '/']);
+    let lower_case = trimmed.chars().all(|ch| !ch.is_ascii_uppercase());
+    if trimmed.contains('/') && lower_case && trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        paths.push(trimmed.to_owned());
+    }
+    current.clear();
 }
 
 /// Strips the prose punctuation a hint may carry before or after a path.
@@ -193,11 +322,18 @@ fn clean_path(path: &str) -> &str {
 
 /// One row of the `plan/map.md` feature table: the feature and where it lives.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MapRow {
+pub struct MapRow {
     /// The feature name, as the first column spells it.
     pub feature: String,
     /// The path plus the anchor in parentheses; what to grep for.
     pub where_: String,
+}
+
+impl MapRow {
+    /// The paths the row names, in cell order — what a task's `files:` hint is matched against.
+    pub fn paths(&self) -> Vec<String> {
+        map_paths(&self.where_)
+    }
 }
 
 /// Parses the Markdown table in `plan/map.md`: one [`MapRow`] per data row.
@@ -236,6 +372,28 @@ pub(crate) fn parse_map(text: &str) -> Vec<MapRow> {
         }
     }
     rows
+}
+
+/// The top-level `- ` bullets of a markdown file, wrapped lines joined onto their bullet, so a
+/// two-line entry reads as one sentence.
+pub(crate) fn markdown_bullets(text: &str) -> Vec<String> {
+    let mut bullets: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            bullets.push(rest.trim().to_owned());
+            open = true;
+        } else if open && line.starts_with([' ', '\t']) && !trimmed.is_empty() {
+            if let Some(bullet) = bullets.last_mut() {
+                bullet.push(' ');
+                bullet.push_str(trimmed);
+            }
+        } else {
+            open = false;
+        }
+    }
+    bullets
 }
 
 /// The cells of one table line: outer pipes stripped, each cell trimmed of spaces, with every
@@ -307,6 +465,66 @@ pub(crate) fn parse_session(session: &str) -> crate::Session {
 mod tests {
     use super::*;
     use crate::TaskStatus;
+
+    #[test]
+    fn an_entry_splits_into_its_lead_and_its_labelled_fields() {
+        let (lead, fields) = split_fields(
+            "`panel_cmds.rs` gives up its banding commands — rules: B1, B4. Why: 1143 lines. \
+             Shape: the ten commands move. Done: the registry test. Commits: one move.",
+        );
+        assert_eq!(lead, "`panel_cmds.rs` gives up its banding commands");
+        let labels: Vec<&str> = fields.iter().map(|field| field.label.as_str()).collect();
+        assert_eq!(labels, ["Rules", "Why", "Shape", "Done", "Commits"]);
+        assert_eq!(fields[0].body, "B1, B4.");
+        assert_eq!(fields[2].body, "the ten commands move.");
+        assert!(fields[4].body.starts_with("one move"), "{:?}", fields[4].body);
+    }
+
+    #[test]
+    fn a_label_needs_a_word_start_and_any_case() {
+        let (lead, fields) = split_fields("a task without fields, and no colon either");
+        assert_eq!(lead, "a task without fields, and no colon either");
+        assert!(fields.is_empty(), "{fields:?}");
+
+        let (_, fields) = split_fields("a task why: lower case counts");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].label, "Why");
+        assert_eq!(fields[0].body, "lower case counts");
+
+        let (lead, fields) = split_fields("a task with `Done: now` in code is still a field");
+        assert_eq!(lead, "a task with `");
+        assert_eq!(fields[0].label, "Done", "a label is a label wherever it starts a word");
+    }
+
+    #[test]
+    fn a_bug_entry_keeps_its_whole_observation_as_the_lead() {
+        let bugs = "## Bugs\n\n- `[ ]` **X31** a drag on a short segment panics: the corner stops neither \
+                    way. Expectation: refuse it. Suspected cause: the clamp. `files: crates/geom/src/segment.rs`\n";
+        let task = &parse_backlog(bugs)[0];
+        assert!(task.fields.is_empty(), "a bug has no labelled fields: {:?}", task.fields);
+        assert!(task.lead.starts_with("a drag on a short segment panics"), "{:?}", task.lead);
+        assert!(!task.lead.contains("files:"), "the hint is not part of the lead: {:?}", task.lead);
+        assert_eq!(task.paths, ["crates/geom/src/segment.rs"]);
+    }
+
+    #[test]
+    fn paths_come_from_the_hint_and_from_a_map_cell() {
+        assert_eq!(
+            hint_paths("`crates/model/src/lib.rs`, crates/ui/src/object_card.rs."),
+            ["crates/model/src/lib.rs", "crates/ui/src/object_card.rs"]
+        );
+        assert_eq!(
+            map_paths("crates/scene/src/lib.rs (Polyline, SceneFrame::pick), docs/decisions/"),
+            ["crates/scene/src/lib.rs", "docs/decisions"]
+        );
+        assert!(map_paths("(PanelOutlineSet, PanelOutlineToContour)").is_empty(), "an anchor alone is no path");
+        assert!(
+            map_paths("`crates/model/src/contour.rs` (ContourSegment, Line/Arc)")
+                .iter()
+                .all(|path| path.contains("crates")),
+            "a prose pair with a slash is not a path"
+        );
+    }
 
     #[test]
     fn a_task_marker_may_be_wrapped_in_backticks() {

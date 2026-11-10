@@ -225,8 +225,8 @@ only when the crates exist.
 | L7 | `furnicraft-ui` | `egui` panels and viewport widgets: scene tree, inspector, input, gizmos; dispatches commands | engine, model, scene, egui, egui_extras |
 | L8 | `apps/furnicraft` | Composition root: `eframe` window, input, `egui` ↔ `wgpu` paint callback, constructs `TruckKernel` and evaluates the sample document | ui, engine, render, scene, model, param, mesh, kernel, kernel-truck, geom, units, eframe |
 | dev | `furnicraft-testkit` | Fixtures and helpers for tests; re-exports `millimetres`, `open_path` and `sample_project` from `furnicraft-model`'s `testing` feature, where they are defined once (ADR 0084) | model, units |
-| tool | `xtask` | Workspace checks (`cargo xtask layers`) | serde_json |
-| tool | `state-contract` | Plan gate: parses and validates `STATUS`/`BACKLOG`/`SESSION` for any project; reusable, zero dependencies | — |
+| tool | `xtask` | The host's rules only: layering, the C-vendoring check and the `ci` step list, registered into the plan tool's command table (`cargo xtask help`) | serde_json, state-contract |
+| tool | `state-contract` | The plan tool: gate, status, report, writer, dashboard, ADR index and the command table a host imports; reusable, zero dependencies | — |
 
 ```text
 apps/furnicraft        composition root (window, input, egui <-> wgpu, TruckKernel)

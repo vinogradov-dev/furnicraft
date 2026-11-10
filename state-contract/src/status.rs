@@ -10,6 +10,14 @@ use crate::{Session, Summary, TaskStatus};
 /// The caller prints it; the crate does not write to stdout, so a host can put it in a log, a
 /// diagnostic or a test.
 pub fn render(summary: &Summary) -> String {
+    render_with_detail(summary, None)
+}
+
+/// [`render`] with the command a host points at for the full task.
+///
+/// The crate has no opinion about the host's command line, so the hint is passed in; `None` prints
+/// no hint, which is what a project without a task command wants.
+pub fn render_with_detail(summary: &Summary, detail: Option<&str>) -> String {
     let state = &summary.state;
     let mut text = String::new();
     let _ = writeln!(
@@ -26,16 +34,27 @@ pub fn render(summary: &Summary) -> String {
     if let Some(session) = &summary.session {
         render_session(&mut text, session);
     }
+    if summary.interrupted {
+        // The one fact `AGENTS.md` §1.1 otherwise asks the reader to derive from `base`, `HEAD` and
+        // the note's steps.
+        text.push_str("  interrupted: yes\n");
+    }
     let current = summary.tasks.iter().position(|task| task.id == state.task);
     let from = current.unwrap_or(0);
     let upcoming = summary.tasks.iter().skip(from).filter(|task| task.status != TaskStatus::Done);
     for (offset, task) in upcoming.take(4).enumerate() {
         let arrow = if offset == 0 { "->" } else { "  " };
-        let _ = write!(text, "{arrow} {} {} · {}", task.status.marker(), task.id, task.text);
+        // The lead sentence, not the whole entry: the fields are one command away.
+        let _ = write!(text, "{arrow} {} {} · {}", task.status.marker(), task.id, task.lead);
         if let Some(files) = &task.files {
             let _ = write!(text, "  [files: {files}]");
         }
         text.push('\n');
+        if offset == 0
+            && let Some(detail) = detail
+        {
+            let _ = writeln!(text, "   detail: {detail} {}", task.id);
+        }
     }
     text
 }
@@ -45,11 +64,16 @@ fn short(hash: &str) -> &str {
     hash.get(..7).unwrap_or(hash)
 }
 
-/// The four fields a fresh session resumes from; an absent one prints as `-`.
+/// The fields a fresh session resumes from; an absent one prints as `-`.
 fn render_session(text: &mut String, session: &Session) {
-    for (key, value) in
-        [("task", &session.task), ("now", &session.now), ("blocked", &session.blocked), ("run", &session.run)]
-    {
+    for (key, value) in [
+        ("task", &session.task),
+        ("goal", &session.goal),
+        ("now", &session.now),
+        ("blocked", &session.blocked),
+        ("run", &session.run),
+        ("resume", &session.resume),
+    ] {
         let _ = writeln!(text, "  {key}: {}", value.as_deref().unwrap_or("-"));
     }
 }
@@ -57,7 +81,21 @@ fn render_session(text: &mut String, session: &Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{State, Task, TaskStatus};
+    use crate::{Field, State, Task, TaskStatus};
+
+    /// One backlog task as the parser would hand it over.
+    fn task(id: &str, status: TaskStatus, section: &str, lead: &str, files: Option<&str>) -> Task {
+        Task {
+            id: id.to_owned(),
+            status,
+            section: section.to_owned(),
+            text: lead.to_owned(),
+            lead: lead.to_owned(),
+            fields: vec![Field { label: "Why".to_owned(), body: "because".to_owned() }],
+            files: files.map(str::to_owned),
+            paths: files.map(|files| vec![files.to_owned()]).unwrap_or_default(),
+        }
+    }
 
     fn summary(status: &str, head: Option<&str>, session: Option<Session>) -> Summary {
         Summary {
@@ -70,23 +108,12 @@ mod tests {
                 updated: "2026-10-30".to_owned(),
             },
             tasks: vec![
-                Task {
-                    id: "A3".to_owned(),
-                    status: TaskStatus::Open,
-                    section: "Now".to_owned(),
-                    text: "arcs in the card".to_owned(),
-                    files: Some("crates/ui/src/object_card.rs".to_owned()),
-                },
-                Task {
-                    id: "A4".to_owned(),
-                    status: TaskStatus::Open,
-                    section: "Next".to_owned(),
-                    text: "stable ids".to_owned(),
-                    files: None,
-                },
+                task("A3", TaskStatus::Open, "Now", "arcs in the card", Some("crates/ui/src/object_card.rs")),
+                task("A4", TaskStatus::Open, "Next", "stable ids", None),
             ],
             session,
             head: head.map(str::to_owned),
+            interrupted: false,
         }
     }
 
@@ -105,13 +132,7 @@ mod tests {
     #[test]
     fn the_block_skips_finished_tasks() {
         let mut list = summary("idle", Some("fedcba9"), None);
-        list.tasks.push(Task {
-            id: "A5".to_owned(),
-            status: TaskStatus::Done,
-            section: "Now".to_owned(),
-            text: "already shipped".to_owned(),
-            files: None,
-        });
+        list.tasks.push(task("A5", TaskStatus::Done, "Now", "already shipped", None));
         let text = render(&list);
         assert!(!text.contains("A5"), "a `[x]` task is not part of what comes next: {text}");
         assert!(text.contains("-> [ ] A3"), "the current task stays first: {text}");
@@ -123,6 +144,29 @@ mod tests {
         assert!(text.starts_with("plan: M7 - · task A3 · idle · base abc1234"), "{text}");
         assert!(text.contains("-> [ ] A3 · arcs in the card  [files: crates/ui/src/object_card.rs]"), "{text}");
         assert!(text.contains("   [ ] A4 · stable ids\n"), "{text}");
+    }
+
+    #[test]
+    fn the_block_prints_the_lead_and_not_the_whole_entry() {
+        let mut list = summary("idle", Some("fedcba9"), None);
+        list.tasks[0].lead = "a short lead".to_owned();
+        list.tasks[0].text = "a short lead Why: the whole entry, far too long for this block".to_owned();
+        let text = render(&list);
+        assert!(text.contains("-> [ ] A3 · a short lead"), "{text}");
+        assert!(!text.contains("far too long"), "the fields are one command away: {text}");
+    }
+
+    #[test]
+    fn a_detail_hint_follows_the_current_task_only() {
+        let text = render_with_detail(&summary("idle", Some("fedcba9"), None), Some("cargo xtask task"));
+        assert!(text.contains("   detail: cargo xtask task A3\n"), "{text}");
+        assert!(!text.contains("cargo xtask task A4"), "only the current task is pointed at: {text}");
+    }
+
+    #[test]
+    fn a_block_without_a_hint_names_no_command() {
+        let text = render(&summary("idle", Some("fedcba9"), None));
+        assert!(!text.contains("detail:"), "a host without a task command prints no hint: {text}");
     }
 
     #[test]
@@ -146,14 +190,27 @@ mod tests {
     }
 
     #[test]
-    fn a_session_note_prints_the_four_resume_fields() {
+    fn a_session_note_prints_every_field_a_session_resumes_from() {
         let text = render(&summary("doing", Some("fedcba9"), Some(note())));
-        for line in
-            ["  task: A3\n", "  now: the arc arm\n", "  blocked: nothing\n", "  run: cargo test -p furnicraft-ui\n"]
-        {
+        for line in [
+            "  task: A3\n",
+            "  goal: arcs in the card\n",
+            "  now: the arc arm\n",
+            "  blocked: nothing\n",
+            "  run: cargo test -p furnicraft-ui\n",
+            "  resume: finish the arc arm\n",
+        ] {
             assert!(text.contains(line), "the block must carry `{line}`: {text}");
         }
-        assert!(!text.contains("finish the arc arm"), "`resume:` is not one of the four: {text}");
+    }
+
+    #[test]
+    fn an_interrupted_session_says_so() {
+        let mut list = summary("doing", Some("fedcba9"), Some(note()));
+        list.interrupted = true;
+        let text = render(&list);
+        assert!(text.contains("  interrupted: yes\n"), "the flag the reader would derive is printed: {text}");
+        assert!(!render(&summary("idle", Some("fedcba9"), None)).contains("interrupted"), "an idle plan says nothing");
     }
 
     #[test]

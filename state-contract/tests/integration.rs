@@ -189,17 +189,19 @@ fn the_status_block_names_the_current_task_and_its_files() {
 }
 
 #[test]
-fn the_status_block_carries_the_note_a_session_resumes_from() {
+fn the_status_block_carries_every_field_a_session_resumes_from() {
     let text = status_with(&fixture("good-note"), &FakeGit::repository()).expect("a consistent plan renders");
     for line in [
         "  task: T1\n",
+        "  goal: the first user-visible result\n",
         "  now: the parser arm in `src/lib.rs`\n",
         "  blocked: nothing\n",
         "  run: cargo test -p state-contract\n",
+        "  resume: finish the parser arm",
     ] {
         assert!(text.contains(line), "the block must carry `{line}`: {text}");
     }
-    assert!(!text.contains("resume:"), "the four fields are task/now/blocked/run: {text}");
+    assert!(text.contains("  interrupted: yes\n"), "the note has an open step and `HEAD` is past `base`: {text}");
 }
 
 #[test]
@@ -265,4 +267,57 @@ fn head_is_a_legal_base_in_a_real_repository() {
     assert_eq!(summary.state.base, "HEAD");
     assert!(ProcessGit::new(&root).head().is_some(), "the scratch repository has a commit");
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_note_for_a_task_the_backlog_has_is_a_valid_plan() {
+    let summary = check_with(&fixture("good"), &FakeGit::repository()).expect("a note is not a violation");
+    assert_eq!(summary.tasks.len(), 3, "the note adds no task");
+
+    let error = check_with(&fixture("notes-unknown"), &FakeGit::repository())
+        .expect_err("a note for an unknown task must fail");
+    assert!(error.iter().any(|violation| violation.contains("does not have")), "{error:?}");
+
+    let error = check_with(&fixture("notes-empty"), &FakeGit::repository()).expect_err("an empty note must fail");
+    assert!(error.iter().any(|violation| violation.contains("is empty")), "{error:?}");
+}
+
+#[test]
+fn the_task_report_carries_the_entry_the_note_and_the_paths() {
+    use state_contract::{TaskOptions, task_view_with};
+
+    let view = task_view_with(&fixture("good"), "T1", &FakeGit::repository()).expect("the task reads");
+    assert_eq!(view.task.id, "T1");
+    assert_eq!(view.task.paths, ["src/lib.rs"], "the hint is split into paths");
+    assert_eq!(view.task.lead, "first task");
+    assert!(view.notes.as_deref().is_some_and(|note| note.contains("road ruled out")), "{:?}", view.notes);
+    assert_eq!(view.next.as_ref().map(|task| task.id.as_str()), Some("T2"), "the next task in file order");
+    assert!(view.session.is_none(), "the plan is idle");
+
+    let error = task_view_with(&fixture("good"), "T9", &FakeGit::repository()).expect_err("T9 does not exist");
+    assert!(error.iter().any(|violation| violation.contains("has no task `T9`")), "{error:?}");
+
+    let text = state_contract::task_with(&fixture("good"), "T1", &TaskOptions::default(), &FakeGit::repository())
+        .expect("the task renders");
+    assert!(text.contains("TASK ─ plan/BACKLOG.md"), "{text}");
+    assert!(text.contains("NOTES ─ plan/notes/T1.md"), "{text}");
+    assert!(text.contains("road ruled out"), "the note is printed in full: {text}");
+    assert!(text.contains("src/lib.rs"), "{text}");
+}
+
+#[test]
+fn the_dashboard_expands_one_task_when_asked() {
+    use state_contract::{DashboardOptions, dashboard_with};
+
+    let opts = DashboardOptions { task: Some("T1".to_owned()), width: 80, color: false };
+    let text = dashboard_with(&fixture("good"), &opts, &FakeGit::repository()).expect("the dashboard renders");
+    let task = text.find("TASK ─ plan/BACKLOG.md").expect("the task block is there");
+    let now = text.find("NOW ─ plan/BACKLOG.md").expect("the backlog blocks stay");
+    assert!(task < now, "the task block sits above the backlog sections: {text}");
+    assert!(text.contains("NOTES ─ plan/notes/T1.md"), "{text}");
+
+    let opts = DashboardOptions { task: Some("T9".to_owned()), width: 80, color: false };
+    let error = dashboard_with(&fixture("good"), &opts, &FakeGit::repository())
+        .expect_err("a task the backlog does not have is an error");
+    assert!(error.iter().any(|violation| violation.contains("has no task `T9`")), "{error:?}");
 }

@@ -1,14 +1,26 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|plan|status|ci>`
+//! Usage: `cargo xtask <layers|plan|status|task|next|dashboard|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
 //! the same change.
 
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+use state_contract::{Command as PlanCommand, Config, Global};
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -82,142 +94,9 @@ const CRATES: &[CrateRule] = &[
     CrateRule { name: "state-contract", layer: 0, forbidden: UI_GPU_DEPS },
 ];
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let code = match args.first().map(String::as_str) {
-        Some("layers") => report(check_layers()),
-        Some("plan") => report_plan(check_plan()),
-        Some("status") => print_status(),
-        Some("dashboard") => print_dashboard(),
-        Some("ci") => run_ci(),
-        Some("help") | Some("--help") | None => {
-            print_usage();
-            0
-        }
-        Some(other) => {
-            eprintln!("xtask: unknown task `{other}`");
-            print_usage();
-            2
-        }
-    };
-    std::process::exit(code);
-}
-
-fn print_usage() {
-    println!("usage: cargo xtask <layers|plan|status|dashboard|ci>");
-    println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
-    println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
-    println!("  status    print the current task and what follows, for a session start");
-    println!("  dashboard print a styled overview of the plan; each section names its source file");
-    println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
-}
-
-/// Runs the gate in order and returns the process exit code.
-fn run_ci() -> i32 {
-    let workspace = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
-    for (name, args) in CI_STEPS {
-        println!("ci: {name}");
-        let status = Command::new(env!("CARGO"))
-            .args(*args)
-            .current_dir(workspace)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status();
-        let status = match status {
-            Ok(status) => status,
-            Err(error) => {
-                eprintln!("ci: FAILED at {name}: cannot run cargo: {error}");
-                return 1;
-            }
-        };
-        if !status.success() {
-            eprintln!("ci: FAILED at {name}");
-            return status.code().unwrap_or(1);
-        }
-    }
-
-    if report(check_layers()) != 0 {
-        return 1;
-    }
-    if report_plan(check_plan()) != 0 {
-        return 1;
-    }
-    println!("ci: ok");
-    0
-}
-
 /// The workspace root, one level above `xtask`.
 fn workspace_root() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
-}
-
-/// Checks the plan files in the workspace root.
-fn check_plan() -> Result<state_contract::Summary, Vec<String>> {
-    state_contract::check(workspace_root())
-}
-
-/// Prints what the plan files say, without failing on a warning.
-fn print_status() -> i32 {
-    match state_contract::status(workspace_root()) {
-        Ok(text) => {
-            print!("{text}");
-            0
-        }
-        Err(violations) => report_plan(Err(violations)),
-    }
-}
-
-/// Prints the styled overview; every section names the file it was read from. A thin wrapper:
-/// all the layout lives in `state_contract::dashboard`.
-fn print_dashboard() -> i32 {
-    let opts = state_contract::DashboardOptions::default();
-    match state_contract::dashboard(workspace_root(), &opts) {
-        Ok(text) => {
-            println!("{text}");
-            0
-        }
-        Err(violations) => {
-            for violation in &violations {
-                eprintln!("plan: {violation}");
-            }
-            violations.len() as i32
-        }
-    }
-}
-
-fn report_plan(result: Result<state_contract::Summary, Vec<String>>) -> i32 {
-    match result {
-        Ok(summary) => {
-            println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
-            println!("plan: ok");
-            0
-        }
-        Err(violations) => {
-            for violation in &violations {
-                eprintln!("error: {violation}");
-            }
-            eprintln!("plan: FAILED ({} violation(s))", violations.len());
-            1
-        }
-    }
-}
-
-fn report(result: Result<usize, Vec<String>>) -> i32 {
-    match result {
-        Ok(checked) => {
-            println!("layers: {checked} crates checked");
-            println!("layers: ok");
-            0
-        }
-        Err(violations) => {
-            for violation in &violations {
-                eprintln!("error: {violation}");
-            }
-            eprintln!("layers: FAILED ({} violation(s))", violations.len());
-            1
-        }
-    }
 }
 
 fn check_layers() -> Result<usize, Vec<String>> {
@@ -345,6 +224,92 @@ fn string<'a>(value: &'a serde_json::Value, key: &str) -> Result<&'a str, String
         .get(key)
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("`cargo metadata` field `{key}` is not a string"))
+}
+
+/// The commands FurniCraft adds to the plan tool: its layer rules and the whole gate.
+///
+/// Everything else — `plan`, `status`, `task`, `next`, `dashboard`, `docs`, `state` — comes from
+/// `state-contract`, so this file holds the product's rules and no plan logic at all.
+static HOST: &[PlanCommand] = &[
+    PlanCommand {
+        name: "layers",
+        usage: "layers",
+        summary: "check crate rules: layering, forbidden/dev-only dependencies and no C/C++ sources",
+        run: |global, _, _| run_layers(global),
+    },
+    PlanCommand {
+        name: "ci",
+        usage: "ci",
+        summary: "run the whole gate: fmt, clippy, tests, layers, plan, docs",
+        run: |global, config, _| run_ci(global, config),
+    },
+];
+
+fn main() {
+    let config = Config { runner: "cargo xtask".to_owned(), name: "xtask".to_owned(), ..Config::default() };
+    std::process::exit(state_contract::cli::run_main(workspace_root(), HOST, config));
+}
+
+/// `layers`: the crate rules, printed the way the gate prints a plan failure.
+fn run_layers(_global: &Global) -> Result<(), String> {
+    match check_layers() {
+        Ok(checked) => {
+            println!("layers: {checked} crates checked");
+            println!("layers: ok");
+            Ok(())
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            Err(format!("layers: FAILED ({} violation(s))", violations.len()))
+        }
+    }
+}
+
+/// `ci`: the cargo steps, then the two checks that are not cargo commands.
+fn run_ci(global: &Global, config: &Config) -> Result<(), String> {
+    for (name, args) in CI_STEPS {
+        println!("ci: {name}");
+        let status = Command::new(env!("CARGO"))
+            .args(*args)
+            .current_dir(&global.root)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| format!("ci: FAILED at {name}: cannot run cargo: {error}"))?;
+        if !status.success() {
+            return Err(format!("ci: FAILED at {name}"));
+        }
+    }
+    run_layers(global)?;
+    match state_contract::check(&global.root) {
+        Ok(summary) => {
+            println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
+            println!("plan: ok");
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            return Err(format!("plan: FAILED ({} violation(s))", violations.len()));
+        }
+    }
+    match state_contract::cli::docs::check_in(&global.root, &config.decisions) {
+        Ok(count) => {
+            println!("docs: {count} decisions indexed");
+            println!("docs: ok");
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            return Err(format!("docs: FAILED ({} violation(s))", violations.len()));
+        }
+    }
+    println!("ci: ok");
+    Ok(())
 }
 
 #[cfg(test)]
