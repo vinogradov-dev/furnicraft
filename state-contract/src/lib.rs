@@ -35,6 +35,7 @@
 //! }
 //! ```
 
+pub mod cli;
 mod dashboard;
 pub mod edit;
 mod git;
@@ -47,6 +48,7 @@ mod validate;
 
 use std::path::Path;
 
+pub use cli::{Command, Config, Global};
 pub use dashboard::{DashboardOptions, dashboard, dashboard_with};
 pub use git::{Git, ProcessGit};
 pub use notes::{MAX_NOTE_LINES, note, note_path};

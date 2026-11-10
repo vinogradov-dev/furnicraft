@@ -1,6 +1,6 @@
 //! The writer half of the plan: the verbs that change `plan/*.md`.
 //!
-//! Every verb builds the new text with [`state_contract::edit`], copies `plan/` into a staging
+//! Every verb builds the new text with [`crate::edit`], copies `plan/` into a staging
 //! directory, applies the change there, runs the gate on the copy with the *real* repository's git
 //! facts and only then lets the bytes land through a temp file and a rename. A verb that would break
 //! the plan writes nothing and prints the violations instead (ADR 0085).
@@ -10,7 +10,7 @@
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use state_contract::{Git, ProcessGit, TaskStatus, edit};
+use crate::{Git, ProcessGit, TaskStatus, edit};
 
 /// The command line a verb that changes the plan accepts.
 #[derive(Clone, Debug, Default)]
@@ -141,7 +141,7 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 fn start(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let options = Options::parse(args, &["goal", "now", "run", "resume"])?;
     let id = options.words.first().ok_or("task start needs a task id")?.clone();
-    let summary = state_contract::check_with(root, git).map_err(violations)?;
+    let summary = crate::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
     if task.section != "Now" {
         return Err(format!("task {id} sits in `## {}`; only a task in `## Now` can start", task.section));
@@ -174,7 +174,7 @@ fn start(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 }
 
 /// The note a start writes: the four fields the gate requires, filled from the entry.
-fn session_note(id: &str, task: &state_contract::Task, options: &Options) -> String {
+fn session_note(id: &str, task: &crate::Task, options: &Options) -> String {
     let goal = options.value("goal").unwrap_or(&task.lead);
     let now = options.value("now").unwrap_or("starting the task");
     let run = options.value("run").unwrap_or("cargo xtask task");
@@ -231,7 +231,7 @@ fn note(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let options = Options::parse(args, &["body"])?;
     let id = options.words.first().ok_or("task note needs a task id")?.clone();
     let body = options.body("body")?;
-    let summary = state_contract::check_with(root, git).map_err(violations)?;
+    let summary = crate::check_with(root, git).map_err(violations)?;
     find(&summary.tasks, &id)?;
     let path = format!("plan/notes/{id}.md");
     let existing = std::fs::read_to_string(root.join(&path)).unwrap_or_default();
@@ -258,7 +258,7 @@ fn first_line(body: &str) -> String {
 fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let options = Options::parse(args, &["commit", "next"])?;
     let id = options.words.first().ok_or("task close needs a task id")?.clone();
-    let summary = state_contract::check_with(root, git).map_err(violations)?;
+    let summary = crate::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
     if task.status == TaskStatus::Done {
         return Err(format!("task {id} is already done"));
@@ -271,7 +271,7 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let backlog = edit::append_to_entry(&backlog, &id, &suffix)?;
     let backlog = edit::move_entry(&backlog, &id, "Done", edit::At::Top)?;
     let status = read(root, "plan/STATUS.md")?;
-    let tasks = state_contract::parse_backlog(&backlog);
+    let tasks = crate::parse_backlog(&backlog);
     let next = first_open(&tasks).ok_or_else(|| {
         "no unfinished task is left in `## Now`; set `STATE:` for the next milestone by hand".to_owned()
     })?;
@@ -306,7 +306,7 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let options = Options::parse(args, &[])?;
     let id = options.words.first().ok_or("task reopen needs a task id")?.clone();
-    let summary = state_contract::check_with(root, git).map_err(violations)?;
+    let summary = crate::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
     if task.status != TaskStatus::Done {
         return Err(format!("task {id} is not done"));
@@ -329,7 +329,7 @@ fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 fn drop(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let options = Options::parse(args, &[])?;
     let id = options.words.first().ok_or("task drop needs a task id")?.clone();
-    let summary = state_contract::check_with(root, git).map_err(violations)?;
+    let summary = crate::check_with(root, git).map_err(violations)?;
     if summary.state.task == id {
         return Err(format!("task {id} is the current task; move `STATE:` to another task first"));
     }
@@ -348,12 +348,12 @@ fn drop(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 }
 
 /// The task with this id, or a message naming the id that is missing.
-fn find<'a>(tasks: &'a [state_contract::Task], id: &str) -> Result<&'a state_contract::Task, String> {
+fn find<'a>(tasks: &'a [crate::Task], id: &str) -> Result<&'a crate::Task, String> {
     tasks.iter().find(|task| task.id == id).ok_or_else(|| format!("`plan/BACKLOG.md` has no task `{id}`"))
 }
 
 /// The first unfinished task in `## Now`, which is the task `STATE:` must name.
-fn first_open(tasks: &[state_contract::Task]) -> Option<&state_contract::Task> {
+fn first_open(tasks: &[crate::Task]) -> Option<&crate::Task> {
     tasks.iter().find(|task| task.section == "Now" && task.status != TaskStatus::Done)
 }
 
@@ -409,13 +409,8 @@ fn apply(root: &Path, changes: Changes, dry_run: bool, git: &dyn Git) -> Result<
     let backlog = resulting(root, &changes, "plan/BACKLOG.md").ok_or("`plan/BACKLOG.md` is missing")?;
     let session = resulting(root, &changes, "plan/SESSION.md");
     let notes = notes_after(root, &changes)?;
-    let plan = state_contract::PlanText {
-        status: &status,
-        backlog: &backlog,
-        session: session.as_deref(),
-        notes: Some(&notes),
-    };
-    state_contract::check_text(root, &plan, git).map_err(violations)?;
+    let plan = crate::PlanText { status: &status, backlog: &backlog, session: session.as_deref(), notes: Some(&notes) };
+    crate::check_text(root, &plan, git).map_err(violations)?;
 
     for (path, old, new) in &changed {
         println!("{}", diff(path, old.as_deref().unwrap_or(""), new));
@@ -583,7 +578,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use state_contract::{Git, TaskStatus};
+    use crate::{Git, TaskStatus};
 
     /// The git facts a verb needs, without a repository.
     struct FakeGit;
@@ -675,7 +670,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(status.contains("task=P6 state=doing"), "{status}");
         let session = text(&root, "plan/SESSION.md");
         assert!(session.contains("task: P6") && session.contains("now: "), "{session}");
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -707,7 +702,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(status.contains("task=S14 state=idle"), "{status}");
         assert!(status.contains("base=abc1234"), "the plan describes the checkout: {status}");
         assert!(!root.join("plan/SESSION.md").exists(), "the note is gone");
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -724,7 +719,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(added > last, "the new task joins the end: {backlog}");
         let status = text(&root, "plan/STATUS.md");
         assert!(status.contains("task=P6"), "the current task does not change: {status}");
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -736,7 +731,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         let backlog = text(&root, "plan/BACKLOG.md");
         assert!(backlog.contains("  Done: a test per refusal"), "{backlog}");
         assert!(backlog.contains("  `files: src/a.rs, src/b.rs`"), "{backlog}");
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -764,7 +759,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         let note = text(&root, "plan/notes/P6.md");
         assert!(note.contains("a second thought"), "{note}");
         assert_eq!(note.matches("# P6").count(), 1, "the heading is written once: {note}");
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -849,7 +844,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         let root = project("state", STATUS, BACKLOG, None);
         state(&root, &["set".to_owned(), "phase=A".to_owned()], &FakeGit).expect("phase moves to A");
         assert!(text(&root, "plan/STATUS.md").contains("phase=A"));
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -862,7 +857,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(text(&root, "plan/SESSION.md").contains("  [x] the writer"));
         run(&root, &["step", "P6", "--add", "the verbs"]).expect("a step is added");
         assert!(text(&root, "plan/SESSION.md").contains("  [ ] the verbs"));
-        state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
+        crate::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -882,7 +877,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
     fn a_task_status_is_read_back_as_the_gate_sees_it() {
         let root = project("status", STATUS, BACKLOG, None);
         run(&root, &["start", "P6"]).expect("P6 starts");
-        let summary = state_contract::check_with(&root, &FakeGit).expect("the plan is valid");
+        let summary = crate::check_with(&root, &FakeGit).expect("the plan is valid");
         let task = summary.tasks.iter().find(|task| task.id == "P6").expect("P6 is in the backlog");
         assert_eq!(task.status, TaskStatus::Doing);
         let _ = std::fs::remove_dir_all(&root);

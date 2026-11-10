@@ -29,21 +29,24 @@ README describes the product, the state lives in `plan/STATUS.md`.
 
 ## Usage
 
-`cargo run -p state-contract -- dashboard` shows the current state with source paths: every section
-(`STATE`, `NOW`, `NEXT`, `SESSION`, `QUESTIONS`, `DEBT`) names the file it was read from; sections for
-missing files are omitted. Flags: `--root <path>` (default `.`), `--width <n>` (default 80, longer
-lines truncate with `…`), `--no-color` (ANSI is on only when stdout is a terminal), `--task <id>`
-(expand one task in the same frame). A session that looks interrupted — `state=doing`, a
-`plan/SESSION.md`, `base != HEAD` and open `[ ]` steps — carries a red `INTERRUPTED` marker in its
-header.
+The crate ships a complete command line. `cargo run -p state-contract -- help` lists the table, and
+`help <command>` prints one usage line; a host that embeds the tool adds its own commands to the same
+table, so one help lists everything.
 
-`cargo run -p state-contract -- task <id>` is the whole task on one screen: the entry with its
-fields, the `files:` hint, the `plan/map.md` rows that name those paths, the debt and questions that
-name them (or all of them, with `--all`; the block says how many it left out), the note, the notes of
-*other* tasks that name the same files, the commit that closed a done task, and the live session
-fields while it is the current task. `cargo run -p state-contract -- task list` prints one line per
-task; a host adds the filters it needs (`xtask` has `--section`, `--status`, `--phase`, `--grep`).
-`--width` and `--no-color` apply as above.
+| Command | Does |
+|---|---|
+| `plan` | the gate: the plan files, the notes, the map, the debt tags and the base against git |
+| `status` | the session-start block: `STATE`, `head`, the note's fields, `interrupted`, the next tasks |
+| `task [<id>]` | one task in full: fields, files with line counts and last commits, map rows, notes, `RELATED`, debt, questions, ADRs, the closing commit |
+| `task list` | one line per task, filtered by `--section`, `--status`, `--phase` and `--grep` |
+| `task --md` / `--paths` | the same task for an agent, or one path per line for a shell loop |
+| `task add\|start\|set\|step\|note\|close\|reopen\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run` |
+| `state set k=v` / `state next` | one field of the `STATE:` line, or the `## Next` paragraph |
+| `dashboard [--task <id>]` | the framed overview, optionally with one task expanded |
+| `docs` | the decisions `README.md` against the files it indexes |
+
+Every command takes `--root <path>` (default `.`), `--width <n>` (default 80) and `--no-color`;
+ANSI is on only when stdout is a terminal.
 
 ### Entry fields
 
@@ -114,9 +117,22 @@ session note without `now:` turns a resume into a rewrite.
    mkdir -p plan/notes && cp ../state-contract/templates/NOTE.md plan/notes/{{TASK_ID}}.md
    ```
 
-3. Call `state_contract::check` from CI, `state_contract::status` from your task runner and
-   `state_contract::task_view` where you print a task in full, then paste
-   `templates/AGENTS.section.md` into the instructions your agent reads:
+3. Point your runner at the crate's table — this is all a host needs to write:
+
+   ```rust
+   // xtask/src/main.rs
+   fn main() {
+       let config = state_contract::Config { runner: "cargo xtask".to_owned(), ..Config::default() };
+       std::process::exit(state_contract::cli::run_main(&workspace_root(), &[], config));
+   }
+   ```
+
+   Add your own commands to the same table with `state_contract::cli::main_with(&MY_COMMANDS, config)`.
+   Nothing in the host reads or writes a plan file. Then paste `templates/AGENTS.section.md` into the
+   instructions your agent reads.
+
+   A library caller can still use the pieces directly — `check`, `status`, `task_view`, `edit`,
+   `check_text` — and the `State`/`Task` values they return.
 
    ```rust
    let workspace = Path::new(".");
@@ -157,10 +173,9 @@ trait for a fake with a `head`, a commit list and an ancestor list.
 
 ## Used by
 
-FurniCraft — a native cabinet-furniture editor in Rust — is the first consumer: `cargo xtask plan` calls
-`state_contract::check`, `cargo xtask status` calls `state_contract::status`, `cargo xtask task` prints
-the report plus the facts only a checkout has (production and test lines, the last commit, the ADR
-titles), and its `AGENTS.md` §1.1 points at `templates/AGENTS.section.md`.
+FurniCraft — a native cabinet-furniture editor in Rust — is the first consumer: its `cargo xtask` is a
+table entry, and the only code it adds is its layer rules and its `ci` step list. Everything else —
+`plan`, `status`, `task`, `next`, `dashboard`, `docs`, `state` — comes from this crate.
 
 ## License
 

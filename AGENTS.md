@@ -99,8 +99,8 @@ crates/kernel          L1  geometry kernel port: profiles, bodies, booleans, tes
 crates/model           L1  document data: placements, panels, assemblies, hardware, materials
 crates/units, geom     L0  lengths (micrometres), angles (millidegrees), vectors, frames, bounds, meshes
 crates/testkit         dev-only test helpers (may depend on anything)
-state-contract         tool  plan gate: parses and checks STATUS/BACKLOG/SESSION, reusable
-xtask                  workspace checks; not part of the product
+state-contract         tool  plan gate, report, writer and CLI; a project imports it, reusable
+xtask                  the host's rules and the ci gate; no plan logic
 ```
 
 - **Layering is enforced** by `cargo xtask layers`. A crate may depend only on crates in **lower** layers, and the same table lists per-crate forbidden dependencies. A new crate must be registered in `xtask/src/main.rs` and in `PROJECT.md` in the same change.

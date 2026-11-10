@@ -1,4 +1,4 @@
-//! The decision index: `docs/decisions/README.md` must list every record and nothing else.
+//! The decision index: `<decisions>/README.md` must list every record and nothing else.
 //!
 //! The index is how a session finds a decision it did not know it needed; a record that is not in the
 //! table is invisible, and a row that points at a missing file sends the reader nowhere. Both are the
@@ -8,9 +8,14 @@ use std::path::Path;
 
 /// The number of decisions the index and the directory agree on, or every mismatch.
 pub fn check(root: &Path) -> Result<usize, Vec<String>> {
-    let directory = root.join("docs/decisions");
-    let entries =
-        std::fs::read_dir(&directory).map_err(|error| vec![format!("cannot read `docs/decisions/`: {error}")])?;
+    check_in(root, Path::new("docs/decisions"))
+}
+
+/// [`check`] with the decisions directory named by the caller.
+pub fn check_in(root: &Path, relative: &Path) -> Result<usize, Vec<String>> {
+    let directory = root.join(relative);
+    let shown = relative.display();
+    let entries = std::fs::read_dir(&directory).map_err(|error| vec![format!("cannot read `{shown}/`: {error}")])?;
     let mut files: Vec<String> = entries
         .flatten()
         .filter(|entry| entry.path().is_file())
@@ -18,7 +23,7 @@ pub fn check(root: &Path) -> Result<usize, Vec<String>> {
         .collect();
     files.sort();
     let index = std::fs::read_to_string(directory.join("README.md"))
-        .map_err(|error| vec![format!("cannot read `docs/decisions/README.md`: {error}")])?;
+        .map_err(|error| vec![format!("cannot read `{shown}/README.md`: {error}")])?;
     let mut listed: Vec<String> = Vec::new();
     for (offset, _) in index.match_indices("](") {
         let rest = index.get(offset.saturating_add(2)..).unwrap_or_default();
@@ -32,12 +37,12 @@ pub fn check(root: &Path) -> Result<usize, Vec<String>> {
     let mut violations = Vec::new();
     for file in &files {
         if !listed.contains(file) {
-            violations.push(format!("`docs/decisions/` has {file}, but `README.md` has no row for it"));
+            violations.push(format!("`{shown}/` has {file}, but `README.md` has no row for it"));
         }
     }
     for row in &listed {
         if !files.contains(row) {
-            violations.push(format!("`docs/decisions/README.md` lists {row}, but no file carries that number"));
+            violations.push(format!("`{shown}/README.md` lists {row}, but no file carries that number"));
         }
     }
     if violations.is_empty() { Ok(files.len()) } else { Err(violations) }

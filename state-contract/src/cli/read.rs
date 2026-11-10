@@ -11,10 +11,10 @@
 //! takes the task `STATE:` names.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 use std::path::Path;
 
-use state_contract::{Git, ProcessGit, Section, Style, Summary, TaskOptions, TaskView};
+use super::{Config, Global};
+use crate::{Git, ProcessGit, Section, Style, Summary, TaskOptions, TaskView};
 
 /// What the caller asked for, printed one way or another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,15 +27,32 @@ enum Form {
     Paths,
 }
 
-/// The flags `task` accepts.
+/// The flags `task` accepts once the globals are split off.
 struct Flags {
     id: Option<String>,
     form: Form,
     all: bool,
-    width: usize,
-    no_color: bool,
-    /// Whether ANSI codes reach the terminal: `--no-color` or a pipe turns them off.
-    color: bool,
+}
+
+impl Flags {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut flags = Flags { id: None, form: Form::Human, all: false };
+        for arg in args {
+            match arg.as_str() {
+                "--md" => flags.form = Form::Markdown,
+                "--paths" => flags.form = Form::Paths,
+                "--all" => flags.all = true,
+                other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
+                other => {
+                    if flags.id.is_some() {
+                        return Err(format!("task takes one id, got `{other}` too"));
+                    }
+                    flags.id = Some(other.to_owned());
+                }
+            }
+        }
+        Ok(flags)
+    }
 }
 
 /// One file the task names: what the checkout says about it.
@@ -67,31 +84,27 @@ impl Fact {
     }
 }
 
-/// `task [<id>] [--md|--paths] [--all] [--width <n>] [--no-color]`, `task list [filters]`, or `next`
-/// with no arguments.
-pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
-    if args.first().is_some_and(|word| word == "list") {
-        return list(root, &args[1..]);
-    }
+/// `task [<id>] [--md|--paths] [--all]`: the report for one task, or for the task `STATE:` names.
+pub(crate) fn report(root: &Path, config: &Config, global: &Global, args: &[String]) -> Result<(), String> {
     let flags = Flags::parse(args)?;
-    let summary = state_contract::check(root).map_err(report)?;
+    let summary = crate::check(root).map_err(super::violations)?;
     let id = flags.id.clone().unwrap_or_else(|| summary.state.task.clone());
-    let view = state_contract::task_view_with(root, &id, &ProcessGit::new(root)).map_err(report)?;
+    let view = crate::task_view_with(root, &id, &ProcessGit::new(root)).map_err(super::violations)?;
     let facts = facts(root, &view);
-    let decisions = decisions(root, &view);
+    let decisions = decisions(root, config, &view);
     let text = match flags.form {
         Form::Paths => facts.iter().map(|fact| format!("{}\n", fact.path)).collect(),
         Form::Markdown => markdown(&summary, &view, &facts, &decisions, flags.all),
-        Form::Human => human(&summary, &view, &facts, &decisions, &flags),
+        Form::Human => human(&summary, &view, &facts, &decisions, global, flags.all),
     };
     print!("{text}");
     Ok(())
 }
 
 /// One line per task, grouped by section, in file order: the read side without reading the file.
-fn list(root: &Path, args: &[String]) -> Result<(), String> {
+pub(crate) fn list(root: &Path, args: &[String]) -> Result<(), String> {
     let filters = Filters::parse(args)?;
-    let summary = state_contract::check(root).map_err(report)?;
+    let summary = crate::check(root).map_err(super::violations)?;
     let mut section = String::new();
     let mut shown = 0usize;
     for task in &summary.tasks {
@@ -117,7 +130,7 @@ fn list(root: &Path, args: &[String]) -> Result<(), String> {
 /// The filters `task list` accepts: a section, a status, a phase and a text fragment.
 struct Filters {
     section: Option<String>,
-    status: Option<state_contract::TaskStatus>,
+    status: Option<crate::TaskStatus>,
     phase: Option<String>,
     grep: Option<String>,
 }
@@ -147,9 +160,9 @@ impl Filters {
                 "--status" => {
                     let word = value(&mut index)?.to_lowercase();
                     filters.status = Some(match word.as_str() {
-                        "open" => state_contract::TaskStatus::Open,
-                        "doing" => state_contract::TaskStatus::Doing,
-                        "done" => state_contract::TaskStatus::Done,
+                        "open" => crate::TaskStatus::Open,
+                        "doing" => crate::TaskStatus::Doing,
+                        "done" => crate::TaskStatus::Done,
                         other => return Err(format!("--status takes open, doing or done, got `{other}`")),
                     });
                 }
@@ -159,7 +172,7 @@ impl Filters {
         Ok(filters)
     }
 
-    fn matches(&self, task: &state_contract::Task) -> bool {
+    fn matches(&self, task: &crate::Task) -> bool {
         if let Some(section) = &self.section
             && !task.section.eq_ignore_ascii_case(section)
         {
@@ -201,11 +214,18 @@ fn phase(id: &str) -> &str {
 }
 
 /// The framed report: the plan blocks, the code facts after the files, the decisions last.
-fn human(summary: &Summary, view: &TaskView, facts: &[Fact], decisions: &[String], flags: &Flags) -> String {
-    let style = Style::new(flags.width, flags.color);
-    let opts = TaskOptions { width: flags.width, color: flags.color, all: flags.all };
+fn human(
+    summary: &Summary,
+    view: &TaskView,
+    facts: &[Fact],
+    decisions: &[String],
+    global: &Global,
+    all: bool,
+) -> String {
+    let style = Style::new(global.width, global.color);
+    let opts = TaskOptions { width: global.width, color: global.color, all };
     let mut blocks = vec![Section::new("STATE", "plan/STATUS.md").line(plan_line(summary))];
-    let mut task = state_contract::task_sections(view, &opts);
+    let mut task = crate::task_sections(view, &opts);
 
     // The code facts belong beside the files the plan names, before the map points anywhere.
     let code = code_section(facts);
@@ -219,7 +239,7 @@ fn human(summary: &Summary, view: &TaskView, facts: &[Fact], decisions: &[String
     if !decisions.is_empty() {
         blocks.push(Section::new("DECISIONS", "docs/decisions/").lines(decisions.to_vec()));
     }
-    state_contract::sections(&blocks, style)
+    crate::sections(&blocks, style)
 }
 
 /// The agent form: every label on its own line, no box drawing, nothing to un-wrap.
@@ -429,13 +449,13 @@ fn push_token(current: &mut String, tokens: &mut Vec<String>) {
 }
 
 /// The ADRs the entry and the note cite, with their titles read from `docs/decisions/`.
-fn decisions(root: &Path, view: &TaskView) -> Vec<String> {
+fn decisions(root: &Path, config: &Config, view: &TaskView) -> Vec<String> {
     let mut text = view.task.text.clone();
     if let Some(notes) = &view.notes {
         text.push('\n');
         text.push_str(notes);
     }
-    let titles = decision_titles(root);
+    let titles = decision_titles(&root.join(&config.decisions));
     let mut found: Vec<String> = Vec::new();
     for number in adr_numbers(&text) {
         let title = titles.get(&number).cloned().unwrap_or_else(|| format!("{number}. (no file in docs/decisions/)"));
@@ -447,9 +467,9 @@ fn decisions(root: &Path, view: &TaskView) -> Vec<String> {
 }
 
 /// The first line of every `docs/decisions/NNNN-*.md`, keyed by the number.
-fn decision_titles(root: &Path) -> BTreeMap<String, String> {
+fn decision_titles(directory: &Path) -> BTreeMap<String, String> {
     let mut titles = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(root.join("docs/decisions")) else {
+    let Ok(entries) = std::fs::read_dir(directory) else {
         return titles;
     };
     for entry in entries.flatten() {
@@ -507,58 +527,12 @@ fn push_unique(numbers: &mut Vec<String>, number: &str) {
     }
 }
 
-/// Prints every violation on its own line and returns the summary as the error.
-fn report(violations: Vec<String>) -> String {
-    if violations.is_empty() {
-        return "the plan is not readable".to_owned();
-    }
-    for violation in &violations {
-        eprintln!("plan: {violation}");
-    }
-    format!("the plan has {} violation(s)", violations.len())
-}
-
-impl Flags {
-    fn parse(args: &[String]) -> Result<Self, String> {
-        let mut flags = Flags { id: None, form: Form::Human, all: false, width: 80, no_color: false, color: false };
-        let mut index = 0;
-        while index < args.len() {
-            let arg = args[index].as_str();
-            index += 1;
-            match arg {
-                "--md" => flags.form = Form::Markdown,
-                "--paths" => flags.form = Form::Paths,
-                "--all" => flags.all = true,
-                "--no-color" => flags.no_color = true,
-                "--width" => {
-                    let value = args.get(index).ok_or("--width needs a value")?;
-                    index += 1;
-                    flags.width =
-                        value.parse::<usize>().map_err(|_| format!("--width needs a number, got `{value}`"))?;
-                }
-                other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
-                other => {
-                    if flags.id.is_some() {
-                        return Err(format!("task takes one id, got `{other}` too"));
-                    }
-                    flags.id = Some(other.to_owned());
-                }
-            }
-        }
-        if flags.width < 24 {
-            return Err(format!("--width must be at least 24, got {}", flags.width));
-        }
-        flags.color = !flags.no_color && std::io::stdout().is_terminal();
-        Ok(flags)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use state_contract::{Field, Task, TaskStatus};
+    use crate::{Field, Task, TaskStatus};
 
     #[test]
     fn production_lines_stop_at_the_last_test_module() {
@@ -680,7 +654,7 @@ mod tests {
             task: task.clone(),
             next: None,
             notes: Some("measured `old.rs`\n".to_owned()),
-            related: vec![state_contract::RelatedNote { id: "S1".to_owned(), title: "the same file".to_owned() }],
+            related: vec![crate::RelatedNote { id: "S1".to_owned(), title: "the same file".to_owned() }],
             closed: None,
             map: Vec::new(),
             debt: vec!["[mesh] a gap in crates/x".to_owned(), "[render] elsewhere".to_owned()],
@@ -688,7 +662,7 @@ mod tests {
             session: None,
         };
         let summary = Summary {
-            state: state_contract::State {
+            state: crate::State {
                 milestone: "M7".to_owned(),
                 phase: None,
                 task: "S14".to_owned(),
