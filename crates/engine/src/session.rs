@@ -1538,6 +1538,44 @@ mod tests {
     }
 
     #[test]
+    fn grouping_is_one_undo_entry_anchored_at_the_childrens_centre() {
+        let mut session = sample_session();
+        let root = session.project().root().id();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("drawer id");
+        let before_panel = session.project().world_placement(panel).expect("panel world");
+        let before_drawer = session.project().world_placement(drawer).expect("drawer world");
+        let revision = session.project().revision();
+
+        let group = NodeGroup { nodes: vec![panel, drawer], name: "Cabinet".to_owned() };
+        let group_id = session
+            .dispatch("node.group", &json_params(&group))
+            .expect("group siblings")
+            .created_id()
+            .expect("group id");
+
+        // One command, one revision: the anchor and the shifted children are written together.
+        assert_eq!(session.project().revision().get(), revision.get() + 1);
+        let container = session.project().container(group_id).expect("group");
+        assert_ne!(container.placement().translation().length(), 0.0, "the group is anchored at the centre");
+        assert_eq!(session.project().pivot(group_id), Some(Pivot::ZERO));
+        let world_panel = session.project().world_placement(panel).expect("panel world after");
+        assert!(
+            (world_panel.translation() - before_panel.translation()).length() < 1.1e-3,
+            "the panel keeps its world transform"
+        );
+        let world_drawer = session.project().world_placement(drawer).expect("drawer world after");
+        assert!((world_drawer.translation() - before_drawer.translation()).length() < 1.1e-3);
+
+        session.undo().expect("undo grouping");
+        assert!(session.project().container(group_id).is_none());
+        assert_eq!(session.project().parent_of(panel), Some(root));
+        assert_eq!(session.project().parent_of(drawer), Some(root));
+        assert_eq!(session.project().world_placement(panel), Some(before_panel));
+        assert_eq!(session.project().world_placement(drawer), Some(before_drawer));
+    }
+
+    #[test]
     fn property_commands_edit_values_as_single_undo_steps() {
         let mut session = sample_session();
         let panel = Id::new(2).expect("panel id");
@@ -1917,14 +1955,9 @@ mod tests {
         session.undo().expect("undo centring");
         assert_eq!(session.project().pivot(drawer), Some(pivot));
         session.undo().expect("undo set");
-        assert_eq!(
-            session.project().pivot(drawer),
-            Some(Pivot::new(
-                Length::from_micrometres(350_000),
-                Length::from_micrometres(250_000),
-                Length::from_micrometres(9_000),
-            ))
-        );
+        // The drawer was built with children but a container is born at its own origin; the centre
+        // is what `node.pivot.center` writes, not a default.
+        assert_eq!(session.project().pivot(drawer), Some(Pivot::ZERO));
         assert!(!session.can_undo(), "each pivot edit is exactly one undo entry");
 
         let registry = CommandRegistry::new();

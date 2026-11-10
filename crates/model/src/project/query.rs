@@ -167,8 +167,8 @@ impl Project {
     /// The stored manipulation pivot of a node, in its own frame.
     ///
     /// A panel keeps its local zero, the minimum corner of its nominal rectangle, until the user
-    /// moves the pivot; a container created with children starts at the centre of their local
-    /// bounding box and an empty container starts at its own origin. The root is not selectable and
+    /// moves the pivot; a container is born at its own origin and a group re-anchors its children
+    /// there (so a group's translation is the centre of their union). The root is not selectable and
     /// always has a zero pivot. Returns `None` for an unknown id.
     pub fn pivot(&self, id: Id) -> Option<Pivot> {
         if id == self.root.id() {

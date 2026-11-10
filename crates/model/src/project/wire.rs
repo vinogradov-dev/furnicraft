@@ -46,9 +46,10 @@ impl TryFrom<ProjectWire> for Project {
             migrate_machining_to_nominal(&mut root, 1)?;
         }
         if wire.schema_version <= 5 {
-            // Before schema 6 the pivot was derived from the current tree. Materialize the new
+            // Before schema 6 the pivot was derived from the current tree. Materialize the old
             // default once so it stays stable: panels keep the local origin, non-empty containers
-            // start at the centre of their local panel bounds.
+            // start at the centre of their local panel bounds. This is the only writer of such a
+            // centre; a container created today is born at zero and no pass re-normalizes it.
             migrate_container_pivots(&mut root, 1)?;
         }
         root.set_pivot(Pivot::ZERO);
