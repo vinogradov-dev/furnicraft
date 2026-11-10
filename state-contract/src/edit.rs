@@ -355,8 +355,13 @@ pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, Stri
     let mut layout = Layout::parse(text);
     let at = layout.heading(heading)?;
     let end = layout.sections.iter().map(|(_, at)| *at).filter(|start| *start > at).min().unwrap_or(layout.lines.len());
+    // A section that is already wrapped wider keeps its width: the file's own convention wins over
+    // the constant, so rewriting one paragraph does not re-flow the section and its line budget.
+    let width =
+        layout.lines.get(at.saturating_add(1)..end).unwrap_or_default().iter().map(|line| line.chars().count()).max();
+    let width = width.unwrap_or(PROSE_WIDTH).max(PROSE_WIDTH);
     let mut replacement: Vec<String> = vec![String::new()];
-    replacement.extend(wrap_prose(body));
+    replacement.extend(wrap_prose(body, width));
     if end < layout.lines.len() {
         replacement.push(String::new());
     }
@@ -399,19 +404,35 @@ pub fn set_state(status: &str, values: &[(String, String)]) -> Result<String, St
     Ok(text)
 }
 
-/// The prose of a section, wrapped at [`PROSE_WIDTH`] with the blank lines between paragraphs kept.
-fn wrap_prose(body: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    for paragraph in body.lines().map(str::trim) {
-        if paragraph.is_empty() {
+/// The prose of a section, with the blank lines between paragraphs kept.
+///
+/// A line that already fits [`PROSE_WIDTH`] is copied as it is: a caller that hands the tool the
+/// plan's own text gets it back byte for byte, so a rewrite of one paragraph does not re-flow the
+/// section and push a file over its line budget. Only a line that is too long is wrapped.
+fn wrap_prose(body: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in body.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            if lines.last().is_some_and(|line| !line.is_empty()) {
+                lines.push(String::new());
+            }
             continue;
         }
+        // The indentation a bullet's continuation lines carry is part of the file, not noise.
+        let indent = raw.get(..raw.len().saturating_sub(raw.trim_start().len())).unwrap_or_default();
+        if raw.trim_end().chars().count() <= width {
+            lines.push(raw.trim_end().to_owned());
+            continue;
+        }
+        let room = width.saturating_sub(indent.chars().count()).max(1);
         let mut current = String::new();
-        for word in paragraph.split_whitespace() {
+        for word in trimmed.split_whitespace() {
             if !current.is_empty()
-                && current.chars().count().saturating_add(1).saturating_add(word.chars().count()) > PROSE_WIDTH
+                && current.chars().count().saturating_add(1).saturating_add(word.chars().count()) > room
             {
-                lines.push(std::mem::take(&mut current));
+                lines.push(format!("{indent}{current}"));
+                current = String::new();
             }
             if !current.is_empty() {
                 current.push(' ');
@@ -419,14 +440,28 @@ fn wrap_prose(body: &str) -> Vec<String> {
             current.push_str(word);
         }
         if !current.is_empty() {
-            lines.push(current);
+            lines.push(format!("{indent}{current}"));
         }
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
     }
     lines
 }
 
 /// The wrapped lines of one labelled field, `Label: body` on the first.
+///
+/// A body whose lines already fit [`FIELD_WIDTH`] is copied line for line, so setting one field
+/// does not re-flow the whole of it: the diff a session reviews is the change it made.
 fn field_lines(label: &str, body: &str) -> Vec<String> {
+    let fits = body.lines().all(|line| line.chars().count() <= FIELD_WIDTH);
+    if fits && body.lines().count() > 1 {
+        let mut lines: Vec<String> = body.lines().map(|line| format!("{INDENT}{}", line.trim_end())).collect();
+        if let Some(first) = lines.first_mut() {
+            *first = format!("{INDENT}{label}: {}", first.trim_start_matches(INDENT));
+        }
+        return lines;
+    }
     let mut lines = Vec::new();
     let mut current = format!("{INDENT}{label}:");
     for word in body.split_whitespace() {
@@ -656,11 +691,39 @@ mod tests {
     }
 
     #[test]
+    fn a_section_rewrite_keeps_each_line_that_already_fits() {
+        // A bulleted section, wrapped by hand at 100, keeps its indent, its breaks and its width:
+        // a session that changes one paragraph must not re-flow the rest of the file.
+        let status = "STATE: milestone=M1 task=A3 state=idle base=abc1234 updated=2026-01-01\n\n\
+                      ## Where we are\n\n\
+                      - M7 — objects. `Container` is the only container kind, every node carries typed\n\
+                      \x20 properties.\n\n- S7 audited the rules.\n\n## Next\n\nA3 is next.\n";
+        let body = "- M7 — objects. `Container` is the only container kind, every node carries typed\n  properties.\n\n- S7 audited the rules.\n- S8 gave the fixtures one definition.\n";
+        let text = set_section(status, "Where we are", body).expect("the section exists");
+        assert!(text.contains("  properties.\n\n- S7 audited the rules.\n"), "{text}");
+        assert!(text.contains("- S8 gave the fixtures one definition."), "{text}");
+    }
+
+    #[test]
+    fn a_section_written_wider_keeps_its_own_width() {
+        let wide = "w".repeat(105);
+        let status =
+            format!("STATE: milestone=M1 task=A3 state=idle base=abc1234 updated=2026-01-01\n\n## Next\n\n{wide}\n");
+        let text = set_section(&status, "Next", &format!("{wide} {wide}")).expect("Next exists");
+        let body = text.split("## Next\n\n").nth(1).unwrap_or_default();
+        assert!(body.lines().count() >= 2, "the paragraph wraps: {text}");
+        assert!(
+            body.lines().take(2).all(|line| line.chars().count() <= 105),
+            "the section's own width wins over the constant: {text}"
+        );
+    }
+
+    #[test]
     fn a_section_body_is_replaced_and_the_headings_around_it_stay() {
         let status = "STATE: milestone=M1 task=A3 state=idle base=abc1234 updated=2026-01-01\n\n\
                       ## Where we are\n\nProse.\n\n## Next\n\nA3 is next.\n\n## Index\n\n| File |\n";
         let text = set_section(status, "Next", "A4 is next: the card.\n\nThen A5.").expect("Next exists");
-        assert!(text.contains("## Next\n\nA4 is next: the card.\nThen A5.\n\n## Index"), "{text}");
+        assert!(text.contains("## Next\n\nA4 is next: the card.\n\nThen A5.\n\n## Index"), "{text}");
         assert!(text.contains("## Where we are\n\nProse.\n"), "the section above stays: {text}");
         assert!(set_section(status, "Gone", "x").is_err());
     }

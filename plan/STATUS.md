@@ -48,7 +48,10 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init` and the command table
   (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and the `ci` step list and registers them
-  into that table (P8). Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
+  into that table (P8). P10 completed the write surface (`--repair`, `task add --at top`, `reopen
+  --next`, `state where`, `file`) and the gate now follows the links it used to ignore: every
+  `files:` hint, a closed entry's ADR, the `STATE:` keys, the reference files, a stale `base`.
+  Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
