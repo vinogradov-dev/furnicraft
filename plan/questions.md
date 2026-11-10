@@ -30,3 +30,10 @@ this file only when a task touches the question.
   creation/edit results; whether 20 pt tool buttons fit the current 16 pt row height or the set keeps
   16 pt everywhere and relies on tone alone; and whether `assets/README.md`'s "a shared drawing is two
   files" rule survives the icon alias table.
+- `Project`'s mutations are one command per attribute (`panel.resize`, `panel.material.set`,
+  `panel.edge_banding.set`, …), so a new panel attribute edits `model/panel`,
+  `model/project/panel_cmds`, `engine/panel_cmds`, `engine/commands`, `engine/lib.rs`, `ui/panel_card`
+  and often `ui/palette` — seven files in three layers, against the refactor's three-file locality stick
+  (F4 in the S7 audit). One `Project::apply(Change)` value per area would collapse the engine side to
+  one module and the UI to one card, at the cost of rewriting every command or keeping the stable ids
+  as thin wrappers over the change values. Decide before M8 puts hardware commands on the same pattern.

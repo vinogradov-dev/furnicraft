@@ -6,7 +6,8 @@ is not part of a session start. An entry leaves this file when the fix lands.
 Tags: `[view-state]` session versus document, `[render]` lighting and drawing, `[mesh]` geometry
 editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]` tree and files,
 `[gizmo]` manipulation, `[types]` properties and furniture types, `[engine]` commands and history,
-`[perf]` frame and picking cost, `[assistant]`, `[ui]` panels, toolbars and icon artwork, `[vendor]`.
+`[perf]` frame and picking cost, `[assistant]`, `[ui]` panels, toolbars and icon artwork, `[design]`
+module size, layer arrows and duplicated knowledge, `[vendor]`.
 
 - `[view-state]` Selection and open containers still live in `ui::Editor` and the view camera in the
   shell, although ADR 0029 places them in the session. Cameras and lights are document nodes with
@@ -136,3 +137,18 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   `object.path.extrude` from the command palette or an API, and `object.extrude.create` from a
   contour, leave the body without a pull. The shell reads the height from the command result, so
   another entry point needs the same signal before it can pull too.
+
+- `[design]` `apps/furnicraft/src/main.rs` `viewport` is one 635-line function. U45 moves it onto
+  `Document` with the rest of the scene-bound state, so the S7 audit filed no split; it is measured
+  again and split there.
+- `[design]` `impl FurniCraftApp` is 1620 lines over 40 fields. U45 extracts about twenty fields into
+  `Document` and the viewport and file state into `tabs.rs`, so the audit filed only the two moves U45
+  does not perform (S21 Home, S22 the chrome) and the impl is re-measured after U45.
+- `[design]` `ui/panel_card.rs` (989), `ui/object_card.rs` (989) and `ui/toolbars.rs` (982) sit under
+  B4's 1000-line ceiling and their impls under 800 (`PanelCard` 432, `ObjectCard` 469, and
+  `show_group_row` 146 is under the 150-line function ceiling), so the audit filed no split although F6
+  named them. Re-measure when a section grows.
+- `[design]` Twenty modules carry 25 or more public items (B6). Each is one value family or one command
+  family whose header states what holds it together (`geom` segments, `model/contour.rs`,
+  `model/primitive.rs`, `engine/node_cmds.rs`, `model/panel/machining.rs`, `ui/theme.rs`); the audit
+  filed only the two over B4's size ceiling (S9, S14).

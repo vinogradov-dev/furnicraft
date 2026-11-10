@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
+- `[~]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
   audit re-measures the tree, checks every finding against the code as it stands then, and files one
   small behaviour-preserving subtask per finding (`S8`, `S9`, … in dependency order) in `## Now`, then
   stops. The audit commit touches `plan/` only — no source file and no test. It runs right after S6
@@ -80,6 +80,202 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   names the first subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit
   commit touches only `plan/`.
   `files: plan/refactor.md, plan/BACKLOG.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
+- `[ ]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
+  Why: `fn millimetres` is written 20 times across 8 crates, `open_path` 5 times and `sample_project`
+  twice, although `furnicraft-testkit` exists for exactly this (F7). Test-only: no production line
+  changes, no ceiling is crossed — the finding is duplicated knowledge in ~26 test modules.
+  Shape: `testkit::{millimetres, open_path, sample_project}` replace the copies; `crates/model/src/fixtures.rs`
+  keeps the fixtures only the model's own tests need; `model`, `param` and `mesh` gain a
+  `[dev-dependencies]` entry. Test lines only; nothing over 300 moves into a sibling file (T2).
+  Done: every test passes with a `use` line changed and its assertions untouched (T1, B8); the
+  fixtures that a hostile-value test deliberately rejects stay local; `cargo xtask layers` still green.
+  Commits: one move.
+  `files: crates/testkit/src/lib.rs, crates/model/src/fixtures.rs`
+
+- `[ ]` **S9** `geom/contour.rs` keeps the ring and gives the segment family its own module — rules:
+  B1, B4, B8, H2, H5.
+  Why: 1046 production lines crosses B4's 1000-line ceiling and the file holds two value families
+  with 74 public items between them: `Line`, `Arc` and `Segment` with their impls (108-775) and the
+  ring `Contour` with its operations (776-1046).
+  Shape: `Line`/`Arc`/`Segment` and their impls move to `crates/geom/src/segment.rs` (~690);
+  `ContourError` and `Contour` stay in `contour.rs` (~390); `geom/lib.rs` re-exports both, so no call
+  site and no test changes (B8, T1).
+  Done: the suite passes with a `use` line at most; both headers state their family, the millimetre
+  and radian units, the tolerance that matters and `//! Changes when:` (H1, H2, H5).
+  Commits: one move.
+  `files: crates/geom/src/contour.rs, crates/geom/src/lib.rs`
+
+- `[ ]` **S10** `geom/region.rs` gives up the exact rectangle booleans — rules: B1, B4, B8, H2.
+  Why: 1660 production lines, the largest geometry module, holds two unrelated layers (F5): the exact
+  orthogonal boolean (`Rect`, `RectError`, `total_area`, `union_rects`, `subtract_rects`,
+  `connected_count`, `regions_from_rects` and its loop tracer, 432-980) and the general contour
+  boolean over `Region` (981-1660).
+  Shape: the rectangle layer moves to `crates/geom/src/rect.rs` (~570) with its tests; `region.rs`
+  1660 -> ~1120; `geom/lib.rs` re-exports `Rect` and the rectangle functions.
+  Done: the rectangle tests move unchanged (T1); `rect.rs` states that a corner is a point and never a
+  sample, that its arithmetic is exact, and `//! Changes when:` (H2, H4).
+  Commits: one move.
+  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
+
+- `[ ]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
+  Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
+  algorithm, so a change to "what a region is" and a change to "how sets combine" reopen one file.
+  Shape: `Region`, `RegionSamples`, `RingKind`, `RegionError`, the area, containment and validation
+  helpers and `loop_to_contour` move to `crates/geom/src/ring.rs` (~450); what remains is the one
+  named algorithm, renamed `crates/geom/src/boolean.rs` (~700, inside B4's 600-1200 band); `geom/lib.rs`
+  keeps every public path.
+  Done: suite unchanged; `boolean.rs` cites the method it implements and the sweep it does not do
+  (self-intersection, tolerance), with `//! Changes when:` (H4, H6); the `plan/map.md` row for planar
+  regions points at `ring.rs` and `boolean.rs`.
+  Commits: one move; the rename is part of the move, not a separate edit.
+  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
+
+- `[ ]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
+  D1, D2, B8, H2, H4.
+  Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
+  `arc_with_radius`, `arc_between`, `arc_midpoint`, projection (`clamp_to_curve`) and split
+  (`split_document`), although `geom` has `Arc::with_start_point`, `with_end_point`, `split_at`,
+  `Line::split_at`, `nearest_on_support` and `from_endpoints_sagitta` (F3); `model/contour.rs` still
+  calls itself the only place a segment becomes millimetres.
+  Shape: the arc-from-radius, arc-between, projection and split maths become free functions beside the
+  segments in `crates/geom/src/segment.rs`, each taking its tolerance as an argument (D2);
+  `contour_edit.rs` keeps the `Length`/`Degrees` conversion at the call and computes nothing
+  (conversions 27 -> ~8), 1572 -> ~1280. The `model/contour.rs` header states that the document
+  converts once at its edge and that the maths lives in `geom`.
+  Done: every contour-edit test passes unchanged; if a test disagrees with the `geom` formula, stop and
+  file an `X` task instead of bending the test (§12); `cargo test -p furnicraft-model -p furnicraft-geom`.
+  Commits: one move.
+  `files: crates/model/src/contour_edit.rs, crates/geom/src/contour.rs`
+
+- `[ ]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
+  Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
+  a corner of any ring (`CornerMove`, `move_corner*`, trim and split, `PathCorner`) and the constrained
+  drags of a tagged figure (`CircleFrame`, `RectangleFrame`, `PolygonFrame`, `ArcFrame` and the numeric
+  setters, ADR 0073, ADR 0075).
+  Shape: the four frames and their drags and setters move to `crates/model/src/contour_frames.rs`
+  (~580); `contour_edit.rs` keeps `CornerMove`, the error, `impl Path`'s corner moves and
+  `impl Contour` (~700).
+  Done: suite unchanged; both headers name the constraint they enforce (free or along the picked
+  segment; a tagged figure keeps its own) and their `//! Changes when:`; the `plan/map.md` row for
+  contour edit math names both files.
+  Commits: one move.
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs`
+
+- `[ ]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
+  Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
+  (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
+  `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
+  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; `panel_cmds.rs`
+  becomes `panel_cmds/mod.rs` that declares its submodules and re-exports every id and spec, so the
+  `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> ~600.
+  Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
+  re-exports only (B3) and `banding.rs` states its one reason to change (H5).
+  Commits: one move.
+  `files: crates/engine/src/panel_cmds.rs, crates/engine/src/commands.rs`
+
+- `[ ]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
+  Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
+  ray, picking, the grid, the lights, the contact shadows and the frame (F5).
+  Shape: `Camera`, `Projection`, `FixedBasis`, `CameraError`, the fov, pitch and distance constants and
+  the projection helpers move to `crates/scene/src/camera.rs` (~600); `Ray`, `ray_segment`,
+  `ray_triangle`, `ray_hit_drawable` and `ray_hit_polyline` move to `crates/scene/src/ray.rs` (~180);
+  `scene/lib.rs` 1277 -> ~520 (grid, lights, shadows, drawables, `SceneFrame`), under the ceiling, so
+  no further split is filed.
+  Done: suite unchanged; `scene/lib.rs` re-exports every moved name; both headers state millimetres,
+  radians, near and far planes and the pick radius tolerance (H2).
+  Commits: one move.
+  `files: crates/scene/src/lib.rs`
+
+- `[ ]` **S16** `render/lib.rs` gives up the pipelines and the GPU buffer helpers — rules: B1, B4, B8, H2.
+  Why: 1446 production lines (F5) mix the renderer with eleven pipeline constructors, the depth-state
+  builders and the buffer wrappers, so a shader change and an upload change reopen one file.
+  Shape: `create_triangle_pipeline`, `create_line_pipeline`, `create_shadow_pipeline`, the
+  `*_depth_state` builders, `face_target`, `vertex_layout`, `FACE_DEPTH_BIAS` and the stencil constants
+  move to `crates/render/src/pipelines.rs` (~300); `GpuMesh`, `GpuLineList`, `GpuTriangles`,
+  `line_list`, `triangle_list` and `clamp_size` move to `crates/render/src/gpu.rs` (~180);
+  `render/lib.rs` 1446 -> ~1000.
+  Done: suite unchanged; `pipelines.rs` states the depth, blend and stencil contract it encodes and
+  `gpu.rs` states that it owns device objects and no frame data (H2, H6).
+  Commits: one move.
+  `files: crates/render/src/lib.rs`
+
+- `[ ]` **S17** `render/lib.rs` gives up the vertex builders — rules: B1, B4, B8.
+  Why: after S16 the file is ~1000 lines and still mixes the renderer with the CPU-side builders
+  (`edge_geometry`, `shadow_geometry`, `world_vertices`, `flat_vertices`, `grid_vertices`,
+  `polyline_vertices`, `mesh_centre`, `stencil_slot`, `edge_color`, `sort_back_to_front`, 1030-1445).
+  Shape: they move to `crates/render/src/geometry.rs` (~420); `render/lib.rs` 1000 -> ~600 and
+  `impl ViewportRenderer` (421) stays under B4's target.
+  Done: suite unchanged; `geometry.rs` states that a builder reads frame data and writes vertices,
+  never a device, and names the units it works in (H1, H2, H6).
+  Commits: one move.
+  `files: crates/render/src/lib.rs`
+
+- `[ ]` **S18** `ui/lib.rs`'s `Editor` gives up the document rules it holds — rules: C7, D1, B1, H2.
+  Why: three document rules live inside the UI's edit session (F2): `placement_in_parent` repeats the
+  model's frame composition, `NEW_PANEL_LENGTH_MM`/`NEW_PANEL_WIDTH_MM` (600 x 400) are a document
+  default held in the UI, and `resolve_viewport_pick`, `creation_target` and `child_containing` are the
+  picking and creation-target rules (C7: the UI never holds a document default).
+  Shape: `placement_in_parent` becomes `Project::placement_in_parent` beside `world_placement` in
+  `crates/model/src/project/query.rs`; `default_panel_size` becomes
+  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds.rs` and the UI asks it; the
+  pick and target helpers move to `crates/ui/src/target.rs` (~90); `ui/lib.rs` 1159 -> ~1090, still
+  over the ceiling, so S19 follows.
+  Done: a model test for a rotated parent and for the root's identity frame; a created panel is still
+  600 x 400; suite unchanged; the palette builds the same params.
+  Commits: one move.
+  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds.rs`
+
+- `[ ]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
+  B1, B3, B4, B5, B8.
+  Why: 1090 production lines with `impl Editor` at 966, 18 fields and 60 public methods: four pointer
+  modes, ribbon state and eight cards in one impl (F2, B4, B5).
+  Shape: the `Editor` type and its state move to `crates/ui/src/editor/mod.rs`; the methods split by
+  what they own — `selection.rs` (select, enter and exit a level, `retain_open`), `mesh.rs` (the mesh
+  edit mode), `contour.rs` (the contour edit mode and its grips), `drawing.rs` (the draft and its
+  commit), `creation.rs` (armed container, primitives, panels, assemblies, cameras, lights) and
+  `cards.rs` (`show_scene_tree`, `show_card`, `run_action`); `lib.rs` 1090 -> ~150 and holds `mod` and
+  `pub use` only (B3).
+  Done: suite unchanged apart from paths and `use` lines (T1); the crate header still states the layer
+  and that the UI dispatches and never writes the document; every new header names its mode and
+  `//! Changes when:`; no module over 600 lines.
+  Commits: one move; T2's sibling test files are optional and never in the same commit.
+  `files: crates/ui/src/lib.rs, crates/ui/src`
+
+- `[ ]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
+  Why: 1112 production lines in one file cover two operations: editing an existing contour
+  (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one (`DrawTool`,
+  `DrawDraft`, 425-1112) — a new draw tool and a new grip rule reopen one file (F10).
+  Shape: `DrawTool` and `DrawDraft` with their impls move to `crates/ui/src/draw.rs` (~690);
+  `contour_edit.rs` 1112 -> ~425; `lib.rs` re-exports `DrawTool` and `DrawDraft` so the shell changes
+  at most one `use`.
+  Done: the draft tests move unchanged; both headers cite the decisions they implement (ADR 0048,
+  0052, 0076, 0077) and state `//! Changes when:`.
+  Commits: one move.
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
+
+- `[ ]` **S21** the shell's Home surface moves out of `main.rs` — rules: B4, B8, H2, H5.
+  Why: `home_surface` is one 632-line function inside `impl FurniCraftApp` (1620 lines, 40 fields),
+  four times B4's 150-line function ceiling (F1).
+  Shape: `home_surface` becomes a free function in `apps/furnicraft/src/home.rs` (~640) over the state
+  it reads, called from `ui()`; `main.rs` 2609 -> ~1980.
+  Done: the existing Home tests move unchanged; `home.rs` states that it draws the start surface and
+  returns one action, that it never touches the document, and `//! Changes when:`.
+  Commits: one move.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src`
+
+- `[ ]` **S22** `main.rs` keeps the frame loop and gives up its chrome — rules: B1, B4, B8, H5.
+  Why: after S21 the file is ~1980 lines, and four chrome pieces each have their own reason to change:
+  the status bar (`StatusInfo`, `StatusOut`, `status_state_ui`, `apply_status`, `hint`, `rule`), the
+  folding side panels (`PanelHead`, `side_panel`, `panel_header`, `count_chip`, `collapsed_strip`), the
+  ribbon-band geometry (`strip_rect`, `strip_area`, `uncovered`, `fit_uncovered`, `view_region`) and
+  the shortcut readers (`Shortcuts`, `take_shortcuts`, `take_drawing_shortcut`) — F1, B4.
+  Shape: they move to `apps/furnicraft/src/status_bar.rs`, `side_panels.rs`, `strip.rs` and
+  `shortcuts.rs`; `main.rs` 1980 -> ~1460, and U45 then takes `viewport` (635) onto `Document` and
+  leaves the shell near 800.
+  Done: suite unchanged; each module states what it draws or reads and `//! Changes when:`; the
+  `plan/map.md` rows for the status bar and the folding panels name the new files.
+  Commits: one move.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src`
 
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
