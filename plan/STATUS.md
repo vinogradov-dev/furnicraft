@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X23 state=doing base=ed0e8af updated=2026-11-10
+STATE: milestone=M7 phase=A task=S5 state=idle base=35b4ec7 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -47,17 +47,17 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   current bounds, U62 expands any view with *Expand* / *Restore* or `Alt+W`, and U51 floats the
   ribbon over the design space (ADR 0080). U43 made the five display styles real (ADR 0070) and U63
   gives each view its own style; X10 made their edges mean the form, and its stencil slot lets an
-  object show its own inside but never the one behind it. U44 gives
-  every floor-standing object a contact shadow (ADR 0071). X11 fixed a ring closed by an arc: a joint
-  is `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's derived end closes, reaches a
+  object show its own inside but never the one behind it. U44 gives every floor-standing object a
+  contact shadow (ADR 0071). X11 fixed a ring closed by an arc: a joint is
+  `1 µm + arc_slack(first) + arc_slack(next)`, so a large arc's derived end closes, reaches a
   contour and extrudes, and the preview never blanks (ADR 0072). X12 makes a tool switch: another
   tool replaces the running draft, Escape discards it, Enter and the right button commit, and the
-  shortcut table reads keys mid-draft.
+  shortcut table reads keys mid-draft. X23 makes every *Close* close and commit (ADR 0052).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0) checks the plan files. Gate: `cargo xtask ci` — green, `dev` → `main` with `--no-ff`.
 
 ## Next
 
-S5 lands the canonical frame: `rebase_at_anchor` with its three strategies, `Path::translated` and `Placement::inverse`, so the drawing, panel, group and migration steps that follow share one operation (owner's audit decisions, 2026-11-10).
+S5 lands the canonical frame in `crates/model`: `rebase_at_anchor` with its three strategies plus `Placement::inverse` and `Path::translated`, so X24 and X25 rebase a drawing and a primitive at creation through one operation. No command calls it yet, so nothing visible moves (ADR 0082).
 
 ## Index
 

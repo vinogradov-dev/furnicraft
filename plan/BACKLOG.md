@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X23** the ribbon's *Close* leaves the ring a draft: a polyline closed from the floating
-  tool strip becomes a ring on screen but is never committed, so the closed chain stays a draft with
-  the last rubber band still pointing at the strip and the document never learns about the figure
-  (observed 2026-11-10; the status bar's *Close* and a click on the first point do commit).
-  Expectation: closing is one operation — close, then commit — whichever entry point asked for it
-  (ADR 0052: "*Close* closes and commits in one step"). Suspected cause: `Editor::close_drawing` is a
-  public primitive that only closes; the pair is written out by hand in the status bar, inferred from
-  `is_finished` for a click in the viewport, and forgotten by `ToolAction::CloseDrawing`, while the
-  gizmo keeps its cached preview because a closed draft's `preview` answers `Ok(None)`. Fix: one
-  shell method `close_draft` owns close+commit, the ribbon and the status bar call it, the gizmo
-  reports a close instead of performing it, and `Editor::close_and_commit_drawing` reopens the ring
-  when the commit refuses it. The floating strip also leaves a band of itself hoverable, so the rubber
-  band can follow the pointer onto the toolbar: the strip blocks the pointer over its whole
-  rectangle. Tests: the ribbon reports the close and writes nothing; `close_and_commit_drawing`
-  closes and commits as one undo entry and a refused close changes nothing; a closed draft drops the
-  cached preview; a pointer over the strip band does not hover the viewport behind it. ADR 0052
-  already decides the behaviour, so this adds no record.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs, crates/ui/src/lib.rs, crates/ui/src/toolbars.rs`
-
 - `[ ]` **S5** one operation chooses a node's frame: a new `crates/model/src/frame.rs` holds
   `rebase_at_anchor(strategy)` and the three strategies the owner approved — `CreationPivot` (an open
   chain's first point, a closed ring's bounds centre), `BBoxBaseCorner` (the local min-X/min-Y corner,
@@ -377,6 +358,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X23** the ribbon's *Close* leaves the ring a draft: a polyline closed from the floating
+  tool strip becomes a ring on screen but is never committed, so the closed chain stays a draft with
+  the last rubber band still pointing at the strip and the document never learns about the figure
+  (observed 2026-11-10; the status bar's *Close* and a click on the first point do commit).
+  Expectation: closing is one operation — close, then commit — whichever entry point asked for it
+  (ADR 0052: "*Close* closes and commits in one step"). Suspected cause: `Editor::close_drawing` is a
+  public primitive that only closes; the pair is written out by hand in the status bar, inferred from
+  `is_finished` for a click in the viewport, and forgotten by `ToolAction::CloseDrawing`, while the
+  gizmo keeps its cached preview because a closed draft's `preview` answers `Ok(None)`. Fix: one
+  shell method `close_draft` owns close+commit, the ribbon and the status bar call it, the gizmo
+  reports a close instead of performing it, and `Editor::close_and_commit_drawing` reopens the ring
+  when the commit refuses it. The floating strip also leaves a band of itself hoverable, so the rubber
+  band can follow the pointer onto the toolbar: the strip blocks the pointer over its whole
+  rectangle. Tests: the ribbon reports the close and writes nothing; `close_and_commit_drawing`
+  closes and commits as one undo entry and a refused close changes nothing; a closed draft drops the
+  cached preview; a pointer over the strip band does not hover the viewport behind it. ADR 0052
+  already decides the behaviour, so this adds no record.
+  `ed0e8af`
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs, crates/ui/src/lib.rs, crates/ui/src/toolbars.rs`
 
 - `[x]` **U51** the toolbars float over the design space: the ribbon is an `Order::Middle` overlay
   anchored to the window below the header instead of a top panel, so the scene image runs under it,
