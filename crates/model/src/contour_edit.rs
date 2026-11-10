@@ -10,10 +10,13 @@
 //! is trimmed or extended, never redefined. A corner more than one micrometre off the circle is an
 //! error, because redefining the circle would change the curve the user drew. The same holds for a
 //! trim or a split: the point must lie on the segment's own supporting line or circle.
+//!
+//! The geometry over a segment is `furnicraft_geom::segment`'s: it rebuilds an arc through new ends,
+//! projects a point onto a support, clamps a sliding corner to a segment's extent and splits a
+//! curve. This module owns the ids, the shape tags and the errors, and converts `Length`/`Degrees`
+//! at the call — it computes no trigonometry of its own (ADR 0040, D1).
 
-use std::f64::consts::TAU;
-
-use furnicraft_geom::{Arc, ContourError as GeomError, DVec2, Segment};
+use furnicraft_geom::{Arc, ContourError as GeomError, DVec2, Segment, point_on_circle};
 use furnicraft_units::{Degrees, Length};
 use thiserror::Error;
 
@@ -28,6 +31,12 @@ use crate::{
 /// The document stores whole micrometres, so a point placed on a curve can miss it by half a
 /// micrometre before it is rounded. One micrometre accepts that rounding and nothing coarser.
 const SUPPORT_TOLERANCE: f64 = 1.0e-3;
+
+/// Distance a corner sliding along a segment keeps from the opposite node, in millimetres.
+///
+/// One micrometre is the document's own resolution: the corner stops just short of the far end so
+/// the draft stays a legal segment, and a collapse to zero length is recorded separately.
+const CLAMP_MARGIN_MM: f64 = 1.0e-3;
 
 /// Minimum half-extent for a rectangle side, in millimetres.
 ///
@@ -451,7 +460,7 @@ impl Path {
         let mut corners = Vec::with_capacity(self.entries().len());
         for index in 0..self.entries().len() {
             let angle = phase + step * index as f64;
-            corners.push(crate::contour::point_to_document(center + DVec2::new(angle.cos(), angle.sin()) * radius)?);
+            corners.push(crate::contour::point_to_document(point_on_circle(center, radius, angle))?);
         }
         let edited = self.polygon_entries(&corners)?;
         Ok(self.rebuild(edited)?)
@@ -461,7 +470,7 @@ impl Path {
     /// the opposite node when moving along the contour.
     fn clamp_to_segment(&self, segment: ContourSegmentId, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
         let curve = self.segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
-        clamp_to_curve(curve, point)
+        clamp_to_extent(curve, point)
     }
 
     /// The point of `segment`'s own line or circle nearest to `point`.
@@ -692,7 +701,9 @@ impl Path {
             return Err(ContourEditError::InvalidValue);
         }
         let arc = geometry_arc(center, self.arc_radius(segment)?, start_angle, sweep)?;
-        let rebuilt = arc_with_radius(arc, arc.start(), arc.end(), radius.millimetres_f64())?;
+        let rebuilt = arc
+            .with_radius_through(arc.start(), arc.end(), radius.millimetres_f64(), SUPPORT_TOLERANCE)
+            .map_err(|_| ContourEditError::InvalidValue)?;
         let moved = ContourSegment::from_geom(Segment::Arc(rebuilt))?;
         let Some(entry) = self.entries().get(index) else {
             return Err(ContourEditError::UnknownSegment { segment });
@@ -869,12 +880,11 @@ impl Path {
             return Err(ContourEditError::UnknownSegment { segment });
         };
         let requested = point_to_geometry(point)?;
-        let Some(nearest) = entry.segment().to_geom()?.nearest_on_support(requested) else {
-            return Err(ContourEditError::PointOffSegment { segment });
-        };
-        if (nearest - requested).length() > SUPPORT_TOLERANCE {
-            return Err(ContourEditError::PointOffSegment { segment });
-        }
+        let nearest = entry
+            .segment()
+            .to_geom()?
+            .support_point_within(requested, SUPPORT_TOLERANCE)
+            .map_err(|_| ContourEditError::PointOffSegment { segment })?;
         let (first, second) = split_document(entry.segment(), nearest)?;
         let inserted = self.next_segment_id();
         let mut edited = entries.to_vec();
@@ -1042,7 +1052,7 @@ impl Contour {
                 let nearest = curve.to_geom()?.nearest_on_support(requested).ok_or(ContourEditError::InvalidValue)?;
                 let nearest = crate::contour::point_to_document(nearest)?;
                 // Clamp on the motion segment so the corner cannot pass the opposite node.
-                let clamped = clamp_to_curve(curve, nearest)?;
+                let clamped = clamp_to_extent(curve, nearest)?;
                 self.move_corner(segment, clamped)
             }
             CornerMove::Free => self.move_corner_free(segment, point),
@@ -1098,12 +1108,9 @@ impl Contour {
         };
         let geometry = entry.segment().to_geom()?;
         let requested = point_to_geometry(point)?;
-        let Some(nearest) = geometry.nearest_on_support(requested) else {
-            return Err(ContourEditError::PointOffSegment { segment });
-        };
-        if (nearest - requested).length() > SUPPORT_TOLERANCE {
-            return Err(ContourEditError::PointOffSegment { segment });
-        }
+        geometry
+            .support_point_within(requested, SUPPORT_TOLERANCE)
+            .map_err(|_| ContourEditError::PointOffSegment { segment })?;
         if let Segment::Line(line) = geometry {
             let direction = line.end() - line.start();
             let travel = if at_end { requested - line.start() } else { line.end() - requested };
@@ -1172,12 +1179,9 @@ impl Contour {
         };
         let geometry = entry.segment().to_geom()?;
         let requested = point_to_geometry(point)?;
-        let Some(nearest) = geometry.nearest_on_support(requested) else {
-            return Err(ContourEditError::PointOffSegment { segment });
-        };
-        if (nearest - requested).length() > SUPPORT_TOLERANCE {
-            return Err(ContourEditError::PointOffSegment { segment });
-        }
+        let nearest = geometry
+            .support_point_within(requested, SUPPORT_TOLERANCE)
+            .map_err(|_| ContourEditError::PointOffSegment { segment })?;
         let (first, second) = split_document(entry.segment(), nearest)?;
         let inserted = self.next_segment_id();
         let mut edited = entries.to_vec();
@@ -1236,8 +1240,7 @@ impl PolygonFrame {
         let step = std::f64::consts::TAU / f64::from(count);
         let angle = self.phase.radians_f64() + step * 0.5;
         let center = point_to_geometry(self.center)?;
-        let offset = DVec2::new(angle.cos(), angle.sin()) * self.radius.millimetres_f64();
-        Ok(crate::contour::point_to_document(center + offset)?)
+        Ok(crate::contour::point_to_document(point_on_circle(center, self.radius.millimetres_f64(), angle))?)
     }
 }
 
@@ -1245,9 +1248,8 @@ impl CircleFrame {
     /// The point of the circle at `angle`, rounded to whole micrometres.
     pub fn point_at(self, angle: Degrees) -> Result<[Length; 2], ContourEditError> {
         let center = point_to_geometry(self.center)?;
-        let radians = angle.radians_f64();
-        let offset = DVec2::new(radians.cos(), radians.sin()) * self.radius.millimetres_f64();
-        Ok(crate::contour::point_to_document(center + offset)?)
+        let point = point_on_circle(center, self.radius.millimetres_f64(), angle.radians_f64());
+        Ok(crate::contour::point_to_document(point)?)
     }
 }
 
@@ -1295,9 +1297,8 @@ impl ArcFrame {
     /// The point of the arc at `angle`, rounded to whole micrometres.
     pub fn point_at(self, angle: Degrees) -> Result<[Length; 2], ContourEditError> {
         let center = point_to_geometry(self.center)?;
-        let radians = angle.radians_f64();
-        let offset = DVec2::new(radians.cos(), radians.sin()) * self.radius.millimetres_f64();
-        Ok(crate::contour::point_to_document(center + offset)?)
+        let point = point_on_circle(center, self.radius.millimetres_f64(), angle.radians_f64());
+        Ok(crate::contour::point_to_document(point)?)
     }
 
     /// The point midway along the sweep.
@@ -1327,71 +1328,17 @@ fn free_corner(
             let arc = geometry_arc(center, radius, start_angle, sweep)?;
             let other = if at_end { arc.start() } else { arc.end() };
             let target = point_to_geometry(corner)?;
-            let rebuilt = if at_end { arc_rebuilt(arc, other, target)? } else { arc_rebuilt(arc, target, other)? };
+            let rebuilt = if at_end {
+                arc.through_ends(other, target, SUPPORT_TOLERANCE)
+            } else {
+                arc.through_ends(target, other, SUPPORT_TOLERANCE)
+            }
+            .map_err(|_| ContourEditError::InvalidValue)?;
             let moved = ContourSegment::from_geom(Segment::Arc(rebuilt))?;
             let reached = if at_end { moved.end()? } else { moved.start()? };
             Ok((moved, reached))
         }
     }
-}
-
-/// An arc from `start` to `end` that keeps the radius and the bulge of `arc` where it can.
-///
-/// When the chord fits two circles of that radius the centre that stays on the same side as the old
-/// one is used, so the curve keeps its direction. When the chord is longer than the diameter the
-/// radius is recalculated as half the chord, which is the one semicircle that still reaches both
-/// ends.
-fn arc_rebuilt(arc: Arc, start: DVec2, end: DVec2) -> Result<Arc, ContourEditError> {
-    let chord = (end - start).length();
-    if !chord.is_finite() || chord < SUPPORT_TOLERANCE {
-        return Err(ContourEditError::InvalidValue);
-    }
-    if chord <= 2.0 * arc.radius() {
-        arc_with_radius(arc, start, end, arc.radius())
-    } else {
-        arc_with_radius(arc, start, end, chord * 0.5)
-    }
-}
-
-/// An arc from `start` to `end` with a given radius, on the side `arc` already bulges to.
-fn arc_with_radius(arc: Arc, start: DVec2, end: DVec2, radius: f64) -> Result<Arc, ContourEditError> {
-    let chord = (end - start).length();
-    if !chord.is_finite() || chord < SUPPORT_TOLERANCE || !radius.is_finite() || radius <= 0.0 {
-        return Err(ContourEditError::InvalidValue);
-    }
-    if radius < chord * 0.5 - SUPPORT_TOLERANCE {
-        return Err(ContourEditError::InvalidValue);
-    }
-    let midpoint = (start + end) * 0.5;
-    let direction = (end - start) / chord;
-    let normal = DVec2::new(-direction.y, direction.x);
-    let bulge = (arc_midpoint(arc) - start).perp_dot(direction);
-    let half = (radius * radius - (chord * 0.5) * (chord * 0.5)).max(0.0).sqrt();
-    let toward = (arc.center() - midpoint).dot(normal);
-    let center = if toward >= 0.0 { midpoint + normal * half } else { midpoint - normal * half };
-    arc_between(center, radius, start, end, bulge >= 0.0)
-}
-
-/// An arc on `center` from `start` to `end` that bulges to the left of travel when `left` is set.
-fn arc_between(center: DVec2, radius: f64, start: DVec2, end: DVec2, left: bool) -> Result<Arc, ContourEditError> {
-    let start_angle = (start.y - center.y).atan2(start.x - center.x);
-    let end_angle = (end.y - center.y).atan2(end.x - center.x);
-    let counter_clockwise = (end_angle - start_angle).rem_euclid(TAU);
-    if !counter_clockwise.is_finite() || counter_clockwise <= 0.0 {
-        return Err(ContourEditError::InvalidValue);
-    }
-    let forward = Arc::new(center, radius, start_angle, counter_clockwise).map_err(ContourEditError::Geometry)?;
-    let bulge = (arc_midpoint(forward) - start).perp_dot(end - start);
-    if (bulge >= 0.0) == left {
-        return Ok(forward);
-    }
-    Arc::new(center, radius, start_angle, counter_clockwise - TAU).map_err(ContourEditError::Geometry)
-}
-
-/// The point halfway along an arc.
-fn arc_midpoint(arc: Arc) -> DVec2 {
-    let angle = arc.start_angle() + arc.sweep_angle() * 0.5;
-    arc.center() + DVec2::new(angle.cos(), angle.sin()) * arc.radius()
 }
 
 /// The same segment with one endpoint at `corner`, and the corner it actually reaches.
@@ -1413,12 +1360,9 @@ fn with_corner(
         ContourSegment::Arc { center, radius, start_angle, sweep } => {
             let arc = geometry_arc(center, radius, start_angle, sweep)?;
             let requested = point_to_geometry(corner)?;
-            let Some(nearest) = arc.nearest_on_support(requested) else {
-                return Err(ContourEditError::PointOffCircle { segment: id });
-            };
-            if (nearest - requested).length() > SUPPORT_TOLERANCE {
-                return Err(ContourEditError::PointOffCircle { segment: id });
-            }
+            let nearest = Segment::Arc(arc)
+                .support_point_within(requested, SUPPORT_TOLERANCE)
+                .map_err(|_| ContourEditError::PointOffCircle { segment: id })?;
             let moved = if at_end { arc.with_end_point(nearest)? } else { arc.with_start_point(nearest)? };
             let moved = ContourSegment::from_geom(Segment::Arc(moved))?;
             let reached = if at_end { moved.end()? } else { moved.start()? };
@@ -1427,51 +1371,17 @@ fn with_corner(
     }
 }
 
-/// Clamps a point to lie on `curve` between its two endpoints, leaving a one-micrometre margin.
+/// Clamps a document point to the segment's own extent, held [`CLAMP_MARGIN_MM`] short of each end.
 ///
 /// A corner sliding along the contour must not pass the opposite node: the point is projected onto
-/// the segment's own extent and held short of the far end by a micrometre, so the draft stays a
-/// legal segment. The collapse to zero is recorded separately and happens on Apply.
-fn clamp_to_curve(curve: ContourSegment, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
-    match curve {
-        ContourSegment::Line { start, end } => {
-            let start = point_to_geometry(start)?;
-            let end = point_to_geometry(end)?;
-            let requested = point_to_geometry(point)?;
-            let direction = end - start;
-            let len2 = direction.length_squared();
-            if len2 <= 0.0 {
-                return Err(ContourEditError::InvalidValue);
-            }
-            let margin = 1.0e-3 / (end - start).length().max(f64::MIN_POSITIVE);
-            let t = ((requested - start).dot(direction) / len2).clamp(margin, 1.0 - margin);
-            Ok(crate::contour::point_to_document(start + direction * t)?)
-        }
-        ContourSegment::Arc { center, radius, start_angle, sweep } => {
-            let center = point_to_geometry(center)?;
-            let requested = point_to_geometry(point)?;
-            let offset = requested - center;
-            if offset.length() <= f64::EPSILON {
-                return Ok(point);
-            }
-            let angle = offset.y.atan2(offset.x);
-            let start_r = start_angle.radians_f64();
-            let sweep_r = sweep.radians_f64();
-            let travel = if sweep_r >= 0.0 {
-                (angle - start_r).rem_euclid(std::f64::consts::TAU)
-            } else {
-                -((-angle + start_r).rem_euclid(std::f64::consts::TAU))
-            };
-            let arc_len = (sweep_r.abs() * radius.millimetres_f64()).max(f64::MIN_POSITIVE);
-            let margin = 1.0e-3 / arc_len;
-            let low = 0.0_f64.min(sweep_r);
-            let high = 0.0_f64.max(sweep_r);
-            let clamped = travel.clamp(low + margin * sweep_r.abs(), high - margin * sweep_r.abs());
-            let clamped_angle = start_r + clamped;
-            let clamped_offset = DVec2::new(clamped_angle.cos(), clamped_angle.sin()) * radius.millimetres_f64();
-            Ok(crate::contour::point_to_document(center + clamped_offset)?)
-        }
-    }
+/// the segment and pulled back by the margin, so the draft stays a legal segment. The collapse to
+/// zero is recorded separately and happens on Apply.
+fn clamp_to_extent(curve: ContourSegment, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
+    let clamped = curve
+        .to_geom()?
+        .clamp_to_extent(point_to_geometry(point)?, CLAMP_MARGIN_MM)
+        .map_err(|_| ContourEditError::InvalidValue)?;
+    Ok(crate::contour::point_to_document(clamped)?)
 }
 
 /// Moves the shared corner of two segments, reconciling a rounded arc endpoint.
@@ -1516,15 +1426,15 @@ fn split_document(segment: ContourSegment, point: DVec2) -> Result<(ContourSegme
         }
         ContourSegment::Arc { center, radius, start_angle, sweep } => {
             let arc = geometry_arc(center, radius, start_angle, sweep)?;
-            let (first, _) = arc.split_at(point)?;
-            let first_sweep =
-                Degrees::from_radians(first.sweep_angle()).ok_or(ContourSegmentError::NonFinite)?.millidegrees();
-            let split_angle =
-                start_angle.millidegrees().checked_add(first_sweep).ok_or(ContourSegmentError::NonFinite)?;
+            let first_sweep = Degrees::from_radians(arc.sweep_to(point)?).ok_or(ContourSegmentError::NonFinite)?;
+            let split_angle = start_angle
+                .millidegrees()
+                .checked_add(first_sweep.millidegrees())
+                .ok_or(ContourSegmentError::NonFinite)?;
             let end_angle =
                 start_angle.millidegrees().checked_add(sweep.millidegrees()).ok_or(ContourSegmentError::NonFinite)?;
             let second_sweep = end_angle.checked_sub(split_angle).ok_or(ContourSegmentError::NonFinite)?;
-            let first = ContourSegment::arc(center, radius, start_angle, Degrees::from_millidegrees(first_sweep))?;
+            let first = ContourSegment::arc(center, radius, start_angle, first_sweep)?;
             let second = ContourSegment::arc(
                 center,
                 radius,
