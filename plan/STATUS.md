@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S7 state=idle base=d7ad707 updated=2026-11-10
+STATE: milestone=M7 phase=A task=S9 state=idle base=22e0e71 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -15,8 +15,13 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   0073), and an extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054);
   every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
-  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082, 0083),
-  and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
+  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
+  0083), and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
+- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
+  render, then `Editor`, then the shell; `main.rs` and `ui/lib.rs` land before U45). S8 gave the shared
+  test fixtures one definition, `model::testing` behind a `testing` feature the testkit re-exports, so
+  a crate's test names a helper once instead of 20 copies (ADR 0084). F4 (`Project::apply(Change)`)
+  waits in `plan/questions.md`; the no-action verdicts are `[design]` debt.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -34,29 +39,23 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 - X1, X2 and X7 are fixed: a ring past the cap follows the shape (ADR 0062) and a ribbon tool is one
   measured cell with an elided caption (ADR 0067). U27 caches icons per `(uri, px, colour)`; 47
   placeholders sit in `plan/debt.md` (ADR 0055).
-- U38–U42 landed the visual pass: `theme.rs` owns two palettes and the type scale (ADRs 0063, 0069);
-  `header.rs` returns a `HeaderAction` (ADR 0064); U39 landed the ribbon (ADR 0066); U40 folded the
-  side panels and moved the view controls into a bottom-centre cluster; U41 added *Settings*, the
-  atomic `settings.json` (ADR 0068) and *Home*; U47 added the `Ctrl+K` palette; U42 divided the
-  central area into one, two or four views with a split tree and an orientation widget; U60 gives
-  every layout its own tree, cameras and active view (ADR 0079), U61 makes *Frame all* fit the
-  scene's current bounds, U62 expands a view with *Expand* / *Restore* or `Alt+W`, and U51 floats
-  the ribbon over the design space (ADR 0080). U43 made the five display styles real (ADR 0070) and
-  U63 gives each view its own style; X10 made their edges mean the form, and its stencil slot shows
-  an object's own inside but never the one behind it. U44 gives every floor-standing object a
-  contact shadow (ADR 0071); X11 fixed a ring closed by an arc: a joint takes the `arc_slack` of
-  either end, so a large arc's derived end closes, extrudes and never blanks the preview (ADR 0072).
-  X12 makes a tool switch: another tool replaces the draft, Escape discards it, Enter or RMB
-  commits, shortcuts read keys mid-draft. X23 makes every *Close* close and commit (ADR 0052).
+- U38–U42 and the X-fixes landed the visual pass: `theme.rs` owns two palettes and the type scale
+  (ADRs 0063, 0069), `header.rs` returns a `HeaderAction` (ADR 0064), U39 the ribbon (ADR 0066), U40
+  the folded side panels and the bottom-centre cluster, U41 *Settings*, `settings.json` and *Home*
+  (ADR 0068), U47 the `Ctrl+K` palette, U42 the one/two/four-view split with an orientation widget,
+  U60 a tree, cameras and active view per layout (ADR 0079), U61/U62/U51 framing, expand and the
+  floating ribbon (ADR 0080). U43/U63 gave each view its display style (ADR 0070), X10 made the edges
+  mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
+  closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0)
   checks the plan. Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
-S7 is next: a read-only audit re-measures the tree, checks F1-F7 against the code, and files the
-design-rules refactor as small behaviour-preserving subtasks in `## Now` under `plan/refactor.md`; the
-audit touches `plan/` only and the `main.rs` and `Editor` splits land before U45. S6 closed the frame
-contract in `crates/model/src/project/frame_contract.rs`; ADRs 0009, 0026, 0052, 0082 and 0083 agree.
+S9 is next: `geom/contour.rs` keeps the ring and the segment family (`Line`, `Arc`, `Segment`) moves
+to `geom/segment.rs`, so the file leaves B4's ceiling with no call site and no test touched. Then
+S10–S13 in `geom` and `model`, S14 in `engine`, S15–S17 in `scene` and `render`, S18–S20 in `ui`,
+S21–S22 in the shell, each with its rule ids and line target in `plan/BACKLOG.md` `## Now`.
 
 ## Index
 
@@ -65,6 +64,6 @@ contract in `crates/model/src/project/frame_contract.rs`; ADRs 0009, 0026, 0052,
 | `plan/BACKLOG.md` | one line per task, ids, order, file hints | always |
 | `plan/SESSION.md` | the live task: steps, blocker, next command | `state=doing` |
 | `plan/debt.md`, `plan/questions.md` | accepted gaps; decisions for the owner | a task touches that area |
-| `plan/rename.md` | the pre-release rename: inventory, procedure, gotchas | task R1, or a change that adds another place the product name appears |
-| `plan/refactor.md` | design rules, audit procedure, subtask template (S7) | task S7, or a subtask's rules |
+| `plan/rename.md` | the pre-release rename: inventory, procedure, gotchas | task R1, or a change that adds a place the product name appears |
+| `plan/refactor.md` | design rules, subtask template, order (S7, S8–S22) | any S subtask |
 | `plan/archive/done.md` | history up to schema 11 | never, `git log` replaces it |

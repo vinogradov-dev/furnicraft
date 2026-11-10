@@ -1169,7 +1169,7 @@ mod tests {
         Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, FaceSide, Geometry,
         MachiningAnchor, MachiningParams, Mesh, Panel, Pivot, Placement,
     };
-    use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
+    use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
     use furnicraft_units::Degrees;
 
     fn cube_project() -> (Project, Id) {
@@ -1208,15 +1208,11 @@ mod tests {
     fn open_path_project() -> (Project, Id) {
         let mut project = sample_project();
         let root = project.root().id();
-        let path = Path::polyline(
-            vec![
-                [Length::ZERO, Length::ZERO],
-                [Length::from_millimetres(600).expect("x"), Length::ZERO],
-                [Length::from_millimetres(600).expect("x"), Length::from_millimetres(400).expect("y")],
-            ],
-            false,
-        )
-        .expect("open path");
+        let path = open_path(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+        ]);
         let id = project.add_object(root, "Sketch", Placement::IDENTITY, Geometry::Path(path)).expect("path object");
         (project, id)
     }

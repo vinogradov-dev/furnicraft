@@ -479,12 +479,9 @@ mod tests {
 
     use furnicraft_engine::{ObjectExtrudeHeightSet, Session, object_cmds::OBJECT_EXTRUDE_HEIGHT_SET_ID};
     use furnicraft_model::{Constructive, Extrude, Feature, Geometry, Path};
+    use furnicraft_testkit::millimetres;
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
 
     fn viewport() -> egui::Rect {
         egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))

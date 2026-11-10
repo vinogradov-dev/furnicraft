@@ -1,6 +1,10 @@
 //! Test fixtures and helpers shared by FurniCraft crates.
 //!
 //! Development-only: nothing in the product may depend on this crate.
+//!
+//! A helper lives here when more than one crate's tests need it. `millimetres`, `open_path` and
+//! `sample_project` are defined in `furnicraft_model::testing` and re-exported here, because that is
+//! the only crate that can define them for both itself and everyone else (C7).
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -11,11 +15,13 @@
     clippy::unreachable
 )]
 
-use furnicraft_model::{
-    Catalog, Container, EdgeBandingMaterial, Id, MaterialId, Panel, PanelMaterial, PanelNominalSize, PanelRect,
-    Placement, Project,
-};
+use furnicraft_model::{Catalog, EdgeBandingMaterial, MaterialId, PanelMaterial, PanelNominalSize, PanelRect};
 use furnicraft_units::Length;
+
+/// The three fixtures every crate's tests start from, defined once in `furnicraft_model::testing`
+/// (C7): a crate cannot re-export them back into `furnicraft-model`, because the dev-dependency
+/// cycle would compile the model twice and its types would not match.
+pub use furnicraft_model::testing::{millimetres, open_path, sample_project};
 
 /// The stable id of the sample panel material.
 #[allow(clippy::expect_used)]
@@ -165,38 +171,4 @@ pub fn sample_notch_cutout_rect() -> PanelRect {
 #[allow(clippy::expect_used)]
 pub fn sample_blind_depth() -> Length {
     Length::from_millimetres(8).expect("8 mm fits a length")
-}
-
-/// A small valid project: a root, one panel and one component container with a panel.
-#[allow(clippy::expect_used)]
-pub fn sample_project() -> Project {
-    let size = sample_panel_nominal_size();
-    let shelf = Panel::new(
-        Id::new(2).expect("non-zero id"),
-        "Shelf",
-        size,
-        None,
-        sample_panel_thickness(),
-        Placement::IDENTITY,
-    )
-    .expect("sample shelf is valid");
-    let front = Panel::new(
-        Id::new(4).expect("non-zero id"),
-        "Front",
-        size,
-        None,
-        sample_panel_thickness(),
-        Placement::IDENTITY,
-    )
-    .expect("sample front is valid");
-    let mut drawer =
-        Container::new(Id::new(3).expect("non-zero id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
-    drawer.set_component_marker(true).expect("sample drawer is a component");
-    let root = Container::new(
-        Id::new(1).expect("non-zero id"),
-        "Root",
-        Placement::IDENTITY,
-        vec![shelf.into(), drawer.into()],
-    );
-    Project::new(root).expect("sample project is valid")
 }

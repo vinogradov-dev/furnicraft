@@ -121,14 +121,11 @@ mod tests {
     use furnicraft_kernel::{Profile, SolidKernel};
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{Contour, Feature, Id, Panel, PanelNominalSize, Placement};
+    use furnicraft_testkit::millimetres;
     use furnicraft_units::Length;
 
     use super::*;
     use crate::build_panel;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
 
     fn rectangle(size: i64, height: i64) -> Contour {
         Contour::from_polygon(vec![

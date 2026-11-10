@@ -473,12 +473,9 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::Path;
+    use furnicraft_testkit::millimetres;
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
 
     fn point(x: i64, y: i64) -> [Length; 2] {
         [millimetres(x), millimetres(y)]

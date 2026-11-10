@@ -203,13 +203,11 @@ mod tests {
         PanelNominalSize, PanelRect, Placement, Project,
     };
 
+    use furnicraft_testkit::millimetres;
+
     use crate::{TOOL_OVERSHOOT_MM, extrusion_plan};
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
 
     fn panel_size() -> PanelNominalSize {
         PanelNominalSize::new(millimetres(700), millimetres(500)).expect("panel size")

@@ -301,13 +301,9 @@ mod tests {
 
     use furnicraft_geom::DQuat;
     use furnicraft_model::{Geometry, Mesh, Placement};
-    use furnicraft_testkit::sample_project;
+    use furnicraft_testkit::{millimetres, sample_project};
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("length")
-    }
 
     fn cube_project() -> (Project, Id) {
         let mut project = sample_project();

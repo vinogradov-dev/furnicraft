@@ -182,14 +182,12 @@ pub(crate) fn validate_contour_features(features: &[CornerFeature], bows: &[Edge
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use crate::testing::millimetres;
+
     use super::*;
     use crate::panel::PanelWire;
     use crate::{RectCorner, RectEdge};
     use serde_json::json;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
 
     #[test]
     fn corner_features_round_trip_and_validate() {

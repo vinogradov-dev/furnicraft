@@ -163,13 +163,10 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::{Contour as DocumentContour, ContourSegment};
+    use furnicraft_testkit::millimetres;
     use furnicraft_units::{Degrees, Length};
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
 
     fn rounded_plate() -> DocumentContour {
         let arc = ContourSegment::arc(

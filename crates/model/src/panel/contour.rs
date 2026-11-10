@@ -890,13 +890,11 @@ fn join_segments(segments: Vec<Segment>) -> Result<Contour, PanelContourError> {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use crate::testing::millimetres;
+
     use super::*;
     use crate::{CornerBanding, EdgeBow, Id, MaterialId, PanelNominalSize, Placement, RectCorner, RectEdge};
     use furnicraft_units::Length;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
 
     fn panel(length: i64, width: i64) -> Panel {
         Panel::new(

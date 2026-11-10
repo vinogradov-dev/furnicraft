@@ -696,6 +696,7 @@ mod tests {
     use furnicraft_kernel_truck::TruckKernel;
     use furnicraft_model::{Contour, EdgeId, Id, Panel, PanelNominalSize, Placement};
     use furnicraft_param::build_panel;
+    use furnicraft_testkit::millimetres;
     use furnicraft_units::Length;
 
     use super::*;
@@ -737,10 +738,6 @@ mod tests {
             normals: vec![[0.0, 0.0, 1.0]; 3],
             indices: vec![0, 1, 2],
         }
-    }
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
     }
 
     #[test]

@@ -536,7 +536,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, Pivot, Revision};
-    use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_project};
     use furnicraft_units::Degrees;
 
     use crate::CommandRegistry;
@@ -961,18 +961,12 @@ mod tests {
     }
 
     /// An open two-segment drawing, so replacing it is visible in the stored value.
-    fn open_path(end: i64) -> Path {
-        let millimetres = |value| Length::from_millimetres(value).expect("length");
-        Path::new(
-            vec![
-                ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(end), millimetres(0)])
-                    .expect("line"),
-                ContourSegment::line([millimetres(end), millimetres(0)], [millimetres(end), millimetres(40)])
-                    .expect("line"),
-            ],
-            false,
-        )
-        .expect("open path")
+    fn l_path(end: i64) -> Path {
+        open_path(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(end), millimetres(0)],
+            [millimetres(end), millimetres(40)],
+        ])
     }
 
     fn path_create_params(session: &Session, name: &str, path: Path) -> Value {
@@ -988,7 +982,7 @@ mod tests {
     #[test]
     fn a_path_is_created_in_one_revision_and_undone_in_one_step() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let path = open_path(100);
+        let path = l_path(100);
         let value = path_create_params(&session, "Sketch", path.clone());
         let spec = CommandRegistry::new().get(OBJECT_PATH_CREATE_ID).expect("registered");
         assert!(spec.enabled(&session, &value));
@@ -1012,14 +1006,14 @@ mod tests {
     #[test]
     fn a_path_replacement_is_one_revision_and_one_undo() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let original = open_path(100);
+        let original = l_path(100);
         let id = session
             .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Sketch", original.clone()))
             .expect("create the drawing")
             .created_id()
             .expect("id");
 
-        let replacement = open_path(120);
+        let replacement = l_path(120);
         let value = serde_json::to_value(ObjectPathReplace { object: id, path: replacement.clone() })
             .expect("params serialize");
         let spec = CommandRegistry::new().get(OBJECT_PATH_REPLACE_ID).expect("registered");
@@ -1077,7 +1071,7 @@ mod tests {
     fn an_open_path_cannot_be_extruded() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let id = session
-            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Sketch", open_path(100)))
+            .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Sketch", l_path(100)))
             .expect("create the drawing")
             .created_id()
             .expect("id");
@@ -1328,14 +1322,14 @@ mod tests {
         let registry = CommandRegistry::new();
         let spec = registry.get(OBJECT_PATH_CREATE_ID).expect("registered");
 
-        let blank = path_create_params(&session, "  ", open_path(100));
+        let blank = path_create_params(&session, "  ", l_path(100));
         assert!(!spec.enabled(&session, &blank));
         assert!(session.dispatch(OBJECT_PATH_CREATE_ID, &blank).is_err());
 
         let unknown = serde_json::to_value(ObjectPathCreate {
             parent: Id::new(99).expect("id"),
             name: "Sketch".to_owned(),
-            path: open_path(100),
+            path: l_path(100),
             placement: Placement::IDENTITY,
         })
         .expect("params");
@@ -1355,7 +1349,7 @@ mod tests {
             .created_id()
             .expect("id");
         let value =
-            serde_json::to_value(ObjectPathReplace { object: cube, path: open_path(100) }).expect("params serialize");
+            serde_json::to_value(ObjectPathReplace { object: cube, path: l_path(100) }).expect("params serialize");
         let spec = CommandRegistry::new().get(OBJECT_PATH_REPLACE_ID).expect("registered");
         assert!(!spec.enabled(&session, &value));
         assert!(session.dispatch(OBJECT_PATH_REPLACE_ID, &value).is_err());

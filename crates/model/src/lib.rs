@@ -39,6 +39,8 @@ mod primitive;
 mod project;
 mod properties;
 mod query;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 mod tree;
 
 pub use camera::{CameraError, CameraNode, CameraProjection};

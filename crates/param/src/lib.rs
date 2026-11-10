@@ -695,6 +695,7 @@ mod tests {
         EdgeId, Id, MaterialId, Mesh, PanelNominalSize, PanelRect, Placement, Project, RectCorner, RectEdge,
         RingBanding,
     };
+    use furnicraft_testkit::millimetres;
     use furnicraft_units::Length;
 
     use super::*;
@@ -742,10 +743,6 @@ mod tests {
             self.frame = None;
             self.height = None;
         }
-    }
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
     }
 
     fn panel_size() -> PanelNominalSize {

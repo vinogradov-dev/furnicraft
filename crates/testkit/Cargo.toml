@@ -9,5 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-furnicraft-model = { workspace = true }
+furnicraft-model = { workspace = true, features = ["testing"] }
 furnicraft-units = { workspace = true }

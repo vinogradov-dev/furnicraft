@@ -376,11 +376,9 @@ impl Primitive {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::testing::millimetres;
 
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
+    use super::*;
 
     #[test]
     fn the_creation_size_builds_the_default_shape() {

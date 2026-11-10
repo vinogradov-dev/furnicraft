@@ -1,19 +1,17 @@
-//! Shared test fixtures for the model crate.
+//! Fixtures the model's own tests build on.
 //!
-//! A helper lives here when more than one module's tests need it; anything used by one module stays
-//! in that module's own `tests`.
+//! A helper lives here when more than one module of this crate needs it; anything used by one
+//! module stays in that module's own `tests`. The three helpers every crate shares — `millimetres`,
+//! `open_path` and `sample_project` — come from [`crate::testing`].
 
 use furnicraft_units::Length;
 
 use crate::{
-    Container, Contour, ContourSegmentId, FurnType, Geometry, Id, MaterialId, Mesh, Node, Object, Panel,
-    PanelNominalSize, PanelRect, Placement, Project,
+    Contour, ContourSegmentId, FurnType, Geometry, Id, MaterialId, Mesh, Object, Panel, PanelNominalSize, PanelRect,
+    Placement,
 };
 
-/// Whole millimetres as an exact length.
-pub(crate) fn millimetres(value: i64) -> Length {
-    Length::from_millimetres(value).expect("whole millimetres fit a length")
-}
+pub(crate) use crate::testing::{millimetres, sample_project};
 
 /// Parses the dotted text form of a furniture type.
 pub(crate) fn furntype(text: &str) -> FurnType {
@@ -30,20 +28,6 @@ pub(crate) fn sample_thickness() -> Length {
 
 pub(crate) fn sample_panel(id: Id, name: &str) -> Panel {
     Panel::new(id, name, sample_nominal(), None, sample_thickness(), Placement::IDENTITY).expect("valid panel")
-}
-
-pub(crate) fn sample_project() -> Project {
-    let shelf = sample_panel(Id::new(2).expect("id"), "Shelf");
-    let front = sample_panel(Id::new(4).expect("id"), "Front");
-    let drawer = component(Id::new(3).expect("id"), "Drawer", Placement::IDENTITY, vec![front.into()]);
-    let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![shelf.into(), drawer.into()]);
-    Project::new(root).expect("valid project")
-}
-
-pub(crate) fn component(id: Id, name: &str, placement: Placement, children: Vec<Node>) -> Container {
-    let mut container = Container::new(id, name, placement, children);
-    container.set_component_marker(true).expect("component marker");
-    container
 }
 
 pub(crate) fn sample_material() -> MaterialId {
