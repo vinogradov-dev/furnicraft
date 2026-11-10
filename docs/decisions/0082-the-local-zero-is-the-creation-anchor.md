@@ -42,8 +42,9 @@ answered, the placement is the parent-frame position of that point and the pivot
 
 ## Consequences
 
-The drawing, primitive, panel and group steps call one function, and S6 checks the invariants as one
-contract instead of one per kind. A command that creates a node no longer decides where its zero is,
+The drawing, primitive, panel and group steps call one function, and
+`crates/model/src/project/frame_contract.rs` checks the invariants as one contract instead of one per
+kind (S6). A command that creates a node no longer decides where its zero is,
 so a new content kind cannot invent a fourth answer.
 
 The cost is that a shell must convert a world placement into the parent's frame before it dispatches

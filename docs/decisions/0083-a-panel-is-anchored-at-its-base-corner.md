@@ -52,6 +52,10 @@ contour lands on that contour instead of moving by its corner. The panel frame a
 question as every other creation — which point of the content is the local zero — and the panel card
 can read the corner back from the geometry instead of inventing a second handle.
 
+`crates/model/src/project/frame_contract.rs` holds the contract: a new panel's local zero is its
+base corner, its pivot is zero, and an outline edit re-anchors the frame while every world point
+stays put (S6).
+
 The cost is that panel creation must know the corner in the parent frame, and that a contour panel
 is not centred on its own bounds. A caller that has only a world frame converts it with
 `Placement::inverse`; a caller that has a source object composes the source's world frame with the

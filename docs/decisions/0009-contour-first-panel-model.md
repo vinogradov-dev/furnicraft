@@ -1,6 +1,7 @@
 # 0009. Contour-first panel geometry
 
-- Status: Accepted; core-local machining superseded by 0011; banding-path unit superseded by 0014
+- Status: Accepted; core-local machining superseded by 0011; banding-path unit superseded by 0014;
+  frame anchored at the outline's base corner, clarified by 0083
 - Date: 2026-10-23
 
 ## Context
@@ -24,8 +25,10 @@ This record supersedes the core-origin placement in ADR 0004 and ADR 0006; their
 and nominal-size formulas remain in force. It refines ADR 0007: the v1 banding order and butt-joint
 rules remain, while coordinates are read in the nominal frame.
 
-The panel-local frame is anchored at the **nominal minimum corner**. The nominal rectangle is the
-reference for dimensions and placements. Derived panel geometry uses three contours:
+The panel-local frame is anchored at the **base corner of the panel's outline**: the minimum corner
+of the nominal rectangle for a rectangle panel, and the ring's minimum corner for a contour panel
+([0083](0083-a-panel-is-anchored-at-its-base-corner.md)). The nominal rectangle is the reference for
+dimensions and placements. Derived panel geometry uses three contours:
 
 - `N` — the nominal outer contour: the target finished outline, including corner features and bows;
 - `C` — the core contour: `N` with each included banded path offset inward by the band thickness;
@@ -100,9 +103,10 @@ crate or dependency.
 
 ## Consequences
 
-- `Placement` anchors the nominal minimum corner. An included band moves the core inward instead of
-  moving the whole panel outward.
-- Machining stays core-local; the parametric layer translates it by the core origin.
+- `Placement` anchors the base corner of the outline; for a rectangle that is the nominal minimum
+  corner. An included band moves the core inward instead of moving the whole panel outward.
+- Machining is stored in the nominal panel-local frame; the parametric layer derives the core and
+  never translates machining ([0011](0011-machining-uses-the-nominal-panel-frame.md)).
 - Overall size is derived from the finished contour, not from a fixed core corner. With corner
   features and bows it may not be a simple sum of lengths.
 - The current v1 restrictions on cutouts outside the core and overlapping cutouts are temporary;
