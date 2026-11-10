@@ -27,8 +27,8 @@ impl Project {
     /// Adds a geometry object to an existing container and bumps the revision once.
     ///
     /// The object id is allocated from the document; callers must not invent one. The parent may
-    /// be the root or any nested container. The pivot starts at the node's local origin; a drawing
-    /// or a body passes the pivot its own shape gives it through
+    /// be the root or any nested container. The pivot starts at the node's local origin; a creation
+    /// that anchors its content at another point passes that anchor through
     /// [`Project::add_object_with_pivot`].
     pub fn add_object(
         &mut self,
@@ -42,9 +42,10 @@ impl Project {
 
     /// Adds a geometry object with a stored pivot and bumps the revision once.
     ///
-    /// Creation is the only time the pivot is chosen from the shape: a drawing is grabbed at its
-    /// centre or at its first point, a body at the centre of the ring it was extruded from. Every
-    /// later geometry edit leaves the stored pivot alone (ADR 0026).
+    /// The pivot is the manipulation handle in the object's own frame. A creation command rebases
+    /// its content first, so the content's anchor is the local zero, and passes the zero pivot that
+    /// [`crate::rebase_at_anchor`] returns; every later geometry edit leaves the stored pivot alone
+    /// (ADR 0026).
     pub fn add_object_with_pivot(
         &mut self,
         parent: Id,

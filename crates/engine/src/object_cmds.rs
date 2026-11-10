@@ -10,7 +10,10 @@
 //! [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
 
 use furnicraft_mesh::{evaluate_constructive, evaluate_primitive};
-use furnicraft_model::{Constructive, Contour, Geometry, Id, Path, Placement, Primitive, Project, ProjectError};
+use furnicraft_model::{
+    Constructive, Contour, FrameAnchor, Geometry, Id, Path, Placement, Primitive, Project, ProjectError,
+    rebase_at_anchor,
+};
 use furnicraft_param::validate_extrusion_contour;
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -135,7 +138,8 @@ pub struct ObjectExtrudeCreate {
     pub parent: Id,
     /// User-visible name; it must contain a non-whitespace character.
     pub name: String,
-    /// Closed flat contour in the object's local XY plane.
+    /// Closed flat contour in the frame of `placement`; the command moves it so its creation pivot
+    /// becomes the object's local zero.
     pub contour: Contour,
     /// Positive extrusion height along `+Z`.
     pub height: Length,
@@ -182,14 +186,16 @@ fn object_extrude_create_run(
         });
     }
     evaluate_contour(OBJECT_EXTRUDE_CREATE_ID, &params.contour)?;
-    let pivot = params.contour.creation_pivot();
-    let constructive = Constructive::extrude(params.contour.into(), params.height).map_err(ProjectError::from)?;
+    let rebased = rebase_at_anchor(params.contour, params.placement, FrameAnchor::CreationPivot).map_err(|error| {
+        CommandError::InvalidParams { command: OBJECT_EXTRUDE_CREATE_ID, message: error.to_string() }
+    })?;
+    let constructive = Constructive::extrude(rebased.content.into(), params.height).map_err(ProjectError::from)?;
     let id = project.add_object_with_pivot(
         params.parent,
         params.name,
-        params.placement,
+        rebased.placement,
         Geometry::Constructive(constructive),
-        pivot,
+        rebased.pivot,
     )?;
     Ok(CommandOutcome::created(id))
 }
@@ -387,7 +393,8 @@ pub struct ObjectPathCreate {
     pub parent: Id,
     /// User-visible name; it must contain a non-whitespace character.
     pub name: String,
-    /// Open or closed chain of line and arc segments, in the object's local XY plane.
+    /// Open or closed chain of line and arc segments, in the frame of `placement`; the command moves
+    /// it so its creation pivot becomes the object's local zero.
     pub path: Path,
     /// Placement relative to the parent container.
     pub placement: Placement,
@@ -415,16 +422,14 @@ fn object_path_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectPathCreate>(params, OBJECT_PATH_CREATE_ID)?;
     validate_name(&params.name, OBJECT_PATH_CREATE_ID)?;
-    let pivot = params
-        .path
-        .creation_pivot()
+    let rebased = rebase_at_anchor(params.path, params.placement, FrameAnchor::CreationPivot)
         .map_err(|error| CommandError::InvalidParams { command: OBJECT_PATH_CREATE_ID, message: error.to_string() })?;
     let id = project.add_object_with_pivot(
         params.parent,
         params.name,
-        params.placement,
-        Geometry::Path(params.path),
-        pivot,
+        rebased.placement,
+        Geometry::Path(rebased.content),
+        rebased.pivot,
     )?;
     Ok(CommandOutcome::created(id))
 }
@@ -530,7 +535,7 @@ fn object_collapse_run(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, Pivot, Revision};
+    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, Pivot, Revision};
     use furnicraft_testkit::{sample_catalog, sample_project};
     use furnicraft_units::Degrees;
 
@@ -1042,6 +1047,8 @@ mod tests {
             .expect("create the drawing")
             .created_id()
             .expect("id");
+        let stored = session.project().object_path(id).expect("the drawn path").clone();
+        let frame = session.project().object(id).map(|object| (object.placement(), object.pivot())).expect("object");
         let children = session.project().root().children().len();
 
         let value =
@@ -1055,14 +1062,15 @@ mod tests {
         let object = session.project().object(id).expect("the node stays");
         assert_eq!(object.name(), "Plate", "the node keeps its name");
         let body = object.geometry().as_constructive().expect("the drawing is the body now");
-        assert_eq!(body.path(), &closed, "the body owns the path that was drawn");
+        assert_eq!(body.path(), &stored, "the body owns the path that was drawn");
         assert_eq!(body.height(), Some(millimetres(18)));
+        assert_eq!((object.placement(), object.pivot()), frame, "extruding in place leaves the frame alone");
         assert_eq!(session.project().root().children().len(), children, "no sibling body appears");
         assert!(session.project().object_path(id).is_err(), "the drawing is gone");
         assert!(!spec.enabled(&session, &value), "a body is not extruded a second time");
 
         session.undo().expect("one undo restores the drawing");
-        assert_eq!(session.project().object_path(id), Ok(&closed));
+        assert_eq!(session.project().object_path(id), Ok(&stored));
     }
 
     #[test]
@@ -1153,40 +1161,48 @@ mod tests {
     }
 
     #[test]
-    fn a_created_drawing_pivots_on_its_shape() {
+    fn a_created_drawing_is_born_at_its_own_zero() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let millimetres = |value| Length::from_millimetres(value).expect("length");
 
-        let closed =
-            Path::rectangle([millimetres(100), millimetres(50)], [millimetres(0), millimetres(0)]).expect("rectangle");
+        let closed = Path::rectangle([millimetres(600), millimetres(400)], [millimetres(700), millimetres(500)])
+            .expect("rectangle");
         let id = session
             .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Frame", closed))
             .expect("create the drawing")
             .created_id()
             .expect("id");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.placement().translation().x, 650.0, "the ring's centre is the translation");
+        assert_eq!(object.placement().translation().y, 450.0);
+        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO), "the creation pivot is the local zero");
         assert_eq!(
-            session.project().pivot(id),
-            Some(Pivot::new(millimetres(50), millimetres(25), Length::ZERO)),
-            "a closed drawing is grabbed at its centre"
+            session.project().object_path(id).expect("path").bounds_micrometres(),
+            ([-50_000, -50_000], [50_000, 50_000]),
+            "a closed ring straddles its own zero"
         );
 
         let open =
-            Path::polyline(vec![[millimetres(600), millimetres(400)], [millimetres(0), millimetres(400)]], false)
+            Path::polyline(vec![[millimetres(600), millimetres(400)], [millimetres(700), millimetres(450)]], false)
                 .expect("open chain");
         let id = session
             .dispatch(OBJECT_PATH_CREATE_ID, &path_create_params(&session, "Line", open))
             .expect("create the line")
             .created_id()
             .expect("id");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.placement().translation().x, 600.0, "the first point is the translation");
+        assert_eq!(object.placement().translation().y, 400.0);
+        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO));
         assert_eq!(
-            session.project().pivot(id),
-            Some(Pivot::new(millimetres(600), millimetres(400), Length::ZERO)),
-            "an open chain is grabbed at its first point"
+            session.project().object_path(id).expect("path").bounds_micrometres().0,
+            [0, 0],
+            "an open chain's first point is the local zero"
         );
     }
 
     #[test]
-    fn an_extruded_body_pivots_at_the_centre_of_its_ring() {
+    fn an_extruded_body_is_born_at_its_rings_centre() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let id = session
             .dispatch(
@@ -1196,12 +1212,76 @@ mod tests {
             .expect("create extrusion")
             .created_id()
             .expect("id");
-        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        let object = session.project().object(id).expect("object");
+        assert_eq!(object.placement().translation().x, 50.0, "the ring's centre is the translation");
+        assert_eq!(object.placement().translation().y, 25.0);
+        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO), "the creation pivot is the local zero");
+        let body = object.geometry().as_constructive().expect("a body");
         assert_eq!(
-            session.project().pivot(id),
-            Some(Pivot::new(millimetres(50), millimetres(25), Length::ZERO)),
-            "the body takes the ring's centre on its base plane"
+            body.contour().expect("ring").bounds_micrometres(),
+            ([-50_000, -25_000], [50_000, 25_000]),
+            "the body's ring straddles the local zero"
         );
+    }
+
+    #[test]
+    fn a_drawing_in_a_moved_container_lands_where_it_was_clicked() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        // A container turned about Z and moved, so a parent-frame placement is not a world one.
+        let parent_world = Placement::IDENTITY
+            .with_translation(millimetres(-320), millimetres(150), millimetres(700))
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let parent = {
+            let params = serde_json::to_value(crate::AssemblyCreate {
+                parent: root,
+                name: "Frame".to_owned(),
+                placement: parent_world,
+            })
+            .expect("params serialize");
+            session
+                .dispatch(crate::node_cmds::ASSEMBLY_CREATE_ID, &params)
+                .expect("create the container")
+                .created_id()
+                .expect("the container id")
+        };
+        // The shell hands over the work plane's world frame; the command must receive the parent-frame one.
+        let world = Placement::IDENTITY
+            .with_translation(millimetres(200), millimetres(100), millimetres(900))
+            .expect("work plane");
+        let local = Placement::compose(parent_world.inverse().expect("inverse"), world).expect("parent frame");
+        let line =
+            Path::polyline(vec![[millimetres(600), millimetres(400)], [millimetres(700), millimetres(450)]], false)
+                .expect("open chain");
+        let value =
+            serde_json::to_value(ObjectPathCreate { parent, name: "Line".to_owned(), path: line, placement: local })
+                .expect("params serialize");
+
+        let revision = session.project().revision();
+        let id = session.dispatch(OBJECT_PATH_CREATE_ID, &value).expect("create the drawing").created_id().expect("id");
+
+        assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
+        let object = session.project().object(id).expect("object");
+        assert!(!object.placement().same_transform(world), "the stored placement is relative to the parent");
+        let world_placement = session.project().world_placement(id).expect("world placement");
+        let clicked = Placement::IDENTITY
+            .with_translation(millimetres(800), millimetres(500), millimetres(900))
+            .expect("the clicked point in world space");
+        assert!(
+            (world_placement.translation() - clicked.translation()).length() < 1e-9,
+            "the first clicked point is still on the pointer: {:?}",
+            world_placement.translation()
+        );
+        assert!(world_placement.rotation().dot(Placement::IDENTITY.rotation()).abs() >= 1.0 - 1e-12);
+        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO));
+        assert_eq!(session.project().object_path(id).expect("path").bounds_micrometres().0, [0, 0]);
+
+        session.undo().expect("one undo removes the drawing");
+        assert!(session.project().object(id).is_none());
+        assert!(session.project().container(parent).is_some(), "the container is its own undo entry");
     }
 
     #[test]

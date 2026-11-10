@@ -1009,6 +1009,12 @@ mod tests {
         .expect("rectangle")
     }
 
+    /// The same rectangle moved so its bounds centre is the origin, the frame a creation stores.
+    fn centred_rectangle(width: i64, height: i64) -> Contour {
+        let millimetres = |value| Length::from_millimetres(value).expect("length");
+        rectangle(width, height).translated([millimetres(-width / 2), millimetres(-height / 2)]).expect("a moved ring")
+    }
+
     fn object_project() -> (furnicraft_model::Project, Id) {
         let mut project = sample_project();
         let root = project.root().id();
@@ -1048,11 +1054,11 @@ mod tests {
         let (session, id) = constructive_session();
         let summary = object_summary(session.project(), id).expect("summary");
         assert_eq!(summary.kind, "Constructive");
-        assert_eq!(summary.contour, Some(rectangle(100, 50)));
+        assert_eq!(summary.contour, Some(centred_rectangle(100, 50)));
         assert_eq!(
             summary.path.as_ref().map(Path::to_contour),
-            Some(Ok(rectangle(100, 50))),
-            "the body carries the path it grew from"
+            Some(Ok(centred_rectangle(100, 50))),
+            "the body carries the path it grew from, anchored at its own zero"
         );
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
         assert!(summary.contour.as_ref().is_some_and(|contour| contour.segments().len() == 4));
@@ -1259,7 +1265,7 @@ mod tests {
         session.undo().expect("undo");
         assert_eq!(
             session.project().object(id).expect("object").geometry().as_constructive().expect("constructive").contour(),
-            Ok(rectangle(100, 50))
+            Ok(centred_rectangle(100, 50))
         );
     }
 

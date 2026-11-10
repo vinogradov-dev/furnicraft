@@ -1094,10 +1094,12 @@ pub struct DrawnPath {
 impl DrawDraft {
     /// Commits the drawing as one `object.path.create`.
     ///
-    /// The path is placed on the work plane: `placement` maps local X and Y onto the plane's `u` and
-    /// `v`, so the stored coordinates are the visible drawing. A fixed tool commits its finished
-    /// path, a polyline commits what it has whether it was closed or not. On success the caller
-    /// drops the draft; a rejected path leaves it intact so the user can undo or cancel.
+    /// `placement` is the work plane's frame relative to the target container. The command moves the
+    /// chain so its creation pivot becomes the object's local zero, and stores that pivot position
+    /// as the placement; the coordinates of the drawn figure are not the stored ones. A fixed tool
+    /// commits its finished path, a polyline commits what it has whether it was closed or not. On
+    /// success the caller drops the draft; a rejected path leaves it intact so the user can undo or
+    /// cancel.
     pub fn commit(&self, session: &mut Session, parent: Id, placement: Placement) -> Result<Id, String> {
         let path = self.to_path().map_err(|error| error.to_string())?;
         let name = format!("{} drawing", self.tool.label());

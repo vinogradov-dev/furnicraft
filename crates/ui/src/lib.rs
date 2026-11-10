@@ -473,15 +473,18 @@ impl Editor {
     /// Commits the running draft as one path object and opens it for editing.
     ///
     /// The drawing lands in the armed container, or at the scene root like every other creation
-    /// tool, and is placed on `placement`, which maps the work plane onto the object's local XY. The
-    /// new node becomes the selection and immediately enters contour edit mode with its grips, so
-    /// the figure the user just drew can be reshaped without a second click. Escape or Enter leaves
-    /// that mode. A refused path leaves the draft and the selection untouched.
+    /// tool. `placement` is the work plane's *world* frame, the one the shell can measure; the
+    /// command stores a placement relative to the parent, so this converts it with the parent's
+    /// inverse first. The command then moves the chain so its creation pivot is the object's local
+    /// zero. The new node becomes the selection and immediately enters contour edit mode with its
+    /// grips, so the figure the user just drew can be reshaped without a second click. Escape or
+    /// Enter leaves that mode. A refused path leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
         };
         let parent = self.creation_target(session.project());
+        let placement = placement_in_parent(session.project(), parent, placement)?;
         let object = draft.commit(session, parent, placement)?;
         let tool = draft.tool();
         self.drawing = None;
@@ -1109,6 +1112,19 @@ fn creation_target(project: &Project, armed: Option<Id>) -> Id {
     armed.filter(|id| *id != root && project.is_container(*id)).unwrap_or(root)
 }
 
+/// The same world placement expressed in `parent`'s frame.
+///
+/// The shell knows the work plane only in world space, while a command stores a placement relative
+/// to the parent container. `inverse(parent_world) ∘ world_placement` is that conversion, and the
+/// root's world placement is the identity, so a creation at the root is unchanged.
+fn placement_in_parent(project: &Project, parent: Id, world: Placement) -> Result<Placement, String> {
+    let parent_world = project
+        .world_placement(parent)
+        .ok_or_else(|| format!("the creation container {parent} is not in the scene"))?;
+    let parent_inverse = parent_world.inverse().map_err(|error| error.to_string())?;
+    Placement::compose(parent_inverse, world).map_err(|error| error.to_string())
+}
+
 /// The direct child of `container` whose subtree contains `node`.
 fn child_containing(project: &Project, container: Id, node: Id) -> Option<Id> {
     if node == container {
@@ -1143,10 +1159,11 @@ mod tests {
 
     use furnicraft_model::Contour;
     use furnicraft_model::{
-        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, Geometry,
-        MachiningAnchor, MachiningParams, Mesh, Panel, Placement,
+        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, FaceSide, Geometry,
+        MachiningAnchor, MachiningParams, Mesh, Panel, Pivot, Placement,
     };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
+    use furnicraft_units::Degrees;
 
     fn cube_project() -> (Project, Id) {
         let mut project = sample_project();
@@ -1535,14 +1552,59 @@ mod tests {
         assert!(!session.can_undo(), "the drawing was the only undo entry");
     }
 
+    #[test]
+    fn a_drawing_in_a_turned_container_is_stored_in_the_parents_frame() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        let parent_world = Placement::IDENTITY
+            .with_translation(mm(-320), mm(150), mm(700))
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let parent = create_assembly_placed_under(&mut session, root, "Frame", parent_world);
+
+        let mut editor = Editor::new();
+        assert!(editor.arm_creation(session.project(), parent), "the drawing lands in the container");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(600), mm(400)]).expect("first point");
+        editor.drawing_point([mm(700), mm(450)]).expect("second point");
+
+        let world = Placement::IDENTITY.with_translation(mm(200), mm(100), mm(900)).expect("the work plane");
+        let before = session.project().revision();
+        let drawn = editor.commit_drawing(&mut session, world).expect("commit into the container");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(session.project().parent_of(drawn.object), Some(parent), "the node lands in the armed container");
+
+        let object = session.project().object(drawn.object).expect("object");
+        assert!(!object.placement().same_transform(world), "the stored placement is relative to the turned parent");
+        let world_placement = session.project().world_placement(drawn.object).expect("world placement");
+        let clicked = Placement::IDENTITY.with_translation(mm(800), mm(500), mm(900)).expect("the clicked point");
+        assert!(
+            (world_placement.translation() - clicked.translation()).length() < 1e-9,
+            "the first clicked point is still on the pointer: {:?}",
+            world_placement.translation()
+        );
+        assert!(world_placement.rotation().dot(Placement::IDENTITY.rotation()).abs() >= 1.0 - 1e-12);
+        assert_eq!(session.project().pivot(drawn.object), Some(Pivot::ZERO), "the local zero is the pivot");
+        assert_eq!(session.project().object_path(drawn.object).expect("path").bounds_micrometres().0, [0, 0]);
+
+        session.undo().expect("one undo removes the drawing");
+        assert!(session.project().object(drawn.object).is_none());
+        assert!(session.project().container(parent).is_some(), "the container is its own undo entry");
+    }
+
     /// Creates an assembly under `parent` and returns its id.
     fn create_assembly_under(session: &mut Session, parent: Id, name: &str) -> Id {
-        let params = serde_json::to_value(furnicraft_engine::AssemblyCreate {
-            parent,
-            name: name.to_owned(),
-            placement: Placement::IDENTITY,
-        })
-        .expect("params");
+        create_assembly_placed_under(session, parent, name, Placement::IDENTITY)
+    }
+
+    /// Creates an assembly with a given placement under `parent` and returns its id.
+    fn create_assembly_placed_under(session: &mut Session, parent: Id, name: &str, placement: Placement) -> Id {
+        let params =
+            serde_json::to_value(furnicraft_engine::AssemblyCreate { parent, name: name.to_owned(), placement })
+                .expect("params");
         session
             .dispatch(furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID, &params)
             .expect("create the assembly")
