@@ -98,7 +98,8 @@ cutout edge at a boolean intersection; that needs explicit compatible banding.
 
 The first step does not add a new crate or dependency. The later contour work was to need a robust 2D
 line/arc offset and boolean layer; offsets landed in stage 2 as analytic contour code (ADR 0010), and
-the boolean layer lands in stage 3 as the in-house `geom::region` module (ADR 0012), still with no new
+the boolean layer lands in stage 3 as the in-house `geom::boolean` module over `geom::ring` (ADR
+0012), still with no new
 crate or dependency.
 
 ## Consequences

@@ -19,8 +19,9 @@ third-party boolean crate, adds a dependency for a task the crate graph already 
 
 ## Decision
 
-`geom::region` gains exact booleans over `Region` sets: `union_regions`, `intersect_regions` and
-`subtract_regions`. Rings stay lines and arcs from input to output.
+`geom::boolean` gains exact booleans over `Region` sets: `union_regions`, `intersect_regions` and
+`subtract_regions`, while the ring model itself stays in `geom::ring`. Rings stay lines and arcs from
+input to output.
 
 - Every input edge is oriented with its own material on the left: an outer ring counter-clockwise, a
   hole clockwise. All edges of both operands are collected into one arrangement.
@@ -62,7 +63,8 @@ third-party boolean crate, adds a dependency for a task the crate graph already 
 
 ## Related
 
-- [`crates/geom/src/region.rs`](../../crates/geom/src/region.rs) — `Region` and the general boolean;
+- [`crates/geom/src/boolean.rs`](../../crates/geom/src/boolean.rs) — the general boolean;
+  [`crates/geom/src/ring.rs`](../../crates/geom/src/ring.rs) — `Region` and its rings;
   [`crates/geom/src/rect.rs`](../../crates/geom/src/rect.rs) — the exact orthogonal one.
 - [`docs/domain/panels.md`](../domain/panels.md) — machining and the core invariant.
 - [0010](0010-analytic-line-arc-contours.md) — why rings stay analytic.
