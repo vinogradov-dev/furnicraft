@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=P10 state=doing base=4e6d535 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S15 state=idle base=e353f02 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -46,16 +46,17 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
   closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
-  whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init` and the command table
-  (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and the `ci` step list and registers them
-  into that table (P8). P10 completed the write surface (`--repair`, `task add --at top`, `reopen
-  --next`, `state where`, `file`) and the gate now follows the links it used to ignore: every
-  `files:` hint, a closed entry's ADR, the `STATE:` keys, the reference files, a stale `base`.
+  whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
+  (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8). P10 completed the write
+  surface (`--repair`, `task add --at top`, `state where`, `file`) and the gate now follows every
+  `files:` hint, a closed entry's ADR, the `STATE:` keys, the reference files and a stale `base`.
   Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
-P10 is next: the gate follows the links the plan relies on
+S15 is next: `scene/lib.rs` is 1276 production lines and 82 public items, so `Camera`, `Projection`
+and `FixedBasis` move to `crates/scene/src/camera.rs` and the `ray_*` pickers to
+`crates/scene/src/ray.rs`; then S16 and S17 split `render`, and S18–S22 follow.
 
 ## Index
 
