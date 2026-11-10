@@ -331,6 +331,23 @@ fn join(lines: Vec<String>, original: &str) -> String {
     text
 }
 
+/// Replaces the body of a `## <heading>` section, keeping the heading and the blank lines around it.
+///
+/// The prose under `## Next` is the one part of `plan/STATUS.md` a command has to own, because the
+/// gate requires it to name the current task and a close changes which task that is.
+pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, String> {
+    let mut layout = Layout::parse(text);
+    let at = layout.heading(heading)?;
+    let end = layout.sections.iter().map(|(_, at)| *at).filter(|start| *start > at).min().unwrap_or(layout.lines.len());
+    let mut replacement: Vec<String> = vec![String::new()];
+    replacement.extend(body.lines().map(str::trim_end).filter(|line| !line.is_empty()).map(str::to_owned));
+    if end < layout.lines.len() {
+        replacement.push(String::new());
+    }
+    layout.lines.splice(at.saturating_add(1)..end, replacement);
+    Ok(layout.render())
+}
+
 /// Sets one or more `key=value` fields on the single `STATE:` line.
 ///
 /// A key the line does not carry is appended, so a new field costs one command and no rewrite.
@@ -580,6 +597,16 @@ mod tests {
         assert!(ticked.contains("  [ ] the verbs"), "only one step is ticked: {ticked}");
         assert!(add_step("no steps here\n", "x").is_err());
         assert!(tick_step("task: P6\n").is_err(), "nothing to tick is a refusal");
+    }
+
+    #[test]
+    fn a_section_body_is_replaced_and_the_headings_around_it_stay() {
+        let status = "STATE: milestone=M1 task=A3 state=idle base=abc1234 updated=2026-01-01\n\n\
+                      ## Where we are\n\nProse.\n\n## Next\n\nA3 is next.\n\n## Index\n\n| File |\n";
+        let text = set_section(status, "Next", "A4 is next: the card.\n\nThen A5.").expect("Next exists");
+        assert!(text.contains("## Next\n\nA4 is next: the card.\nThen A5.\n\n## Index"), "{text}");
+        assert!(text.contains("## Where we are\n\nProse.\n"), "the section above stays: {text}");
+        assert!(set_section(status, "Gone", "x").is_err());
     }
 
     #[test]

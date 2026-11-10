@@ -236,12 +236,14 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo xtask layers` and `cargo xtask plan`, in that order, stopping at the
-first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
+`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan` and `cargo xtask docs`, in that
+order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
 formatting, the gate only checks it.
 
 `cargo xtask plan` fails when the plan files contradict each other: `STATE` naming a task the backlog
 does not have, has finished, keeps outside `## Now`, or that is not the first unfinished task there;
+a `## Next` paragraph naming another task than `STATE` does; a `plan/map.md` row naming a path that
+does not exist; a `plan/debt.md` entry whose tag the `Tags:` line does not declare;
 `state=doing` without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`,
 `goal:`, `now:` and `run:`; `state=idle` with a `[~]` task or a leftover session note; a duplicated
 task id; a `[x]` task outside `## Done`, or a `## Done` entry that is not `[x]`; a finished task

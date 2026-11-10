@@ -139,7 +139,7 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
 
 /// `task start <ID> [--goal <text>] [--now <text>] [--run <cmd>]`
 fn start(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["goal", "now", "run"])?;
+    let options = Options::parse(args, &["goal", "now", "run", "resume"])?;
     let id = options.words.first().ok_or("task start needs a task id")?.clone();
     let summary = state_contract::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
@@ -172,9 +172,10 @@ fn session_note(id: &str, task: &state_contract::Task, options: &Options) -> Str
     let goal = options.value("goal").unwrap_or(&task.lead);
     let now = options.value("now").unwrap_or("starting the task");
     let run = options.value("run").unwrap_or("cargo xtask task");
+    let resume = options.value("resume").unwrap_or("read the first `files:` path and its callers");
     format!(
         "# Session\n\n```text\ntask: {id}\ngoal: {goal}\n\nsteps:\n  [ ] {now}\n\nnow: {now}\nblocked: nothing\n\
-         run: {run} {id}\nresume: {now}\n```\n",
+         run: {run} {id}\nresume: {resume}\n```\n",
     )
 }
 
@@ -247,9 +248,9 @@ fn first_line(body: &str) -> String {
     line.trim_start_matches('#').trim().chars().take(80).collect()
 }
 
-/// `task close <ID> [--commit <hash|HEAD>]`
+/// `task close <ID> [--commit <hash|HEAD>] [--next <text>]`
 fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["commit"])?;
+    let options = Options::parse(args, &["commit", "next"])?;
     let id = options.words.first().ok_or("task close needs a task id")?.clone();
     let summary = state_contract::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
@@ -268,11 +269,22 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let next = first_open(&tasks).ok_or_else(|| {
         "no unfinished task is left in `## Now`; set `STATE:` for the next milestone by hand".to_owned()
     })?;
+    // The plan describes the tree that is checked out now, so `base` and `updated` follow `HEAD`,
+    // not the commit the closed task names (a task may be closed long after it landed).
     let mut values = vec![("task".to_owned(), next.id.clone()), ("state".to_owned(), "idle".to_owned())];
-    if let Some(date) = git.commit_date(commit) {
+    if let Some(head) = git.short("HEAD") {
+        values.push(("base".to_owned(), head));
+    }
+    if let Some(date) = git.commit_date("HEAD") {
         values.push(("updated".to_owned(), date));
     }
     let status = edit::set_state(&status, &values)?;
+    // The `## Next` paragraph names the task `STATE:` does, so a close that changes it must say what
+    // the next paragraph is; otherwise the gate refuses and nothing is written.
+    let status = match options.value("next") {
+        Some(next) => edit::set_section(&status, "Next", next)?,
+        None => status,
+    };
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog).with("plan/STATUS.md", status);
     if root.join("plan/SESSION.md").exists() {
         changes = changes.removed("plan/SESSION.md");
@@ -534,11 +546,18 @@ fn read(root: &Path, path: &str) -> Result<String, String> {
     std::fs::read_to_string(root.join(path)).map_err(|error| format!("cannot read `{path}`: {error}"))
 }
 
-/// `state set key=value …`: the `STATE:` line, one field at a time.
+/// `state set key=value …` and `state next (--body <text>|--stdin)`.
 pub fn state(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &[])?;
-    if options.words.first().map(String::as_str) != Some("set") {
-        return Err("usage: cargo xtask state set key=value …".to_owned());
+    let options = Options::parse(args, &["body"])?;
+    match options.words.first().map(String::as_str) {
+        Some("next") => {
+            let body = options.body("body")?;
+            let status = read(root, "plan/STATUS.md")?;
+            let status = edit::set_section(&status, "Next", &body)?;
+            return apply(root, Changes::new(root).with("plan/STATUS.md", status), options.dry_run, git);
+        }
+        Some("set") => {}
+        _ => return Err("usage: cargo xtask state <set key=value …|next --stdin>".to_owned()),
     }
     let mut values: Vec<(String, String)> = Vec::new();
     for word in options.words.iter().skip(1) {
@@ -680,6 +699,7 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(!backlog[..done].contains("**P6**"), "and left Now: {backlog}");
         let status = text(&root, "plan/STATUS.md");
         assert!(status.contains("task=S14 state=idle"), "{status}");
+        assert!(status.contains("base=abc1234"), "the plan describes the checkout: {status}");
         assert!(!root.join("plan/SESSION.md").exists(), "the note is gone");
         state_contract::check_with(&root, &FakeGit).expect("the plan is still valid");
         let _ = std::fs::remove_dir_all(&root);

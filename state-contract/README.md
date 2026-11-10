@@ -81,6 +81,10 @@ let plan = state_contract::PlanText {
 state_contract::check_text(root, &plan, &git)?; // the caller writes only after this returns `Ok`
 ```
 
+The prose under `## Next` is the one part of `plan/STATUS.md` a command has to own, because the gate
+requires it to name the current task: `edit::set_section` replaces a whole section body, and a close
+that changes the current task takes the new paragraph with it.
+
 `FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|drop` and `cargo xtask state
 set` are the reference host: they take `--dry-run`, print the diff, hold `plan/.lock` while they
 write and land each file through a temp file and a rename.
@@ -133,6 +137,9 @@ session note without `now:` turns a resume into a rewrite.
 | files hints | an unfinished task without a `files:` hint, or a hint naming a path that does not exist |
 | session note | `doing` without exactly one `[~]` task in `## Now`, without a `plan/SESSION.md`, or with a note about another task; a note missing `task`, `goal`, `now` or `run`; `idle` with a note or a `[~]` task |
 | notes | a `plan/notes/` file that is not `<task id>.md`, one named after a task the backlog does not have, an empty note, or a note over 150 lines |
+| next paragraph | the `## Next` section of `plan/STATUS.md` names another task than `STATE: task=`, or names none while the section exists |
+| feature map | a `plan/map.md` row names a path that does not exist |
+| debt tags | a `plan/debt.md` entry carries a tag the `Tags:` line does not declare, or tags without a `Tags:` line |
 | budget | `STATUS.md` over 70 lines, `SESSION.md` over 50 — a warning nobody reads is not a check |
 | history | a done task without a commit hash, or a hash that is not a commit in the repository |
 | base | `base` is not a commit, or is not an ancestor of `HEAD`; `HEAD` itself is legal while the plan edit is uncommitted |

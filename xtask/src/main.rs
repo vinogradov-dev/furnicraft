@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+mod docs;
 mod task;
 mod write;
 
@@ -96,8 +97,9 @@ fn main() {
             Some("add" | "start" | "set" | "step" | "note" | "close" | "reopen" | "drop") => report_write(&args[1..]),
             _ => report_task(&args[1..]),
         },
-        Some("state") => report_write(&args[1..]),
+        Some("state") => report_state(&args[1..]),
         Some("dashboard") => print_dashboard(),
+        Some("docs") => report_docs(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
             print_usage();
@@ -124,7 +126,8 @@ fn print_usage() {
     println!("  state set k=v  set a field of the `STATE:` line");
     println!("  next      `task` with no id: the task `STATE:` names");
     println!("  dashboard print a styled overview of the plan; `--task <id>` expands one task");
-    println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
+    println!("  docs      check that `docs/decisions/README.md` lists every decision and nothing else");
+    println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan, docs");
 }
 
 /// Runs the gate in order and returns the process exit code.
@@ -156,6 +159,9 @@ fn run_ci() -> i32 {
         return 1;
     }
     if report_plan(check_plan()) != 0 {
+        return 1;
+    }
+    if report_docs() != 0 {
         return 1;
     }
     println!("ci: ok");
@@ -197,6 +203,36 @@ fn report_write(args: &[String]) -> i32 {
         write::run(root, args)
     };
     match result {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("plan: {message}");
+            1
+        }
+    }
+}
+
+/// Checks the ADR index against the files it indexes.
+fn report_docs() -> i32 {
+    match docs::check(workspace_root()) {
+        Ok(count) => {
+            println!("docs: {count} decisions indexed");
+            println!("docs: ok");
+            0
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            eprintln!("docs: FAILED ({} violation(s))", violations.len());
+            1
+        }
+    }
+}
+
+/// Runs `state set k=v`, which validates the whole plan before it writes.
+fn report_state(args: &[String]) -> i32 {
+    let root = workspace_root();
+    match write::state(root, args, &state_contract::ProcessGit::new(root)) {
         Ok(()) => 0,
         Err(message) => {
             eprintln!("plan: {message}");

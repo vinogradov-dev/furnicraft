@@ -289,7 +289,8 @@ pub(crate) fn missing_paths<F: Fn(&str) -> bool>(hint: &str, exists: F) -> Vec<S
     hint_paths(hint).into_iter().filter(|path| !exists(path)).collect()
 }
 
-/// The path-like tokens of a map cell: a run that holds a `/`, so an anchor name never matches.
+/// The path-like tokens of a map cell: a lower-case run that holds a `/`, so an anchor name or a
+/// prose pair like `Line/Arc` never matches.
 pub(crate) fn map_paths(cell: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut current = String::new();
@@ -307,7 +308,8 @@ pub(crate) fn map_paths(cell: &str) -> Vec<String> {
 /// Pushes the run collected so far when it reads as a path, then starts a new run.
 fn flush_path(current: &mut String, paths: &mut Vec<String>) {
     let trimmed = current.trim_end_matches(['.', '-', '/']).trim_start_matches(['.', '/']);
-    if trimmed.contains('/') && trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
+    let lower_case = trimmed.chars().all(|ch| !ch.is_ascii_uppercase());
+    if trimmed.contains('/') && lower_case && trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
         paths.push(trimmed.to_owned());
     }
     current.clear();
@@ -516,6 +518,12 @@ mod tests {
             ["crates/scene/src/lib.rs", "docs/decisions"]
         );
         assert!(map_paths("(PanelOutlineSet, PanelOutlineToContour)").is_empty(), "an anchor alone is no path");
+        assert!(
+            map_paths("`crates/model/src/contour.rs` (ContourSegment, Line/Arc)")
+                .iter()
+                .all(|path| path.contains("crates")),
+            "a prose pair with a slash is not a path"
+        );
     }
 
     #[test]

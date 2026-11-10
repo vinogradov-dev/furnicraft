@@ -220,6 +220,13 @@ pub fn check_text(root: &Path, plan: &PlanText<'_>, git: &dyn Git) -> Result<Sum
         if let Some(notes) = plan.notes {
             violations.extend(notes::note_violations_in(notes, &summary.tasks));
         }
+        // The reference files are the plan too: a stale map row or an undeclared debt tag rots it.
+        if let Ok(map) = std::fs::read_to_string(root.join("plan/map.md")) {
+            violations.extend(validate::map_violations(&map, |path| root.join(path).exists()));
+        }
+        if let Ok(debt) = std::fs::read_to_string(root.join("plan/debt.md")) {
+            violations.extend(validate::debt_violations(&debt));
+        }
     }
     match std::fs::read_to_string(root.join("README.md")) {
         Ok(readme) => violations.extend(validate::readme_violations(&readme)),
