@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X29** a group is anchored at its bounds centre: `group_nodes` builds the container with an
-  identity placement while `Container::new` puts the pivot at the centre of the children's bounds, so
-  the card shows `Translation (0, 0, 0)` while the pivot sits in the middle of the group — the same
-  class of defect as a drawing's frame, and a nested group compounds it. Expectation: grouping
-  re-anchors with `rebase_at_anchor(CenterOfBounds)` — the new container's translation is the
-  parent-frame centre of the children's union, every child placement moves by `-centre`,
-  `pivot_local = 0`, and the children's world transforms do not change. `Container::new` stops
-  inventing a pivot (a new container is born at zero), so no caller gets a hidden centre; the
-  pre-schema-6 migration keeps `default_container_pivot` and no later pass re-normalizes it. Tests:
-  a group of two panels keeps their world bounds and reports the centre as its translation; a group
-  inside a rotated container keeps world positions and the parent-frame centre; a group of objects and
-  panels uses the same union; no child's rotation changes; one undo entry.
-  `files: crates/model/src/project/node_cmds.rs, crates/model/src/container.rs, crates/model/src/tree.rs`
-
 - `[ ]` **X30** a panel's frame follows its parameters, its pivot does not: `move_frame_to` keeps the
   world shape when a contour edit moves the ring's minimum corner, but it also shifts the pivot by
   `-min`, so the pivot drifts off the base corner — and the inspector still lets every node author a
@@ -254,6 +240,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X29** a group is anchored at its bounds centre: `group_nodes` builds the container with an
+  identity placement while `Container::new` puts the pivot at the centre of the children's bounds, so
+  the card shows `Translation (0, 0, 0)` while the pivot sits in the middle of the group — the same
+  class of defect as a drawing's frame, and a nested group compounds it. Expectation: grouping
+  re-anchors with `rebase_at_anchor(CenterOfBounds)` — the new container's translation is the
+  parent-frame centre of the children's union, every child placement moves by `-centre`,
+  `pivot_local = 0`, and the children's world transforms do not change. `Container::new` stops
+  inventing a pivot (a new container is born at zero), so no caller gets a hidden centre; the
+  pre-schema-6 migration keeps `default_container_pivot` and no later pass re-normalizes it. Tests:
+  a group of two panels keeps their world bounds and reports the centre as its translation; a group
+  inside a rotated container keeps world positions and the parent-frame centre; a group of objects and
+  panels uses the same union; no child's rotation changes; one undo entry.
+  `1e04142`
+  `files: crates/model/src/project/node_cmds.rs, crates/model/src/container.rs, crates/model/src/tree.rs`
 
 - `[x]` **X27** the inspector tells the local and the world truth: the Transform card's X/Y/Z is the
   placement *relative to the parent* and the Pivot card's X/Y/Z is the pivot in the node's own frame,
