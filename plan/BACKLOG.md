@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
-  one by one become one test module, and the documents stop describing the old behaviour. Tests: for
-  every creation path (line, polyline, arc, rectangle, circle, polygon, contour, extrusion, primitive,
-  panel, group, duplicate) the local zero is the creation anchor and `pivot_local` is zero;
-  `vertex_world = translation + rotation * vertex_local` and
-  `pivot_world = translation + rotation * pivot_local` for every payload; a geometry edit changes no
-  component of `translation`, `rotation` or `pivot_local`; a move changes only `translation`; a turn
-  about a pivot keeps `pivot_world`; world-zero keeps vertices, pivot and rotation; duplicate copies
-  local fields exactly; undo/redo restores the frame bit for bit; a round trip at the current schema
-  keeps every invariant. Docs: ADR 0082 and 0083 (written
-  with S5 and X26) are checked against the code, ADRs 0009, 0026, 0052 and 0058 are corrected,
-  `PROJECT.md` §"Space and views", `AGENTS.md` §4.10 and the `plan/map.md` rows for the frame, the
-  panel and the inspector are updated. Two commits: the invariants with any fix they force, then the
-  documents and `cargo xtask ci`.
-  `files: crates/model/src/project/mod.rs, docs/decisions, PROJECT.md, plan/map.md, AGENTS.md`
-
 - `[ ]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
   audit re-measures the tree, checks every finding against the code as it stands then, and files one
   small behaviour-preserving subtask per finding (`S8`, `S9`, … in dependency order) in `## Now`, then
@@ -280,6 +264,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
+  one by one become one test module, and the documents stop describing the old behaviour. Tests: for
+  every creation path (line, polyline, arc, rectangle, circle, polygon, contour, extrusion, primitive,
+  panel, group, duplicate) the local zero is the creation anchor and `pivot_local` is zero;
+  `vertex_world = translation + rotation * vertex_local` and
+  `pivot_world = translation + rotation * pivot_local` for every payload; a geometry edit changes no
+  component of `translation`, `rotation` or `pivot_local` (an object edit; a panel outline edit
+  re-anchors by X30 and compensates the translation instead); a move changes only `translation`; a turn
+  about a pivot keeps `pivot_world`; world-zero keeps vertices, pivot and rotation; duplicate copies
+  local fields exactly; undo/redo restores the frame bit for bit; a round trip at the current schema
+  keeps every invariant. Docs: ADR 0082 and 0083 (written
+  with S5 and X26) are checked against the code, ADRs 0009, 0026, 0052 and 0058 are corrected,
+  `PROJECT.md` §"Space and views", `AGENTS.md` §4.10 and the `plan/map.md` rows for the frame, the
+  panel and the inspector are updated. Two commits: the invariants with any fix they force, then the
+  documents and `cargo xtask ci`.
+  `d7ad707`
+  `files: crates/model/src/project/mod.rs, docs/decisions, PROJECT.md, plan/map.md, AGENTS.md`
 - `[x]` **X30** a panel's frame follows its parameters, its pivot does not: `move_frame_to` shifted the
   pivot by `-min` when a contour edit moved the ring's minimum corner, so the pivot drifted off the
   base corner, and the inspector let every node author a pivot. Expectation: a panel's pivot is

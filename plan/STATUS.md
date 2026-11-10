@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S6 state=idle base=cb5763b updated=2026-11-10
+STATE: milestone=M7 phase=A task=S7 state=idle base=d7ad707 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -15,7 +15,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   0073), and an extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054);
   every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
-  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082, 0083).
+  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082, 0083),
+  and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -52,11 +53,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-S6 is next: the frame invariants become one test module, ADRs 0082/0083 are checked against the code,
-ADRs 0009, 0026, 0052 and 0058 are corrected, and `PROJECT.md`, `AGENTS.md` §4.10 and the map rows
-follow. S7 follows S6: a read-only audit re-measures the tree and files the design-rules refactor as
-small behaviour-preserving subtasks under `plan/refactor.md` (findings F1-F7 in the entry), the
-`main.rs` and `Editor` splits landing before U45. X30 made a panel's pivot derived (ADR 0083).
+S7 is next: a read-only audit re-measures the tree, checks F1-F7 against the code, and files the
+design-rules refactor as small behaviour-preserving subtasks in `## Now` under `plan/refactor.md`; the
+audit touches `plan/` only and the `main.rs` and `Editor` splits land before U45. S6 closed the frame
+contract in `crates/model/src/project/frame_contract.rs`; ADRs 0009, 0026, 0052, 0082 and 0083 agree.
 
 ## Index
 
