@@ -1,9 +1,8 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S14 state=idle base=7df9401 updated=2026-11-10
+STATE: milestone=M7 phase=A task=S14 state=idle base=5df8549 updated=2026-11-11
 
-Read this file first; `cargo xtask status` prints `STATE` and `## Now`, and `cargo xtask task` one
-task in full. `AGENTS.md` §1.1 orders a broken plan.
+Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
 ## Where we are
 
@@ -29,8 +28,7 @@ task in full. `AGENTS.md` §1.1 orders a broken plan.
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
   0044–0046, schema 16). `crates/mesh` caches by derivation inputs, so a rebuild reuses every
   untouched node and a collapsed object keeps its shape (ADR 0053).
-- Cameras and lights are scene objects (ADR 0036); the frame takes the first authored sun plus eight
-  point lights in watts with a fixed exposure and no tone mapper (ADR 0039).
+- Cameras and lights are scene objects (ADR 0036); one authored sun plus eight point lights (0039).
 - The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view and draw/pick/snap
   for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061): the projection button
   draws its view, a creation lands at the scene root unless a container is armed, the armed tool
@@ -48,15 +46,16 @@ task in full. `AGENTS.md` §1.1 orders a broken plan.
   mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
   closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
-  the plan and prints one task in full (P4); `cargo xtask task` adds line counts, commits and ADRs.
-  Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
+  the plan, prints one task in full (P4) and writes it (P6); P7 checks the map, `## Next`, the debt
+  tags and the ADR index (ADR 0085). Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
 S14 is next: `engine/panel_cmds.rs` is 1143 production lines and 21 commands, 547 of them the ten
-banding ones (`panel.edge_banding.*`, `corner_banding`, `ring_banding`, `panel.corner.*`, `panel.bow.*`),
-so they move to `crates/engine/src/panel_cmds/banding.rs` and `mod.rs` keeps the declarations and the
-re-exports the `COMMANDS` table names. Then S15, S16 in `scene` and `render`, S17–S22 after them.
+banding ones (`panel.edge_banding.*`, `corner_banding`, `ring_banding`, `panel.corner.*`,
+`panel.bow.*`), so they move to `crates/engine/src/panel_cmds/banding.rs` and `mod.rs` keeps the
+declarations and the re-exports the `COMMANDS` table names. Then S15, S16 in `scene` and `render`,
+S17–S22 after them.
 
 ## Index
 

@@ -339,6 +339,54 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **P7** the gate checks the plan it already parses — rules: B1, C7.
+  Why: `plan/map.md` is unchecked although a stale row sends a reader to a file that no longer exists;
+  `## Next` in `plan/STATUS.md` is the first prose a session reads and can name another task than
+  `STATE`; a debt tag with a typo silently drops out of the task report's selection; the ADR index can
+  miss a new decision.
+  Shape: `validate.rs` gains three checks — a map row naming a path that does not exist (only
+  `.rs`/`.md`/`.toml` tokens and existing directories count), the first task id of `## Next` equal to
+  `STATE: task=`, and every debt tag declared in the `Tags:` line; `xtask docs` compares
+  `docs/decisions/README.md` with the files it indexes.
+  Done: each check has a fixture that fails and the current plan still passes; `cargo xtask ci` green.
+  Commits: one.
+  `files: state-contract/src/validate.rs, state-contract/src/lib.rs, xtask/src/main.rs` — `5df8549`
+
+- `[x]` **P6** the agent writes the plan through the tool, never by hand — rules: B1, B8, C7.
+  Why: 194 commits touched `plan/BACKLOG.md` by hand, and a close is five edits — the marker, the
+  hash, the move to `## Done`, `STATE` and deleting `SESSION.md` — each one a chance to break the
+  order the gate enforces.
+  Shape: `state-contract/src/edit.rs` splices line ranges in `plan/BACKLOG.md` and `plan/STATUS.md`,
+  so a command rewrites only its own lines and the rest of the file stays byte-identical;
+  `xtask task add|start|set|step|note|close|reopen|drop` and `xtask state set` build the new text,
+  validate it with the gate in memory and write it through a temp file and a rename. Every verb takes
+  `--dry-run` and prints its diff; `plan/.lock` keeps two writers apart.
+  Done: each verb has a test that a refused command writes nothing; a round-trip test proves
+  `parse(edit(parse(x)))` and that untouched bytes stay; `AGENTS.md` says the plan is written only
+  through `cargo xtask`.
+  Commits: one per verb family.
+  `files: state-contract/src/parse.rs, xtask/src/task.rs, xtask/src/main.rs` — `a35f3d5`
+
+- `[x]` **P5** a session start needs no reasoning the tool can do — rules: B1, B7, C7.
+  Why: `status` drops `resume:` and prints no interrupted flag, so `AGENTS.md` §1.1 case 1 makes the
+  reader compare `base`/`HEAD` and inspect `steps` by hand; `task` prints only its own note, so
+  research on another task that touched the same files is invisible; there is no way to enumerate
+  tasks, the report does not say how many debt or question entries it filtered out, and a done task
+  does not say which commit closed it. `next:` is also computed for a task outside `## Now`, where it
+  means nothing.
+  Shape: `Summary` carries `interrupted`, computed once in `check_with` (the dashboard stops deriving
+  it); `render` prints `goal`, `resume` and the flag. `TaskView` gains `related` — other tasks' notes
+  whose text meets the same `touches` needles — and `closed` (hash, date and subject of a done task).
+  `xtask task list` filters by section, status, phase and text; the human and `--md` forms print how
+  many entries were filtered out; `next` is `None` outside `## Now`; `state-contract` denies the
+  panic lints at the crate root.
+  Done: a session start prints `interrupted: yes` and `resume:` while the note has open steps; another
+  task's note that names one of this task's files appears under `RELATED`; `list --phase X
+  --status open` prints one line per task; the report says `+N other entries (--all)`; a done task
+  shows `closed:`; the suite covers each; `cargo xtask ci` green.
+  Commits: one or two. `[x]` `c884b81`
+  `files: state-contract/src/lib.rs, state-contract/src/task.rs, xtask/src/task.rs`
+
 - `[x]` **P4** `cargo xtask task` prints one task in full — rules: B1, B7, C7, C10.
   Why: starting S14 costs `status`, then a grep of `plan/BACKLOG.md`, `plan/map.md`, `plan/debt.md`,
   `docs/decisions/` and `git log`, plus the production-line loop in `plan/refactor.md`; the gate
