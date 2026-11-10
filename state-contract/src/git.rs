@@ -23,6 +23,13 @@ pub trait Git {
         let _ = path;
         None
     }
+    /// The short form of a commit, as the plan writes it; `None` when it does not resolve.
+    ///
+    /// The default answers `None`, like [`Git::last_touch`].
+    fn short(&self, hash: &str) -> Option<String> {
+        let _ = hash;
+        None
+    }
     /// The subject line of a commit, when it resolves to one.
     ///
     /// The default answers `None`, for the same reason as [`Git::last_touch`].
@@ -93,6 +100,10 @@ impl Git for ProcessGit {
 
     fn subject(&self, hash: &str) -> Option<String> {
         self.output(&["show", "-s", "--format=%s", hash]).filter(|line| !line.is_empty())
+    }
+
+    fn short(&self, hash: &str) -> Option<String> {
+        self.output(&["rev-parse", "--short", hash]).filter(|short| !short.is_empty())
     }
 }
 

@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 mod task;
+mod write;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -90,7 +91,12 @@ fn main() {
         Some("layers") => report(check_layers()),
         Some("plan") => report_plan(check_plan()),
         Some("status") => print_status(),
-        Some("task") | Some("next") => report_task(&args[1..]),
+        Some("next") => report_task(&args[1..]),
+        Some("task") => match args.get(1).map(String::as_str) {
+            Some("add" | "start" | "set" | "step" | "note" | "close" | "reopen" | "drop") => report_write(&args[1..]),
+            _ => report_task(&args[1..]),
+        },
+        Some("state") => report_write(&args[1..]),
         Some("dashboard") => print_dashboard(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
@@ -113,6 +119,9 @@ fn print_usage() {
     println!("  status    print the current task and what follows, for a session start");
     println!("  task [id] print one task in full: fields, notes, files with line counts, map, debt, ADRs");
     println!("            `--md` for an agent, `--paths` for a shell loop, default is the framed report");
+    println!("  task list print one line per task; `--section/--status/--phase/--grep` filter");
+    println!("  task add|start|set|step|note|close|reopen|drop — write the plan, `--dry-run` prints the diff");
+    println!("  state set k=v  set a field of the `STATE:` line");
     println!("  next      `task` with no id: the task `STATE:` names");
     println!("  dashboard print a styled overview of the plan; `--task <id>` expands one task");
     println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
@@ -176,6 +185,23 @@ fn print_status() -> i32 {
             0
         }
         Err(violations) => report_plan(Err(violations)),
+    }
+}
+
+/// Runs one of the verbs that change the plan, which validate before they write.
+fn report_write(args: &[String]) -> i32 {
+    let root = workspace_root();
+    let result = if args.first().map(String::as_str) == Some("state") {
+        write::state(root, &args[1..], &state_contract::ProcessGit::new(root))
+    } else {
+        write::run(root, args)
+    };
+    match result {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("plan: {message}");
+            1
+        }
     }
 }
 

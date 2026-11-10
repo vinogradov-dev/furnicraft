@@ -206,8 +206,11 @@ pub(crate) fn parse_task_line(line: &str) -> Option<TaskLine> {
     let id = bold(rest)?;
     let files = files_hint(rest);
     let text = strip_files(rest);
-    let text =
-        text.trim_start().strip_prefix("**").and_then(|text| text.split_once("**")).map_or(text, |(_, text)| text);
+    let text: &str = text
+        .trim_start()
+        .strip_prefix("**")
+        .and_then(|text| text.split_once("**"))
+        .map_or(text.as_str(), |(_, text)| text);
     let text = text.trim_start().trim_start_matches(['—', '-', '·']).trim().to_owned();
     Some(TaskLine { status, id, text, files })
 }
@@ -244,19 +247,36 @@ fn bold(text: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_owned())
 }
 
-/// The `files:` hint at the end of a task line.
+/// The `files:` hint of a task, which is the comma-separated path list that follows the label.
+///
+/// The list ends at the first character a path cannot hold, so an inline hint is followed by the
+/// rest of the line (`— \`hash\``, a field) instead of swallowing it.
 pub(crate) fn files_hint(text: &str) -> Option<String> {
     let (_, hint) = text.rsplit_once("files:")?;
-    let hint = hint.trim().trim_end_matches('`').trim();
+    let hint = hint.get(..hint_len(hint)).unwrap_or_default().trim().trim_end_matches(['`', '.', ',']).trim();
     (!hint.is_empty()).then(|| hint.to_owned())
 }
 
-/// The task text without its trailing `files:` hint.
-pub(crate) fn strip_files(text: &str) -> &str {
-    match text.rsplit_once("files:") {
-        Some((text, _)) => text.trim_end().trim_end_matches('`').trim_end(),
-        None => text,
+/// The byte length of the path list that starts `hint`: paths, commas, spaces and inline-code ticks.
+fn hint_len(hint: &str) -> usize {
+    let mut end = 0;
+    for (index, ch) in hint.char_indices() {
+        let allowed = ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-' | ',' | ' ' | '\t' | '`');
+        if !allowed {
+            break;
+        }
+        end = index.saturating_add(ch.len_utf8());
     }
+    end
+}
+
+/// The task text without its `files:` hint. Whatever follows the hint survives, so a done entry that
+/// writes its commit after the hint keeps it.
+pub(crate) fn strip_files(text: &str) -> String {
+    let Some((before, hint)) = text.rsplit_once("files:") else { return text.trim_end().to_owned() };
+    let head = before.trim_end().trim_end_matches('`').trim_end();
+    let tail = hint.get(hint_len(hint)..).unwrap_or_default().trim();
+    if tail.is_empty() { head.to_owned() } else { format!("{head} {tail}") }
 }
 
 /// The `files:` hint split into paths, in the order it names them.

@@ -38,6 +38,13 @@ the design rules, the audit procedure and the subtask template for the design-ru
 
 Answering the next step has its own procedure (§1.1); it never re-derives the state from the code.
 
+**Writing the plan is a command too.** The agent changes `plan/BACKLOG.md`, `plan/STATUS.md`,
+`plan/SESSION.md` and `plan/notes/<ID>.md` with `cargo xtask task add|start|set|step|note|close|
+reopen|drop` and `cargo xtask state set`, never with a text edit. The commands splice only the lines
+they own, validate the result with the gate *before* writing, take `--dry-run`, and refuse instead
+of leaving a broken plan (ADR 0085). The owner may still edit a file by hand; the format is the
+same.
+
 | Read | Why |
 |---|---|
 | `PROJECT.md` | Vision, domain vocabulary, crate map, milestones |
@@ -336,6 +343,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
 - `cargo xtask task [<ID>]` prints one task in full — the plan half, the code facts, the ADRs, the notes of other tasks that name the same files; `--md` for an agent, `--paths` for a shell loop, `list` to enumerate.
+- `cargo xtask task add|start|set|step|note|close|reopen|drop` and `cargo xtask state set` are the only way an agent writes the plan; each validates the result before it lands, and `--dry-run` prints the diff.
 - `cargo xtask dashboard` prints the state with the file each section comes from; `--task <ID>` expands one task in it.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the

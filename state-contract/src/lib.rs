@@ -34,6 +34,7 @@
 //! ```
 
 mod dashboard;
+pub mod edit;
 mod git;
 mod notes;
 mod parse;
@@ -176,15 +177,35 @@ pub fn check(root: &Path) -> Result<Summary, Vec<String>> {
 pub fn check_with(root: &Path, git: &dyn Git) -> Result<Summary, Vec<String>> {
     let status = read(&root.join("plan/STATUS.md"), "plan/STATUS.md")?;
     let backlog = read(&root.join("plan/BACKLOG.md"), "plan/BACKLOG.md")?;
-    let session_path = root.join("plan/SESSION.md");
-    let session = match std::fs::read_to_string(&session_path) {
+    let session = match std::fs::read_to_string(root.join("plan/SESSION.md")) {
         Ok(text) => Some(text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(vec![format!("cannot read `plan/SESSION.md`: {error}")]),
     };
+    let plan = PlanText { status: &status, backlog: &backlog, session: session.as_deref(), notes: None };
+    check_text(root, &plan, git)
+}
 
+/// A plan as text, for a writer that has not written it yet.
+///
+/// Everything the gate needs from the filesystem — the README, the paths a `files:` hint names, the
+/// commits and the base — still comes from `root`; only the plan files come from the caller.
+pub struct PlanText<'a> {
+    /// `plan/STATUS.md`.
+    pub status: &'a str,
+    /// `plan/BACKLOG.md`.
+    pub backlog: &'a str,
+    /// `plan/SESSION.md`, or `None` when the plan has no note.
+    pub session: Option<&'a str>,
+    /// `plan/notes/` as `(file name, text)`, when the caller changed it; `None` reads the disk.
+    pub notes: Option<&'a [(String, String)]>,
+}
+
+/// Checks a plan given as text against the workspace under `root`: the same rules [`check_with`]
+/// applies, with the plan files supplied instead of read.
+pub fn check_text(root: &Path, plan: &PlanText<'_>, git: &dyn Git) -> Result<Summary, Vec<String>> {
     let mut violations = Vec::new();
-    let mut summary = match analyze(&status, &backlog, session.as_deref()) {
+    let mut summary = match analyze(plan.status, plan.backlog, plan.session) {
         Ok(summary) => Some(summary),
         Err(errors) => {
             violations.extend(errors);
@@ -194,8 +215,11 @@ pub fn check_with(root: &Path, git: &dyn Git) -> Result<Summary, Vec<String>> {
     if let Some(summary) = summary.as_mut() {
         // One git call answers both the `base` rule and the head line the block prints.
         summary.head = git.head();
-        summary.interrupted = session_interrupted(&summary.state, session.as_deref(), summary.head.as_deref(), git);
+        summary.interrupted = session_interrupted(&summary.state, plan.session, summary.head.as_deref(), git);
         violations.extend(workspace_violations(root, summary, git));
+        if let Some(notes) = plan.notes {
+            violations.extend(notes::note_violations_in(notes, &summary.tasks));
+        }
     }
     match std::fs::read_to_string(root.join("README.md")) {
         Ok(readme) => violations.extend(validate::readme_violations(&readme)),

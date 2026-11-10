@@ -63,6 +63,28 @@ Only `Rules`, `Why`, `Shape`, `Done` and `Commits` are fields; `files:` stays th
 and the opening sentence before the first label is the `lead` — the line a one-screen status block
 shows.
 
+## Writing the plan
+
+The crate parses and renders; the writer is a host's, and it gets two pieces from here. `edit`
+splices line ranges — one command owns the lines of its entry, every other byte of the file is
+copied — and `check_text` validates a plan that is still in memory, so a command that would break
+the plan can refuse before anything is written:
+
+```rust
+let backlog = state_contract::edit::set_marker(&backlog, "A3", state_contract::edit::DOING)?;
+let plan = state_contract::PlanText {
+    status: &status,
+    backlog: &backlog,
+    session: Some(&session),
+    notes: None,
+};
+state_contract::check_text(root, &plan, &git)?; // the caller writes only after this returns `Ok`
+```
+
+`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|drop` and `cargo xtask state
+set` are the reference host: they take `--dry-run`, print the diff, hold `plan/.lock` while they
+write and land each file through a temp file and a rename.
+
 ## Why
 
 An agent starts with no memory of the previous session. The plan files are that memory; the gate is

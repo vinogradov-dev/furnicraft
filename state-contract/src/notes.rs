@@ -78,9 +78,23 @@ pub(crate) fn note_violations(root: &Path, tasks: &[Task]) -> Vec<String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(error) => return vec![format!("cannot read `plan/notes/`: {error}")],
     };
+    let notes: Vec<(String, String)> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            (name, text)
+        })
+        .collect();
+    note_violations_in(&notes, tasks)
+}
+
+/// The same rules over notes that are still in memory: a writer validates the plan it is about to
+/// write, before any of it reaches the disk.
+pub(crate) fn note_violations_in(notes: &[(String, String)], tasks: &[Task]) -> Vec<String> {
     let mut violations = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
+    for (name, text) in notes {
         let Some(id) = name.strip_suffix(".md") else {
             violations.push(format!("`plan/notes/{name}` is not a note: a note is named `<task id>.md`"));
             continue;
@@ -88,7 +102,6 @@ pub(crate) fn note_violations(root: &Path, tasks: &[Task]) -> Vec<String> {
         if !tasks.iter().any(|task| task.id == id) {
             violations.push(format!("`plan/notes/{name}` is named after {id}, which `plan/BACKLOG.md` does not have"));
         }
-        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
         if text.trim().is_empty() {
             violations.push(format!(
                 "`plan/notes/{name}` is empty; a note says what the research found, or it does not exist"
