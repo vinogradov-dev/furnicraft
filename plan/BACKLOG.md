@@ -25,27 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X28** old scenes migrate to the canonical frame: schema 20 (owner's decision, 2026-11-10;
-  the debt note that reserved 20 for explicit arc endpoints moves to 21) adds one load migration that
-  runs for every document saved at 19 or older and preserves the world shape. An object re-anchors on
-  its stored pivot (`translation += rotation * pivot_local`, geometry moves by `-pivot_local`,
-  `pivot_local = 0`); a panel keeps its translation and drops an authored pivot to zero, because its
-  local zero already is the base corner; a container re-anchors on the centre of its children's bounds
-  (`translation += rotation * centre`, every child moves by `-centre`, `pivot_local = 0`), the owner's
-  group rule, which for an untouched container equals the general rule. `Primitive` payloads are left
-  alone: their geometry is already centred and a stored pivot is a handle, not a frame. The migration is one
-  pass over the tree that validates as it goes; a refused value names the node instead of
-  half-migrating the file. The blocking test loads a version 19 document with a drawn path, an
-  extrusion, a nested group with its own pivot, a group inside a rotated parent and a panel with an
-  authored pivot, and asserts every world vertex is unchanged and every world pivot is unchanged
-  except a panel's, which becomes the new base corner; translations became the old anchor and every
-  pivot is zero. A round trip at 20 changes nothing, and the version 7–18 goldens still load and
-  migrate once. Open edge recorded in `plan/questions.md`: a flat `Path`/`Constructive` whose stored
-  pivot has a non-zero Z cannot satisfy both the world-preservation test and the new "flat pivot is
-  zero" rule; the owner's ruling decides whether the handle is clamped, the file refused, or the case
-  kept as legacy.
-  `files: crates/model/src/project/wire.rs, crates/model/src/project/mod.rs, plan/debt.md`
-
 - `[ ]` **X29** a group is anchored at its bounds centre: `group_nodes` builds the container with an
   identity placement while `Container::new` puts the pivot at the centre of the children's bounds, so
   the card shows `Translation (0, 0, 0)` while the pivot sits in the middle of the group — the same
@@ -54,7 +33,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   parent-frame centre of the children's union, every child placement moves by `-centre`,
   `pivot_local = 0`, and the children's world transforms do not change. `Container::new` stops
   inventing a pivot (a new container is born at zero), so no caller gets a hidden centre; the
-  pre-schema-6 migration keeps `default_container_pivot` and X28 re-normalizes what it writes. Tests:
+  pre-schema-6 migration keeps `default_container_pivot` and no later pass re-normalizes it. Tests:
   a group of two panels keeps their world bounds and reports the centre as its translation; a group
   inside a rotated container keeps world positions and the parent-frame centre; a group of objects and
   panels uses the same union; no child's rotation changes; one undo entry.
@@ -73,8 +52,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   vertex and every machining point where it was, `translation` becomes the new world base corner and
   `pivot_local` is zero; a resize leaves the translation alone because the minimum corner does not
   move; a panel made by `panel.contour.create` survives a later outline edit; `node.pivot.set` and
-  `node.pivot.center` on a panel return the new error and change nothing; a schema 20 document whose
-  panel carries a non-zero pivot is a readable load error.
+  `node.pivot.center` on a panel return the new error and change nothing; a document whose panel
+  carries a non-zero pivot is a readable load error.
   `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/mod.rs`
 
 - `[ ]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
@@ -85,8 +64,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `pivot_world = translation + rotation * pivot_local` for every payload; a geometry edit changes no
   component of `translation`, `rotation` or `pivot_local`; a move changes only `translation`; a turn
   about a pivot keeps `pivot_world`; world-zero keeps vertices, pivot and rotation; duplicate copies
-  local fields exactly; undo/redo restores the frame bit for bit; a round trip at 20 keeps every
-  invariant, and a version 19 file loads with its world unchanged. Docs: ADR 0082 and 0083 (written
+  local fields exactly; undo/redo restores the frame bit for bit; a round trip at the current schema
+  keeps every invariant. Docs: ADR 0082 and 0083 (written
   with S5 and X26) are checked against the code, ADRs 0009, 0026, 0052 and 0058 are corrected,
   `PROJECT.md` §"Space and views", `AGENTS.md` §4.10 and the `plan/map.md` rows for the frame, the
   panel and the inspector are updated. Two commits: the invariants with any fix they force, then the

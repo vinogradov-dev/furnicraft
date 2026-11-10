@@ -65,6 +65,10 @@ editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]
   unsaved changes, Open warns inside the path dialog instead of asking for confirmation, there is no
   recent-files list and no autosave. `apps/furnicraft` still starts from `sample_session()`; a new
   empty scene is one menu click away.
+- `[scene]` A scene written by an earlier build is not migrated to the current frame: there are no
+  releases and no user files yet (`plan/rename.md`), so an old pre-release document may load with a
+  different world shape instead of being converted. Owner's decision, 2026-11-10; revisit when a
+  format ships to a user.
 - `[types]` Parametric cabinets do not exist yet: M6 provides classification and properties, and
   product prototypes arrive later as user scripts over those properties.
 - `[types]` A component has no separate "dissolve" operation yet: `node.component.convert_to_group`

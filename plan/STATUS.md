@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X28 state=idle base=62501ad updated=2026-11-10
+STATE: milestone=M7 phase=A task=X29 state=idle base=36b0694 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -54,10 +54,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X27 made the inspector tell the local and the world truth: parent-relative labels, a read-only
-world position and world pivot, and `node.placement.world_zero`; a panel's derived base-corner
-pivot is read-only (ADR 0083). X28 migrates every old scene to the canonical frame at schema 20,
-re-anchoring objects on their pivot, panels on zero and containers on their children's centre.
+X27 made the inspector tell the local and the world truth: parent-relative labels, a read-only world
+pivot and `node.placement.world_zero`; a panel's pivot is read-only (ADR 0083). X28 is dropped — no
+releases, no user files — and X29 is next: a group anchors at the centre of its children's bounds.
 
 ## Index
 
