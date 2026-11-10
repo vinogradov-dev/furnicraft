@@ -811,9 +811,15 @@ impl Editor {
     }
 
     /// Creates the armed primitive in the creation target and selects it.
+    ///
+    /// `placement` is the work plane's *world* frame, the one the shell can measure; the command
+    /// stores a placement relative to the parent, so this converts it with the parent's inverse
+    /// first, exactly like [`Self::commit_drawing`]. A primitive's mesh is centred on its local
+    /// zero with a zero pivot, so the stored translation is the clicked point in the parent frame.
     pub fn place_primitive(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
         let pending = self.pending_primitive.ok_or_else(|| "No primitive is waiting for a click.".to_owned())?;
         let parent = self.creation_target(session.project());
+        let placement = placement_in_parent(session.project(), parent, placement)?;
         self.create_primitive(session, parent, pending.kind, pending.size, placement)?;
         self.pending_primitive = None;
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
@@ -1920,6 +1926,64 @@ mod tests {
         editor.cancel_primitive();
         assert!(editor.pending_primitive().is_none());
         assert_eq!(session.project().revision().get(), 1, "cancelling creates nothing");
+    }
+
+    #[test]
+    fn a_clicked_primitive_lands_on_the_pointer_at_the_root_and_in_a_turned_container() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        // A container turned about Z and moved, so a parent-frame placement is not a world one.
+        let parent_world = Placement::IDENTITY
+            .with_translation(mm(-320), mm(150), mm(700))
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let parent = create_assembly_placed_under(&mut session, root, "Frame", parent_world);
+        let click = Placement::IDENTITY.with_translation(mm(200), mm(100), mm(900)).expect("the clicked point");
+
+        for armed in [None, Some(parent)] {
+            let mut editor = Editor::new();
+            if let Some(container) = armed {
+                assert!(editor.arm_creation(session.project(), container), "the cube lands in the container");
+            }
+            editor.arm_primitive(PrimitiveKind::Cube, mm(300)).expect("arm the cube");
+
+            let before = session.project().revision();
+            let cube = editor.place_primitive(&mut session, click).expect("place the cube");
+            let what = if armed.is_some() { "in the container" } else { "at the root" };
+            assert_eq!(
+                session.project().revision(),
+                before.checked_next().expect("revision"),
+                "{what}: one click is one change"
+            );
+            assert_eq!(session.project().parent_of(cube), Some(armed.unwrap_or(root)), "{what}: the parent");
+            assert_eq!(session.project().pivot(cube), Some(Pivot::ZERO), "{what}: the local zero is the pivot");
+
+            let object = session.project().object(cube).expect("object");
+            let stored = object.geometry().as_primitive().expect("the parameters are stored");
+            let (min, max) = stored.bounds_micrometres();
+            assert_eq!(min, [-150_000; 3], "{what}: the mesh is centred on the local zero");
+            assert_eq!(max, [150_000; 3], "{what}: the mesh is symmetric about the local zero");
+
+            let world = session.project().world_placement(cube).expect("world placement");
+            assert!(
+                (world.translation() - click.translation()).length() < 1e-9,
+                "{what}: the clicked point is on the pointer, was {:?}",
+                world.translation()
+            );
+            assert!(world.rotation().dot(click.rotation()).abs() >= 1.0 - 1e-12, "{what}: the plane rotation");
+            if armed.is_none() {
+                assert_eq!(object.placement(), click, "at the root the stored placement is the world one");
+            } else {
+                assert!(!object.placement().same_transform(click), "the container stores a relative placement");
+            }
+
+            session.undo().expect("one undo removes the cube");
+            assert!(session.project().object(cube).is_none(), "{what}: the undo removed the cube");
+        }
+        assert!(session.project().container(parent).is_some(), "the container is its own undo entry");
     }
 
     #[test]
