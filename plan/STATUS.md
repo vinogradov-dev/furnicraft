@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X27 state=idle base=c992043 updated=2026-11-10
+STATE: milestone=M7 phase=A task=X28 state=idle base=62501ad updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -54,10 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X26 anchored a panel at its contour's base corner (ADR 0083): `add_panel_contour` rebases the ring
-and `panel.contour.create` lands it exactly over its source. X27 makes the inspector tell the local
-and the world truth: parent-relative labels, a read-only world position and world pivot, and
-`node.placement.world_zero`, which clears a nested translation without turning the node.
+X27 made the inspector tell the local and the world truth: parent-relative labels, a read-only
+world position and world pivot, and `node.placement.world_zero`; a panel's derived base-corner
+pivot is read-only (ADR 0083). X28 migrates every old scene to the canonical frame at schema 20,
+re-anchoring objects on their pivot, panels on zero and containers on their children's centre.
 
 ## Index
 

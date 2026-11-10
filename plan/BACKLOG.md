@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X27** the inspector tells the local and the world truth: the Transform card's X/Y/Z is the
-  placement *relative to the parent* and the Pivot card's X/Y/Z is the pivot in the node's own frame,
-  so at a nested node nothing on screen says where the node is in the world or what point the gizmo
-  turns about, and there is no way to zero a nested node's translation. Expectation: the editable
-  fields are labelled `Translation (local to <parent>)`, a read-only `World position` row reads
-  `project.world_placement`, the Pivot card adds a read-only `Pivot (world)` from `pivot_world`, and a
-  new `node.placement.world_zero` command sets `translation` to zero in the parent frame, keeping the
-  rotation (the owner split a rotation reset into its own future command); at the root that is the
-  world origin, inside a container the read-only row shows the parent's origin. For a panel the pivot
-  fields are read-only: `Local pivot = 0` with the note "base corner" and `Pivot (world) = World
-  position`, because the pivot is derived from the geometry, not authored. The card never computes a
-  world value itself. Tests: the world rows match `world_placement`/`pivot_world` after a gizmo move
-  and a rotation about the pivot; world-zero on a root node and on a node inside a rotated parent
-  leaves the world rotation composed exactly as before, leaves vertices and `pivot_local`
-  bit-identical and is one undo entry; a panel's pivot fields cannot be edited; the command is in the
-  registry and refuses the root.
-  `files: crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/engine/src/node_cmds.rs`
-
 - `[ ]` **X28** old scenes migrate to the canonical frame: schema 20 (owner's decision, 2026-11-10;
   the debt note that reserved 20 for explicit arc endpoints moves to 21) adds one load migration that
   runs for every document saved at 19 or older and preserves the world shape. An object re-anchors on
@@ -293,6 +275,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X27** the inspector tells the local and the world truth: the Transform card's X/Y/Z is the
+  placement *relative to the parent* and the Pivot card's X/Y/Z is the pivot in the node's own frame,
+  so at a nested node nothing on screen says where the node is in the world or what point the gizmo
+  turns about, and there is no way to zero a nested node's translation. Expectation: the editable
+  fields are labelled `Translation (local to <parent>)`, a read-only `World position` row reads
+  `project.world_placement`, the Pivot card adds a read-only `Pivot (world)` from `pivot_world`, and a
+  new `node.placement.world_zero` command sets `translation` to zero in the parent frame, keeping the
+  rotation (the owner split a rotation reset into its own future command); at the root that is the
+  world origin, inside a container the read-only row shows the parent's origin. For a panel the pivot
+  fields are read-only: `Local pivot = 0` with the note "base corner" and `Pivot (world) = World
+  position`, because the pivot is derived from the geometry, not authored. The card never computes a
+  world value itself. Tests: the world rows match `world_placement`/`pivot_world` after a gizmo move
+  and a rotation about the pivot; world-zero on a root node and on a node inside a rotated parent
+  leaves the world rotation composed exactly as before, leaves vertices and `pivot_local`
+  bit-identical and is one undo entry; a panel's pivot fields cannot be edited; the command is in the
+  registry and refuses the root.
+  `62501ad`
+  `files: crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/engine/src/node_cmds.rs`
 
 - `[x]` **X26** a panel is anchored at its base corner: a panel is a parametric entity, not a mesh —
   the core draws a closed contour, extrudes the thickness and then explicitly re-anchors the frame with

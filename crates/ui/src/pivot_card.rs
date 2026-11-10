@@ -1,18 +1,22 @@
 //! The pivot card shared by panels and containers.
 //!
-//! The pivot is stored in the node's own frame and is entered in millimetres. It is authored data:
-//! it never follows a resize or a reparent, and both gizmos use the same point. Enter in a field or
-//! the Apply button dispatches one `node.pivot.set`; the Center button dispatches
-//! `node.pivot.center`, which puts the pivot at the centre of the node's local bounds. Each accepted
-//! edit is one undo entry, and an unchanged value does not touch history.
+//! The pivot is stored in the node's own frame and is entered in millimetres. For a container it is
+//! authored data: it never follows a resize or a reparent, and both gizmos use the same point.
+//! Enter in a field or the Apply button dispatches one `node.pivot.set`; the Center button
+//! dispatches `node.pivot.center`, which puts the pivot at the centre of the node's local bounds.
+//! Each accepted edit is one undo entry, and an unchanged value does not touch history. A panel's
+//! pivot is derived from its geometry — the base corner — so the card shows it read-only. A
+//! read-only *Pivot (world)* row prints `Project::pivot_world`; the card never turns the point
+//! itself.
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PIVOT_CENTER_ID, NODE_PIVOT_SET_ID};
 use furnicraft_engine::{NodePivotCenter, NodePivotSet, Session};
-use furnicraft_model::{Id, Pivot};
+use furnicraft_model::{Id, Pivot, Project};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
+use crate::coords;
 use crate::section::section;
 
 /// Persistent state of the pivot card.
@@ -52,12 +56,28 @@ impl PivotCard {
             self.error = None;
             return;
         };
+
+        ui.label(RichText::new("Pivot").strong());
+        if pivot_is_derived(session.project(), node) {
+            self.draft = None;
+            self.error = None;
+            ui.label("Derived from the panel's geometry");
+            section(ui, "pivot.local", "Local pivot", true, |ui| {
+                ui.label("0 mm");
+                ui.label("Base corner of the panel.");
+            });
+            match coords::world_position(session.project(), node) {
+                Some(world) => ui.label(format!("Pivot (world)  {world}")),
+                None => ui.label("Pivot (world)  outside the editable range"),
+            };
+            return;
+        }
+
         if self.draft.as_ref().is_none_or(|draft| draft.node != node || draft.base != current) {
             self.error = None;
             self.draft = Some(Draft::new(node, current));
         }
 
-        ui.label(RichText::new("Pivot").strong());
         ui.label("In the node's own frame");
 
         let Some(draft) = self.draft.as_mut() else {
@@ -86,6 +106,10 @@ impl PivotCard {
                 }
             });
         });
+        match coords::world_pivot(session.project(), node) {
+            Some(world) => ui.label(format!("Pivot (world)  {world}")),
+            None => ui.label("Pivot (world)  outside the editable range"),
+        };
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
@@ -146,6 +170,13 @@ fn apply_center(session: &mut Session, node: Id) -> Result<(), String> {
     }
     let params = json(&NodePivotCenter { node })?;
     dispatch(session, NODE_PIVOT_CENTER_ID, &params).map(|_| ())
+}
+
+/// Whether the pivot comes from the node's geometry instead of the user.
+///
+/// A panel is anchored at the base corner of its outline (ADR 0083), so its pivot is read-only.
+fn pivot_is_derived(project: &Project, node: Id) -> bool {
+    project.panel(node).is_some()
 }
 
 fn parse_length(label: &str, text: &str) -> Result<Length, String> {
@@ -235,6 +266,17 @@ mod tests {
         let missing = Id::new(999).expect("id");
         let error = apply_pivot(&mut session, missing, &fields("0", "0", "0")).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
+    }
+
+    #[test]
+    fn a_panel_pivot_is_derived_and_a_container_pivot_is_authored() {
+        let project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let drawer = Id::new(3).expect("drawer id");
+        assert!(pivot_is_derived(&project, panel), "a panel's pivot comes from its geometry");
+        assert!(!pivot_is_derived(&project, drawer), "a container's pivot is authored");
+        assert!(!pivot_is_derived(&project, project.root().id()));
+        assert!(!pivot_is_derived(&project, Id::new(999).expect("id")));
     }
 
     #[test]

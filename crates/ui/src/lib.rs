@@ -18,6 +18,7 @@ mod command;
 mod container_card;
 mod contour_edit;
 mod contour_grips;
+mod coords;
 pub mod display;
 pub mod home;
 pub mod icons;

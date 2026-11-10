@@ -11,6 +11,7 @@
 use std::collections::HashSet;
 
 use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError, PropertyChange, PropertyValue};
+use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -266,6 +267,57 @@ fn node_placement_set_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePlacementSet>(params, NODE_PLACEMENT_SET_ID)?;
     project.set_node_placement(params.node, params.placement)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the world-zero placement command.
+pub const NODE_PLACEMENT_WORLD_ZERO_ID: &str = "node.placement.world_zero";
+
+/// User-facing label of the world-zero placement command.
+pub const NODE_PLACEMENT_WORLD_ZERO_LABEL: &str = "Zero translation";
+
+/// Parameters for `node.placement.world_zero`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePlacementWorldZero {
+    /// Panel or container whose parent-relative translation becomes zero.
+    pub node: Id,
+}
+
+/// The `node.placement.world_zero` command.
+///
+/// The translation is cleared in the parent frame and the rotation is kept bit-for-bit, so a node
+/// inside a turned container lands on that container's origin without turning.
+pub(crate) const NODE_PLACEMENT_WORLD_ZERO: CommandSpec = CommandSpec::new(
+    NODE_PLACEMENT_WORLD_ZERO_ID,
+    NODE_PLACEMENT_WORLD_ZERO_LABEL,
+    node_placement_world_zero_enabled,
+    node_placement_world_zero_run,
+);
+
+fn node_placement_world_zero_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodePlacementWorldZero>(params, NODE_PLACEMENT_WORLD_ZERO_ID) else {
+        return false;
+    };
+    let project = session.project();
+    params.node != project.root().id() && project.contains_node(params.node)
+}
+
+fn node_placement_world_zero_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodePlacementWorldZero>(params, NODE_PLACEMENT_WORLD_ZERO_ID)?;
+    if params.node == project.root().id() {
+        return Err(ProjectError::RootImmutable { id: params.node }.into());
+    }
+    let current =
+        project.node(params.node).map(|node| node.placement()).ok_or(ProjectError::NodeNotFound { id: params.node })?;
+    let placement = current.with_translation(Length::ZERO, Length::ZERO, Length::ZERO).map_err(|error| {
+        CommandError::Evaluation { command: NODE_PLACEMENT_WORLD_ZERO_ID, message: error.to_string() }
+    })?;
+    project.set_node_placement(params.node, placement)?;
     Ok(CommandOutcome::changed())
 }
 

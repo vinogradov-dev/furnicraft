@@ -154,8 +154,8 @@ mod tests {
 
     use crate::node_cmds::{
         AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter,
-        NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodeProperty, NodePropertyClear,
-        NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
+        NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodePlacementWorldZero, NodeProperty,
+        NodePropertyClear, NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
@@ -1721,6 +1721,81 @@ mod tests {
         session.redo().expect("redo batch");
         assert_eq!(session.project().panel(panel).expect("panel").placement(), moved);
         assert_eq!(session.project().container(drawer).expect("assembly").placement(), raised);
+    }
+
+    #[test]
+    fn world_zero_clears_a_nested_translation_and_keeps_everything_else() {
+        let mut project = sample_project();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let turn = std::f64::consts::FRAC_PI_4;
+        let turned: Placement = serde_json::from_value(serde_json::json!({
+            "translation": [100.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, turn.sin(), turn.cos()]
+        }))
+        .expect("turned placement");
+        project.set_node_placement(drawer, turned).expect("turn the drawer");
+        project.set_node_placement(front, placement(10.0, 0.0, 0.0)).expect("move the front");
+
+        let before = project.panel(front).expect("front panel").clone();
+        let before_world = project.world_placement(front).expect("world placement");
+        let before_pivot = project.pivot_local(front).expect("local pivot");
+        let zeroed =
+            before.placement().with_translation(Length::ZERO, Length::ZERO, Length::ZERO).expect("zero translation");
+        let mut expected = project.clone();
+        expected.set_node_placement(front, zeroed).expect("expected world-zero placement");
+
+        let mut session = Session::with_catalog(project, sample_catalog());
+        session
+            .dispatch("node.placement.world_zero", &json_params(&NodePlacementWorldZero { node: front }))
+            .expect("zero the nested translation");
+
+        let after = session.project().panel(front).expect("front panel");
+        assert_eq!(after.placement().translation_lengths(), Some([Length::ZERO; 3]));
+        assert_eq!(after.placement().rotation(), before.placement().rotation(), "the rotation must stay bit-identical");
+        assert_eq!(
+            session.project().world_placement(front).expect("world placement").rotation(),
+            before_world.rotation(),
+            "the composed world rotation must not change"
+        );
+        assert_eq!(session.project().pivot_local(front), Some(before_pivot), "the local pivot must not move");
+        assert_eq!(session.project(), &expected, "only the placement may change");
+
+        session.undo().expect("undo world zero");
+        assert_eq!(session.project().panel(front).expect("front panel").placement(), before.placement());
+        assert!(!session.can_undo(), "world zero must be exactly one undo entry");
+    }
+
+    #[test]
+    fn world_zero_at_the_root_lands_on_the_world_origin_and_refuses_the_root_itself() {
+        let mut session = sample_session();
+        let panel = Id::new(2).expect("panel id");
+        let root = session.project().root().id();
+        let turned: Placement = serde_json::from_value(serde_json::json!({
+            "translation": [5.0, 7.0, 9.0],
+            "rotation": [0.0, 0.0, std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2]
+        }))
+        .expect("turned placement");
+        session
+            .dispatch("node.placement.set", &json_params(&NodePlacementSet { node: panel, placement: turned }))
+            .expect("place the panel");
+
+        let spec = CommandRegistry::new().get("node.placement.world_zero").expect("registered");
+        assert!(spec.enabled(&session, &json_params(&NodePlacementWorldZero { node: panel })));
+        assert!(!spec.enabled(&session, &json_params(&NodePlacementWorldZero { node: root })));
+        assert!(!spec.enabled(&session, &json_params(&NodePlacementWorldZero { node: Id::new(999).expect("id") })));
+
+        session
+            .dispatch("node.placement.world_zero", &json_params(&NodePlacementWorldZero { node: panel }))
+            .expect("zero a root-level translation");
+        let world = session.project().world_placement(panel).expect("world placement");
+        assert_eq!(world.translation(), furnicraft_model::Placement::IDENTITY.translation());
+        assert_eq!(world.rotation(), turned.rotation());
+
+        let error = session
+            .dispatch("node.placement.world_zero", &json_params(&NodePlacementWorldZero { node: root }))
+            .expect_err("the root has no placement");
+        assert!(matches!(error, CommandError::Model(ProjectError::RootImmutable { .. })));
     }
 
     #[test]
