@@ -162,13 +162,25 @@ pub fn append_to_entry(backlog: &str, id: &str, suffix: &str) -> Result<String, 
     Ok(layout.render())
 }
 
-/// Replaces the `files:` hint of `id`.
+/// Replaces the `files:` hint of `id`, keeping whatever a closed entry wrote after it.
 pub fn set_files(backlog: &str, id: &str, hint: &str) -> Result<String, String> {
     let mut layout = Layout::parse(backlog);
     let entry = layout.entry(id)?.clone();
     let range = layout.field_range(&entry, "files").ok_or_else(|| format!("task {id} has no `files:` hint"))?;
-    layout.lines.splice(range.0..range.1, [format!("{INDENT}`files: {hint}`")]);
+    let tail = layout.lines.get(range.0).map(|line| hint_tail(line).to_owned()).unwrap_or_default();
+    layout.lines.splice(range.0..range.1, [format!("{INDENT}`files: {hint}`{tail}")]);
     Ok(layout.render())
+}
+
+/// The text after the closing backtick of a `files:` hint, so the commit a closed entry writes on
+/// the same line survives an edit that only meant to move the hint.
+fn hint_tail(line: &str) -> &str {
+    let Some(open) = line.find("`files:") else { return "" };
+    let rest = line.get(open.saturating_add(1)..).unwrap_or_default();
+    match rest.find('`') {
+        Some(close) => rest.get(close.saturating_add(1)..).unwrap_or_default(),
+        None => "",
+    }
 }
 
 /// Replaces, adds or removes one labelled field of `id`; an empty body removes the field.
@@ -543,6 +555,16 @@ mod tests {
     fn a_files_hint_is_replaced_without_touching_the_entry() {
         let text = set_files(BACKLOG, "S14", "crates/a.rs, crates/b.rs").expect("S14 is in the file");
         assert!(text.contains("  `files: crates/a.rs, crates/b.rs`\n"), "{text}");
+    }
+
+    #[test]
+    fn a_closed_entry_keeps_the_commit_written_after_its_hint() {
+        // The hint and the commit share a line in `## Done`; moving the hint may not drop the hash.
+        let done = "## Now\n\n## Done\n\n- `[x]` **S10** a move — `0bd1f6e`.\n  \
+                     `files: crates/geom/src/old.rs, crates/geom/src/lib.rs` — `0bd1f6e`\n";
+        let text = set_files(done, "S10", "crates/geom/src/rect.rs, crates/geom/src/lib.rs").expect("S10 has a hint");
+        assert!(text.contains("`files: crates/geom/src/rect.rs, crates/geom/src/lib.rs` — `0bd1f6e`"), "{text}");
+        assert_eq!(text.matches("0bd1f6e").count(), 2, "the subject and the hint line keep their hash: {text}");
     }
 
     #[test]
