@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
-  Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
-  a corner of any ring (`CornerMove`, `move_corner*`, trim and split, `PathCorner`) and the constrained
-  drags of a tagged figure (`CircleFrame`, `RectangleFrame`, `PolygonFrame`, `ArcFrame` and the numeric
-  setters, ADR 0073, ADR 0075).
-  Shape: the four frames and their drags and setters move to `crates/model/src/contour_frames.rs`
-  (~580); `contour_edit.rs` keeps `CornerMove`, the error, `impl Path`'s corner moves and
-  `impl Contour` (~700).
-  Done: suite unchanged; both headers name the constraint they enforce (free or along the picked
-  segment; a tagged figure keeps its own) and their `//! Changes when:`; the `plan/map.md` row for
-  contour edit math names both files.
-  Commits: one move.
-  `files: crates/model/src/contour_edit.rs, crates/model/src/contour.rs`
-
 - `[ ]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
   Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
   (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
@@ -352,6 +338,27 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
+  Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
+  a corner of any ring (`CornerMove`, `move_corner*`, trim and split, `PathCorner`) and the constrained
+  drags of a tagged figure (`CircleFrame`, `RectangleFrame`, `PolygonFrame`, `ArcFrame` and the numeric
+  setters, ADR 0073, ADR 0075).
+  Shape: the four frames and their drags and setters move to `crates/model/src/contour_frames.rs`;
+  `contour_edit.rs` keeps `CornerMove`, the error, `impl Path`'s corner moves and `impl Contour`.
+  Done: suite unchanged; both headers name the constraint they enforce (free or along the picked
+  segment; a tagged figure keeps its own) and their `//! Changes when:`; the `plan/map.md` row for
+  contour edit math names both files.
+  Commits: one move.
+  Measured: 1481 -> 811 (`contour_edit.rs`) + 707 (`contour_frames.rs`) production lines, both under
+  the ceiling though neither reaches the 600 target, because the shared corner machinery
+  (`with_corner`, `geometry_arc`, `distance`, `SUPPORT_TOLERANCE`, `Path::position`/`replaced`) has one
+  definition in `contour_edit.rs` and is `pub(crate)` instead of copied. The tests stayed in
+  `contour_edit.rs` (T2 forbids mixing a test move into a logic commit); they reach the moved code
+  through `Path` and the frame values, so only the two private `RectangleFrame` axes widened to
+  `pub(crate)`.
+  `d8864be`
+  `files: crates/model/src/contour_edit.rs, crates/model/src/contour_frames.rs`
 
 - `[x]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
   D1, D2, B8, H2, H4.

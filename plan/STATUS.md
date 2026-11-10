@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S13 state=idle base=392ebff updated=2026-11-10
+STATE: milestone=M7 phase=A task=S14 state=idle base=d8864be updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -23,7 +23,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   (ADR 0084); S9 split off `geom/segment.rs`, so `geom/contour.rs` keeps the ring that joins, areas,
   offsets and samples it; S10 split off `geom/rect.rs` (the exact orthogonal boolean and its tracer),
   S11 the rest: `geom/ring.rs` is what a region is, `geom/boolean.rs` the general boolean (ADR 0043
-  amended); S12 gave the segment maths back to `geom/segment.rs` (X31 is the panic it exposed). F4 (`Project::apply(Change)`) waits in `plan/questions.md`; no-action verdicts are debt.
+  amended); S12 gave the segment maths back to `geom/segment.rs` (X31 is the panic it exposed) and
+  S13 split the figure frames into `contour_frames.rs`; F4 waits in `plan/questions.md`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -52,11 +53,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-S13 is next: `model/contour_edit.rs` is 1481 production lines with two reasons to change, so the four
-figure frames and their constrained drags and setters move to `crates/model/src/contour_frames.rs`
-(~580) and the corner moves, `CornerMove` and the errors stay behind. Then S14 in `engine`, S15–S17 in
-`scene` and `render`, S18–S20 in `ui`, S21–S22 in the shell — rule ids and line targets in
-`plan/BACKLOG.md` `## Now`.
+S14 is next: `engine/panel_cmds.rs` is 1143 production lines and 21 commands, 547 of them the ten
+banding ones (`panel.edge_banding.*`, `corner_banding`, `ring_banding`, `panel.corner.*`, `panel.bow.*`),
+so they move to `crates/engine/src/panel_cmds/banding.rs` and `mod.rs` keeps the declarations and the
+re-exports the `COMMANDS` table names. Then S15, S16 in `scene` and `render`, S17–S22 after them.
 
 ## Index
 
