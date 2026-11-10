@@ -88,6 +88,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0082](0082-the-local-zero-is-the-creation-anchor.md) | The local zero is the creation anchor | Accepted |
 | [0083](0083-a-panel-is-anchored-at-its-base-corner.md) | A panel is anchored at its base corner | Accepted |
 | [0084](0084-shared-test-fixtures-behind-a-testing-feature.md) | Shared test fixtures live in the model behind a `testing` feature | Accepted |
+| [0085](0085-the-plan-stays-markdown.md) | The plan is markdown, written through one tool — not a database | Accepted |
 
 ## Format
 
