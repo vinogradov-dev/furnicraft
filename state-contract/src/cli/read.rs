@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::{Config, Global};
+use crate::parse::adr_numbers;
 use crate::{Git, ProcessGit, Section, Style, Summary, TaskOptions, TaskView};
 
 /// What the caller asked for, printed one way or another.
@@ -486,45 +487,6 @@ fn decision_titles(directory: &Path) -> BTreeMap<String, String> {
         }
     }
     titles
-}
-
-/// The four-digit ADR numbers `text` cites, including a written range (`ADRs 0034–0035`).
-fn adr_numbers(text: &str) -> Vec<String> {
-    let mut numbers: Vec<String> = Vec::new();
-    for (offset, _) in text.match_indices("ADR") {
-        let mut cursor = offset + 3;
-        if text.get(cursor..).is_some_and(|rest| rest.starts_with('s')) {
-            cursor += 1;
-        }
-        while text.get(cursor..).is_some_and(|rest| rest.starts_with(' ')) {
-            cursor += 1;
-        }
-        let Some((first, mut after)) = take_number(text, cursor) else { continue };
-        push_unique(&mut numbers, first);
-        // A range names its second decision after a dash and no second `ADR`.
-        if let Some(dash) = text.get(after..).and_then(|rest| rest.chars().next())
-            && matches!(dash, '–' | '—' | '-')
-        {
-            after += dash.len_utf8();
-            if let Some((second, _)) = take_number(text, after) {
-                push_unique(&mut numbers, second);
-            }
-        }
-    }
-    numbers
-}
-
-/// Exactly four digits at `start`, when the run is not part of a longer number.
-fn take_number(text: &str, start: usize) -> Option<(&str, usize)> {
-    let run: String = text.get(start..)?.chars().take(5).take_while(char::is_ascii_digit).collect();
-    (run.len() == 4).then(|| (text.get(start..start + 4).unwrap_or_default(), start + 4))
-}
-
-/// Pushes a number once, keeping the order the text cites them in.
-fn push_unique(numbers: &mut Vec<String>, number: &str) {
-    if !numbers.iter().any(|seen| seen == number) {
-        numbers.push(number.to_owned());
-    }
 }
 
 #[cfg(test)]

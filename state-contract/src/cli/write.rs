@@ -1,9 +1,14 @@
 //! The writer half of the plan: the verbs that change `plan/*.md`.
 //!
-//! Every verb builds the new text with [`crate::edit`], copies `plan/` into a staging
-//! directory, applies the change there, runs the gate on the copy with the *real* repository's git
-//! facts and only then lets the bytes land through a temp file and a rename. A verb that would break
-//! the plan writes nothing and prints the violations instead (ADR 0085).
+//! Every verb builds the new text with [`crate::edit`], then runs the gate over the whole plan as
+//! it would be after the change, with the *real* repository's git facts, and only then lets the
+//! bytes land through a temp file and a rename. A verb that would break the plan writes nothing and
+//! prints the violations instead (ADR 0085).
+//!
+//! `--repair` is the one exception: a plan can carry several violations at once, and fixing them one
+//! verb at a time would be refused at every step, because the others are still there. The flag lets
+//! a write through when it strictly shrinks the set of violations — it removes at least one and adds
+//! none — so the plan can be brought back with the commands instead of by hand.
 //!
 //! `--dry-run` prints the diff and stops. `plan/.lock` keeps two writers apart.
 
@@ -17,6 +22,8 @@ use crate::{Git, ProcessGit, TaskStatus, edit};
 pub struct Options {
     /// Print the diff and write nothing.
     pub dry_run: bool,
+    /// Let the write through when it shrinks the set of violations, even though it does not empty it.
+    pub repair: bool,
     /// The arguments that are not flags, in order.
     pub words: Vec<String>,
     /// `--key value` pairs, in order.
@@ -35,6 +42,10 @@ impl Options {
             index += 1;
             if arg == "--dry-run" {
                 options.dry_run = true;
+                continue;
+            }
+            if arg == "--repair" {
+                options.repair = true;
                 continue;
             }
             if let Some(flag) = arg.strip_prefix("--") {
@@ -109,9 +120,13 @@ pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), Strin
     }
 }
 
-/// `task add --phase <P> --files <paths> [--section Now] [--why/--shape/--done <text>] <lead>`
+/// `task add --phase <P> --files <paths> [--section Now] [--at top|end] [--why/--shape/--done <text>] <lead>`
+///
+/// `--at top` puts the task at the head of the work order and points `STATE: task=` at it, because
+/// the tool cannot leave a plan in which the current task is not the first open one: an owner-directed
+/// interjection joins the order in one validated write instead of two that are each refused.
 fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["phase", "section", "files", "why", "shape", "done"])?;
+    let options = Options::parse(args, &["phase", "section", "files", "why", "shape", "done", "at", "next"])?;
     let phase = options.required("phase")?;
     let files = options.required("files")?;
     let lead = options.words.join(" ");
@@ -119,6 +134,16 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         return Err("a new task needs its opening sentence: `task add --phase S --files … \"what it is\"`".to_owned());
     }
     let section = options.value("section").unwrap_or("Now");
+    let at = match options.value("at") {
+        None | Some("end") => edit::At::End,
+        Some("top") => edit::At::Top,
+        Some(other) => return Err(format!("`--at` takes `top` or `end`, not `{other}`")),
+    };
+    if at == edit::At::Top && !section.eq_ignore_ascii_case("Now") {
+        return Err(format!(
+            "`--at top` puts the task in the work order, so it needs the `Now` section, not `{section}`"
+        ));
+    }
     let backlog = read(root, "plan/BACKLOG.md")?;
     let id = edit::next_id(&backlog, phase);
     let mut fields: Vec<(String, String)> = Vec::new();
@@ -128,9 +153,21 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         }
     }
     let block = edit::new_entry(&id, lead.trim(), &fields, files);
-    let backlog = edit::insert_entry(&backlog, section, edit::At::End, &block)?;
-    let changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
-    apply(root, changes, options.dry_run, git)?;
+    let backlog = edit::insert_entry(&backlog, section, at, &block)?;
+    let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
+    if at == edit::At::Top {
+        let status = read(root, "plan/STATUS.md")?;
+        let mut status = edit::set_state(&status, &[("task".to_owned(), id.clone())])?;
+        if edit::has_section(&status, "Next") {
+            let body = match options.value("next") {
+                Some(next) => next.to_owned(),
+                None => format!("{id} is next: {}", lead.trim()),
+            };
+            status = edit::set_section(&status, "Next", &body)?;
+        }
+        changes = changes.with("plan/STATUS.md", status);
+    }
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} added to `## {section}`");
     }
@@ -166,7 +203,7 @@ fn start(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let session = session_note(&id, task, &options);
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog).with("plan/STATUS.md", status);
     changes = changes.with("plan/SESSION.md", session);
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} started; `plan/SESSION.md` holds the note");
     }
@@ -201,7 +238,7 @@ fn set(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         backlog = edit::set_field(&backlog, &id, &field, &body)?;
         changes = changes.with("plan/BACKLOG.md", backlog);
     }
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id}: `{field}` updated");
     }
@@ -219,7 +256,7 @@ fn step(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         edit::tick_step(&session)?
     };
     let changes = Changes::new(root).with("plan/SESSION.md", session);
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id}: the session note changed");
     }
@@ -241,7 +278,7 @@ fn note(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         format!("{}\n{}\n", existing.trim_end(), body.trim())
     };
     let changes = Changes::new(root).with(&path, text);
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id}: `{path}` appended");
     }
@@ -295,16 +332,16 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     if root.join("plan/SESSION.md").exists() {
         changes = changes.removed("plan/SESSION.md");
     }
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} closed into `## Done` at `{hash}`; `{next_id}` is next", next_id = next.id);
     }
     Ok(())
 }
 
-/// `task reopen <ID>`
+/// `task reopen <ID> [--next <text>]`
 fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &[])?;
+    let options = Options::parse(args, &["next"])?;
     let id = options.words.first().ok_or("task reopen needs a task id")?.clone();
     let summary = crate::check_with(root, git).map_err(violations)?;
     let task = find(&summary.tasks, &id)?;
@@ -317,8 +354,20 @@ fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let backlog = edit::move_entry(&backlog, &id, "Now", edit::At::Top)?;
     let status = read(root, "plan/STATUS.md")?;
     let status = edit::set_state(&status, &[("task".to_owned(), id.clone()), ("state".to_owned(), "idle".to_owned())])?;
+    // The reopened task becomes the current one, so `## Next` has to name it in the same write;
+    // otherwise the gate refuses, and two hand edits are the only way to say what the plan means.
+    let status = match options.value("next") {
+        Some(next) => edit::set_section(&status, "Next", next)?,
+        None if crate::validate::next_violation(&status, &id).is_some() => {
+            return Err(format!(
+                "`plan/STATUS.md` › `## Next` must name the reopened task {id}; \
+                 `task reopen {id} --next \"{id} is next: …\"` rewrites it in the same write"
+            ));
+        }
+        None => status,
+    };
     let changes = Changes::new(root).with("plan/BACKLOG.md", backlog).with("plan/STATUS.md", status);
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} reopened at the top of `## Now`");
     }
@@ -340,7 +389,7 @@ fn drop(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     if !options.flag("keep-note") && root.join(&note).exists() {
         changes = changes.removed(&note);
     }
-    apply(root, changes, options.dry_run, git)?;
+    apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} dropped");
     }
@@ -396,7 +445,11 @@ impl Changes {
 
 /// Validates the plan as it would be, then lands the change — or prints why it refused and writes
 /// nothing.
-fn apply(root: &Path, changes: Changes, dry_run: bool, git: &dyn Git) -> Result<(), String> {
+///
+/// A plan that is already broken cannot be repaired one verb at a time, because every verb is refused
+/// while the other violations stand: `--repair` lets a write through when it strictly shrinks the set
+/// of violations, so `plan/BACKLOG.md` and `plan/STATUS.md` can be brought back with commands.
+fn apply(root: &Path, changes: Changes, options: &Options, git: &dyn Git) -> Result<(), String> {
     if changes.is_empty() {
         return Err("nothing to change".to_owned());
     }
@@ -410,7 +463,17 @@ fn apply(root: &Path, changes: Changes, dry_run: bool, git: &dyn Git) -> Result<
     let session = resulting(root, &changes, "plan/SESSION.md");
     let notes = notes_after(root, &changes)?;
     let plan = crate::PlanText { status: &status, backlog: &backlog, session: session.as_deref(), notes: Some(&notes) };
-    crate::check_text(root, &plan, git).map_err(violations)?;
+    let after = violations_of(root, &plan, git);
+    let repairing = if after.is_empty() {
+        false
+    } else {
+        let before = crate::check_with(root, git).err().unwrap_or_default();
+        if options.repair && shrinks(&before, &after) {
+            true
+        } else {
+            return Err(refusal(&after, options.repair, &before));
+        }
+    };
 
     for (path, old, new) in &changed {
         println!("{}", diff(path, old.as_deref().unwrap_or(""), new));
@@ -418,7 +481,10 @@ fn apply(root: &Path, changes: Changes, dry_run: bool, git: &dyn Git) -> Result<
     for path in &changes.removed {
         println!("--- {path}\n(deleted)");
     }
-    if dry_run {
+    if repairing {
+        println!("repair: {} violation(s) still stand", after.len());
+    }
+    if options.dry_run {
         println!("dry run: nothing written");
         return Ok(());
     }
@@ -542,23 +608,75 @@ fn violations(errors: Vec<String>) -> String {
     format!("refused: the plan has {} violation(s); nothing was written", errors.len())
 }
 
+/// The violations the plan has once the change lands, or none when it is valid.
+fn violations_of(root: &Path, plan: &crate::PlanText<'_>, git: &dyn Git) -> Vec<String> {
+    crate::check_text(root, plan, git).err().unwrap_or_default()
+}
+
+/// Whether `after` is a strict subset of `before`: at least one violation gone, none new.
+///
+/// A repair may not trade one violation for another, and may not repeat one it claims to fix, so
+/// `--repair` cannot be used to land a change that leaves the plan in a state nobody looked at.
+fn shrinks(before: &[String], after: &[String]) -> bool {
+    after.len() < before.len() && after.iter().all(|violation| before.contains(violation))
+}
+
+/// The refusal for a write that would leave violations, with the one line that says how to proceed.
+///
+/// `before` is what the plan has now: when the write takes a violation away and leaves the rest, the
+/// message names `--repair`, which is the only way to bring a plan with several violations back.
+fn refusal(after: &[String], repair: bool, before: &[String]) -> String {
+    for error in after {
+        eprintln!("plan: {error}");
+    }
+    if repair {
+        eprintln!(
+            "plan: `--repair` passes only a write that removes a violation and adds none; this one \
+             leaves {} where the plan has {}",
+            after.len(),
+            before.len()
+        );
+    } else if after.len() < before.len() {
+        eprintln!("plan: this write removes a violation; `--repair` passes it and leaves the rest");
+    }
+    format!("refused: the plan has {} violation(s); nothing was written", after.len())
+}
+
 /// Reads a required plan file.
 fn read(root: &Path, path: &str) -> Result<String, String> {
     std::fs::read_to_string(root.join(path)).map_err(|error| format!("cannot read `{path}`: {error}"))
 }
 
-/// `state set key=value …` and `state next (--body <text>|--stdin)`.
+/// `state set key=value …`, `state next (--body <text>|--stdin) [--task <id>]` and
+/// `state where (--body <text>|--stdin)`.
+///
+/// `state next --task <id>` names a new current task in the same write: the gate requires the
+/// paragraph to name the task `STATE:` does, so a paragraph that moves on its own would be refused,
+/// and the only way out would be a hand edit. `state where` owns the prose that describes the tree
+/// `base` points at, so a session that sets `base=HEAD` can say what changed in the same command.
 pub fn state(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["body"])?;
+    let options = Options::parse(args, &["body", "task"])?;
     match options.words.first().map(String::as_str) {
         Some("next") => {
             let body = options.body("body")?;
             let status = read(root, "plan/STATUS.md")?;
             let status = edit::set_section(&status, "Next", &body)?;
-            return apply(root, Changes::new(root).with("plan/STATUS.md", status), options.dry_run, git);
+            let status = match options.value("task") {
+                Some(task) => edit::set_state(&status, &[("task".to_owned(), task.to_owned())])?,
+                None => status,
+            };
+            return apply(root, Changes::new(root).with("plan/STATUS.md", status), &options, git);
+        }
+        Some("where") => {
+            let body = options.body("body")?;
+            let status = read(root, "plan/STATUS.md")?;
+            let status = edit::set_section(&status, "Where we are", &body)?;
+            return apply(root, Changes::new(root).with("plan/STATUS.md", status), &options, git);
         }
         Some("set") => {}
-        _ => return Err("usage: cargo xtask state <set key=value …|next --stdin>".to_owned()),
+        _ => {
+            return Err("usage: cargo xtask state <set key=value …|next|where (--body <text>|--stdin)>".to_owned());
+        }
     }
     let mut values: Vec<(String, String)> = Vec::new();
     for word in options.words.iter().skip(1) {
@@ -570,7 +688,39 @@ pub fn state(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> 
     }
     let status = read(root, "plan/STATUS.md")?;
     let status = edit::set_state(&status, &values)?;
-    apply(root, Changes::new(root).with("plan/STATUS.md", status), options.dry_run, git)
+    apply(root, Changes::new(root).with("plan/STATUS.md", status), &options, git)
+}
+
+/// The reference files a command owns: the plan's data lives here too, and a session that edits one
+/// by hand leaves no diff through the tool and no gate run to catch a stale row.
+const REFERENCE_FILES: &[&str] = &[
+    "plan/map.md",
+    "plan/debt.md",
+    "plan/questions.md",
+    "plan/refactor.md",
+    "plan/rename.md",
+    "plan/archive/done.md",
+    "plan/SESSION.template.md",
+];
+
+/// `file <path> (--body <text>|--stdin) [--dry-run]`: one reference file, written through the gate.
+///
+/// `plan/BACKLOG.md`, `plan/STATUS.md` and `plan/SESSION.md` are not on the list: the `task` and
+/// `state` verbs own their lines, and a whole-file rewrite would lose the entry formatting their
+/// splices preserve.
+pub fn file(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
+    let options = Options::parse(args, &["body"])?;
+    let path = options.words.first().ok_or("`file` needs the path of a reference file")?;
+    if !REFERENCE_FILES.contains(&path.as_str()) {
+        return Err(format!("`{path}` is not a reference file a command owns; one of {}", REFERENCE_FILES.join(", ")));
+    }
+    let body = options.body("body")?;
+    if body.trim().is_empty() {
+        return Err(format!("`{path}` would be empty; a reference file says something or it does not exist"));
+    }
+    let mut text = body.trim_end().to_owned();
+    text.push('\n');
+    apply(root, Changes::new(root).with(path, text), &options, git)
 }
 
 #[cfg(test)]
@@ -659,6 +809,44 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
             .collect();
         files.sort();
         files
+    }
+
+    #[test]
+    fn a_repair_passes_only_a_write_that_shrinks_the_violations() {
+        let stale = |left: &str, right: &str| format!("before {left} after {right}");
+        let (before, after) = (vec![stale("a", "b")], vec![stale("a", "c")]);
+        assert!(!shrinks(&before, &after), "a trade is not a repair");
+        assert!(!shrinks(&before, &before), "a write that fixes nothing is not a repair");
+        let two = vec![stale("a", "b"), stale("c", "d")];
+        assert!(shrinks(&two, &[stale("c", "d")]), "one violation gone, none new");
+        assert!(!shrinks(&two, &[stale("c", "d"), stale("e", "f")]), "one gone, one new is a trade");
+        assert!(shrinks(&two, &Vec::new()), "an empty plan is a strict subset");
+    }
+
+    #[test]
+    fn a_verb_repairs_a_plan_with_several_violations_only_when_told_to() {
+        // Two hints name files that are gone: one verb can fix one of them.
+        let backlog = BACKLOG.replace("src/a.rs", "src/gone.rs").replace("src/b.rs", "src/also_gone.rs");
+        let root = project("repair", STATUS, &backlog, None);
+        let before = snapshot(&root);
+        let error =
+            run(&root, &["set", "P6", "--field", "files", "--files", "src/a.rs"]).expect_err("two violations stand");
+        assert!(error.contains("refused"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refused repair writes nothing");
+
+        run(&root, &["set", "P6", "--field", "files", "--files", "src/a.rs", "--repair"])
+            .expect("one violation goes, none comes");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`files: src/a.rs`"), "the hint is fixed: {backlog}");
+        let remaining = crate::check_with(&root, &FakeGit).expect_err("the other violation stands");
+        assert_eq!(remaining.len(), 1, "{remaining:?}");
+        assert!(remaining[0].contains("also_gone.rs"), "{remaining:?}");
+
+        // The last one is repairable the same way, and then the plan is valid again.
+        run(&root, &["set", "S14", "--field", "files", "--files", "src/b.rs", "--repair"])
+            .expect("the second violation goes");
+        crate::check_with(&root, &FakeGit).expect("the plan is whole again");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -817,6 +1005,118 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         let error = run(&root, &["reopen", "S14"]).expect_err("S14 is not done");
         assert!(error.contains("is not done"), "{error}");
         assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_reopen_that_moves_the_current_task_names_the_next_paragraph() {
+        let done = BACKLOG.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n", "");
+        let done = format!("{done}\n- `[x]` **P6** the writer\n  `files: src/a.rs` — `abc1234`\n");
+        let status = format!("{}\n## Next\n\nS14 is next: the banding.\n", STATUS.replace("task=P6", "task=S14"));
+        let root = project("reopen-next", &status, &done, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["reopen", "P6"]).expect_err("the paragraph names another task");
+        assert!(error.contains("--next") && error.contains("P6"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+
+        run(&root, &["reopen", "P6", "--next", "P6 is back: the writer."]).expect("both atoms in one write");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=P6 state=idle"), "{status}");
+        let next = status.split("## Next").nth(1).unwrap_or_default();
+        assert!(next.contains("P6 is back"), "the paragraph moved: {status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_task_added_at_the_top_becomes_the_current_one() {
+        let status = format!("{}\n## Next\n\nP6 is next: the writer.\n", STATUS);
+        let root = project("add-top", &status, BACKLOG, None);
+        run(&root, &["add", "--phase", "X", "--at", "top", "--files", "src/b.rs", "an interjection"])
+            .expect("the task joins the head of the order");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        let added = backlog.find("**X1**").expect("X1 is there");
+        let first = backlog.find("**P6**").expect("P6 is there");
+        assert!(added < first, "the new task is first in `## Now`: {backlog}");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=X1 state=idle"), "the plan points at it: {status}");
+        assert!(status.contains("X1 is next"), "the paragraph follows: {status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+
+        // A task that cannot be the current one may not take the top of a section.
+        let error =
+            run(&root, &["add", "--phase", "X", "--at", "top", "--section", "Bugs", "--files", "src/b.rs", "a defect"])
+                .expect_err("only `## Now` orders the work");
+        assert!(error.contains("`Now`"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_next_paragraph_moves_with_the_task_it_names() {
+        // An interrupted session: `STATE:` still names P6, which already landed, and the paragraph
+        // has to move to S14 with it — one write, or the gate refuses either half.
+        let done = BACKLOG.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n", "");
+        let done = format!("{done}\n- `[x]` **P6** the writer\n  `files: src/a.rs` — `abc1234`\n");
+        let status = format!("{}\n## Next\n\nP6 is next: the writer.\n", STATUS);
+        let root = project("state-next", &status, &done, None);
+        let before = snapshot(&root);
+        let error =
+            state(&root, &["next".to_owned(), "--body".to_owned(), "S14 is next: the banding.".to_owned()], &FakeGit)
+                .expect_err("the paragraph must name the current task");
+        assert!(error.contains("refused"), "{error}");
+        assert_eq!(snapshot(&root), before);
+
+        state(
+            &root,
+            &[
+                "next".to_owned(),
+                "--body".to_owned(),
+                "S14 is next: the banding.".to_owned(),
+                "--task".to_owned(),
+                "S14".to_owned(),
+            ],
+            &FakeGit,
+        )
+        .expect("the paragraph and the current task move together");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=S14"), "{status}");
+        assert!(status.contains("S14 is next"), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_where_we_are_prose_is_written_by_a_command() {
+        let status = format!("{}\n## Where we are\n\nthe old tree.\n\n## Next\n\nP6 is next.\n", STATUS);
+        let root = project("state-where", &status, BACKLOG, None);
+        state(&root, &["where".to_owned(), "--body".to_owned(), "the tree at abc1234.".to_owned()], &FakeGit)
+            .expect("the prose is replaced");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("the tree at abc1234."), "{status}");
+        assert!(!status.contains("the old tree."), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_reference_file_is_written_through_the_gate() {
+        let root = project("file", STATUS, BACKLOG, None);
+        file(
+            &root,
+            &["plan/map.md".to_owned(), "--body".to_owned(), "# Map\n\n| Feature | Where |\n|---|---|\n".to_owned()],
+            &FakeGit,
+        )
+        .expect("a reference file is written");
+        assert!(text(&root, "plan/map.md").contains("| Feature |"), "the file landed");
+
+        let error = file(&root, &["plan/BACKLOG.md".to_owned(), "--body".to_owned(), "gone\n".to_owned()], &FakeGit)
+            .expect_err("the task verbs own the backlog");
+        assert!(error.contains("not a reference file"), "{error}");
+        assert!(text(&root, "plan/BACKLOG.md").contains("**P6**"), "the backlog is untouched");
+
+        let error = file(&root, &["plan/debt.md".to_owned(), "--body".to_owned(), "   \n".to_owned()], &FakeGit)
+            .expect_err("an empty file says nothing");
+        assert!(error.contains("would be empty"), "{error}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

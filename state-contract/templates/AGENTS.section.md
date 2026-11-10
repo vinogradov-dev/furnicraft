@@ -29,8 +29,9 @@ case that applies.
    continue it or put it back to `[ ]`; do not pick the next task silently.
 3. **A contradiction.** A `[x]` without a commit hash, a `base` that is not an ancestor of `HEAD`, a
    `files:` path that does not exist, a `SESSION.md` without `goal`/`now`/`run`. Report what is
-   broken and stop: an answer read from a broken plan is worse than none. The plan gate names every
-   case.
+   broken and fix it with the tool before answering: the plan gate names every case, and
+   `--repair` on a write lets a plan with several violations be brought back one verb at a time, so
+   a broken plan is never a reason to edit `plan/` by hand. Stop only when the tool cannot do it.
 4. **Only then** answer from `STATE` and `## Now`: the current task, its `files:`, and the one after
    it. Short.
 
