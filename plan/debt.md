@@ -159,3 +159,18 @@ module size, layer arrows and duplicated knowledge, `[vendor]`.
 - `[design]` `cargo xtask task set --field files` replaces a `files:` hint only when it sits on its own
   line, which is the layout `task add` writes; an inline hint on the marker line must be moved by
   hand first. Every entry in `plan/BACKLOG.md` already uses the line form (P6).
+- `[design]` The gate cannot see a number. `plan/refactor.md` §2 says an entry's "N production lines"
+  and the report's measurement must agree, and nothing compares them: S14 closed with 547 and 172
+  against the 574 and 212 the report printed, and the arithmetic of the two sums was wrong for a
+  week. `cargo xtask task <ID>` prints both, so a closing session can see the drift; a rule would have
+  to parse prose (P10).
+- `[design]` `plan/map.md` is checked in one direction only: a row must name a path that exists, but a
+  new module needs no row, so a split that creates `geometry.rs` leaves the map silent and the gate
+  green. A path-to-row rule would fire on every `mod.rs` (P10).
+- `[design]` An open task may cite an ADR number it will write — U45 reserves 0081, a hole in the
+  sequence — so the gate checks a citation only once the task closes. A reserved number can rot
+  unnoticed until then, and the report prints `(no file in docs/decisions/)` (P10).
+- `[design]` Nothing proves a plan edit came from the tool: the gate validates what the files say, not
+  how they got there, so a consistent hand edit lands and `cargo xtask ci` stays green. `--repair`,
+  `file` and the missing verbs closed every reason to type the plan by hand; the rule that a session
+  does not stays a promise in `AGENTS.md` §6.1 (P10).

@@ -37,6 +37,15 @@ pub trait Git {
         let _ = hash;
         None
     }
+    /// The paths that differ between two commits, or `None` when the host cannot compare them.
+    ///
+    /// The default answers `None`: a host that knows only the plan files needs nothing here, and a
+    /// host that has the checkout overrides it. `None` turns the `base` freshness rule off rather
+    /// than failing a plan it cannot measure.
+    fn changed(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        let _ = (from, to);
+        None
+    }
 }
 
 /// [`Git`] implemented by running the `git` binary in a directory.
@@ -104,6 +113,11 @@ impl Git for ProcessGit {
 
     fn short(&self, hash: &str) -> Option<String> {
         self.output(&["rev-parse", "--short", hash]).filter(|short| !short.is_empty())
+    }
+
+    fn changed(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        let output = self.output(&["diff", "--name-only", from, to])?;
+        Some(output.lines().filter(|line| !line.is_empty()).map(str::to_owned).collect())
     }
 }
 

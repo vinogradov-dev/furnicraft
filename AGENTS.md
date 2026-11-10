@@ -56,7 +56,8 @@ same.
 The contract is a template, not prose duplicated here: read
 `state-contract/templates/AGENTS.section.md` before answering a request for the next step. In short:
 `STATE` and `## Now` decide the answer, an interrupted session resumes at `now:` instead of starting
-over, and a broken plan is reported rather than answered around.
+over, and a broken plan is repaired with the tool (`--repair` on a write) rather than answered around
+or edited by hand.
 
 ### 1.2 Reading code with the language server
 
@@ -235,16 +236,23 @@ cargo xtask ci
 order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
 formatting, the gate only checks it.
 
-`cargo xtask plan` fails when the plan files, the notes, `plan/map.md`, the debt tags or the `base`
-contradict each other, and it names the mismatch in a sentence you can act on;
-`state=doing` without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`,
-`goal:`, `now:` and `run:`; `state=idle` with a `[~]` task or a leftover session note; a duplicated
-task id; a `[x]` task outside `## Done`, or a `## Done` entry that is not `[x]`; a finished task
-without a commit hash that exists; a task line without a `**bold**` id; a task without a `files:`
-hint, or a hint naming a path that does not exist; a `base` that is not an ancestor of `HEAD`; an
-`updated=` that is not a `YYYY-MM-DD` calendar date or is earlier than the `base` commit's date; a
-`STATUS.md` or `SESSION.md` over its line budget.
-`HEAD` is a legal `base` while the plan edit itself is still uncommitted.
+`cargo xtask plan` fails when the plan files, the notes, the reference files or the `base`
+contradict each other, and it names the mismatch in a sentence you can act on: a missing or
+duplicated `STATE:` line, a key nobody reads, a `state=` other than `idle` or `doing`, an `updated=`
+that is not a `YYYY-MM-DD` calendar date or is earlier than the `base` commit's date, a `base` that
+is not an ancestor of `HEAD`, and an `idle` plan whose `base` lags commits that touched anything but
+`plan/` (`HEAD` is a legal `base` while the plan edit itself is still uncommitted); `state=doing`
+without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`, `goal:`, `now:`
+and `run:`; `state=idle` with a `[~]` task or a leftover session note; a `STATE: task=` that is done,
+sits outside `## Now` or is not the first unfinished task there; a `## Next` paragraph that does not
+name that task; a duplicated task id; a `[x]` task outside `## Done`, or a `## Done` entry that is
+not `[x]`; a finished task without a commit hash that exists, or with an ADR citation
+`docs/decisions/` does not hold; a task line without a `**bold**` id; a task without a `files:` hint,
+or any hint — closed tasks included — naming a path that does not exist; a `plan/map.md` row naming a
+path that does not exist; a debt tag the `Tags:` line does not declare; a `STATE:` line or a task
+marker in `plan/debt.md` or `plan/questions.md`; a `README.md` carrying a status line or a milestone;
+a note that is empty, over budget or named after no task; a `STATUS.md`, `SESSION.md` or note over its
+line budget.
 
 Then check by hand:
 
@@ -277,7 +285,8 @@ The commit closes the operation; the plan files close it too, in the same change
 1. Mark the task `[x]` in `plan/BACKLOG.md` with the short hash of the commit that delivers it. When a
    task needs several commits, mark it on the last one. `cargo xtask task close <ID> --commit <hash>
    --next <text>` does this, rewrites `plan/STATUS.md` and deletes `plan/SESSION.md` in one gated
-   write; do it by hand only when the tool refuses a shape the plan has never had.
+   write. The verbs cover every file of the plan (`task`, `state`, `file`), so a refusal is a bug to
+   report, not a licence to edit `plan/` by hand.
 2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `updated` = today, `base` =
    the commit whose tree the plan describes — `HEAD` when the plan edit is its own commit, the parent
    when the edit rides in the commit it describes) and a new `Next` paragraph. Never append to it.
@@ -288,13 +297,17 @@ The commit closes the operation; the plan files close it too, in the same change
    new, add a row. A stale row is a defect the reader fixes.
 
 Starting a task is the mirror image: `cargo xtask task start <ID>` sets `[~]`, `state=doing` and
-writes `plan/SESSION.md` from the entry in one validated step (the manual fallback is the template
-beside it). Keep `now:`, `run:` and `resume:` current with `cargo xtask task step` and
+writes `plan/SESSION.md` from the entry in one validated step. A task that arrives out of the work
+order — an owner-directed interjection — is filed with `cargo xtask task add --at top`, which puts it
+first in `## Now` and points `state` at it; `cargo xtask task reopen <ID> --next <text>` and
+`cargo xtask state next --task <ID>` move the current task and the `## Next` paragraph together, and
+`cargo xtask state where` rewrites the prose that says what the tree is. Keep `now:`, `run:` and `resume:` current with `cargo xtask task step` and
 `cargo xtask task set` after every meaningful step and every green gate run — a session that dies
 must not lose more than the current sub-step — and close the task with
 `cargo xtask task close <ID> --commit <hash>`, which marks it `[x]`, records the hash, moves it to
 `## Done`, points `STATE:` at the next task, takes the new `## Next` paragraph (`--next`) and deletes
-the note.
+`plan/SESSION.md`. The research note under `plan/notes/` stays: it says what a session measured and
+ruled out, and the next one reads it through `cargo xtask task <ID>`.
 
 ### 6.2 Branch workflow
 

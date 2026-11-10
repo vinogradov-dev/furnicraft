@@ -230,6 +230,51 @@ fn bracketed(line: &str) -> Vec<String> {
     tags
 }
 
+/// A closed task's ADR citation must name a decision the project has: a closed entry is the record
+/// of what landed, and an "ADR 0081" nobody can open is a record of a promise, not of a decision.
+///
+/// An open task may reserve a number it will write — the report prints it as missing, and the gate
+/// leaves it alone until the task closes.
+pub(crate) fn adr_cite_violations(tasks: &[Task], decisions: &[String]) -> Vec<String> {
+    let mut violations = Vec::new();
+    for task in tasks.iter().filter(|task| task.status == TaskStatus::Done) {
+        for number in crate::parse::adr_numbers(&task.text) {
+            if decisions.contains(&number) {
+                continue;
+            }
+            violations.push(format!(
+                "backlog task {} is closed but cites ADR {number}, which `docs/decisions/` does not hold",
+                task.id
+            ));
+        }
+    }
+    violations
+}
+
+/// The reference files carry no plan state: a `STATE:` line or a task marker in `plan/debt.md` or
+/// `plan/questions.md` is a second source of truth for the same fact, and a second one is the stale
+/// one. An empty entry is the same rot in another shape: it reads as a decision nobody wrote down.
+pub(crate) fn reference_violations(name: &str, text: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if let Some(line) = text.lines().find(|line| line.trim_start().starts_with(STATE_PREFIX)) {
+        violations.push(format!("`{name}` carries `{}`; the state lives in `plan/STATUS.md`", line.trim()));
+    }
+    for line in text.lines() {
+        let Some(entry) = line.trim_start().strip_prefix("- ") else { continue };
+        // A marker is written in inline code, `` `[ ]` ``, as the backlog spells it.
+        let entry = entry.trim_start().trim_start_matches('`').trim_start();
+        if let Some(marker) = ["[ ]", "[~]", "[x]"].iter().find(|marker| entry.starts_with(*marker)) {
+            violations.push(format!(
+                "`{name}` marks an entry `{marker}`; a reference file carries no status — that is `plan/BACKLOG.md`"
+            ));
+        }
+        if entry.is_empty() {
+            violations.push(format!("`{name}` has an empty entry"));
+        }
+    }
+    violations
+}
+
 /// The first task in `## Now` that is not finished, in file order.
 ///
 /// Order is the order of work, so this is the task the plan is actually on: `STATE: task=` may name

@@ -113,8 +113,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 - `[ ]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
   Why: 1112 production lines in one file cover two operations: editing an existing contour
-  (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one (`DrawTool`,
-  `DrawDraft`, 425-1112) — a new draw tool and a new grip rule reopen one file (F10).
+   (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one
+   (`DrawTool`, `DrawDraft`, 425-1112) — a new draw tool and a new grip rule reopen one file,
+   which is the crossing the audit measured beyond the filed findings.
   Shape: `DrawTool` and `DrawDraft` with their impls move to `crates/ui/src/draw.rs` (~690);
   `contour_edit.rs` 1112 -> ~425; `lib.rs` re-exports `DrawTool` and `DrawDraft` so the shell changes
   at most one `use`.
@@ -349,12 +350,13 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
   (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
   `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
-  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; the eleven that
-  remain divide by value family into `panel.rs` (creation, outline, name, size, material) and
-  `machining.rs` (the four records), because `mod.rs` holds declarations and re-exports only (B3)
-  and 580 lines of logic is not one family (B1); `panel_cmds/mod.rs` re-exports every id and spec,
-  so the `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> mod.rs 44 +
-  panel.rs 411 + banding.rs 547 + machining.rs 172 production lines, none past 600.
+  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; the eleven
+   that remain divide by value family into `panel.rs` (creation, outline, name, size, material)
+   and `machining.rs` (the four records), because `mod.rs` holds declarations and re-exports
+   only (B3) and 580 lines of logic is not one family (B1); `panel_cmds/mod.rs` re-exports
+   every id and spec, so the `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds`
+   1143 -> mod.rs 44 + panel.rs 411 + banding.rs 574 + machining.rs 212 production lines (1241:
+   every new module carries its own header and imports), none past 600.
   Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
   re-exports only (B3) and `banding.rs` states its one reason to change (H5).
   Commits: one move.
@@ -416,7 +418,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `parse(edit(parse(x)))` and that untouched bytes stay; `AGENTS.md` says the plan is written only
   through `cargo xtask`.
   Commits: one per verb family.
-  `files: state-contract/src/parse.rs, xtask/src/task.rs, xtask/src/main.rs` — `a35f3d5`
+  `files: state-contract/src/parse.rs, state-contract/src/task.rs, xtask/src/main.rs` — `a35f3d5`
 
 - `[x]` **P5** a session start needs no reasoning the tool can do — rules: B1, B7, C7.
   Why: `status` drops `resume:` and prints no interrupted flag, so `AGENTS.md` §1.1 case 1 makes the
@@ -436,7 +438,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   --status open` prints one line per task; the report says `+N other entries (--all)`; a done task
   shows `closed:`; the suite covers each; `cargo xtask ci` green.
   Commits: one or two. `[x]` `c884b81`
-  `files: state-contract/src/lib.rs, state-contract/src/task.rs, xtask/src/task.rs`
+  `files: state-contract/src/lib.rs, state-contract/src/task.rs`
 
 - `[x]` **P4** `cargo xtask task` prints one task in full — rules: B1, B7, C7, C10.
   Why: starting S14 costs `status`, then a grep of `plan/BACKLOG.md`, `plan/map.md`, `plan/debt.md`,
@@ -526,7 +528,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   pass unchanged; `rect.rs` states that a corner is a point and never a sample, that its arithmetic
   is exact, and its `//! Changes when:` (H2, H4); the `plan/map.md` row and ADR 0043 name both files.
   `186a5bc`
-  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
+  `files: crates/geom/src/boolean.rs, crates/geom/src/lib.rs`
 
 - `[x]` **S9** `geom/contour.rs` keeps the ring and gives the segment family its own module — rules:
   B1, B4, B8, H2, H5.
@@ -711,7 +713,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   is anchored without moving a world point; a nested parent and a rotated panel placement both keep the
   world corner equal to `world_placement ∘ (0, 0, 0)`; one undo entry.
   `c992043`
-  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/engine/src/panel_cmds.rs`
+  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/engine/src/panel_cmds/panel.rs`
 
 - `[x]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` handed
   `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
@@ -1446,7 +1448,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   warns that the corner and bow parameters are gone; undo brings them back. Tests: the ring keeps the
   outline bounds; the converted banding names the same segments; undo restores the rectangle with its
   features; a second conversion is refused. ADR 0061 — `8ae7de5`
-  `files: crates/engine/src/panel_cmds.rs, crates/model/src/panel/contour.rs`
+  `files: crates/engine/src/panel_cmds/panel.rs, crates/model/src/panel/contour.rs`
 
 - `[x]` **U35** the path gizmo: the contour gizmo painted every draft as a closed ring and put a handle
   on each segment start, so an open chain lost its last point and no free end could be grabbed.

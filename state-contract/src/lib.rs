@@ -227,6 +227,10 @@ pub fn check_text(root: &Path, plan: &PlanText<'_>, git: &dyn Git) -> Result<Sum
         }
         if let Ok(debt) = std::fs::read_to_string(root.join("plan/debt.md")) {
             violations.extend(validate::debt_violations(&debt));
+            violations.extend(validate::reference_violations("plan/debt.md", &debt));
+        }
+        if let Ok(questions) = std::fs::read_to_string(root.join("plan/questions.md")) {
+            violations.extend(validate::reference_violations("plan/questions.md", &questions));
         }
     }
     match std::fs::read_to_string(root.join("README.md")) {
@@ -313,7 +317,9 @@ fn workspace_violations(
         None => notes::note_violations(root, &summary.tasks),
     };
 
-    for task in summary.tasks.iter().filter(|task| task.status != TaskStatus::Done) {
+    // Every hint, the closed ones included: a later move deletes the file the entry names, and a
+    // plan whose history points nowhere sends the reader to a dead end.
+    for task in &summary.tasks {
         let Some(hint) = &task.files else { continue };
         for path in parse::missing_paths(hint, |path| root.join(path).exists()) {
             violations
@@ -339,12 +345,58 @@ fn workspace_violations(
     let ancestor = head.is_some_and(|head| git.is_ancestor(base, head));
     if let Some(violation) = validate::base_violation(base, head, exists, ancestor) {
         violations.push(violation);
-    } else if let Some(violation) =
-        validate::updated_base_violation(&summary.state.updated, base, git.commit_date(base).as_deref())
-    {
-        // Only a base that resolves can have a date; an unknown base already has its own error.
-        violations.push(violation);
+    } else {
+        if let Some(violation) =
+            validate::updated_base_violation(&summary.state.updated, base, git.commit_date(base).as_deref())
+        {
+            // Only a base that resolves can have a date; an unknown base already has its own error.
+            violations.push(violation);
+        }
+        violations.extend(base_freshness(summary, git));
+    }
+
+    if let Some(decisions) = decision_numbers(&root.join(DECISIONS)) {
+        violations.extend(validate::adr_cite_violations(&summary.tasks, &decisions));
     }
 
     violations
+}
+
+/// Where the architecture decisions live, when the project does not rename them.
+const DECISIONS: &str = "docs/decisions";
+
+/// The decision numbers a directory holds, or `None` when there is no such directory.
+fn decision_numbers(directory: &Path) -> Option<Vec<String>> {
+    let entries = std::fs::read_dir(directory).ok()?;
+    let mut numbers: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().and_then(|name| name.split('-').next().map(str::to_owned)))
+        .filter(|number| number.len() == 4 && number.chars().all(|ch| ch.is_ascii_digit()))
+        .collect();
+    numbers.sort();
+    Some(numbers)
+}
+
+/// `state=idle` means the plan describes the checkout: `base` may lag `HEAD` only by commits that
+/// touched `plan/` and nothing else, which is how a plan edit rides on top of the tree it describes.
+///
+/// A plan whose `base` sits a hundred commits back is green and useless: its prose describes a tree
+/// nobody can check out, and the reader has no way to tell. While a task runs (`state=doing`) the
+/// code moves ahead of the plan on purpose, so the rule stays out of the way.
+fn base_freshness(summary: &Summary, git: &dyn Git) -> Vec<String> {
+    let (Some(head), "idle") = (summary.head.as_deref(), summary.state.status.as_str()) else {
+        return Vec::new();
+    };
+    let base = summary.state.base.as_str();
+    if base == head {
+        return Vec::new();
+    }
+    let Some(paths) = git.changed(base, head) else { return Vec::new() };
+    match paths.iter().find(|path| !path.starts_with("plan/")) {
+        None => Vec::new(),
+        Some(path) => vec![format!(
+            "`STATE: base={base}` is not the tree this plan describes: `{path}` changed since, and \
+             `state=idle` means the plan is written; rewrite `## Where we are` and set `base={head}`"
+        )],
+    }
 }

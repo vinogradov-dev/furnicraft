@@ -11,6 +11,10 @@ pub(crate) const STATE_PREFIX: &str = "STATE:";
 /// that merely mentions the word keeps it.
 pub(crate) const ENTRY_LABELS: &[&str] = &["Rules", "Why", "Shape", "Done", "Commits"];
 
+/// The keys the `STATE:` line carries. Anything else is a key nobody reads, and a plan that grows
+/// one by accident is a plan whose owner believes something is checked that is not.
+pub(crate) const STATE_KEYS: &[&str] = &["milestone", "phase", "task", "state", "base", "updated"];
+
 /// Parses the `STATE:` line and its required fields.
 pub(crate) fn parse_state(status: &str) -> Result<State, Vec<String>> {
     let Some(line) = status.lines().find(|line| line.trim_start().starts_with(STATE_PREFIX)) else {
@@ -22,6 +26,7 @@ pub(crate) fn parse_state(status: &str) -> Result<State, Vec<String>> {
     let mut state = None;
     let mut base = None;
     let mut updated = None;
+    let mut violations = Vec::new();
     for field in line.trim_start().trim_start_matches(STATE_PREFIX).split_whitespace() {
         let Some((key, value)) = field.split_once('=') else {
             continue;
@@ -37,10 +42,12 @@ pub(crate) fn parse_state(status: &str) -> Result<State, Vec<String>> {
             "state" => state = Some(value.to_owned()),
             "base" => base = Some(value.to_owned()),
             "updated" => updated = Some(value.to_owned()),
-            _ => {}
+            other => violations.push(format!(
+                "`STATE:` carries `{other}=`, which nobody reads; the keys are {}",
+                STATE_KEYS.join(", ")
+            )),
         }
     }
-    let mut violations = Vec::new();
     if milestone.is_none() {
         violations.push("`STATE:` needs `milestone=`".to_owned());
     }
@@ -60,6 +67,9 @@ pub(crate) fn parse_state(status: &str) -> Result<State, Vec<String>> {
     else {
         return Err(violations);
     };
+    if !violations.is_empty() {
+        return Err(violations);
+    }
     Ok(State { milestone, phase, task, status: state, base, updated })
 }
 
@@ -289,6 +299,45 @@ pub(crate) fn missing_paths<F: Fn(&str) -> bool>(hint: &str, exists: F) -> Vec<S
     hint_paths(hint).into_iter().filter(|path| !exists(path)).collect()
 }
 
+/// The four-digit ADR numbers `text` cites, including a written range (`ADRs 0034–0035`).
+pub(crate) fn adr_numbers(text: &str) -> Vec<String> {
+    let mut numbers: Vec<String> = Vec::new();
+    for (offset, _) in text.match_indices("ADR") {
+        let mut cursor = offset + 3;
+        if text.get(cursor..).is_some_and(|rest| rest.starts_with('s')) {
+            cursor += 1;
+        }
+        while text.get(cursor..).is_some_and(|rest| rest.starts_with(' ')) {
+            cursor += 1;
+        }
+        let Some((first, mut after)) = take_number(text, cursor) else { continue };
+        push_unique(&mut numbers, first);
+        // A range names its second decision after a dash and no second `ADR`.
+        if let Some(dash) = text.get(after..).and_then(|rest| rest.chars().next())
+            && matches!(dash, '–' | '—' | '-')
+        {
+            after += dash.len_utf8();
+            if let Some((second, _)) = take_number(text, after) {
+                push_unique(&mut numbers, second);
+            }
+        }
+    }
+    numbers
+}
+
+/// Exactly four digits at `start`, when the run is not part of a longer number.
+fn take_number(text: &str, start: usize) -> Option<(&str, usize)> {
+    let run: String = text.get(start..)?.chars().take(5).take_while(char::is_ascii_digit).collect();
+    (run.len() == 4).then(|| (text.get(start..start + 4).unwrap_or_default(), start + 4))
+}
+
+/// Pushes a number once, keeping the order the text cites them in.
+fn push_unique(numbers: &mut Vec<String>, number: &str) {
+    if !numbers.iter().any(|seen| seen == number) {
+        numbers.push(number.to_owned());
+    }
+}
+
 /// The path-like tokens of a map cell: a lower-case run that holds a `/`, so an anchor name or a
 /// prose pair like `Line/Arc` never matches.
 pub(crate) fn map_paths(cell: &str) -> Vec<String> {
@@ -465,6 +514,17 @@ pub(crate) fn parse_session(session: &str) -> crate::Session {
 mod tests {
     use super::*;
     use crate::TaskStatus;
+
+    #[test]
+    fn a_state_line_may_not_carry_a_key_nobody_reads() {
+        let line = "STATE: milestone=M1 phase=P task=P1 state=idle base=abc1234 updated=2026-11-10 next=P2\n";
+        let error = parse_state(line).expect_err("`next=` is not a key of the state line");
+        assert!(error.iter().any(|violation| violation.contains("`next=`")), "{error:?}");
+        assert!(error.iter().any(|violation| violation.contains("milestone, phase, task")), "{error:?}");
+
+        let plain = "STATE: milestone=M1 phase=P task=P1 state=idle base=abc1234 updated=2026-11-10\n";
+        parse_state(plain).expect("the six keys are the state");
+    }
 
     #[test]
     fn an_entry_splits_into_its_lead_and_its_labelled_fields() {

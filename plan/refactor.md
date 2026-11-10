@@ -49,8 +49,9 @@ Count public methods per `impl` and fields per struct with `grep -c '^\s\{4\}pub
 
 ## 3. Module boundaries
 
-- **B1** One module, one operation or one value family. `geom/region.rs` becomes `rect`,
-  `boolean` and `ring`; a new operation is a new module, not a new section of an old one.
+- **B1** One module, one operation or one value family. The region that used to be one file is
+  three today — `geom/ring.rs` (what a region is), `geom/rect.rs` (the exact orthogonal boolean) and
+  `geom/boolean.rs` (the general one); a new operation is a new module, not a new section of an old one.
 - **B2** One reason to change, and the module header says it: `//! Changes when: …`. Two unrelated
   "changes when" in one header is the proof of an SRP breach, without further argument.
 - **B3** `mod.rs` and `lib.rs` hold re-exports and the layer statement only; a `mod.rs` with logic

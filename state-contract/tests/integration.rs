@@ -19,6 +19,8 @@ struct FakeGit {
     ancestors: Vec<(&'static str, &'static str)>,
     /// The author date `commit_date` answers with, when the fixture needs a specific one.
     base_date: Option<&'static str>,
+    /// The paths `changed` answers with; `None` is a host that cannot compare two commits.
+    changed: Option<Vec<String>>,
 }
 
 impl FakeGit {
@@ -28,6 +30,7 @@ impl FakeGit {
             commits: vec!["abc1234", "def5678"],
             ancestors: vec![("abc1234", HEAD), ("HEAD", HEAD)],
             base_date: Some("2025-12-01"),
+            changed: None,
         }
     }
 }
@@ -45,12 +48,27 @@ impl Git for FakeGit {
         self.ancestors.iter().any(|(a, d)| *a == ancestor && *d == descendant)
     }
 
+    fn changed(&self, _from: &str, _to: &str) -> Option<Vec<String>> {
+        self.changed.clone()
+    }
+
     fn commit_date(&self, hash: &str) -> Option<String> {
         // `abc1234` and `HEAD` were made before the fixtures' `updated=2026-01-01`.
         (self.commits.contains(&hash) || hash == "HEAD")
             .then_some(self.base_date.unwrap_or("2025-12-01"))
             .map(str::to_owned)
     }
+}
+
+/// A scratch plan with no git at all: the three plan files and one source file.
+fn plan_dir(name: &str, status: &str, backlog: &str) -> PathBuf {
+    let root = scratch(name);
+    fs::create_dir_all(root.join("plan")).expect("the scratch plan is writable");
+    fs::create_dir_all(root.join("src")).expect("the scratch sources are writable");
+    fs::write(root.join("plan/STATUS.md"), status).expect("STATUS is writable");
+    fs::write(root.join("plan/BACKLOG.md"), backlog).expect("BACKLOG is writable");
+    fs::write(root.join("src/lib.rs"), "//! fixture\n").expect("the source is writable");
+    root
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -320,4 +338,62 @@ fn the_dashboard_expands_one_task_when_asked() {
     let error = dashboard_with(&fixture("good"), &opts, &FakeGit::repository())
         .expect_err("a task the backlog does not have is an error");
     assert!(error.iter().any(|violation| violation.contains("has no task `T9`")), "{error:?}");
+}
+
+/// The `STATE:` line every scratch plan writes: idle, based on `abc1234`.
+const STATUS_T1: &str = "STATE: milestone=M1 phase=P task=T1 state=idle base=abc1234 updated=2026-11-10\n";
+
+#[test]
+fn an_idle_plan_whose_base_lags_the_code_fails() {
+    let root = plan_dir("base-stale", STATUS_T1, PLAN_BACKLOG);
+    let moved = FakeGit { changed: Some(vec!["crates/x/src/lib.rs".to_owned()]), ..FakeGit::repository() };
+    let error = check_with(&root, &moved).expect_err("an idle plan describes the checkout");
+    assert!(error.iter().any(|violation| violation.contains("is not the tree this plan describes")), "{error:?}");
+    assert!(error.iter().any(|violation| violation.contains("crates/x/src/lib.rs")), "{error:?}");
+
+    // A plan edit that rides on top of `base` touches `plan/` only, so that base is legal.
+    let planned = FakeGit { changed: Some(vec!["plan/BACKLOG.md".to_owned()]), ..FakeGit::repository() };
+    check_with(&root, &planned).expect("a plan-only commit is what `base` may lag by");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_doing_plan_may_leave_its_base_behind() {
+    let error = check_with(&fixture("good-note"), &FakeGit::repository()).expect("a doing plan resumes");
+    assert_eq!(error.state.status, "doing");
+    let running = FakeGit { changed: Some(vec!["crates/x/src/lib.rs".to_owned()]), ..FakeGit::repository() };
+    let summary = check_with(&fixture("good-note"), &running).expect("work in progress moves ahead of the plan");
+    assert_eq!(summary.state.status, "doing");
+}
+
+#[test]
+fn a_closed_task_citing_a_missing_decision_fails() {
+    let backlog = "## Now\n\n- `[ ]` **T1** only `files: src/lib.rs`\n\n## Done\n\n\
+                   - `[x]` **T0** it landed (ADR 0099) — `abc1234`\n";
+    let root = plan_dir("adr-cite", STATUS_T1, backlog);
+    fs::create_dir_all(root.join("docs/decisions")).expect("the decisions are writable");
+    fs::write(root.join("docs/decisions/0001-a-decision.md"), "# A decision\n").expect("a decision is writable");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("a closed citation must resolve");
+    assert!(error.iter().any(|violation| violation.contains("ADR 0099")), "{error:?}");
+
+    fs::write(root.join("docs/decisions/0099-a-decision.md"), "# A decision\n").expect("the decision is writable");
+    check_with(&root, &FakeGit::repository()).expect("the record is whole");
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_reference_file_may_not_carry_plan_state() {
+    let root = plan_dir("reference-state", STATUS_T1, PLAN_BACKLOG);
+    let questions = root.join("plan/questions.md");
+    fs::write(&questions, "# Open questions\n\n- `[ ]` a question\n").expect("questions are writable");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("a marker in `questions.md` must fail");
+    assert!(error.iter().any(|violation| violation.contains("questions.md")), "{error:?}");
+
+    fs::write(&questions, "# Open questions\n\nSTATE: task=T1\n").expect("questions are writable");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("a state line in `questions.md` must fail");
+    assert!(error.iter().any(|violation| violation.contains("the state lives in")), "{error:?}");
+
+    fs::write(&questions, "# Open questions\n\n- a question\n").expect("questions are writable");
+    check_with(&root, &FakeGit::repository()).expect("a reference file passes the gate");
+    let _ = fs::remove_dir_all(&root);
 }
