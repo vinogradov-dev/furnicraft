@@ -55,9 +55,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 S6 is next: the frame invariants become one test module, ADRs 0082/0083 are checked against the code,
 ADRs 0009, 0026, 0052 and 0058 are corrected, and `PROJECT.md`, `AGENTS.md` §4.10 and the map rows
 follow. S7 follows S6: a read-only audit re-measures the tree and files the design-rules refactor as
-small behaviour-preserving subtasks (findings F1-F7 in the entry), with the `main.rs` and `Editor`
-splits landing before U45, which moves those files into `Document`. X30 made a panel's pivot derived
-(ADR 0083).
+small behaviour-preserving subtasks under `plan/refactor.md` (findings F1-F7 in the entry), the
+`main.rs` and `Editor` splits landing before U45. X30 made a panel's pivot derived (ADR 0083).
 
 ## Index
 
@@ -67,4 +66,5 @@ splits landing before U45, which moves those files into `Document`. X30 made a p
 | `plan/SESSION.md` | the live task: steps, blocker, next command | `state=doing` |
 | `plan/debt.md`, `plan/questions.md` | accepted gaps; decisions for the owner | a task touches that area |
 | `plan/rename.md` | the pre-release rename: inventory, procedure, gotchas | task R1, or a change that adds another place the product name appears |
+| `plan/refactor.md` | design rules, audit procedure, subtask template (S7) | task S7, or a subtask's rules |
 | `plan/archive/done.md` | history up to schema 11 | never, `git log` replaces it |

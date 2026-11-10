@@ -22,8 +22,9 @@ whole file. If the anchor is wrong or missing, fix the row — the map is a cont
 
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
 area, never read them at start. `plan/rename.md` is the same kind of file: it holds the measured
-inventory and the procedure for the pre-release rename (task R1). `plan/archive/done.md` is history;
-`git log --oneline` replaces it.
+inventory and the procedure for the pre-release rename (task R1). `plan/refactor.md` is the third:
+the design rules, the audit procedure and the subtask template for the design-rules refactor
+(task S7). `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
 Answering the next step has its own procedure (§1.1); it never re-derives the state from the code.
 
@@ -316,5 +317,9 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
   measured procedure and its gotchas. Read only when R1 is taken.
+- `plan/refactor.md` — the design-rules refactor (task S7 and its subtasks): how to measure a module,
+  the boundary, data, clean-code, documentation and test rules (`B`, `D`, `C`, `H`, `T` ids), the
+  legibility test, what to borrow from a reference project, the audit procedure and the subtask
+  template. Read when S7 starts; a subtask reads §3–§8. It leaves the plan with the last subtask.
 - `plan/questions.md` — decisions waiting for the owner.
 - `plan/archive/done.md` — the history the old status file carried; `git log --oneline` is the live record.

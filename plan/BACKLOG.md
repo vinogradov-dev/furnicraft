@@ -68,25 +68,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `furnicraft-testkit` exists. Clean at filing time and not a finding: `cargo xtask layers` green, no
   `kernel` or GPU edge in `model`, no `egui` or `model` edge in `render`, the UI dispatches and never
   writes the document, the kernel port is five methods, tests are 39% of the tree.
-  Rules the subtasks follow. `M1` measure, never re-derive: production lines are the lines before the
-  last `#[cfg(test)] mod tests`; a finding is real at one file ≥1000 production lines, one function
-  ≥150 or one `impl` ≥800, a type ≥12 fields or ≥25 public methods, or a rule outside its layer
-  (`AGENTS.md` §4.2, §4.3, §4.5, §4.11). `M2` one verdict per finding: cohesive-but-big → mechanical
-  split by concern with no API change; two reasons to change → extract the type or the module;
-  layering breach → move it down the layer arrow only (`ui` → `engine`/`model`, `model` → `geom`),
-  never up; no action → one line of why, so the next reader does not re-open it. `M3` one subtask, one
-  commit, one concern: a pure move changes no logic and reads as a rename under `git diff -M`; a move
-  and a fix never share a commit; a moved test keeps its assertions and changes only its path and
-  names, so the suite passes without an edited expectation. `M4` no new escape: no `#[allow]`, no new
-  `unwrap`/`expect` outside tests, every public item keeps its doc comment, a new module gets its
-  `plan/map.md` row in the same commit. `M5` a boundary move amends the ADR that placed the rule
-  (0026, 0029, 0060, 0082 are in play) in the same commit; the crate map and `AGENTS.md` §3 change
-  only when a crate or layer changes. `M6` documented debt is not re-filed: `plan/debt.md`
-  `[view-state]` already owns selection and open containers in `Editor`, and F4's
-  `Project::apply(change)` rewrite touches every command, so it goes to `plan/questions.md` unless the
-  owner approves it during the audit. `M7` order by dependency: `geom`/`model`/`scene` first, then
-  `ui::Editor`, then the shell; each subtask names the file it will own, so two subtasks never edit
-  one file at the same time.
+  Instructions: read `plan/refactor.md` in full before the audit — it holds the measurement recipe
+  (§2), the boundary, data, clean-code, documentation and test rules (§3–§7) with ids (`B1`, `D1`,
+  `C4`, `H2`, `T1`), the legibility test that defines done (§8), what to borrow from SolidCraft and
+  what never to copy (§9), the audit procedure (§10), the subtask template (§11) and the order and
+  stopping rules (§12). The goal there is one sentence: a tree a single maintainer can hold in their
+  head, where a panel attribute is a three-file change. In short: one module one operation, one
+  reason to change stated in the header, geometry below the data and never inside a document type
+  (it fixes F3 structurally, the way SolidCraft's `Seg2Geom for Seg2` does), a move never shares a
+  commit with a fix, the existing suite passes unchanged, and every new or moved module header names
+  its contract, its tolerance, what it refuses and `//! Changes when: …`. Documented debt is not
+  re-filed: `plan/debt.md` `[view-state]` already owns selection and open containers in `Editor`, and
+  F4's `Project::apply(change)` rewrite touches every command, so it is a question for the owner
+  (`plan/questions.md`), not a subtask.
   Re-verify at the start, because the tree will have moved: S6 rewrites the frame tests and the panel
   and inspector documents, so `model/project`, `model/panel` and ADRs 0009, 0026, 0052, 0058, 0082,
   0083 are re-read, not quoted; U45, if it lands first, moves `Session`, `Editor`, `viewport` and
@@ -96,11 +90,12 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   (`plan/rename.md`) renames 13 crates and moves `apps/` to `app/`, so every path here and in
   `plan/map.md` is re-read after it, never copied from this entry.
   Done when `cargo xtask ci` is green on the pre-audit tree, every finding carries a verdict and
-  either a subtask id with its `files:` hint or a stated reason, the subtasks sit in `## Now` in
-  dependency order, `plan/map.md` still describes the tree, and `plan/STATUS.md` names the first
-  subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit commit touches only
-  `plan/`.
-  `files: plan/BACKLOG.md, plan/map.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
+  either a subtask id with its `files:` hint or a `plan/debt.md` line under `[design]`, the subtasks
+  sit in `## Now` in dependency order, each cites the `plan/refactor.md` rule ids it obeys with the
+  production-line number it must reach, `plan/map.md` still describes the tree, and `plan/STATUS.md`
+  names the first subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit
+  commit touches only `plan/`.
+  `files: plan/refactor.md, plan/BACKLOG.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
 
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
