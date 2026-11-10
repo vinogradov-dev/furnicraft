@@ -44,9 +44,24 @@ table, so one help lists everything.
 | `state set k=v` / `state next` | one field of the `STATE:` line, or the `## Next` paragraph |
 | `dashboard [--task <id>]` | the framed overview, optionally with one task expanded |
 | `docs` | the decisions `README.md` against the files it indexes |
+| `agents` | the session contract below, filled with the project's own command lines |
+| `init` | `plan/` for a new project, scaffolded so it passes the gate |
 
 Every command takes `--root <path>` (default `.`), `--width <n>` (default 80) and `--no-color`;
 ANSI is on only when stdout is a terminal.
+
+### Layout
+
+The convention is the format: `plan/` holds the files, `plan/notes/` the research notes. Two things a
+project may rename live in `plan/state.conf` (absent means the defaults):
+
+```text
+runner = cargo xtask          # the command line a session runs
+decisions = docs/decisions    # where the architecture decisions live
+project = FurniCraft          # the name `agents` speaks about
+```
+
+An unknown key is an error, so a typo cannot quietly keep a default.
 
 ### Entry fields
 

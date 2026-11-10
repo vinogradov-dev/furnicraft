@@ -8,20 +8,9 @@ The `files:` hint names where the work starts and is required on every unfinishe
 must exist, so name a directory for a file the task creates. The hint is a hint, not a boundary: read
 those files and their callers, not the workspace.
 
-An entry may carry labelled parts after its opening sentence, in this order. They are what
-`cargo xtask task <id>` prints, so a reader never reconstructs them from prose:
-
-```text
-- `[ ]` **A3** what the user gets, in one sentence — rules: B1, B4, B8.
-  Why: the observation that makes it a task, with the numbers.
-  Shape: what moves where, in which file, and the size before -> after.
-  Done: how a reader knows it landed.
-  Commits: one, or one per step.
-  `files: crates/model/src/lib.rs, crates/model/src/contour.rs`
-```
-
-Only `Rules`, `Why`, `Shape`, `Done` and `Commits` are fields; `files:` stays the hint, and the
-sentence before the first label is the lead that a one-screen status block shows.
+An entry may carry labelled parts after its opening sentence — `Rules`, `Why`, `Shape`, `Done`,
+`Commits` — and the `files:` hint at the end. `cargo xtask task <id>` prints them one by one, so a
+reader never reconstructs them from prose; the shape is in the crate README.
 
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and

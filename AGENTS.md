@@ -13,15 +13,10 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
 
 1. `plan/STATUS.md` — the `STATE:` line and the `Next` section.
 2. `plan/SESSION.md` — only when `state=doing`; it names the live step and the next command.
-3. `cargo xtask task` — the task `STATE:` names, in full: its fields (`Rules`, `Why`, `Shape`, `Done`,
-   `Commits`), the `files:` hint with production and test lines and the last commit that touched each
-   file, the `plan/map.md` rows naming those paths, the `plan/debt.md` and `plan/questions.md` entries
-   the task touches, the ADRs it cites and `plan/notes/<ID>.md`, the research note a previous session
-   left. `cargo xtask task <ID>` answers the same for any task, `--md` is the agent form and `--paths`
-   one file per line; `cargo xtask task list --phase S --status open` enumerates the work order
-   instead of grepping the backlog. **Read this instead of grepping `plan/*.md`, `docs/` or
-   `git log`**, and read the files and their direct callers. Do not scan the workspace; if the hint
-   is wrong, fix the hint.
+3. `cargo xtask task` — the task `STATE:` names, in full; `task <ID>` for any task, `--md` for the
+   agent form, `--paths` for one file per line, `task list` to enumerate the work order. **Read it
+   instead of grepping `plan/*.md`, `docs/` or `git log`**, then read the files it names and their
+   direct callers. Do not scan the workspace; if the hint is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
 Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the
@@ -240,10 +235,8 @@ cargo xtask ci
 order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
 formatting, the gate only checks it.
 
-`cargo xtask plan` fails when the plan files contradict each other: `STATE` naming a task the backlog
-does not have, has finished, keeps outside `## Now`, or that is not the first unfinished task there;
-a `## Next` paragraph naming another task than `STATE` does; a `plan/map.md` row naming a path that
-does not exist; a `plan/debt.md` entry whose tag the `Tags:` line does not declare;
+`cargo xtask plan` fails when the plan files, the notes, `plan/map.md`, the debt tags or the `base`
+contradict each other, and it names the mismatch in a sentence you can act on;
 `state=doing` without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`,
 `goal:`, `now:` and `run:`; `state=idle` with a `[~]` task or a leftover session note; a duplicated
 task id; a `[x]` task outside `## Done`, or a `## Done` entry that is not `[x]`; a finished task
@@ -351,9 +344,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
-- `cargo xtask task [<ID>]` prints one task in full — the plan half, the code facts, the ADRs, the notes of other tasks that name the same files; `--md` for an agent, `--paths` for a shell loop, `list` to enumerate.
-- `cargo xtask task add|start|set|step|note|close|reopen|drop` and `cargo xtask state set` are the only way an agent writes the plan; each validates the result before it lands, and `--dry-run` prints the diff.
-- `cargo xtask dashboard` prints the state with the file each section comes from; `--task <ID>` expands one task in it.
+- `cargo xtask help` — every command with a one-line summary, generated from the command table. The plan is read with `task`/`status`, written with the `task` verbs and `state`, and `agents` prints the session contract below, versioned with the tool.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
   measured procedure and its gotchas. Read only when R1 is taken.

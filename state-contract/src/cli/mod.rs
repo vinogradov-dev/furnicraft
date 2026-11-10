@@ -24,6 +24,8 @@ pub struct Config {
     pub runner: String,
     /// Where the architecture decisions live, relative to the project root.
     pub decisions: PathBuf,
+    /// The project name the `agents` section speaks about.
+    pub project: String,
     /// The name errors are prefixed with.
     pub name: String,
 }
@@ -33,8 +35,53 @@ impl Default for Config {
         Self {
             runner: "state-contract".to_owned(),
             decisions: PathBuf::from("docs/decisions"),
+            project: "the project".to_owned(),
             name: "state-contract".to_owned(),
         }
+    }
+}
+
+impl Config {
+    /// Reads `plan/state.conf` when the project has one.
+    ///
+    /// The file is `key = value` lines with `#` comments and three keys — `runner`, `decisions`,
+    /// `project`. A key the file does not carry keeps its default, an unknown key is an error (a typo
+    /// must not be ignored), and a missing file is not an error: every default is the convention.
+    pub fn read(root: &Path) -> Result<Option<Self>, String> {
+        let path = root.join("plan/state.conf");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("cannot read `plan/state.conf`: {error}")),
+        };
+        let mut config = Config::default();
+        for (index, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                return Err(format!("`plan/state.conf` line {} is not `key = value`", index.saturating_add(1)));
+            };
+            let value = value.trim().trim_matches('"').to_owned();
+            match key.trim() {
+                "runner" => config.runner = value,
+                "decisions" => config.decisions = PathBuf::from(value),
+                "project" => config.project = value,
+                other => {
+                    return Err(format!(
+                        "`plan/state.conf` line {} names `{other}`; the keys are runner, decisions and project",
+                        index.saturating_add(1)
+                    ));
+                }
+            }
+        }
+        Ok(Some(config))
+    }
+
+    /// The usage line the status block and the task report point at.
+    pub fn task_command(&self) -> String {
+        format!("{} task", self.runner)
     }
 }
 
@@ -103,6 +150,18 @@ pub const COMMANDS: &[Command] = &[
         run: |global, config, _| run_docs(global, config),
     },
     Command {
+        name: "agents",
+        usage: "agents",
+        summary: "print the session contract a project pastes into its agent instructions",
+        run: |_, config, _| run_agents(config),
+    },
+    Command {
+        name: "init",
+        usage: "init [--milestone <id>] [--task <id>] [--force]",
+        summary: "scaffold `plan/` for a new project, or fail if a plan is already there",
+        run: run_init,
+    },
+    Command {
         name: "state",
         usage: "state <set key=value …|next (--body <text>|--stdin)>",
         summary: "change the `STATE:` line, or the `## Next` paragraph",
@@ -146,6 +205,16 @@ pub fn run_main(root: &Path, extra: &'static [Command], config: Config) -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (global, rest) = match split_globals(root, &args) {
         Ok(parts) => parts,
+        Err(message) => {
+            eprintln!("{}: {message}", config.name);
+            return 2;
+        }
+    };
+    // The project's layout comes from the root the command line names, not from the working
+    // directory: `--root` has to move the config with it.
+    let config = match Config::read(&global.root) {
+        Ok(Some(project)) => Config { name: config.name, ..project },
+        Ok(None) => config,
         Err(message) => {
             eprintln!("{}: {message}", config.name);
             return 2;
@@ -315,6 +384,125 @@ fn run_docs(global: &Global, config: &Config) -> Result<(), String> {
     }
 }
 
+/// The session contract, embedded from the template so the tool and the instructions share a version.
+const AGENTS_SECTION: &str = include_str!("../../templates/AGENTS.section.md");
+const STATUS_TEMPLATE: &str = include_str!("../../templates/STATUS.md");
+const BACKLOG_TEMPLATE: &str = include_str!("../../templates/BACKLOG.md");
+const SESSION_TEMPLATE: &str = include_str!("../../templates/SESSION.template.md");
+const NOTE_TEMPLATE: &str = include_str!("../../templates/NOTE.md");
+
+/// `agents`: the section a project pastes into the file its agent reads, with its own command names.
+fn run_agents(config: &Config) -> Result<(), String> {
+    print!("{}", agents_text(config));
+    Ok(())
+}
+
+/// The section with the project's own names in it.
+fn agents_text(config: &Config) -> String {
+    AGENTS_SECTION.replace("{{PROJECT}}", &config.project).replace("{{TASK_COMMAND}}", &config.task_command())
+}
+
+/// `init`: write a plan that passes the gate, so a new project starts from a green one.
+fn run_init(global: &Global, config: &Config, args: &[String]) -> Result<(), String> {
+    run_init_with(global, config, args, &ProcessGit::new(&global.root))
+}
+
+/// [`run_init`] with the git facts supplied by `git`, so a test needs no repository.
+fn run_init_with(global: &Global, config: &Config, args: &[String], git: &dyn crate::Git) -> Result<(), String> {
+    let mut milestone = "M1".to_owned();
+    let mut task = "T1".to_owned();
+    let mut force = false;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        index += 1;
+        match arg {
+            "--force" => force = true,
+            "--milestone" => milestone = args.get(index).ok_or("--milestone needs a value")?.clone(),
+            "--task" => task = args.get(index).ok_or("--task needs a value")?.clone(),
+            other => return Err(format!("unknown option `{other}`")),
+        }
+        if matches!(arg, "--milestone" | "--task") {
+            index += 1;
+        }
+    }
+    let status = global.root.join("plan/STATUS.md");
+    if status.exists() && !force {
+        return Err("`plan/STATUS.md` exists; `--force` overwrites it".to_owned());
+    }
+    let today = git.commit_date("HEAD").unwrap_or_else(|| "1970-01-01".to_owned());
+    let files = [
+        ("plan/STATUS.md", filled(STATUS_TEMPLATE, &milestone, &task, &today, config)),
+        ("plan/BACKLOG.md", filled(BACKLOG_TEMPLATE, &milestone, &task, &today, config)),
+        ("plan/SESSION.template.md", SESSION_TEMPLATE.to_owned()),
+        ("plan/NOTE.template.md", NOTE_TEMPLATE.to_owned()),
+        ("plan/state.conf", config_file(config)),
+    ];
+    // The hint a fresh entry carries has to name a path that exists, so the scaffold creates it.
+    let source = global.root.join("src/lib.rs");
+    if !source.exists() {
+        if let Some(parent) = source.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create `{}`: {error}", parent.display()))?;
+        }
+        std::fs::write(&source, "//! The first module.\n")
+            .map_err(|error| format!("cannot write `src/lib.rs`: {error}"))?;
+        println!("src/lib.rs");
+    }
+    for (path, text) in &files {
+        let full = global.root.join(path);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create `{}`: {error}", parent.display()))?;
+        }
+        std::fs::write(&full, text).map_err(|error| format!("cannot write `{path}`: {error}"))?;
+        println!("{path}");
+    }
+    // Without a checkout the `base=` rule cannot be checked at all; say so instead of failing.
+    if git.head().is_none() {
+        println!("init: the plan is written; the gate needs a git checkout, run it once the first commit exists");
+        return Ok(());
+    }
+    match crate::check_with(&global.root, git) {
+        Ok(_) => {
+            println!("init: the plan passes the gate");
+            Ok(())
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            Err(format!("init: the fresh plan has {} violation(s)", violations.len()))
+        }
+    }
+}
+
+/// A template with the placeholders the scaffold fills.
+fn filled(template: &str, milestone: &str, task: &str, date: &str, config: &Config) -> String {
+    template
+        .replace("{{MILESTONE}}", milestone)
+        .replace("{{TASK_ID}}", task)
+        .replace("{{DATE}}", date)
+        .replace("{{PROJECT}}", &config.project)
+        .replace("{{TASK_COMMAND}}", &config.task_command())
+}
+
+/// The `plan/state.conf` a scaffold writes: the defaults spelled out, so a reader can change them.
+fn config_file(config: &Config) -> String {
+    format!(
+        "# The plan tool's layout. Every key has this value as its default; delete a line to keep it.\n\
+         # The command line a session runs, printed by `status` and `task`.\n\
+         runner = {}\n\
+         # Where the architecture decisions live.\n\
+         decisions = {}\n\
+         # The project name the `agents` section speaks about.\n\
+         project = {}\n",
+        config.runner,
+        config.decisions.display(),
+        config.project
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -323,6 +511,95 @@ mod tests {
 
     const HOST: &[Command] =
         &[Command { name: "layers", usage: "layers", summary: "the host's own rule", run: |_, _, _| Ok(()) }];
+
+    /// The git facts a scaffold needs, without a repository.
+    struct FakeGit;
+
+    impl crate::Git for FakeGit {
+        fn head(&self) -> Option<String> {
+            Some("abc1234".to_owned())
+        }
+
+        fn commit_exists(&self, hash: &str) -> bool {
+            hash == "HEAD" || hash == "abc1234"
+        }
+
+        fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+            (ancestor == "HEAD" || ancestor == "abc1234") && (descendant == "HEAD" || descendant == "abc1234")
+        }
+
+        fn commit_date(&self, hash: &str) -> Option<String> {
+            (hash == "HEAD" || hash == "abc1234").then(|| "2026-11-10".to_owned())
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("state-contract-init-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the scratch directory is writable");
+        root
+    }
+
+    #[test]
+    fn a_project_without_a_config_gets_the_conventions() {
+        let root = scratch("no-config");
+        assert_eq!(Config::read(&root).expect("a missing file is not an error"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_config_overrides_the_defaults_and_rejects_a_typo() {
+        let root = scratch("config");
+        std::fs::create_dir_all(root.join("plan")).expect("plan is writable");
+        std::fs::write(
+            root.join("plan/state.conf"),
+            "# a comment\nrunner = cargo xtask\ndecisions = docs/adr\nproject = FurniCraft\n",
+        )
+        .expect("the config is writable");
+        let config = Config::read(&root).expect("the config parses").expect("the file exists");
+        assert_eq!(config.runner, "cargo xtask");
+        assert_eq!(config.decisions, PathBuf::from("docs/adr"));
+        assert_eq!(config.project, "FurniCraft");
+        assert_eq!(config.task_command(), "cargo xtask task");
+
+        std::fs::write(root.join("plan/state.conf"), "runnerr = oops\n").expect("the config is writable");
+        let error = Config::read(&root).expect_err("a typo is an error");
+        assert!(error.contains("runnerr"), "{error}");
+        std::fs::write(root.join("plan/state.conf"), "no equals sign\n").expect("the config is writable");
+        assert!(Config::read(&root).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_agents_section_speaks_about_the_project_and_its_command() {
+        let config = Config { project: "FurniCraft".to_owned(), runner: "cargo xtask".to_owned(), ..Config::default() };
+        let text = agents_text(&config);
+        assert!(text.contains("FurniCraft"), "{text}");
+        assert!(text.contains("cargo xtask task"), "{text}");
+        assert!(!text.contains("{{"), "every placeholder is filled: {text}");
+    }
+
+    #[test]
+    fn a_scaffold_writes_a_plan_that_passes_the_gate() {
+        let root = scratch("init");
+        let global = Global { root: root.clone(), width: 80, color: false };
+        let config = Config::default();
+        run_init_with(&global, &config, &[], &FakeGit).expect("the scaffold succeeds");
+        for path in [
+            "src/lib.rs",
+            "plan/STATUS.md",
+            "plan/BACKLOG.md",
+            "plan/SESSION.template.md",
+            "plan/NOTE.template.md",
+            "plan/state.conf",
+        ] {
+            assert!(root.join(path).is_file(), "{path} is written");
+        }
+        crate::check_with(&root, &FakeGit).expect("the scaffolded plan passes the gate");
+        let error = run_init_with(&global, &config, &[], &FakeGit).expect_err("a second init refuses");
+        assert!(error.contains("--force"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_table_holds_every_command_once() {
