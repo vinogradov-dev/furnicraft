@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X30 state=idle base=1e04142 updated=2026-11-10
+STATE: milestone=M7 phase=A task=S6 state=idle base=524f58f updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -15,8 +15,7 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   0073), and an extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054);
   every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
-  S5 chose the frame rule, X24 made a drawing use it and X29 a group: `rebase_at_anchor`,
-  `Placement::inverse` and a zero pivot (ADR 0082).
+  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082, 0083).
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -53,11 +52,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X29 made grouping use the one frame rule: the new container is anchored at the centre of the selected
-children's union, every child placement moves by `-centre`, the pivot stays at zero and
-`Container::new` no longer invents one, so no world transform changes. X30 is next: a panel's frame
-follows its parameters while its pivot stays derived — an outline edit compensates the translation
-instead of shifting the pivot, and `node.pivot.set` / `node.pivot.center` refuse a panel.
+X30 made a panel's pivot derived: an outline edit re-anchors the frame at the ring's base corner,
+compensates the translation and machining and resets the pivot to zero; the pivot commands refuse a
+panel and a stored non-zero pivot is a readable load error (ADR 0083). S6 is next: the frame
+invariants become one test module, ADRs 0082/0083 are checked against the code, ADRs 0009, 0026,
+0052 and 0058 are corrected, and `PROJECT.md`, `AGENTS.md` §4.10 and the map rows follow.
 
 ## Index
 

@@ -32,7 +32,14 @@ decides how a new panel relates to the object whose contour it takes.
   means "exactly over the source" and the model then appends the ring's base corner in the source
   frame.
 - Machining, banding and the nominal rectangle stay in the panel-local frame, whose origin is the
-  base corner. A later outline edit re-anchors the frame and keeps the world shape (X30).
+  base corner. A later outline edit re-anchors the frame and keeps the world shape: the ring is
+  translated to zero, `translation` becomes the parent-frame position of the new base corner and the
+  machining shifts by the same offset, so no world point moves. The pivot is not shifted with the
+  frame — it is derived, so it stays at zero (X30).
+- A panel's pivot is therefore not authored data. `set_node_pivot` and `center_node_pivot` refuse a
+  panel with `PanelPivotIsDerived`, the two committed commands are disabled for it, and loading a
+  document whose panel carries a non-zero pivot is a readable error rather than a silent correction.
+  A mesh-vertex edit never reaches a panel either: `move_mesh_vertices` only accepts an object.
 
 This is the owner's exception to "a closed body pivots at its bounds centre". It is not an
 exception to "the local zero is the pivot": a panel's pivot is still zero, and because the local

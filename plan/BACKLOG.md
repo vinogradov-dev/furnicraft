@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X30** a panel's frame follows its parameters, its pivot does not: `move_frame_to` keeps the
-  world shape when a contour edit moves the ring's minimum corner, but it also shifts the pivot by
-  `-min`, so the pivot drifts off the base corner — and the inspector still lets every node author a
-  pivot, including a panel. Expectation: a panel's pivot is derived data. Changing `set_panel_outline`,
-  resizing, replacing the contour or baking a rectangle into a ring recomputes the bbox, anchors the
-  outline at zero and compensates `translation` so the frame's corner keeps its world position, then
-  sets `pivot_local = 0`; machining and banding shift with the outline exactly as they do now.
-  `set_node_pivot`/`center_node_pivot` refuse a panel with a readable error, `move_mesh_vertices`
-  already refuses a node that is not an object, and a test pins that no vertex edit reaches a panel;
-  ADR 0083 states the rule. Tests: an outline edit that moves the minimum corner leaves every world
-  vertex and every machining point where it was, `translation` becomes the new world base corner and
-  `pivot_local` is zero; a resize leaves the translation alone because the minimum corner does not
-  move; a panel made by `panel.contour.create` survives a later outline edit; `node.pivot.set` and
-  `node.pivot.center` on a panel return the new error and change nothing; a document whose panel
-  carries a non-zero pivot is a readable load error.
-  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/mod.rs`
-
 - `[ ]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
   one by one become one test module, and the documents stop describing the old behaviour. Tests: for
   every creation path (line, polyline, arc, rectangle, circle, polygon, contour, extrusion, primitive,
@@ -241,6 +224,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X30** a panel's frame follows its parameters, its pivot does not: `move_frame_to` shifted the
+  pivot by `-min` when a contour edit moved the ring's minimum corner, so the pivot drifted off the
+  base corner, and the inspector let every node author a pivot. Expectation: a panel's pivot is
+  derived data. An outline edit, a resize, a contour replacement or a rectangle baked into a ring
+  creates the bbox, anchors the outline at zero, compensates `translation` so the frame's corner
+  keeps its world position and sets `pivot_local = 0`; machining shifts with the outline. A panel's
+  pivot is not authored: `set_node_pivot`/`center_node_pivot` return `PanelPivotIsDerived`, both
+  committed commands are disabled for a panel, `move_mesh_vertices` never reaches one, and a loaded
+  panel with a non-zero pivot is a readable error (ADR 0083). Tests: an outline edit keeps every
+  drawn world point and every machining point, `translation` is the new world base corner and the
+  pivot is zero; a resize keeps the translation; the contour-create panel reloads after an outline
+  edit; the pivot commands refuse a panel and change nothing; the load error.
+  `524f58f`
+  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/mod.rs`
 - `[x]` **X29** a group is anchored at its bounds centre: `group_nodes` builds the container with an
   identity placement while `Container::new` puts the pivot at the centre of the children's bounds, so
   the card shows `Translation (0, 0, 0)` while the pivot sits in the middle of the group — the same

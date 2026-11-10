@@ -408,9 +408,9 @@ mod tests {
         let drawer = Id::new(3).expect("drawer id");
         let front = Id::new(4).expect("front id");
 
-        // Centring uses the panel's own local box.
-        project.center_node_pivot(front).expect("centre front");
-        assert_eq!(project.pivot_local(front), Some(DVec3::new(350.0, 250.0, 9.0)));
+        // A panel's pivot is derived from its base corner and cannot be authored.
+        assert_eq!(project.pivot_local(front), Some(DVec3::ZERO));
+        assert!(matches!(project.center_node_pivot(front), Err(ProjectError::PanelPivotIsDerived { .. })));
 
         // Centring a container uses the union of its panels, including their child placements.
         project

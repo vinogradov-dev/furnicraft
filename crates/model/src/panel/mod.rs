@@ -336,11 +336,6 @@ impl Panel {
         self.last_known_thickness = thickness;
     }
 
-    /// Replaces the stored manipulation pivot.
-    pub(crate) fn set_pivot(&mut self, pivot: Pivot) {
-        self.pivot = pivot;
-    }
-
     /// Replaces the placement relative to the parent container.
     pub(crate) fn set_placement(&mut self, placement: Placement) {
         self.placement = placement;
@@ -538,11 +533,15 @@ impl Panel {
 
     /// Moves the panel-local frame so its origin sits at `min`, keeping the world shape fixed.
     ///
-    /// A contour edit can move the ring's minimum corner. The frame is anchored there (ADR 0009),
-    /// so the ring is translated to zero and the placement, pivot and machining move by the inverse
-    /// offset. The world-space geometry and the world-space pivot therefore do not move.
+    /// A contour edit can move the ring's minimum corner. The frame is anchored there (ADR 0009), so
+    /// the ring is translated to zero, the placement moves by the inverse offset and the machining
+    /// shifts with it. The pivot is derived from the frame: it is the base corner, always zero, so
+    /// it is reset rather than shifted (ADR 0083). The world-space geometry and every machining
+    /// point therefore do not move.
     pub(crate) fn move_frame_to(&mut self, min: [i64; 2]) -> Result<(), ProjectError> {
         if min == [0, 0] {
+            // The frame did not move; the pivot is symbolic anyway, so make the invariant explicit.
+            self.pivot = Pivot::ZERO;
             return Ok(());
         }
         let x = Length::from_micrometres(min[0]);
@@ -551,10 +550,6 @@ impl Panel {
         let translation = self.placement.translation() + self.placement.rotation() * offset;
         let placement = Placement::new(translation, self.placement.rotation())
             .map_err(|_| ProjectError::PanelOutlineFrame { panel: self.id })?;
-        let pivot = self.pivot.components();
-        let pivot_x = pivot[0].checked_sub(x).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
-        let pivot_y = pivot[1].checked_sub(y).ok_or(ProjectError::PanelOutlineFrame { panel: self.id })?;
-        let pivot = Pivot::new(pivot_x, pivot_y, pivot[2]);
         // Build the shifted machining beside the old one so a refusal leaves the panel untouched.
         let mut machining = self.machining.clone();
         let shift = [
@@ -581,7 +576,7 @@ impl Panel {
             cutout.set_shape(shape);
         }
         self.placement = placement;
-        self.pivot = pivot;
+        self.pivot = Pivot::ZERO;
         self.machining = machining;
         Ok(())
     }
@@ -1029,35 +1024,86 @@ mod tests {
         let contour = rectangle_contour(700, 500);
         let panel_id = Id::new(2).expect("id");
         let placement = Placement::new(DVec3::new(100.0, 20.0, 30.0), DQuat::from_rotation_z(0.25)).expect("placement");
-        let panel =
-            Panel::new_contour(panel_id, "Shelf", contour, None, sample_thickness(), placement).expect("contour panel");
+        let panel = Panel::new_contour(panel_id, "Shelf", contour.clone(), None, sample_thickness(), placement)
+            .expect("contour panel");
         let root = Container::new(Id::new(1).expect("id"), "Root", Placement::IDENTITY, vec![panel.into()]);
         let mut project = Project::new(root).expect("valid project");
-        let pivot = Pivot::new(millimetres(350), millimetres(250), Length::ZERO);
-        project.set_node_pivot(panel_id, pivot).expect("pivot");
-        let before_world = project.world_placement(panel_id).expect("world placement");
-        let before_pivot = project.pivot_world(panel_id).expect("world pivot");
+        let cutout_rect =
+            PanelRect::new(millimetres(10), millimetres(10), millimetres(100), millimetres(50)).expect("rect");
+        project
+            .add_cutout(panel_id, CutoutShape::Rectangle(cutout_rect), CutoutDepth::Through, FaceSide::A)
+            .expect("cutout");
 
-        let moved = rectangle_contour(800, 600)
-            .translated([millimetres(-100), millimetres(-50)])
-            .expect("move the ring past the old zero");
-        project.set_panel_outline(panel_id, moved).expect("replace the outline");
+        let before_world = project.world_placement(panel_id).expect("world placement");
+        let before_cutout = cutout_world_corners(cutout_rect, before_world);
+
+        // The user edits the ring in the panel's current frame: the ring grows past its old zero, so
+        // its minimum corner lands at (-100, -50) and the panel must re-anchor there.
+        let edited = ring(-100, -50, 800, 600);
+        let input_points = edited.sampled_points(1_000.0).expect("sampled points");
+        let input_world: Vec<DVec3> = input_points
+            .iter()
+            .map(|point| {
+                before_world.transform_point(DVec3::new(point[0].millimetres_f64(), point[1].millimetres_f64(), 0.0))
+            })
+            .collect();
+        let min = [-100.0, -50.0];
+        let new_base = before_world.transform_point(DVec3::new(min[0], min[1], 0.0));
+        project.set_panel_outline(panel_id, edited).expect("replace the outline");
 
         let panel = project.panel(panel_id).expect("panel");
         let ring = panel.outline_contour().expect("ring");
         assert_eq!(ring.bounds_micrometres().0, [0, 0], "the ring is anchored at the panel zero");
         assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(800), millimetres(600)).expect("new size"));
-        assert_eq!(
-            panel.pivot().components(),
-            [millimetres(450), millimetres(300), Length::ZERO],
-            "the pivot follows the frame so it stays in the same world place"
-        );
+        assert!(panel.pivot().is_zero(), "a panel's pivot is derived and always its base corner");
         let after_world = project.world_placement(panel_id).expect("world placement");
-        let old_zero = before_world.transform_point(DVec3::ZERO);
-        let new_zero = after_world.transform_point(DVec3::new(100.0, 50.0, 0.0));
-        assert!((old_zero - new_zero).length() < 1.0e-9, "the old zero corner stays in place");
+        assert!(
+            (after_world.translation() - new_base).length() < 1.0e-9,
+            "the translation is the world position of the new base corner: {:?} vs {new_base:?}",
+            after_world.translation()
+        );
+        assert!((after_world.rotation() - before_world.rotation()).length() < 1.0e-9, "the turn is untouched");
         let after_pivot = project.pivot_world(panel_id).expect("world pivot");
-        assert!((before_pivot - after_pivot).length() < 1.0e-9, "the pivot stays in place");
+        assert!((after_pivot - new_base).length() < 1.0e-9, "the world pivot is the world base corner");
+        let old_zero = after_world.transform_point(DVec3::new(100.0, 50.0, 0.0));
+        assert!((old_zero - before_world.translation()).length() < 1.0e-9, "the old zero corner keeps its world place");
+
+        // Every point the user drew keeps its world position after the re-anchoring.
+        let after_points = ring.sampled_points(1_000.0).expect("sampled points");
+        assert_eq!(input_world.len(), after_points.len());
+        for expected_world in &input_world {
+            let closest = after_points
+                .iter()
+                .map(|point| {
+                    let world = after_world.transform_point(DVec3::new(
+                        point[0].millimetres_f64(),
+                        point[1].millimetres_f64(),
+                        0.0,
+                    ));
+                    (*expected_world - world).length()
+                })
+                .fold(f64::INFINITY, f64::min);
+            assert!(closest < 1.0e-6, "a world vertex moved by {closest} mm at {expected_world:?}");
+        }
+        let moved_rect = project.panel(panel_id).expect("panel").machining()[0].cutout().expect("cutout").shape();
+        let CutoutShape::Rectangle(moved_rect) = moved_rect else {
+            panic!("the cutout stayed a rectangle");
+        };
+        let after_cutout = cutout_world_corners(*moved_rect, after_world);
+        for (before, after) in before_cutout.iter().zip(&after_cutout) {
+            assert!((*before - *after).length() < 1.0e-6, "a machining point moved: {before:?} -> {after:?}");
+        }
+    }
+
+    fn cutout_world_corners(rect: PanelRect, placement: Placement) -> Vec<DVec3> {
+        let x = rect.x().millimetres_f64();
+        let y = rect.y().millimetres_f64();
+        let width = rect.width().millimetres_f64();
+        let height = rect.height().millimetres_f64();
+        [[x, y], [x + width, y], [x + width, y + height], [x, y + height]]
+            .iter()
+            .map(|point| placement.transform_point(DVec3::new(point[0], point[1], 0.0)))
+            .collect()
     }
 
     #[test]

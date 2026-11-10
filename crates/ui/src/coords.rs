@@ -70,36 +70,37 @@ mod tests {
 
     #[test]
     fn the_world_pivot_follows_a_local_pivot_move() {
-        let (mut session, front) = turned_session();
+        let (mut session, _front) = turned_session();
+        let drawer = Id::new(3).expect("drawer id");
         let pivot = Pivot::new(
             Length::from_micrometres(1_500),
             Length::from_micrometres(-2_500),
             Length::from_micrometres(3_000),
         );
-        let params = serde_json::to_value(furnicraft_engine::NodePivotSet { node: front, pivot }).expect("params");
+        let params = serde_json::to_value(furnicraft_engine::NodePivotSet { node: drawer, pivot }).expect("params");
         session.dispatch(furnicraft_engine::node_cmds::NODE_PIVOT_SET_ID, &params).expect("set pivot");
 
-        assert_eq!(world_pivot(session.project(), front).as_deref(), Some("102.5 mm  11.5 mm  3 mm"));
+        assert_eq!(world_pivot(session.project(), drawer).as_deref(), Some("102.5 mm  1.5 mm  3 mm"));
     }
 
     #[test]
     fn a_turn_about_the_pivot_keeps_the_world_pivot_and_moves_the_world_position() {
-        let (mut session, front) = turned_session();
+        let (mut session, _front) = turned_session();
+        let drawer = Id::new(3).expect("drawer id");
         let pivot = Pivot::new(
             Length::from_micrometres(1_500),
             Length::from_micrometres(-2_500),
             Length::from_micrometres(3_000),
         );
-        let params = serde_json::to_value(furnicraft_engine::NodePivotSet { node: front, pivot }).expect("params");
+        let params = serde_json::to_value(furnicraft_engine::NodePivotSet { node: drawer, pivot }).expect("params");
         session.dispatch(furnicraft_engine::node_cmds::NODE_PIVOT_SET_ID, &params).expect("set pivot");
 
-        // A 90° world turn about the pivot, expressed in the parent frame: the same placement the
-        // rotate gizmo would dispatch. The parent already turns 90°, so the local turn is 90° too.
-        let quarter = std::f64::consts::FRAC_PI_4;
-        set(&mut session, front, placement([9.0, -4.0, 0.0], [0.0, 0.0, quarter.sin(), quarter.cos()]));
+        // A further 90° turn about the pivot, expressed in the parent frame: the same placement the
+        // rotate gizmo would dispatch. The drawer already turns 90°, so the composed turn is 180°.
+        set(&mut session, drawer, placement([104.0, -1.0, 0.0], [0.0, 0.0, 1.0, 0.0]));
 
-        assert_eq!(world_pivot(session.project(), front).as_deref(), Some("102.5 mm  11.5 mm  3 mm"));
-        assert_eq!(world_position(session.project(), front).as_deref(), Some("104 mm  9 mm  0 mm"));
+        assert_eq!(world_pivot(session.project(), drawer).as_deref(), Some("102.5 mm  1.5 mm  3 mm"));
+        assert_eq!(world_position(session.project(), drawer).as_deref(), Some("104 mm  -1 mm  0 mm"));
     }
 
     #[test]

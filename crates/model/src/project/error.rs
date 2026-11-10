@@ -174,10 +174,16 @@ pub enum ProjectError {
         /// The panel that was asked.
         id: Id,
     },
-    /// A contour edit moves the panel frame beyond what the placement or pivot can represent.
+    /// A contour edit moves the panel frame beyond what the placement can represent.
     #[error("the frame of panel {panel} cannot follow its new outline")]
     PanelOutlineFrame {
         /// The panel whose frame could not move.
+        panel: Id,
+    },
+    /// A panel's pivot is derived from its base corner, so it cannot be authored.
+    #[error("panel {panel} is anchored at its base corner, so its pivot is derived and cannot be set")]
+    PanelPivotIsDerived {
+        /// The panel whose pivot was asked for.
         panel: Id,
     },
     /// A new node's content cannot be anchored at the frame its creation asks for.
