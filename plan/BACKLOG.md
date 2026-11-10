@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
-  D1, D2, B8, H2, H4.
-  Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
-  `arc_with_radius`, `arc_between`, `arc_midpoint`, projection (`clamp_to_curve`) and split
-  (`split_document`), although `geom` has `Arc::with_start_point`, `with_end_point`, `split_at`,
-  `Line::split_at`, `nearest_on_support` and `from_endpoints_sagitta` (F3); `model/contour.rs` still
-  calls itself the only place a segment becomes millimetres.
-  Shape: the arc-from-radius, arc-between, projection and split maths become free functions beside the
-  segments in `crates/geom/src/segment.rs`, each taking its tolerance as an argument (D2);
-  `contour_edit.rs` keeps the `Length`/`Degrees` conversion at the call and computes nothing
-  (conversions 27 -> ~8), 1572 -> ~1280. The `model/contour.rs` header states that the document
-  converts once at its edge and that the maths lives in `geom`.
-  Done: every contour-edit test passes unchanged; if a test disagrees with the `geom` formula, stop and
-  file an `X` task instead of bending the test (§12); `cargo test -p furnicraft-model -p furnicraft-geom`.
-  Commits: one move.
-  `files: crates/model/src/contour_edit.rs, crates/geom/src/contour.rs`
-
 - `[ ]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
   Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
   a corner of any ring (`CornerMove`, `move_corner*`, trim and split, `PathCorner`) and the constrained
@@ -369,6 +352,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
+  D1, D2, B8, H2, H4.
+  Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
+  `arc_with_radius`, `arc_between`, `arc_midpoint`, projection (`clamp_to_curve`) and split
+  (`split_document`), although `geom` has `Arc::with_start_point`, `with_end_point`, `split_at`,
+  `Line::split_at`, `nearest_on_support` and `from_endpoints_sagitta` (F3); `model/contour.rs` still
+  calls itself the only place a segment becomes millimetres.
+  Shape: the arc-from-radius, arc-between, projection and split maths become free functions beside the
+  segments in `crates/geom/src/segment.rs`, each taking its tolerance as an argument (D2);
+  `contour_edit.rs` keeps the `Length`/`Degrees` conversion at the call and computes nothing
+  (conversions 27 -> ~8), 1572 -> ~1280. The `model/contour.rs` header states that the document
+  converts once at its edge and that the maths lives in `geom`.
+  Done: every contour-edit test passes unchanged; if a test disagrees with the `geom` formula, stop and
+  file an `X` task instead of bending the test (§12); `cargo test -p furnicraft-model -p furnicraft-geom`.
+  Commits: one move.
+  Measured: `geom/segment.rs` grew 701 -> 875 production lines and holds `Arc::with_radius_through`,
+  `Arc::through_ends`, `Arc::sweep_to`, `Arc::midpoint`, `Segment::clamp_to_extent`,
+  `Segment::support_point_within` and `point_on_circle`; `contour_edit.rs` drops 1571 -> 1481 and keeps
+  no cos, sin or split trigonometry. The conversion target was optimistic: 25 -> 21
+  `millimetres_f64`/`radians_f64`, and the 21 that remain are all the document edge §4.3 requires (the
+  rectangle half-extents, a length ratio, the radius argument of an arc rebuild, `geometry_arc`). The
+  339 model and 97 geom tests pass unchanged; the move exposed X31 and did not fix it.
+  `[x]` `392ebff`
+  `files: crates/model/src/contour_edit.rs, crates/geom/src/segment.rs`
 
 - `[x]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
   Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
