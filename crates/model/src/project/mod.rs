@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 mod camera_light_cmds;
 mod error;
+#[cfg(test)]
+mod frame_contract;
 mod node_cmds;
 mod object_cmds;
 mod panel_cmds;
