@@ -25,6 +25,119 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` hands
+  `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
+  to the parent, so an armed container that is moved or turned puts the cube somewhere else.
+  Expectation: the editor converts the placement with the parent's inverse exactly as X24 does, and
+  `object.primitive.create` keeps its mesh centred with a zero pivot, so the primitive's translation is
+  the parent-frame position of the clicked point. Tests: the same click at the root and inside a
+  rotated, moved container puts the primitive on the pointer; its pivot is zero, its mesh bounds are
+  symmetric about the local zero, and the document changes once.
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/gizmo_math.rs, crates/engine/src/object_cmds.rs`
+
+- `[ ]` **X26** a panel is anchored at its base corner: a panel is a parametric entity, not a mesh —
+  the core draws a closed contour, extrudes the thickness and then explicitly re-anchors the frame with
+  `rebase_at_anchor(BBoxBaseCorner)`, so the local zero *is* the base corner (min-X/min-Y for a
+  rectangle, the chosen bbox corner for any other ring), `pivot_local = 0`, and `translation` is the
+  parent-frame position of that corner. This is the owner's exception to "a closed body pivots at its
+  bounds centre", not to "the local zero is the pivot" (ADR 0083). `add_panel_contour` today subtracts
+  the ring's minimum corner when it anchors the outline but never adds it back to the placement, so a
+  panel made from a scene contour moves; it is rebased instead, and `panel.contour.create` places the
+  panel over its source: the source's world placement converted into the target parent's frame, with
+  `params.placement` composed on top as a parent-frame offset (identity means "exactly over the
+  source"). Machining, banding and the nominal rectangle keep their panel-local frame. Tests: a new
+  rectangle panel is at the parent origin with a zero pivot; a ring panel's world vertices equal the
+  source contour's and its pivot sits at the bbox base corner; a ring whose bounds do not start at zero
+  is anchored without moving a world point; a nested parent and a rotated panel placement both keep the
+  world corner equal to `world_placement ∘ (0, 0, 0)`; one undo entry.
+  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/engine/src/panel_cmds.rs`
+
+- `[ ]` **X27** the inspector tells the local and the world truth: the Transform card's X/Y/Z is the
+  placement *relative to the parent* and the Pivot card's X/Y/Z is the pivot in the node's own frame,
+  so at a nested node nothing on screen says where the node is in the world or what point the gizmo
+  turns about, and there is no way to zero a nested node's translation. Expectation: the editable
+  fields are labelled `Translation (local to <parent>)`, a read-only `World position` row reads
+  `project.world_placement`, the Pivot card adds a read-only `Pivot (world)` from `pivot_world`, and a
+  new `node.placement.world_zero` command sets `translation` to zero in the parent frame, keeping the
+  rotation (the owner split a rotation reset into its own future command); at the root that is the
+  world origin, inside a container the read-only row shows the parent's origin. For a panel the pivot
+  fields are read-only: `Local pivot = 0` with the note "base corner" and `Pivot (world) = World
+  position`, because the pivot is derived from the geometry, not authored. The card never computes a
+  world value itself. Tests: the world rows match `world_placement`/`pivot_world` after a gizmo move
+  and a rotation about the pivot; world-zero on a root node and on a node inside a rotated parent
+  leaves the world rotation composed exactly as before, leaves vertices and `pivot_local`
+  bit-identical and is one undo entry; a panel's pivot fields cannot be edited; the command is in the
+  registry and refuses the root.
+  `files: crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/engine/src/node_cmds.rs`
+
+- `[ ]` **X28** old scenes migrate to the canonical frame: schema 20 (owner's decision, 2026-11-10;
+  the debt note that reserved 20 for explicit arc endpoints moves to 21) adds one load migration that
+  runs for every document saved at 19 or older and preserves the world shape. An object re-anchors on
+  its stored pivot (`translation += rotation * pivot_local`, geometry moves by `-pivot_local`,
+  `pivot_local = 0`); a panel keeps its translation and drops an authored pivot to zero, because its
+  local zero already is the base corner; a container re-anchors on the centre of its children's bounds
+  (`translation += rotation * centre`, every child moves by `-centre`, `pivot_local = 0`), the owner's
+  group rule, which for an untouched container equals the general rule. `Primitive` payloads are left
+  alone: their geometry is already centred and a stored pivot is a handle, not a frame. The migration is one
+  pass over the tree that validates as it goes; a refused value names the node instead of
+  half-migrating the file. The blocking test loads a version 19 document with a drawn path, an
+  extrusion, a nested group with its own pivot, a group inside a rotated parent and a panel with an
+  authored pivot, and asserts every world vertex is unchanged and every world pivot is unchanged
+  except a panel's, which becomes the new base corner; translations became the old anchor and every
+  pivot is zero. A round trip at 20 changes nothing, and the version 7–18 goldens still load and
+  migrate once. Open edge recorded in `plan/questions.md`: a flat `Path`/`Constructive` whose stored
+  pivot has a non-zero Z cannot satisfy both the world-preservation test and the new "flat pivot is
+  zero" rule; the owner's ruling decides whether the handle is clamped, the file refused, or the case
+  kept as legacy.
+  `files: crates/model/src/project/wire.rs, crates/model/src/project/mod.rs, plan/debt.md`
+
+- `[ ]` **X29** a group is anchored at its bounds centre: `group_nodes` builds the container with an
+  identity placement while `Container::new` puts the pivot at the centre of the children's bounds, so
+  the card shows `Translation (0, 0, 0)` while the pivot sits in the middle of the group — the same
+  class of defect as a drawing's frame, and a nested group compounds it. Expectation: grouping
+  re-anchors with `rebase_at_anchor(CenterOfBounds)` — the new container's translation is the
+  parent-frame centre of the children's union, every child placement moves by `-centre`,
+  `pivot_local = 0`, and the children's world transforms do not change. `Container::new` stops
+  inventing a pivot (a new container is born at zero), so no caller gets a hidden centre; the
+  pre-schema-6 migration keeps `default_container_pivot` and X28 re-normalizes what it writes. Tests:
+  a group of two panels keeps their world bounds and reports the centre as its translation; a group
+  inside a rotated container keeps world positions and the parent-frame centre; a group of objects and
+  panels uses the same union; no child's rotation changes; one undo entry.
+  `files: crates/model/src/project/node_cmds.rs, crates/model/src/container.rs, crates/model/src/tree.rs`
+
+- `[ ]` **X30** a panel's frame follows its parameters, its pivot does not: `move_frame_to` keeps the
+  world shape when a contour edit moves the ring's minimum corner, but it also shifts the pivot by
+  `-min`, so the pivot drifts off the base corner — and the inspector still lets every node author a
+  pivot, including a panel. Expectation: a panel's pivot is derived data. Changing `set_panel_outline`,
+  resizing, replacing the contour or baking a rectangle into a ring recomputes the bbox, anchors the
+  outline at zero and compensates `translation` so the frame's corner keeps its world position, then
+  sets `pivot_local = 0`; machining and banding shift with the outline exactly as they do now.
+  `set_node_pivot`/`center_node_pivot` refuse a panel with a readable error, `move_mesh_vertices`
+  already refuses a node that is not an object, and a test pins that no vertex edit reaches a panel;
+  ADR 0083 states the rule. Tests: an outline edit that moves the minimum corner leaves every world
+  vertex and every machining point where it was, `translation` becomes the new world base corner and
+  `pivot_local` is zero; a resize leaves the translation alone because the minimum corner does not
+  move; a panel made by `panel.contour.create` survives a later outline edit; `node.pivot.set` and
+  `node.pivot.center` on a panel return the new error and change nothing; a schema 20 document whose
+  panel carries a non-zero pivot is a readable load error.
+  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/mod.rs`
+
+- `[ ]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
+  one by one become one test module, and the documents stop describing the old behaviour. Tests: for
+  every creation path (line, polyline, arc, rectangle, circle, polygon, contour, extrusion, primitive,
+  panel, group, duplicate) the local zero is the creation anchor and `pivot_local` is zero;
+  `vertex_world = translation + rotation * vertex_local` and
+  `pivot_world = translation + rotation * pivot_local` for every payload; a geometry edit changes no
+  component of `translation`, `rotation` or `pivot_local`; a move changes only `translation`; a turn
+  about a pivot keeps `pivot_world`; world-zero keeps vertices, pivot and rotation; duplicate copies
+  local fields exactly; undo/redo restores the frame bit for bit; a round trip at 20 keeps every
+  invariant, and a version 19 file loads with its world unchanged. Docs: ADR 0082 and 0083 (written
+  with S5 and X26) are checked against the code, ADRs 0009, 0026, 0052 and 0058 are corrected,
+  `PROJECT.md` §"Space and views", `AGENTS.md` §4.10 and the `plan/map.md` rows for the frame, the
+  panel and the inspector are updated. Two commits: the invariants with any fix they force, then the
+  documents and `cargo xtask ci`.
+  `files: crates/model/src/project/mod.rs, docs/decisions, PROJECT.md, plan/map.md, AGENTS.md`
+
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -207,6 +320,66 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X24** a drawing is born at its own zero: a line drawn at (600, 400) stores
+  `translation = (0, 0, 0)` and puts (600, 400) into `pivot_local`, so the card honestly reports a
+  translation of zero and the node cannot be moved to the world origin by its translation; a drawing
+  made inside a moved or rotated container lands somewhere else, because the editor passes the work
+  plane's *world* placement where the command expects a placement *relative to the parent*.
+  Expectation: `object.path.create` and `object.extrude.create` rebase the figure with
+  `rebase_at_anchor(CreationPivot)` and store `Pivot::ZERO`, so an open line's local zero is its first
+  point, a closed ring's is its bounds centre, and every world point stays on the clicked point; the
+  editor converts the one world placement the shell hands it into the target parent's frame with
+  `Placement::inverse(parent_world)` in `commit_drawing`. `object.path.extrude` turns a node into a
+  body in place and leaves its frame alone. The command docs that call the path "local" and the
+  `add_object_with_pivot` doc are corrected here; the ADRs that describe the old behaviour are
+  rewritten in S6. Tests: a line at (600, 400) has its first point in `translation`, zero in
+  `pivot_local` and vertices around zero; a closed rectangle has its bounds centre in `translation`; a
+  figure drawn into a rotated, moved container has `world_placement ∘ vertices_local` on the clicked
+  points and a parent-frame `translation`; extrusion keeps the frame of the path it grew from; each
+  creation is one undo entry.
+  `617a973`
+  `files: crates/engine/src/object_cmds.rs, crates/model/src/project/object_cmds.rs, crates/ui/src/lib.rs`
+
+- `[x]` **S5** one operation chooses a node's frame: a new `crates/model/src/frame.rs` holds
+  `rebase_at_anchor(strategy)` and the three strategies the owner approved — `CreationPivot` (an open
+  chain's first point, a closed ring's bounds centre), `BBoxBaseCorner` (the local min-X/min-Y corner,
+  or a named corner on request) and `CenterOfBounds` (the centre of a group's children). One rule with
+  a small adapter per content kind (a `Path`, a `Contour`, a container's children): move the content by
+  `-anchor`, keep the rotation, set the translation to where the anchor was, and leave the pivot at
+  zero. `Path::translated([Length; 2])` mirrors `Contour::translated` — both ends of a line move, an
+  arc moves by its centre, ids and angles stay — and `Placement::inverse` inverts a rigid frame (the
+  conjugate quaternion and `-R⁻¹t`), so `inverse(parent) ∘ world` is the parent-frame placement of a
+  world frame; it is the missing half of the existing `Placement::compose`.
+  No command calls the new code in this step, so nothing visible moves. Tests: an open chain anchored
+  at its first point and a closed ring at its bounds centre keep every world point within a
+  micrometre; a rebased contour keeps its segment ids, centres and angles; `inverse` round-trips
+  through `compose` and maps a world point back to its local one under a rotated parent;
+  `BBoxBaseCorner` answers min-X/min-Y by default and a named corner on request; `CenterOfBounds` of
+  mixed panels and objects is the centre of their union. ADR 0082 records the strategies and the rule
+  that a frame is chosen only at creation.
+  `d6a09a5`
+  `files: crates/model/src, crates/model/src/placement.rs, crates/model/src/contour.rs`
+
+- `[x]` **X23** the ribbon's *Close* leaves the ring a draft: a polyline closed from the floating
+  tool strip becomes a ring on screen but is never committed, so the closed chain stays a draft with
+  the last rubber band still pointing at the strip and the document never learns about the figure
+  (observed 2026-11-10; the status bar's *Close* and a click on the first point do commit).
+  Expectation: closing is one operation — close, then commit — whichever entry point asked for it
+  (ADR 0052: "*Close* closes and commits in one step"). Suspected cause: `Editor::close_drawing` is a
+  public primitive that only closes; the pair is written out by hand in the status bar, inferred from
+  `is_finished` for a click in the viewport, and forgotten by `ToolAction::CloseDrawing`, while the
+  gizmo keeps its cached preview because a closed draft's `preview` answers `Ok(None)`. Fix: one
+  shell method `close_draft` owns close+commit, the ribbon and the status bar call it, the gizmo
+  reports a close instead of performing it, and `Editor::close_and_commit_drawing` reopens the ring
+  when the commit refuses it. The floating strip also leaves a band of itself hoverable, so the rubber
+  band can follow the pointer onto the toolbar: the strip blocks the pointer over its whole
+  rectangle. Tests: the ribbon reports the close and writes nothing; `close_and_commit_drawing`
+  closes and commits as one undo entry and a refused close changes nothing; a closed draft drops the
+  cached preview; a pointer over the strip band does not hover the viewport behind it. ADR 0052
+  already decides the behaviour, so this adds no record.
+  `ed0e8af`
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/draw_gizmo.rs, crates/ui/src/lib.rs, crates/ui/src/toolbars.rs`
 
 - `[x]` **U51** the toolbars float over the design space: the ribbon is an `Order::Middle` overlay
   anchored to the window below the header instead of a top panel, so the scene image runs under it,

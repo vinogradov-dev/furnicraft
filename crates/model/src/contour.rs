@@ -1265,6 +1265,58 @@ mod tests {
     }
 
     #[test]
+    fn a_translated_path_moves_every_point_and_keeps_its_ids_shape_and_angles() {
+        let rectangle =
+            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let offset = [Length::from_micrometres(600_000), Length::from_micrometres(-400_000)];
+
+        let moved = rectangle.translated(offset).expect("a moved rectangle");
+
+        assert_eq!(moved.shape(), Some(PathShape::Rectangle), "a moved rectangle is still a rectangle");
+        assert_eq!(moved.next_segment_id(), rectangle.next_segment_id(), "the id counter travels");
+        assert_eq!(moved.bounds_micrometres(), ([600_000, -400_000], [700_000, -350_000]));
+        for (before, after) in rectangle.entries().iter().zip(moved.entries()) {
+            assert_eq!(before.id(), after.id());
+            let start = before.segment().start().expect("a start");
+            assert_eq!(after.segment().start().expect("a start"), translate_point(start, offset).expect("moved"));
+            let end = before.segment().end().expect("an end");
+            assert_eq!(after.segment().end().expect("an end"), translate_point(end, offset).expect("moved"));
+        }
+
+        let arc = Path::arc_from_center(
+            [millimetres(0), millimetres(0)],
+            [millimetres(50), millimetres(0)],
+            [millimetres(0), millimetres(50)],
+        )
+        .expect("a quarter arc");
+        let moved_arc = arc.translated(offset).expect("a moved arc");
+        let ContourSegment::Arc { center, radius, start_angle, sweep } = moved_arc.entries()[0].segment() else {
+            panic!("an arc stays an arc");
+        };
+        assert_eq!(center, offset, "an arc moves by its centre");
+        assert_eq!(radius, millimetres(50));
+        assert_eq!(start_angle, Degrees::from_millidegrees(0));
+        assert_eq!(sweep, Degrees::from_millidegrees(90_000));
+    }
+
+    #[test]
+    fn a_translation_that_leaves_the_coordinate_range_is_an_error() {
+        let arc = Path::arc_from_center(
+            [millimetres(0), millimetres(0)],
+            [millimetres(50), millimetres(0)],
+            [millimetres(0), millimetres(50)],
+        )
+        .expect("a quarter arc");
+        assert_eq!(
+            arc.translated([Length::from_micrometres(i64::MAX), Length::ZERO]),
+            Err(PathError::Segment(ContourSegmentError::CoordinateOutOfRange {
+                point: Length::from_micrometres(i64::MAX),
+                max: MAX_CONTOUR_COORDINATE,
+            }))
+        );
+    }
+
+    #[test]
     fn a_circle_through_three_points_is_the_circumcircle() {
         let path = Path::circle_three_points(
             [millimetres(0), millimetres(0)],
@@ -2664,6 +2716,30 @@ impl Path {
     /// area by itself, so these are the extents of the drawing in the local XY plane.
     pub fn bounds_micrometres(&self) -> ([i64; 2], [i64; 2]) {
         entries_bounds_micrometres(&self.entries)
+    }
+
+    /// The same chain moved by a whole-micrometre offset in its own plane.
+    ///
+    /// This is the flat half of re-anchoring a created drawing: ids, the open/closed flag and the
+    /// shape tag travel with the segments, because a moved rectangle is still a rectangle, and both
+    /// ends of a line move while an arc moves by its centre with its radius and angles unchanged. It
+    /// mirrors [`Contour::translated`], so one creation offset re-anchors either kind. The offset is
+    /// applied with [`i64::checked_add`], so a hostile value is an error rather than a wrapped
+    /// coordinate.
+    pub fn translated(&self, offset: [Length; 2]) -> Result<Self, PathError> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            let segment = match entry.segment() {
+                ContourSegment::Line { start, end } => {
+                    ContourSegment::line(translate_point(start, offset)?, translate_point(end, offset)?)?
+                }
+                ContourSegment::Arc { center, radius, start_angle, sweep } => {
+                    ContourSegment::arc(translate_point(center, offset)?, radius, start_angle, sweep)?
+                }
+            };
+            entries.push(ContourSegmentEntry::new(entry.id(), segment));
+        }
+        self.rebuild(entries)
     }
 
     /// The pivot a newly created drawing takes: the centre of a closed chain, or its first point.

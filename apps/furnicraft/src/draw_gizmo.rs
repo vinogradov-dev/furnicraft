@@ -60,6 +60,21 @@ enum DrawClick {
     Ignore,
 }
 
+/// What one pointer frame of the drawing tool did.
+///
+/// The gizmo never closes a draft itself: closing owns the work plane and the commit, both the
+/// shell's (ADR 0052), so a close is reported and the caller runs the one close path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DrawAction {
+    /// The click changed nothing.
+    #[default]
+    Nothing,
+    /// The click added a point or armed an arc.
+    Point,
+    /// The click landed on the chain's first point and asks for the ring to be closed.
+    Close,
+}
+
 /// How the live pointer is snapped to the work plane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SnapSettings {
@@ -137,7 +152,15 @@ impl DrawGizmo {
                 self.preview = Some(path);
                 self.preview_error = None;
             }
-            Ok(None) => self.preview_error = None,
+            Ok(None) => {
+                self.preview_error = None;
+                // A closed draft takes no next point, so the shape under the pointer is not a shape
+                // this click would make: keeping it leaves a phantom segment on screen after the
+                // ring has been closed through the chrome.
+                if draft.is_closed() {
+                    self.preview = None;
+                }
+            }
             Err(error) => self.preview_error = Some(error.to_string()),
         }
     }
@@ -165,13 +188,12 @@ impl DrawGizmo {
 
     /// Applies the pointer to the live draft.
     ///
-    /// A click appends the snapped point, or closes a polyline when the point is its first one. The
-    /// gizmo owns the left button while the tool is live: the transform gizmos are hidden by the
-    /// caller, and `pointer_over_widget` keeps the corner orientation widget usable. Returns whether
-    /// the point was accepted, which lets the caller commit a finished tool.
+    /// A click appends the snapped point, or asks for a polyline to close when the point is its
+    /// first one. The gizmo owns the left button while the tool is live: the transform gizmos are
+    /// hidden by the caller, and `pointer_over_widget` keeps the corner orientation widget usable.
     ///
-    /// Clicking a point that would close the chain is [`DrawClick::Close`] and the caller commits;
-    /// clicking a fixed tool's last point does nothing.
+    /// The returned [`DrawAction`] says what happened, which lets the caller commit a finished fixed
+    /// tool and run the one close path for a ring. Clicking a fixed tool's last point does nothing.
     pub(crate) fn update(
         &mut self,
         response: &egui::Response,
@@ -180,16 +202,16 @@ impl DrawGizmo {
         editor: &mut Editor,
         pointer_over_widget: bool,
         modifiers: DrawModifiers,
-    ) -> Result<bool, String> {
+    ) -> Result<DrawAction, String> {
         let Some(draft) = editor.drawing().cloned() else {
             self.reset();
-            return Ok(false);
+            return Ok(DrawAction::Nothing);
         };
         let plane = *self.plane.get_or_insert_with(|| WorkPlane::from_camera(camera));
         let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
         let Some(pointer) = pointer else {
             self.hover = None;
-            return Ok(false);
+            return Ok(DrawAction::Nothing);
         };
         let Some(outcome) = snap_cursor(
             &draft,
@@ -200,36 +222,37 @@ impl DrawGizmo {
             SnapSettings { grid: self.grid, axis_lock: modifiers.axis_lock, ignore_snaps: modifiers.ignore_snaps },
         ) else {
             self.hover = None;
-            return Ok(false);
+            return Ok(DrawAction::Nothing);
         };
         self.hover = Some(outcome);
         self.refresh_preview(&draft, outcome.point);
 
         // A click that the orientation widget owns must not also place a point.
         if pointer_over_widget || !response.clicked_by(egui::PointerButton::Primary) {
-            return Ok(false);
+            return Ok(DrawAction::Nothing);
         }
-        let accepted = match click_action(&draft, outcome.point) {
+        let action = match click_action(&draft, outcome.point) {
             DrawClick::Append(point) => {
                 editor.drawing_point(point).map_err(|error| error.to_string())?;
-                true
+                DrawAction::Point
             }
             DrawClick::StartArc(point) => {
                 editor.drawing_arc_through(point).map_err(|error| error.to_string())?;
-                true
+                DrawAction::Point
             }
-            DrawClick::Close => {
-                editor.close_drawing().map_err(|error| error.to_string())?;
-                true
-            }
-            DrawClick::Ignore => false,
+            // The ring is closed by the caller: one close path serves the viewport, the ribbon and
+            // the status bar, and it commits in the same step (ADR 0052).
+            DrawClick::Close => DrawAction::Close,
+            DrawClick::Ignore => DrawAction::Nothing,
         };
-        if accepted && let Some(draft) = editor.drawing() {
+        if matches!(action, DrawAction::Point)
+            && let Some(draft) = editor.drawing()
+        {
             // The click moved the chain, so the preview belongs to the new state under the same
             // pointer rather than to the state before it.
             self.refresh_preview(draft, outcome.point);
         }
-        Ok(accepted)
+        Ok(action)
     }
 
     /// Paints the placed chain, the preview, the points, the snap marker and the live size.
@@ -632,6 +655,27 @@ mod tests {
         assert_eq!(draft.preview(next), Ok(None), "the pointer adds nothing on the stored end");
         assert!(gizmo.preview().is_some(), "the last valid preview survives the click");
         assert_eq!(gizmo.preview_error(), None);
+    }
+
+    #[test]
+    fn closing_the_draft_drops_the_preview() {
+        // Closed through the chrome, the ring takes no next point, so the segment the pointer
+        // previewed is not a segment this click would make: keeping it left a phantom line on screen
+        // after the user finished the figure (X23).
+        let mut draft = DrawDraft::new(DrawTool::Polyline);
+        draft.push([millimetres(0), millimetres(0)]).expect("start");
+        draft.push([millimetres(600), millimetres(0)]).expect("bottom");
+        draft.push([millimetres(600), millimetres(400)]).expect("right");
+        let mut gizmo = DrawGizmo::new();
+        let next = [millimetres(0), millimetres(400)];
+        gizmo.refresh_preview(&draft, next);
+        assert!(gizmo.preview().is_some(), "an open chain previews the next segment");
+
+        draft.close().expect("the ring closes");
+        assert_eq!(draft.preview(next), Ok(None), "a closed draft previews nothing");
+        gizmo.refresh_preview(&draft, next);
+        assert!(gizmo.preview().is_none(), "the closed ring drops the segment it can never add");
+        assert_eq!(gizmo.preview_error(), None, "a closed draft is not an error");
     }
 
     #[test]

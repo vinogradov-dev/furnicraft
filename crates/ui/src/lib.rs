@@ -473,15 +473,18 @@ impl Editor {
     /// Commits the running draft as one path object and opens it for editing.
     ///
     /// The drawing lands in the armed container, or at the scene root like every other creation
-    /// tool, and is placed on `placement`, which maps the work plane onto the object's local XY. The
-    /// new node becomes the selection and immediately enters contour edit mode with its grips, so
-    /// the figure the user just drew can be reshaped without a second click. Escape or Enter leaves
-    /// that mode. A refused path leaves the draft and the selection untouched.
+    /// tool. `placement` is the work plane's *world* frame, the one the shell can measure; the
+    /// command stores a placement relative to the parent, so this converts it with the parent's
+    /// inverse first. The command then moves the chain so its creation pivot is the object's local
+    /// zero. The new node becomes the selection and immediately enters contour edit mode with its
+    /// grips, so the figure the user just drew can be reshaped without a second click. Escape or
+    /// Enter leaves that mode. A refused path leaves the draft and the selection untouched.
     pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
         };
         let parent = self.creation_target(session.project());
+        let placement = placement_in_parent(session.project(), parent, placement)?;
         let object = draft.commit(session, parent, placement)?;
         let tool = draft.tool();
         self.drawing = None;
@@ -495,9 +498,46 @@ impl Editor {
         Ok(DrawnPath { object, tool })
     }
 
+    /// Closes the running ring and commits it as one path object.
+    ///
+    /// This is the only operation behind *Close*, whichever surface asked for it: the ribbon, the
+    /// status bar and a click on the first draft point all end here (ADR 0052). Closing and
+    /// committing belong together, because a closed draft that never reached the document is a ring
+    /// the user already finished and cannot edit.
+    ///
+    /// A refused close changes nothing — the ring stays open and editable, and no command ran. A
+    /// close the document then refuses reopens the ring for the same reason: the user keeps the
+    /// shape they drew and can fix it without redrawing.
+    pub fn close_and_commit_drawing(
+        &mut self,
+        session: &mut Session,
+        placement: Placement,
+    ) -> Result<DrawnPath, String> {
+        self.close_drawing().map_err(|error| error.to_string())?;
+        match self.commit_drawing(session, placement) {
+            Ok(drawn) => Ok(drawn),
+            Err(error) => {
+                self.reopen_drawing();
+                Err(error)
+            }
+        }
+    }
+
     /// Closes the running draft back to its first point.
-    pub fn close_drawing(&mut self) -> Result<(), DrawDraftError> {
+    ///
+    /// A primitive that only closes: the one operation the chrome runs is
+    /// [`Self::close_and_commit_drawing`], so a closed draft cannot be left behind.
+    pub(crate) fn close_drawing(&mut self) -> Result<(), DrawDraftError> {
         self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.close()
+    }
+
+    /// Reopens a closed ring, so a refused commit leaves the drawing editable.
+    fn reopen_drawing(&mut self) {
+        if let Some(draft) = self.drawing.as_mut()
+            && draft.is_closed()
+        {
+            draft.undo();
+        }
     }
 
     /// Drops the running draft; the document never changed.
@@ -641,7 +681,9 @@ impl Editor {
     /// creation tool lands at the scene root unless a container was armed through an explicit entry
     /// (ADR 0056). The tool that owns the next click draws pressed, so the ribbon never hides what
     /// the pointer will do. The view actions it returns — frame all, the projection, the grid snap —
-    /// belong to the shell, which owns the view camera and the drawing gizmo.
+    /// belong to the shell, which owns the view camera and the drawing gizmo. So does the *Close* of
+    /// a draft: the ribbon reports it, because closing owns the work plane, the gizmo state and the
+    /// scene rebuild (ADR 0052).
     pub fn show_ribbon(
         &mut self,
         ui: &mut Ui,
@@ -649,7 +691,6 @@ impl Editor {
         view: toolbars::RibbonView,
     ) -> Result<toolbars::RibbonOutcome, String> {
         self.retain_creation_parent(session.project());
-        let target = self.creation_target(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
         let selected = self.selection.primary();
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
@@ -670,6 +711,20 @@ impl Editor {
         };
         let mut actions = Vec::new();
         toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        self.apply_ribbon_actions(session, actions)
+    }
+
+    /// Runs the actions one drawn ribbon asked for and reports what the shell must still do.
+    ///
+    /// Split from [`Self::show_ribbon`] so the mapping from a clicked tool to its effect is testable
+    /// without a window: the *Close* of a draft is reported as [`toolbars::RibbonOutcome::close_draft`]
+    /// rather than run, because only the shell owns the work plane and the gizmo state.
+    fn apply_ribbon_actions(
+        &mut self,
+        session: &mut Session,
+        actions: Vec<ToolAction>,
+    ) -> Result<toolbars::RibbonOutcome, String> {
+        let target = self.creation_target(session.project());
         let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
@@ -687,7 +742,7 @@ impl Editor {
                     outcome.extruded = Some((object, height));
                 }
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
-                ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
+                ToolAction::CloseDrawing => outcome.close_draft = true,
                 ToolAction::CancelDrawing => self.cancel_drawing(),
                 ToolAction::FrameAll => outcome.view = Some(toolbars::RibbonViewAction::FrameAll),
                 ToolAction::ToggleProjection => {
@@ -1057,6 +1112,19 @@ fn creation_target(project: &Project, armed: Option<Id>) -> Id {
     armed.filter(|id| *id != root && project.is_container(*id)).unwrap_or(root)
 }
 
+/// The same world placement expressed in `parent`'s frame.
+///
+/// The shell knows the work plane only in world space, while a command stores a placement relative
+/// to the parent container. `inverse(parent_world) ∘ world_placement` is that conversion, and the
+/// root's world placement is the identity, so a creation at the root is unchanged.
+fn placement_in_parent(project: &Project, parent: Id, world: Placement) -> Result<Placement, String> {
+    let parent_world = project
+        .world_placement(parent)
+        .ok_or_else(|| format!("the creation container {parent} is not in the scene"))?;
+    let parent_inverse = parent_world.inverse().map_err(|error| error.to_string())?;
+    Placement::compose(parent_inverse, world).map_err(|error| error.to_string())
+}
+
 /// The direct child of `container` whose subtree contains `node`.
 fn child_containing(project: &Project, container: Id, node: Id) -> Option<Id> {
     if node == container {
@@ -1091,10 +1159,11 @@ mod tests {
 
     use furnicraft_model::Contour;
     use furnicraft_model::{
-        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, FaceSide, Geometry,
-        MachiningAnchor, MachiningParams, Mesh, Panel, Placement,
+        Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, FaceSide, Geometry,
+        MachiningAnchor, MachiningParams, Mesh, Panel, Pivot, Placement,
     };
     use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
+    use furnicraft_units::Degrees;
 
     fn cube_project() -> (Project, Id) {
         let mut project = sample_project();
@@ -1483,14 +1552,59 @@ mod tests {
         assert!(!session.can_undo(), "the drawing was the only undo entry");
     }
 
+    #[test]
+    fn a_drawing_in_a_turned_container_is_stored_in_the_parents_frame() {
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let root = session.project().root().id();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        let parent_world = Placement::IDENTITY
+            .with_translation(mm(-320), mm(150), mm(700))
+            .expect("translation")
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
+            .expect("rotation");
+        let parent = create_assembly_placed_under(&mut session, root, "Frame", parent_world);
+
+        let mut editor = Editor::new();
+        assert!(editor.arm_creation(session.project(), parent), "the drawing lands in the container");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(600), mm(400)]).expect("first point");
+        editor.drawing_point([mm(700), mm(450)]).expect("second point");
+
+        let world = Placement::IDENTITY.with_translation(mm(200), mm(100), mm(900)).expect("the work plane");
+        let before = session.project().revision();
+        let drawn = editor.commit_drawing(&mut session, world).expect("commit into the container");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+        assert_eq!(session.project().parent_of(drawn.object), Some(parent), "the node lands in the armed container");
+
+        let object = session.project().object(drawn.object).expect("object");
+        assert!(!object.placement().same_transform(world), "the stored placement is relative to the turned parent");
+        let world_placement = session.project().world_placement(drawn.object).expect("world placement");
+        let clicked = Placement::IDENTITY.with_translation(mm(800), mm(500), mm(900)).expect("the clicked point");
+        assert!(
+            (world_placement.translation() - clicked.translation()).length() < 1e-9,
+            "the first clicked point is still on the pointer: {:?}",
+            world_placement.translation()
+        );
+        assert!(world_placement.rotation().dot(Placement::IDENTITY.rotation()).abs() >= 1.0 - 1e-12);
+        assert_eq!(session.project().pivot(drawn.object), Some(Pivot::ZERO), "the local zero is the pivot");
+        assert_eq!(session.project().object_path(drawn.object).expect("path").bounds_micrometres().0, [0, 0]);
+
+        session.undo().expect("one undo removes the drawing");
+        assert!(session.project().object(drawn.object).is_none());
+        assert!(session.project().container(parent).is_some(), "the container is its own undo entry");
+    }
+
     /// Creates an assembly under `parent` and returns its id.
     fn create_assembly_under(session: &mut Session, parent: Id, name: &str) -> Id {
-        let params = serde_json::to_value(furnicraft_engine::AssemblyCreate {
-            parent,
-            name: name.to_owned(),
-            placement: Placement::IDENTITY,
-        })
-        .expect("params");
+        create_assembly_placed_under(session, parent, name, Placement::IDENTITY)
+    }
+
+    /// Creates an assembly with a given placement under `parent` and returns its id.
+    fn create_assembly_placed_under(session: &mut Session, parent: Id, name: &str, placement: Placement) -> Id {
+        let params =
+            serde_json::to_value(furnicraft_engine::AssemblyCreate { parent, name: name.to_owned(), placement })
+                .expect("params");
         session
             .dispatch(furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID, &params)
             .expect("create the assembly")
@@ -1517,9 +1631,10 @@ mod tests {
 
         assert!(editor.drawing().is_some_and(DrawDraft::can_close), "Close is offered and will work");
         let revision = session.project().revision();
-        editor.close_drawing().expect("close through the pending arc");
-        assert!(editor.drawing().is_some_and(DrawDraft::is_finished), "the closed draft commits");
-        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit");
+        let drawn = editor
+            .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+            .expect("close through the pending arc and commit");
+        assert!(editor.drawing().is_none(), "the close ends the tool");
         assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
 
         let path = session.project().object_path(drawn.object).expect("a path object");
@@ -1529,6 +1644,64 @@ mod tests {
         session.undo().expect("one undo removes the whole drawing");
         assert!(session.project().object(drawn.object).is_none());
         assert!(!session.can_undo(), "the drawing was one undo entry");
+    }
+
+    /// The project with its revision counter at the end of its range, so the next command is refused.
+    fn exhausted_revision(project: Project) -> Project {
+        let mut wire = serde_json::to_value(&project).expect("the project serialises");
+        wire["revision"] = serde_json::Value::from(u64::MAX);
+        serde_json::from_value(wire).expect("the project loads with a full revision counter")
+    }
+
+    #[test]
+    fn the_ribbon_reports_a_close_instead_of_running_it() {
+        // The ribbon has no work plane, no gizmo and no scene, so it cannot close on its own: it
+        // reports the close and the shell runs the one path that closes and commits (X23). A ring
+        // closed here and never committed was the bug — the document has to stay untouched until
+        // the shell acts.
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(0), mm(0)]).expect("start");
+        editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
+        editor.drawing_point([mm(600), mm(400)]).expect("right run");
+        let revision = session.project().revision();
+
+        let outcome =
+            editor.apply_ribbon_actions(&mut session, vec![ToolAction::CloseDrawing]).expect("the ribbon runs");
+        assert!(outcome.close_draft, "the ribbon asks the shell for the close and its commit");
+        assert_eq!(session.project().revision(), revision, "reporting a close writes nothing");
+        assert!(!session.can_undo(), "and leaves no undo entry behind");
+        let draft = editor.drawing().expect("the draft stays");
+        assert!(!draft.is_closed(), "the ribbon never closes the ring itself");
+        assert_eq!(draft.len(), 2, "every segment is still there");
+    }
+
+    #[test]
+    fn a_refused_close_leaves_the_ring_open_and_the_document_untouched() {
+        // The revision counter is full, so the close succeeds and the commit that belongs to it is
+        // refused. The ring reopens: the shape the user drew stays editable instead of becoming a
+        // finished draft nothing can change (ADR 0052, "a refused path keeps the draft").
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(exhausted_revision(project), sample_catalog());
+        let mut editor = Editor::new();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(0), mm(0)]).expect("start");
+        editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
+        editor.drawing_point([mm(600), mm(400)]).expect("right run");
+        let revision = session.project().revision();
+
+        editor
+            .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+            .expect_err("the document refuses the commit");
+        assert_eq!(session.project().revision(), revision, "a refused close writes nothing");
+        assert!(!session.can_undo(), "and leaves no undo entry behind");
+        let draft = editor.drawing().expect("the draft survives a refusal");
+        assert!(!draft.is_closed(), "the ring reopens, so the shape stays editable");
+        assert_eq!(draft.len(), 2, "and keeps every segment");
     }
 
     #[test]

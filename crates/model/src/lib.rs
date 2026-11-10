@@ -25,6 +25,7 @@ mod contour;
 mod contour_edit;
 #[cfg(test)]
 mod fixtures;
+mod frame;
 mod furntype;
 mod ids;
 mod light;
@@ -48,6 +49,7 @@ pub use contour::{
     MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathError, PathShape, joint_tolerance_mm,
 };
 pub use contour_edit::{ArcFrame, CircleFrame, ContourEditError, CornerMove, PathCorner, PolygonFrame, RectangleFrame};
+pub use frame::{Anchored, FrameAnchor, FrameError, Rebased, rebase_at_anchor};
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};

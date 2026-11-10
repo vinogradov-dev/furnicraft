@@ -92,6 +92,18 @@ impl Placement {
         Self::new(translation, rotation)
     }
 
+    /// Inverts a rigid frame, so `compose(frame, frame.inverse())` is the identity.
+    ///
+    /// The inverse of a rigid transform is its transposed rotation and the negated rotated origin:
+    /// the conjugate quaternion and `-R⁻¹t`. `inverse(parent) ∘ world` is the world frame expressed
+    /// in the parent's frame, the missing half of [`Self::compose`]: it is how a shell that knows only
+    /// a world placement hands a command the parent-relative placement the document stores.
+    pub fn inverse(self) -> Result<Self, PlacementError> {
+        let rotation = self.rotation.conjugate();
+        let translation = rotation * -self.translation;
+        Self::new(translation, rotation)
+    }
+
     /// Applies the placement to a point.
     pub fn transform_point(self, point: DVec3) -> DVec3 {
         self.rotation * point + self.translation
@@ -157,8 +169,9 @@ impl Placement {
 /// Rounds a millimetre point to exact micrometre lengths.
 ///
 /// Returns `None` when a component is NaN, infinite or outside the range of [`Length`]. This is the
-/// geometry-boundary conversion used by placement and pivot editing.
-fn lengths_from_millimetres(point: DVec3) -> Option<[Length; 3]> {
+/// geometry-boundary conversion used by placement and pivot editing and by a frame anchored on a
+/// mixed collection of children.
+pub(crate) fn lengths_from_millimetres(point: DVec3) -> Option<[Length; 3]> {
     fn to_length(value: f64) -> Option<Length> {
         if !value.is_finite() {
             return None;
@@ -292,6 +305,25 @@ mod tests {
         let world = Placement::compose(parent, child).expect("world placement");
         let point = world.transform_point(DVec3::Y);
         assert!((point - DVec3::Z).length() < 1e-12, "point was {point:?}");
+    }
+
+    #[test]
+    fn inverse_undoes_compose_and_maps_a_world_point_back_to_its_local_one() {
+        let parent = Placement::new(DVec3::new(120.0, -40.0, 900.0), DQuat::from_rotation_z(0.7)).expect("parent");
+        let child = Placement::new(DVec3::new(15.0, 2.5, -3.0), DQuat::from_rotation_x(-0.4)).expect("child");
+        let world = Placement::compose(parent, child).expect("world placement");
+        let parent_inverse = parent.inverse().expect("inverse parent");
+
+        let back = Placement::compose(parent_inverse, world).expect("parent-frame placement");
+        assert!((back.translation() - child.translation()).length() < 1e-9, "was {back:?}, expected {child:?}");
+        assert!(back.rotation().dot(child.rotation()).abs() >= 1.0 - 1e-12, "the rotation came back as {back:?}");
+        let identity = Placement::compose(parent, parent_inverse).expect("identity");
+        assert!(identity.translation().length() < 1e-9, "a frame composed with its inverse is the identity");
+        assert!(identity.rotation().dot(DQuat::IDENTITY).abs() >= 1.0 - 1e-12);
+
+        let local = DVec3::new(1.5, -2.0, 0.25);
+        let round_trip = world.inverse().expect("inverse world").transform_point(world.transform_point(local));
+        assert!((round_trip - local).length() < 1e-9, "the point came back as {round_trip:?}");
     }
 
     #[test]
