@@ -220,10 +220,7 @@ pub fn check_text(root: &Path, plan: &PlanText<'_>, git: &dyn Git) -> Result<Sum
         // One git call answers both the `base` rule and the head line the block prints.
         summary.head = git.head();
         summary.interrupted = session_interrupted(&summary.state, plan.session, summary.head.as_deref(), git);
-        violations.extend(workspace_violations(root, summary, git));
-        if let Some(notes) = plan.notes {
-            violations.extend(notes::note_violations_in(notes, &summary.tasks));
-        }
+        violations.extend(workspace_violations(root, summary, git, plan.notes));
         // The reference files are the plan too: a stale map row or an undeclared debt tag rots it.
         if let Ok(map) = std::fs::read_to_string(root.join("plan/map.md")) {
             violations.extend(validate::map_violations(&map, |path| root.join(path).exists()));
@@ -303,8 +300,18 @@ fn has_open_steps(session: &str) -> bool {
 }
 
 /// Checks what only the filesystem and git can answer: the hinted paths and the `base` commit.
-fn workspace_violations(root: &Path, summary: &Summary, git: &dyn Git) -> Vec<String> {
-    let mut violations = notes::note_violations(root, &summary.tasks);
+///
+/// `notes` is the notes directory as it would be after a writer's change; `None` reads the disk.
+fn workspace_violations(
+    root: &Path,
+    summary: &Summary,
+    git: &dyn Git,
+    notes: Option<&[(String, String)]>,
+) -> Vec<String> {
+    let mut violations = match notes {
+        Some(notes) => notes::note_violations_in(notes, &summary.tasks),
+        None => notes::note_violations(root, &summary.tasks),
+    };
 
     for task in summary.tasks.iter().filter(|task| task.status != TaskStatus::Done) {
         let Some(hint) = &task.files else { continue };
