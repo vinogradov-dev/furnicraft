@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S14 state=idle base=a2509e6 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S14 state=idle base=c27002f updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -45,17 +45,16 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   floating ribbon (ADR 0080). U43/U63 gave each view its display style (ADR 0070), X10 made the edges
   mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
   closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
-- Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
-  the plan, prints one task in full (P4) and writes it (P6); P7 checks the map, `## Next`, the debt
-  tags and the ADR index (ADR 0085). Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
+- Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
+  whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init` and the command table
+  (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and the `ci` step list and registers them
+  into that table (P8). Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
 S14 is next: `engine/panel_cmds.rs` is 1143 production lines and 21 commands, 547 of them the ten
-banding ones (`panel.edge_banding.*`, `corner_banding`, `ring_banding`, `panel.corner.*`,
-`panel.bow.*`), so they move to `crates/engine/src/panel_cmds/banding.rs` and `mod.rs` keeps the
-declarations and the re-exports the `COMMANDS` table names. Then S15, S16 in `scene` and `render`,
-S17–S22 after them.
+banding ones, so they move to `crates/engine/src/panel_cmds/banding.rs`; then S15, S16 in `scene`
+and `render`, S17–S22 after them.
 
 ## Index
 

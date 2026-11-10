@@ -339,6 +339,36 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **P9** the tool documents itself — rules: B1, C7.
+  Why: the contract is written three times (`AGENTS.md` §1/§6.1, `templates/AGENTS.section.md`, the
+  crate README), `plan/state.conf` does not exist although a second project needs its layout, and the
+  usage blocks are hand-written.
+  Shape: `cli::Config` with defaults (`runner`, `decisions`, `notes`) overridable from
+  `plan/state.conf`; `agents` prints the embedded `templates/AGENTS.section.md` with the placeholders
+  filled, `init` scaffolds a plan that passes the gate; `AGENTS.md` and the root `README.md` keep the
+  invariants and point at the tool instead of repeating it.
+  Done: a fresh `state-contract init` in an empty directory passes `check`; `agents` prints the
+  section with the project's runner; `AGENTS.md` loses the duplicated command list; suite and
+  `cargo xtask ci` green.
+  Commits: one.
+  `files: state-contract/src/main.rs, state-contract/README.md, AGENTS.md` — `c27002f`
+
+- `[x]` **P8** the plan tool is one crate a project imports, not code in `xtask` — rules: B1, B3, B7, C7.
+  Why: the write verbs, `list`, the agent form (`--md`/`--paths`), the code facts and the ADR index
+  check live in `xtask` — 1 500 lines a second project would have to copy — while the crate that owns
+  the format exposes only three read commands and two hand-written usage blocks that already differ.
+  Shape: `state-contract/src/cli/` gains `table` (a `Command` list that drives dispatch, `--help` and
+  `help <verb>`), `read` (status, dashboard, task, list, `--md`, `--paths`), `write` (the ten verbs),
+  `facts` (production and test lines, the last commit, the ADR titles) and `docs`; the crate's own
+  binary runs the whole table, and `xtask` keeps only its product rules (`layers`, the C-vendoring
+  check, the `ci` step list) registered into the same table.
+  Done: `cargo xtask <every command it has today>` prints the same output; `cargo xtask help` and
+  `cargo xtask help task` are generated from the table; `cargo run -p state-contract -- help` lists
+  the same commands minus the product ones; `xtask/src` holds no plan logic; the suite moves with the
+  code and `cargo xtask ci` is green.
+  Commits: one or two.
+  `files: state-contract/src/main.rs, state-contract/src/lib.rs, xtask/src/main.rs` — `123afcb`
+
 - `[x]` **P7** the gate checks the plan it already parses — rules: B1, C7.
   Why: `plan/map.md` is unchecked although a stale row sends a reader to a file that no longer exists;
   `## Next` in `plan/STATUS.md` is the first prose a session reads and can name another task than
