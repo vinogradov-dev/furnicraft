@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
-  Why: `fn millimetres` is written 20 times across 8 crates, `open_path` 5 times and `sample_project`
-  twice, although `furnicraft-testkit` exists for exactly this (F7). Test-only: no production line
-  changes, no ceiling is crossed — the finding is duplicated knowledge in ~26 test modules.
-  Shape: `testkit::{millimetres, open_path, sample_project}` replace the copies; `crates/model/src/fixtures.rs`
-  keeps the fixtures only the model's own tests need; `model`, `param` and `mesh` gain a
-  `[dev-dependencies]` entry. Test lines only; nothing over 300 moves into a sibling file (T2).
-  Done: every test passes with a `use` line changed and its assertions untouched (T1, B8); the
-  fixtures that a hostile-value test deliberately rejects stay local; `cargo xtask layers` still green.
-  Commits: one move.
-  `files: crates/testkit/src/lib.rs, crates/model/src/fixtures.rs`
-
 - `[ ]` **S9** `geom/contour.rs` keeps the ring and gives the segment family its own module — rules:
   B1, B4, B8, H2, H5.
   Why: 1046 production lines crosses B4's 1000-line ceiling and the file holds two value families
@@ -404,6 +392,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
+  Why: `fn millimetres` was written 20 times across 8 crates, `open_path` 5 times and `sample_project`
+  twice, although `furnicraft-testkit` exists for exactly this (F7). Test-only: no production line
+  change, no ceiling crossed — the finding was duplicated knowledge in 26 test modules.
+  Shape: the three helpers have one definition in `model::testing`, behind the non-default `testing`
+  feature that `furnicraft-testkit` enables and re-exports them from; `model` itself cannot dev-depend
+  on the testkit, because the cycle compiles the library twice and its types stop matching (ADR 0084).
+  `crates/model/src/fixtures.rs` keeps the fixtures only the model's own tests need; `param` and `mesh`
+  gained the testkit `[dev-dependencies]` entry, `model` reaches the helpers through the feature.
+  A shape one crate needs (the 100 × 60 chain, the 600 × 400 one, the parameterised L) stays local and
+  is built through `open_path`.
+  Done: 20 `millimetres` copies and 4 `open_path` shapes collapse into 3 definitions; the suite is the
+  same 1378 tests with no assertion touched (T1, B8); `cargo xtask layers` green.
+  `22e0e71`
+  `files: crates/model/src/testing.rs, crates/testkit/src/lib.rs`
 
 - `[x]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
   audit re-measures the tree, checks every finding against the code as it stands then, and files one

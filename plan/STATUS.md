@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S8 state=doing base=9deed44 updated=2026-11-10
+STATE: milestone=M7 phase=A task=S9 state=idle base=22e0e71 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -17,10 +17,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
   0083), and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
-- S7 audited the design rules: F1–F7 re-measured and checked, and S8–S22 sit in `## Now` under
-  `plan/refactor.md` (geom, model, engine, scene, render, then `Editor`, then the shell; `main.rs` and
-  `ui/lib.rs` land before U45). F4 (`Project::apply(Change)`) waits in `plan/questions.md`; the
-  no-action verdicts are `[design]` debt.
+- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
+  render, then `Editor`, then the shell; `main.rs` and `ui/lib.rs` land before U45). S8 gave the shared
+  test fixtures one definition, `model::testing` behind a `testing` feature the testkit re-exports, so
+  a crate's test names a helper once instead of 20 copies (ADR 0084). F4 (`Project::apply(Change)`)
+  waits in `plan/questions.md`; the no-action verdicts are `[design]` debt.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -51,9 +52,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-S8 is next: the shared test fixtures (`millimetres`, `open_path`, `sample_project`, 26 test modules)
-move into `furnicraft-testkit`, so the splits that follow touch one helper instead of eight crates.
-Then S9–S13 in `geom` and `model`, S14 in `engine`, S15–S17 in `scene` and `render`, S18–S20 in `ui`,
+S9 is next: `geom/contour.rs` keeps the ring and the segment family (`Line`, `Arc`, `Segment`) moves
+to `geom/segment.rs`, so the file leaves B4's ceiling with no call site and no test touched. Then
+S10–S13 in `geom` and `model`, S14 in `engine`, S15–S17 in `scene` and `render`, S18–S20 in `ui`,
 S21–S22 in the shell, each with its rule ids and line target in `plan/BACKLOG.md` `## Now`.
 
 ## Index
