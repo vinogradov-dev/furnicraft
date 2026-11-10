@@ -25,61 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
-  audit re-measures the tree, checks every finding against the code as it stands then, and files one
-  small behaviour-preserving subtask per finding (`S8`, `S9`, … in dependency order) in `## Now`, then
-  stops. The audit commit touches `plan/` only — no source file and no test. It runs right after S6
-  because it is cheap and gives the rest of `## Now` its order; a subtask that edits `main.rs`,
-  `crates/ui/src/lib.rs` or `apps/furnicraft/src/file_menu.rs` lands before U45, which moves exactly
-  those files into `Document` and `tabs.rs`, and U45 then re-plans against the smaller result; a
-  subtask inside `geom`, `model`, `scene`, `render` or `param` is independent of U45.
-  Findings measured on 2026-11-10, a baseline to re-measure and not a requirement: `F1`
-  `apps/furnicraft/src/main.rs` 2609 production lines, `impl FurniCraftApp` ≈1620, `viewport` 637,
-  40 fields, 113 functions, ≥8 reasons to change; `F2` `crates/ui/src/lib.rs` `Editor` 18 fields, 60
-  public methods, `impl` 1039, four pointer modes plus ribbon state plus eight cards, and three
-  document rules inside it (`placement_in_parent`, `NEW_PANEL_LENGTH_MM/WIDTH_MM`,
-  `resolve_viewport_pick`); `F3` `crates/model/src/contour_edit.rs` 1572 production lines with 27
-  `millimetres_f64`/`radians_f64` conversions and its own projection, split and arc-from-radius
-  trigonometry, which L0 `geom` already owns, while the `model/contour.rs` header still claims to be
-  the single conversion point; `F4` `Project` ≈90 public methods and `Panel` 63, so one new panel
-  field edits `model/panel`, `model/project/panel_cmds`, `engine/panel_cmds` (id, label, params,
-  enabled, run), the `COMMANDS` table, `engine/lib.rs`, `ui/panel_card` and often `ui/palette`; `F5`
-  file-monoliths with no submodule — `geom/region.rs` 1660 (exact rectangle booleans and general
-  contour booleans), `scene/lib.rs` 1277 (camera, ray, grid, light, shadow, frame, picking),
-  `render/lib.rs` 1446; `F6` `ui/panel_card.rs` and `ui/object_card.rs` ≈989 each (`impl PanelCard`
-  ≈857, `run_action` 74) and `ui/toolbars.rs` 982 (`show_group_row` 146); `F7` shared fixtures
-  rewritten in four crates (`millimetres`, `sample_project`, `open_path`) although
-  `furnicraft-testkit` exists. Clean at filing time and not a finding: `cargo xtask layers` green, no
-  `kernel` or GPU edge in `model`, no `egui` or `model` edge in `render`, the UI dispatches and never
-  writes the document, the kernel port is five methods, tests are 39% of the tree.
-  Instructions: read `plan/refactor.md` in full before the audit — it holds the measurement recipe
-  (§2), the boundary, data, clean-code, documentation and test rules (§3–§7) with ids (`B1`, `D1`,
-  `C4`, `H2`, `T1`), the legibility test that defines done (§8), what to borrow from SolidCraft and
-  what never to copy (§9), the audit procedure (§10), the subtask template (§11) and the order and
-  stopping rules (§12). The goal there is one sentence: a tree a single maintainer can hold in their
-  head, where a panel attribute is a three-file change. In short: one module one operation, one
-  reason to change stated in the header, geometry below the data and never inside a document type
-  (it fixes F3 structurally, the way SolidCraft's `Seg2Geom for Seg2` does), a move never shares a
-  commit with a fix, the existing suite passes unchanged, and every new or moved module header names
-  its contract, its tolerance, what it refuses and `//! Changes when: …`. Documented debt is not
-  re-filed: `plan/debt.md` `[view-state]` already owns selection and open containers in `Editor`, and
-  F4's `Project::apply(change)` rewrite touches every command, so it is a question for the owner
-  (`plan/questions.md`), not a subtask.
-  Re-verify at the start, because the tree will have moved: S6 rewrites the frame tests and the panel
-  and inspector documents, so `model/project`, `model/panel` and ADRs 0009, 0026, 0052, 0058, 0082,
-  0083 are re-read, not quoted; U45, if it lands first, moves `Session`, `Editor`, `viewport` and
-  `FileMenu` into `document.rs`/`tabs.rs`, so F1 and F2 are re-measured on the post-U45 files and the
-  audit files no split that U45 already performs; U46, U48, U49, U50 and U52 edit `toolbars.rs`,
-  `scene_tree.rs`, `main.rs` and the cards, so a subtask over one of those re-measures it first; R1
-  (`plan/rename.md`) renames 13 crates and moves `apps/` to `app/`, so every path here and in
-  `plan/map.md` is re-read after it, never copied from this entry.
-  Done when `cargo xtask ci` is green on the pre-audit tree, every finding carries a verdict and
-  either a subtask id with its `files:` hint or a `plan/debt.md` line under `[design]`, the subtasks
-  sit in `## Now` in dependency order, each cites the `plan/refactor.md` rule ids it obeys with the
-  production-line number it must reach, `plan/map.md` still describes the tree, and `plan/STATUS.md`
-  names the first subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit
-  commit touches only `plan/`.
-  `files: plan/refactor.md, plan/BACKLOG.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
 - `[ ]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
   Why: `fn millimetres` is written 20 times across 8 crates, `open_path` 5 times and `sample_project`
   twice, although `furnicraft-testkit` exists for exactly this (F7). Test-only: no production line
@@ -459,6 +404,76 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
+  audit re-measures the tree, checks every finding against the code as it stands then, and files one
+  small behaviour-preserving subtask per finding (`S8`, `S9`, … in dependency order) in `## Now`, then
+  stops. The audit commit touches `plan/` only — no source file and no test. It runs right after S6
+  because it is cheap and gives the rest of `## Now` its order; a subtask that edits `main.rs`,
+  `crates/ui/src/lib.rs` or `apps/furnicraft/src/file_menu.rs` lands before U45, which moves exactly
+  those files into `Document` and `tabs.rs`, and U45 then re-plans against the smaller result; a
+  subtask inside `geom`, `model`, `scene`, `render` or `param` is independent of U45.
+  Findings measured on 2026-11-10, a baseline to re-measure and not a requirement: `F1`
+  `apps/furnicraft/src/main.rs` 2609 production lines, `impl FurniCraftApp` ≈1620, `viewport` 637,
+  40 fields, 113 functions, ≥8 reasons to change; `F2` `crates/ui/src/lib.rs` `Editor` 18 fields, 60
+  public methods, `impl` 1039, four pointer modes plus ribbon state plus eight cards, and three
+  document rules inside it (`placement_in_parent`, `NEW_PANEL_LENGTH_MM/WIDTH_MM`,
+  `resolve_viewport_pick`); `F3` `crates/model/src/contour_edit.rs` 1572 production lines with 27
+  `millimetres_f64`/`radians_f64` conversions and its own projection, split and arc-from-radius
+  trigonometry, which L0 `geom` already owns, while the `model/contour.rs` header still claims to be
+  the single conversion point; `F4` `Project` ≈90 public methods and `Panel` 63, so one new panel
+  field edits `model/panel`, `model/project/panel_cmds`, `engine/panel_cmds` (id, label, params,
+  enabled, run), the `COMMANDS` table, `engine/lib.rs`, `ui/panel_card` and often `ui/palette`; `F5`
+  file-monoliths with no submodule — `geom/region.rs` 1660 (exact rectangle booleans and general
+  contour booleans), `scene/lib.rs` 1277 (camera, ray, grid, light, shadow, frame, picking),
+  `render/lib.rs` 1446; `F6` `ui/panel_card.rs` and `ui/object_card.rs` ≈989 each (`impl PanelCard`
+  ≈857, `run_action` 74) and `ui/toolbars.rs` 982 (`show_group_row` 146); `F7` shared fixtures
+  rewritten in four crates (`millimetres`, `sample_project`, `open_path`) although
+  `furnicraft-testkit` exists. Clean at filing time and not a finding: `cargo xtask layers` green, no
+  `kernel` or GPU edge in `model`, no `egui` or `model` edge in `render`, the UI dispatches and never
+  writes the document, the kernel port is five methods, tests are 39% of the tree.
+  Instructions: read `plan/refactor.md` in full before the audit — it holds the measurement recipe
+  (§2), the boundary, data, clean-code, documentation and test rules (§3–§7) with ids (`B1`, `D1`,
+  `C4`, `H2`, `T1`), the legibility test that defines done (§8), what to borrow from SolidCraft and
+  what never to copy (§9), the audit procedure (§10), the subtask template (§11) and the order and
+  stopping rules (§12). The goal there is one sentence: a tree a single maintainer can hold in their
+  head, where a panel attribute is a three-file change. In short: one module one operation, one
+  reason to change stated in the header, geometry below the data and never inside a document type
+  (it fixes F3 structurally, the way SolidCraft's `Seg2Geom for Seg2` does), a move never shares a
+  commit with a fix, the existing suite passes unchanged, and every new or moved module header names
+  its contract, its tolerance, what it refuses and `//! Changes when: …`. Documented debt is not
+  re-filed: `plan/debt.md` `[view-state]` already owns selection and open containers in `Editor`, and
+  F4's `Project::apply(change)` rewrite touches every command, so it is a question for the owner
+  (`plan/questions.md`), not a subtask.
+  Re-verify at the start, because the tree will have moved: S6 rewrites the frame tests and the panel
+  and inspector documents, so `model/project`, `model/panel` and ADRs 0009, 0026, 0052, 0058, 0082,
+  0083 are re-read, not quoted; U45, if it lands first, moves `Session`, `Editor`, `viewport` and
+  `FileMenu` into `document.rs`/`tabs.rs`, so F1 and F2 are re-measured on the post-U45 files and the
+  audit files no split that U45 already performs; U46, U48, U49, U50 and U52 edit `toolbars.rs`,
+  `scene_tree.rs`, `main.rs` and the cards, so a subtask over one of those re-measures it first; R1
+  (`plan/rename.md`) renames 13 crates and moves `apps/` to `app/`, so every path here and in
+  `plan/map.md` is re-read after it, never copied from this entry.
+  Done when `cargo xtask ci` is green on the pre-audit tree, every finding carries a verdict and
+  either a subtask id with its `files:` hint or a `plan/debt.md` line under `[design]`, the subtasks
+  sit in `## Now` in dependency order, each cites the `plan/refactor.md` rule ids it obeys with the
+  production-line number it must reach, `plan/map.md` still describes the tree, and `plan/STATUS.md`
+  names the first subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit
+  commit touches only `plan/`.
+  Audit 2026-11-10: re-measured `geom/region.rs` 1660, `model/contour_edit.rs` 1572,
+  `render/lib.rs` 1446, `scene/lib.rs` 1277, `ui/lib.rs` 1159, `engine/panel_cmds.rs` 1143,
+  `ui/contour_edit.rs` 1112 and `geom/contour.rs` 1046 production lines, `main.rs` 2609; F1–F7
+  confirmed except F6 (the two cards at 989 and `toolbars.rs` at 982 are under B4's ceiling, their
+  impls under 800) and F4 (one `apply(Change)` per area is an owner decision, filed in
+  `plan/questions.md`). Verdicts: F1 -> S21 (Home) and S22 (the chrome), with the `viewport` function
+  and the 40-field impl deferred to U45; F2 -> S18 (the three document rules) and S19 (the `Editor`
+  split); F3 -> S12 (the maths down to `geom`) and S13 (the split); F5 -> S10, S11 (`region`), S15
+  (`scene`), S16, S17 (`render`); F7 -> S8; the three crossings the audit measured beyond the filed
+  set -> S9 (`geom/contour`), S14 (`engine/panel_cmds`), S20 (`ui/contour_edit`). `plan/debt.md`
+  `[design]` carries the four no-action verdicts. `model/panel/mod.rs` (967) and
+  `model/panel/contour.rs` (889) stay under the ceiling and were not filed. `plan/map.md` still
+  describes the tree, so no row moved.
+  `9deed44`
+  `files: plan/refactor.md, plan/BACKLOG.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
 
 - `[x]` **S6** the frame contract is enforced and written down: the invariants the earlier steps proved
   one by one become one test module, and the documents stop describing the old behaviour. Tests: for
