@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
-  Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
-  algorithm, so a change to "what a region is" and a change to "how sets combine" reopen one file.
-  Shape: `Region`, `RegionSamples`, `RingKind`, `RegionError`, the area, containment and validation
-  helpers and `loop_to_contour` move to `crates/geom/src/ring.rs` (~450); what remains is the one
-  named algorithm, renamed `crates/geom/src/boolean.rs` (~700, inside B4's 600-1200 band); `geom/lib.rs`
-  keeps every public path.
-  Done: suite unchanged; `boolean.rs` cites the method it implements and the sweep it does not do
-  (self-intersection, tolerance), with `//! Changes when:` (H4, H6); the `plan/map.md` row for planar
-  regions points at `ring.rs` and `boolean.rs`.
-  Commits: one move; the rename is part of the move, not a separate edit.
-  `files: crates/geom/src/boolean.rs, crates/geom/src/ring.rs, crates/geom/src/lib.rs`
-
 - `[ ]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
   D1, D2, B8, H2, H4.
   Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
@@ -367,6 +354,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
+  Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
+  algorithm, so a change to "what a region is" and a change to "how sets combine" reopen one file.
+  Shape: `Region`, `RegionSamples`, `RingKind`, `RegionError`, the area, containment and validation
+  helpers and `loop_to_contour` move to `crates/geom/src/ring.rs` (~450); what remains is the one
+  named algorithm, renamed `crates/geom/src/boolean.rs` (~700, inside B4's 600-1200 band); `geom/lib.rs`
+  keeps every public path.
+  Done: suite unchanged; `boolean.rs` cites the method it implements and the sweep it does not do
+  (self-intersection, tolerance), with `//! Changes when:` (H4, H6); the `plan/map.md` row for planar
+  regions points at `ring.rs` and `boolean.rs`.
+  Commits: one move; the rename is part of the move, not a separate edit.
+  `7f1bc27`
+  `files: crates/geom/src/boolean.rs, crates/geom/src/ring.rs, crates/geom/src/lib.rs`
 
 - `[x]` **S10** `geom/region.rs` gives up the exact rectangle booleans — rules: B1, B4, B8, H2.
   Why: 1660 production lines, the largest geometry module, holds two unrelated layers (F5): the exact

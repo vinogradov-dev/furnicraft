@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S11 state=doing base=186a5bc updated=2026-11-10
+STATE: milestone=M7 phase=A task=S12 state=idle base=7f1bc27 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -22,8 +22,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   test fixtures one definition in `model::testing` behind a `testing` feature the testkit re-exports
   (ADR 0084); S9 split off `geom/segment.rs`, so `geom/contour.rs` keeps the ring that joins, areas,
   offsets and samples it; S10 split off `geom/rect.rs` (the exact orthogonal boolean and its tracer),
-  so `geom/region.rs` keeps the ring model and the general contour boolean. F4
-  (`Project::apply(Change)`) waits in `plan/questions.md`; the no-action verdicts are `[design]` debt.
+  S11 the rest: `geom/ring.rs` is what a region is, `geom/boolean.rs` the general boolean (ADR 0043
+  amended). F4 (`Project::apply(Change)`) waits in `plan/questions.md`; no-action verdicts are debt.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -52,11 +52,11 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-S11 is next: `geom/region.rs` (1126 production lines, still over B4's ceiling) gives up the ring model
-to `geom/ring.rs` and what remains becomes the one named algorithm in `geom/boolean.rs`. Then S12–S13
-take the trigonometry into `geom` and split `model/contour_edit.rs`, S14 in `engine`, S15–S17 in
-`scene` and `render`, S18–S20 in `ui`, S21–S22 in the shell — rule ids and line targets in
-`plan/BACKLOG.md` `## Now`.
+S12 is next: `model/contour_edit.rs` (1572 production lines, 27 unit conversions) stops computing the
+trigonometry `geom` already owns — arc-from-radius, arc-between, projection and split become free
+functions in `geom/segment.rs`, each taking its tolerance, and the document converts once at its call.
+Then S13 splits that module, S14 in `engine`, S15–S17 in `scene` and `render`, S18–S20 in `ui`, S21–S22
+in the shell — rule ids and line targets in `plan/BACKLOG.md` `## Now`.
 
 ## Index
 
