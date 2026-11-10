@@ -176,7 +176,12 @@ pub(crate) fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> 
     bounds
 }
 
-/// The default pivot of a container: the centre of the local panel bounds, or the origin.
+/// The pivot a container saved before schema 6 was stored with: the centre of the local panel
+/// bounds, or the origin.
+///
+/// Only the schema-5 migration writes this value now; a container created today is born at zero
+/// and a group puts its content at zero through [`crate::rebase_at_anchor`]. No later pass
+/// re-normalizes a stored pivot.
 pub(crate) fn default_container_pivot(children: &[Node]) -> Pivot {
     let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
         return Pivot::ZERO;
@@ -331,17 +336,10 @@ mod tests {
         let drawer = Id::new(3).expect("drawer id");
         let root = project.root().id();
 
-        // A panel starts at its local zero; a container built with children starts at the centre of
-        // their local bounding box; the root is always zero.
+        // A panel starts at its local zero, a container is born at its own origin — a group puts
+        // the centre of its children into the translation instead — and the root is always zero.
         assert_eq!(project.pivot(shelf), Some(Pivot::ZERO));
-        assert_eq!(
-            project.pivot(drawer),
-            Some(Pivot::new(
-                Length::from_micrometres(350_000),
-                Length::from_micrometres(250_000),
-                Length::from_micrometres(9_000),
-            ))
-        );
+        assert_eq!(project.pivot(drawer), Some(Pivot::ZERO));
         assert_eq!(project.pivot(root), Some(Pivot::ZERO));
 
         project
@@ -360,8 +358,8 @@ mod tests {
         // Placing a node changes only its world pivot, never the stored local one.
         assert_eq!(project.pivot_local(shelf), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
-        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(360.0, 270.0, 39.0)));
+        assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_world(drawer), Some(DVec3::new(10.0, 20.0, 30.0)));
         assert_eq!(project.pivot_local(root), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(root), Some(DVec3::ZERO));
 
@@ -377,6 +375,7 @@ mod tests {
     fn a_container_pivot_is_local_and_turns_with_the_container() {
         let mut project = sample_project();
         let drawer = Id::new(3).expect("drawer id");
+        project.center_node_pivot(drawer).expect("author a pivot at the children's centre");
         project
             .set_node_placement(
                 drawer,

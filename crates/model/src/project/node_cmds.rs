@@ -2,6 +2,7 @@
 
 use furnicraft_geom::DVec3;
 
+use crate::frame::children_center;
 use crate::tree::{
     assign_new_ids, count_nodes, find_container, find_container_mut, find_node_mut, node_height, remove_child,
 };
@@ -243,32 +244,50 @@ impl Project {
 
     /// Wraps sibling nodes in one new group and returns the new group id.
     ///
-    /// All selected nodes stay in their existing order and keep their placements. The new group
-    /// has an identity placement relative to the shared parent, so no leaf moves in world space.
+    /// All selected nodes stay in their existing order. The group is anchored at the centre of the
+    /// selected children's union bounds: the new container's translation is that centre in the
+    /// parent frame, every child placement moves by `-centre` and the pivot starts at zero, so no
+    /// world transform changes while the card shows the point the group is grabbed at (ADR 0082).
+    /// Children without bounds — only cameras and lights — have no centre, so such a group keeps the
+    /// parent origin and its children's placements unchanged.
     pub fn group_nodes(&mut self, nodes: &[Id], name: impl Into<String>) -> Result<Id, ProjectError> {
         let (parent_id, _) = self.group_parent(nodes)?;
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
         let name = name.into();
         let selected: HashSet<u64> = nodes.iter().map(|id| id.get()).collect();
+        let Some((_depth, parent)) = find_container(&self.root, parent_id, 1) else {
+            return Err(ProjectError::ContainerNotFound { id: parent_id });
+        };
+        // The frame is resolved on a copy of the selection and the copy is what the group holds, so
+        // a refused frame leaves the tree untouched and nothing fallible runs after the tree moves.
+        let moved: Vec<Node> =
+            parent.children().iter().filter(|child| selected.contains(&child.id().get())).cloned().collect();
+        let (placement, moved) = match children_center(&moved) {
+            Ok(_) => {
+                let rebased = rebase_at_anchor(moved, Placement::IDENTITY, FrameAnchor::CenterOfBounds)
+                    .map_err(|_| ProjectError::CreationFrame { id })?;
+                (rebased.placement, rebased.content)
+            }
+            Err(FrameError::NoBounds) => (Placement::IDENTITY, moved),
+            Err(_) => return Err(ProjectError::CreationFrame { id }),
+        };
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent_id, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent_id });
         };
-        let mut moved = Vec::new();
-        let mut rest = Vec::new();
+        let mut rest = Vec::with_capacity(children.len());
         let mut insert_at = None;
         for child in children.drain(..) {
             if selected.contains(&child.id().get()) {
                 if insert_at.is_none() {
                     insert_at = Some(rest.len());
                 }
-                moved.push(child);
-            } else {
-                rest.push(child);
+                continue;
             }
+            rest.push(child);
         }
         let index = insert_at.unwrap_or(rest.len());
-        rest.insert(index, Node::Container(Container::new(id, name, Placement::IDENTITY, moved)));
+        rest.insert(index, Node::Container(Container::new(id, name, placement, moved)));
         *children = rest;
         self.revision = next_revision;
         Ok(id)
@@ -339,9 +358,22 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use crate::fixtures::*;
+    use crate::tree::panel_bounds;
     use crate::*;
 
     use furnicraft_geom::{DQuat, DVec3};
+
+    /// Asserts that two placements describe the same frame within the micrometre an anchor keeps.
+    fn assert_same_frame(actual: Placement, expected: Placement, what: &str) {
+        let gap = (actual.translation() - expected.translation()).length();
+        assert!(
+            gap < 1.1e-3,
+            "{what}: translation was {:?}, expected {:?}",
+            actual.translation(),
+            expected.translation()
+        );
+        assert_eq!(actual.rotation(), expected.rotation(), "{what}: rotation changed");
+    }
 
     #[test]
     fn nodes_can_be_renamed_and_placed() {
@@ -490,7 +522,12 @@ mod tests {
         project.set_node_placement(panel, panel_placement).expect("place panel");
         project.set_node_placement(drawer, drawer_placement).expect("place drawer");
         project.set_node_placement(front, front_placement).expect("place front");
-        let before = Placement::compose(drawer_placement, front_placement).expect("world before");
+        let before = project.world_placement(front).expect("front world before");
+        let panel_world = project.world_placement(panel).expect("panel world before");
+        let drawer_world = project.world_placement(drawer).expect("drawer world before");
+        let siblings: Vec<Node> = project.root().children().to_vec();
+        let (min, max) = panel_bounds(&siblings, Placement::IDENTITY, 0).expect("the union has bounds");
+        let centre = (min + max) * 0.5;
         let next_id = project.next_id();
         let revision = project.revision();
 
@@ -503,19 +540,38 @@ mod tests {
         assert_eq!(project.root().children().len(), 1);
         assert_eq!(project.root().children().first().expect("group").id(), group_id);
         let group = project.container(group_id).expect("group");
-        assert_eq!(group.placement(), Placement::IDENTITY);
+        // The group's translation is the parent-frame centre of the children's union and its pivot
+        // is zero, so the card names the point the group is grabbed at.
+        assert_eq!(group.placement().rotation(), DQuat::IDENTITY);
+        let translation = group.placement().translation();
+        assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
+        assert_eq!(project.pivot_local(group_id), Some(DVec3::ZERO));
+        let pivot_world = project.pivot_world(group_id).expect("world pivot");
+        assert!((pivot_world - centre).length() < 1.1e-3, "world pivot was {pivot_world:?}");
         assert_eq!(group.children().len(), 2);
         assert_eq!(group.children()[0].id(), panel);
         assert_eq!(group.children()[1].id(), drawer);
         assert_eq!(project.parent_of(panel), Some(group_id));
         assert_eq!(project.parent_of(drawer), Some(group_id));
-        assert_eq!(project.panel(panel).expect("panel").placement(), panel_placement);
-        assert_eq!(project.container(drawer).expect("drawer").placement(), drawer_placement);
-        let after = Placement::compose(drawer_placement, front_placement).expect("world after");
-        let point = Placement::compose(Placement::IDENTITY, after).expect("root world");
-        let point = point.transform_point(DVec3::ZERO);
-        let expected = before.transform_point(DVec3::ZERO);
-        assert!((point - expected).length() < 1e-12, "point was {point:?}, expected {expected:?}");
+        // Every child moves by `-centre`, so its world transform and its rotation do not change.
+        let moved_panel = project.panel(panel).expect("panel").placement();
+        assert_eq!(moved_panel.rotation(), panel_placement.rotation());
+        assert!(
+            (moved_panel.translation() - (panel_placement.translation() - centre)).length() < 1.1e-3,
+            "panel placement was {moved_panel:?}"
+        );
+        let moved_drawer = project.container(drawer).expect("drawer").placement();
+        assert_eq!(moved_drawer.rotation(), drawer_placement.rotation());
+        assert!(
+            (moved_drawer.translation() - (drawer_placement.translation() - centre)).length() < 1.1e-3,
+            "drawer placement was {moved_drawer:?}"
+        );
+        assert_same_frame(project.world_placement(panel).expect("panel world"), panel_world, "panel");
+        assert_same_frame(project.world_placement(drawer).expect("drawer world"), drawer_world, "drawer");
+        assert_same_frame(project.world_placement(front).expect("front world"), before, "front");
+        // The children's union is centred on the group's own origin.
+        let centre_after = project.bounds_center_local(group_id).expect("local centre");
+        assert!(centre_after.length() < 1.1e-3, "local centre was {centre_after:?}");
         assert_eq!(project.revision().get(), revision.get() + 1);
     }
 
@@ -536,6 +592,114 @@ mod tests {
     }
 
     #[test]
+    fn a_group_inside_a_rotated_container_uses_the_parent_frame_centre() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let frame_placement =
+            Placement::new(DVec3::new(100.0, 50.0, 0.0), DQuat::from_rotation_z(0.4)).expect("frame placement");
+        let frame = project.add_component(root, "Frame", frame_placement).expect("add a container");
+        let first = project
+            .add_panel(
+                frame,
+                "Side",
+                sample_nominal(),
+                None,
+                sample_thickness(),
+                Placement::new(DVec3::new(10.0, 0.0, 0.0), DQuat::IDENTITY).expect("first placement"),
+            )
+            .expect("add a panel");
+        let second = project
+            .add_panel(
+                frame,
+                "Top",
+                sample_nominal(),
+                None,
+                sample_thickness(),
+                Placement::new(DVec3::new(0.0, 40.0, 12.0), DQuat::from_rotation_y(0.2)).expect("second placement"),
+            )
+            .expect("add a panel");
+        let first_world = project.world_placement(first).expect("first world before");
+        let second_world = project.world_placement(second).expect("second world before");
+        let children: Vec<Node> = project.container(frame).expect("frame").children().to_vec();
+        let (min, max) = panel_bounds(&children, Placement::IDENTITY, 0).expect("the union has bounds");
+        let centre = (min + max) * 0.5;
+
+        let group = project.group_nodes(&[first, second], "Pair").expect("group inside the frame");
+
+        // The centre is in the parent (the rotated container's own) frame, so it is not the world
+        // centre of the union.
+        let container = project.container(group).expect("group");
+        let translation = container.placement().translation();
+        assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
+        assert_eq!(container.placement().rotation(), DQuat::IDENTITY);
+        assert_eq!(project.parent_of(group), Some(frame));
+        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_same_frame(project.world_placement(first).expect("first world"), first_world, "first");
+        assert_same_frame(project.world_placement(second).expect("second world"), second_world, "second");
+        let group_world = project.pivot_world(group).expect("group world pivot");
+        let expected_world = frame_placement.transform_point(centre);
+        assert!((group_world - expected_world).length() < 1.1e-3, "pivot was {group_world:?}");
+    }
+
+    #[test]
+    fn a_group_of_objects_and_panels_uses_the_same_union() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let panel = Id::new(2).expect("panel id");
+        let object = project
+            .add_object(
+                root,
+                "Brace",
+                Placement::new(DVec3::new(1200.0, -30.0, 25.0), DQuat::from_rotation_z(0.1)).expect("placement"),
+                Geometry::Mesh(box_mesh()),
+            )
+            .expect("add an object");
+        project
+            .set_node_placement(
+                panel,
+                Placement::new(DVec3::new(0.0, 0.0, 0.0), DQuat::from_rotation_x(0.15)).expect("panel placement"),
+            )
+            .expect("place panel");
+        let panel_world = project.world_placement(panel).expect("panel world before");
+        let object_world = project.world_placement(object).expect("object world before");
+        let selection: Vec<Node> =
+            [panel, object].iter().map(|id| project.node(*id).expect("selected node").clone()).collect();
+        let (min, max) = panel_bounds(&selection, Placement::IDENTITY, 0).expect("the union has bounds");
+        let centre = (min + max) * 0.5;
+
+        let group = project.group_nodes(&[panel, object], "Mixed").expect("group a panel and an object");
+
+        let translation = project.container(group).expect("group").placement().translation();
+        assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
+        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_same_frame(project.world_placement(panel).expect("panel world"), panel_world, "panel");
+        assert_same_frame(project.world_placement(object).expect("object world"), object_world, "object");
+        assert_eq!(project.panel(panel).expect("panel").placement().rotation(), DQuat::from_rotation_x(0.15));
+    }
+
+    #[test]
+    fn a_group_without_bounds_keeps_the_parent_origin() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let first = project.add_component(root, "First", Placement::IDENTITY).expect("add a container");
+        let second_placement =
+            Placement::new(DVec3::new(30.0, 0.0, 0.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        let second = project.add_component(root, "Second", second_placement).expect("add a container");
+
+        let group = project.group_nodes(&[first, second], "Empty").expect("group two empty containers");
+
+        // Children without geometry have no centre, so their placements and the parent origin stay.
+        let container = project.container(group).expect("group");
+        assert_eq!(container.placement(), Placement::IDENTITY);
+        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.container(first).expect("first").placement(), Placement::IDENTITY);
+        assert_eq!(project.container(second).expect("second").placement(), second_placement);
+        assert_eq!(container.children().len(), 2);
+        assert_eq!(container.children()[0].id(), first);
+        assert_eq!(container.children()[1].id(), second);
+    }
+
+    #[test]
     fn ungrouping_flattens_children_and_keeps_their_world_placements() {
         let mut project = sample_project();
         let root = project.root().id();
@@ -552,6 +716,9 @@ mod tests {
         project.set_node_placement(front, front_placement).expect("place front");
 
         let group_id = project.group_nodes(&[panel, drawer], "Group").expect("group siblings");
+        // Grouping moves the children into the group's frame; remember what it wrote.
+        let grouped_panel = project.panel(panel).expect("panel").placement();
+        let grouped_drawer = project.container(drawer).expect("drawer").placement();
         let group_placement =
             Placement::new(DVec3::new(50.0, 60.0, 70.0), DQuat::from_rotation_y(0.3)).expect("group placement");
         project.set_node_placement(group_id, group_placement).expect("place group");
@@ -564,9 +731,9 @@ mod tests {
         assert_eq!(project.parent_of(front), Some(drawer));
         assert_eq!(project.root().children().len(), 2);
 
-        let expected_panel = Placement::compose(group_placement, panel_placement).expect("panel world");
+        let expected_panel = Placement::compose(group_placement, grouped_panel).expect("panel world");
         assert_eq!(project.panel(panel).expect("panel").placement(), expected_panel);
-        let expected_drawer = Placement::compose(group_placement, drawer_placement).expect("drawer world");
+        let expected_drawer = Placement::compose(group_placement, grouped_drawer).expect("drawer world");
         assert_eq!(project.container(drawer).expect("drawer").placement(), expected_drawer);
         let expected_front = Placement::compose(expected_drawer, front_placement).expect("front world");
         assert_eq!(project.world_placement(front).expect("front world"), expected_front);

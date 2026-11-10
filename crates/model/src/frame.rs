@@ -186,15 +186,21 @@ impl Anchored for Contour {
 
 impl Anchored for Vec<Node> {
     fn anchor(&self, strategy: FrameAnchor) -> Result<[Length; 3], FrameError> {
-        let Some((min, max)) = panel_bounds(self, Placement::IDENTITY, 0) else {
-            return Err(FrameError::NoBounds);
-        };
-        let anchor = match strategy {
-            FrameAnchor::CreationPivot => return Err(FrameError::NoCreationPivot),
-            FrameAnchor::BBoxBaseCorner(corner) => box_corner(corner, min, max),
-            FrameAnchor::CenterOfBounds => (min + max) * 0.5,
-        };
-        lengths_from_millimetres(anchor).ok_or(FrameError::OutOfRange)
+        match strategy {
+            FrameAnchor::CreationPivot => {
+                if panel_bounds(self, Placement::IDENTITY, 0).is_none() {
+                    return Err(FrameError::NoBounds);
+                }
+                Err(FrameError::NoCreationPivot)
+            }
+            FrameAnchor::CenterOfBounds => children_center(self),
+            FrameAnchor::BBoxBaseCorner(corner) => {
+                let Some((min, max)) = panel_bounds(self, Placement::IDENTITY, 0) else {
+                    return Err(FrameError::NoBounds);
+                };
+                lengths_from_millimetres(box_corner(corner, min, max)).ok_or(FrameError::OutOfRange)
+            }
+        }
     }
 
     fn shifted(&self, offset: [Length; 3]) -> Result<Self, FrameError> {
@@ -206,6 +212,18 @@ impl Anchored for Vec<Node> {
         }
         Ok(children)
     }
+}
+
+/// The centre of a collection of children's union bounds, in the children's own frame.
+///
+/// This is the anchor [`FrameAnchor::CenterOfBounds`] names for a group. A caller that has to
+/// decide the frame before it owns the children reads it here; the rule that moves them stays in
+/// [`rebase_at_anchor`]. Children without geometry — only cameras and lights — have no centre.
+pub(crate) fn children_center(children: &[Node]) -> Result<[Length; 3], FrameError> {
+    let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
+        return Err(FrameError::NoBounds);
+    };
+    lengths_from_millimetres((min + max) * 0.5).ok_or(FrameError::OutOfRange)
 }
 
 /// Why a frame cannot be chosen for a content.

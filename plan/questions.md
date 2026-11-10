@@ -11,13 +11,6 @@ this file only when a task touches the question.
 - Voice input and output: which platform or service, if any.
 - The orientation widget has no keyboard or menu equivalent; decide whether the six views deserve
   shortcuts before the list grows.
-- A version 19 flat drawing or extrusion (`Path`/`Constructive`) whose stored pivot has a non-zero Z
-  cannot be re-anchored without breaking one rule: the flat payload cannot absorb the Z shift, so
-  either the world shape moves, the file is refused, or an off-plane `pivot_local` survives and
-  contradicts the new flat-pivot rule. The pivot card accepted a Z for every node, so a saved file can
-  carry one. Choose: clamp the handle to zero (the shape stays, the handle moves), refuse the file
-  with a readable error, or keep the off-plane pivot as a legacy exception. Blocks the panel of X28
-  that migrates flat objects; nothing before it is blocked.
 - Around Y = ±90° the Euler fields are gimbal-locked: editing X or Z moves the other angle. Confirm
   whether the card should show a gimbal warning or switch to a quaternion readout there.
 - Double-click enters one container level and Escape leaves it. Confirm whether the tree should also

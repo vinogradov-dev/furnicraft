@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tree::default_container_pivot;
 use crate::{
     Id, Node, Pivot, Placement, Properties, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE,
     SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
@@ -34,12 +33,12 @@ pub struct Container {
 impl Container {
     /// Creates an ordinary container. Global id uniqueness is checked by [`Project::validate`].
     ///
-    /// A non-empty container starts with its pivot at the centre of its local panel bounds, so a
-    /// container created from a selection is grabbed at its visual centre. An empty container
-    /// starts at its own origin. The root has its pivot forced back to zero by [`Project::new`].
+    /// The pivot starts at zero: a container is born at its own local zero, and a caller that wants
+    /// the container grabbed at its content (a group) says so through [`crate::rebase_at_anchor`],
+    /// which also moves the placement. The root has its pivot forced back to zero by
+    /// [`Project::new`].
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        let pivot = default_container_pivot(&children);
-        Self { id, name: name.into(), placement, pivot, children, properties: Properties::new() }
+        Self { id, name: name.into(), placement, pivot: Pivot::ZERO, children, properties: Properties::new() }
     }
 
     /// The stable container id.

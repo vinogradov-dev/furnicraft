@@ -954,15 +954,16 @@ mod tests {
 
     #[test]
     fn a_target_carries_the_parent_frame_and_the_stored_pivot() {
-        let project = nested_project();
+        let mut project = nested_project();
         let cabinet = id(2);
+        project.center_node_pivot(cabinet).expect("centre the cabinet pivot");
         let targets = move_targets(&project, &[cabinet]);
         let target = targets.first().copied().expect("one target");
 
         assert_eq!(target.start_local, project.node(cabinet).expect("node").placement());
         assert_eq!(target.parent, project.world_placement(project.root().id()).expect("root world"));
         assert_eq!(target.pivot_local, project.pivot_local(cabinet).expect("pivot"));
-        assert_ne!(target.pivot_local, DVec3::ZERO, "a container with children is centred on its bounds");
+        assert_ne!(target.pivot_local, DVec3::ZERO, "the target carries the authored pivot");
     }
 
     #[test]

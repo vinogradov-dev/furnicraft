@@ -54,6 +54,18 @@ save/load, and editable when the default is wrong.
   not clamped.
 - The pivot is not yet pickable in the viewport; the inspector is the only editor.
 
+## Amendment: a container is born at zero (2026-11-10)
+
+The creation default changed with [0082](0082-the-local-zero-is-the-creation-anchor.md): a container
+is born with a zero pivot in its own frame, and a caller that wants it grabbed at its content puts
+the centre into the **translation** instead. `group_nodes` is that caller — it anchors a new group at
+the centre of its children's union bounds, moves every child by `-centre` and leaves the pivot at
+zero, so the inspector's translation names the same point the gizmo turns about and a nested group
+composes without inventing a second handle. A container added empty, duplicated or loaded keeps the
+pivot it was given; `node.pivot.center` is still how the user centres one explicitly. The bullets
+above about "a container created with children" describe version 6 behaviour and the schema-5
+migration, which remains the only writer of such a centre.
+
 ## Related
 
 - [0025](0025-one-manipulation-pivot.md) introduced the shared pivot and is superseded here.

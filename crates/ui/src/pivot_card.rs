@@ -251,7 +251,9 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let drawer = Id::new(3).expect("drawer id");
         apply_center(&mut session, drawer).expect("center pivot");
-        assert!(!session.can_undo());
+        let revision = session.project().revision();
+        apply_center(&mut session, drawer).expect("center the centred pivot");
+        assert_eq!(session.project().revision(), revision, "a second centring changes nothing");
     }
 
     #[test]
