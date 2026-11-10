@@ -23,6 +23,7 @@ mod catalog;
 mod container;
 mod contour;
 mod contour_edit;
+mod contour_frames;
 #[cfg(test)]
 mod fixtures;
 mod frame;
@@ -50,7 +51,8 @@ pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
     MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathError, PathShape, joint_tolerance_mm,
 };
-pub use contour_edit::{ArcFrame, CircleFrame, ContourEditError, CornerMove, PathCorner, PolygonFrame, RectangleFrame};
+pub use contour_edit::{ContourEditError, CornerMove, PathCorner};
+pub use contour_frames::{ArcFrame, CircleFrame, PolygonFrame, RectangleFrame};
 pub use frame::{Anchored, FrameAnchor, FrameError, Rebased, rebase_at_anchor};
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
