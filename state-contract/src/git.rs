@@ -15,6 +15,14 @@ pub trait Git {
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool;
     /// The author date of a commit as `YYYY-MM-DD`, when it resolves to one.
     fn commit_date(&self, hash: &str) -> Option<String>;
+    /// The short hash and subject of the last commit that touched `path`, when it resolves to one.
+    ///
+    /// The default answers `None`: a host that knows only the plan files needs nothing here, and a
+    /// host that has the checkout overrides it.
+    fn last_touch(&self, path: &str) -> Option<String> {
+        let _ = path;
+        None
+    }
 }
 
 /// [`Git`] implemented by running the `git` binary in a directory.
@@ -70,6 +78,10 @@ impl Git for ProcessGit {
     fn commit_date(&self, hash: &str) -> Option<String> {
         // `%cs` is the author date in `YYYY-MM-DD`, the same form the plan writes.
         self.output(&["show", "-s", "--format=%cs", hash]).filter(|date| !date.is_empty())
+    }
+
+    fn last_touch(&self, path: &str) -> Option<String> {
+        self.output(&["log", "-1", "--format=%h %s", "--", path]).filter(|line| !line.is_empty())
     }
 }
 

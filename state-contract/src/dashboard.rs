@@ -5,27 +5,31 @@
 //! writes to `plan/*`, never enters raw mode or an alternate screen, and pulls in no dependency: the
 //! styling is hand-written ANSI escape codes, disabled by [`DashboardOptions::color`] = `false`.
 
-use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::parse::{backlog_entries, parse_map, parse_state, parse_task_line, session_field};
-use crate::{Git, ProcessGit, TaskStatus};
+use crate::parse::{markdown_bullets, parse_backlog, parse_map, parse_session, parse_state, session_field};
+use crate::section::{DIM, GREEN, Section, Style, YELLOW, paint, sections, truncate};
+use crate::task::{TaskOptions, task_sections, view_from};
+use crate::{Git, ProcessGit, Summary, Task, TaskStatus};
 
 /// The backlog tasks one section shows at most; the full list stays in `plan/BACKLOG.md`.
 const MAX_TASKS_PER_SECTION: usize = 8;
 
-/// How the dashboard is printed: line width and whether ANSI colors are on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How the dashboard is printed: line width, whether ANSI colors are on, and an optional task to
+/// show in full.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DashboardOptions {
     /// The outer box width, in characters. Longer lines are truncated with `…`.
     pub width: usize,
     /// Whether to emit ANSI escape codes; `false` prints plain text.
     pub color: bool,
+    /// A task id to expand in a `TASK` block, as `cargo xtask task <id>` would print it.
+    pub task: Option<String>,
 }
 
 impl Default for DashboardOptions {
     fn default() -> Self {
-        Self { width: 80, color: true }
+        Self { width: 80, color: true, task: None }
     }
 }
 
@@ -52,76 +56,77 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     let state = parse_state(&status)?;
     let head = git.head();
     let interrupted = is_interrupted(&state, session.as_deref(), head.as_deref(), git);
+    let style = Style::new(opts.width, opts.color);
+    let mut blocks: Vec<Section> = Vec::new();
 
-    let mut out = Boxed::new(*opts);
-    out.section("STATE", "plan/STATUS.md", None, |body| {
-        let _ = writeln!(
-            body,
-            "{} {} · task {} · {} · base {} · updated {}",
-            state.milestone,
-            state.phase.unwrap_or_else(|| "-".to_owned()),
-            state.task,
-            state.status,
-            state.base,
-            state.updated
-        );
-    });
+    blocks.push(Section::new("STATE", "plan/STATUS.md").line(format!(
+        "{} {} · task {} · {} · base {} · updated {}",
+        state.milestone,
+        state.phase.as_deref().unwrap_or("-"),
+        state.task,
+        state.status,
+        state.base,
+        state.updated
+    )));
 
-    let entries = backlog_entries(&backlog);
+    if let Some(id) = opts.task.as_deref() {
+        let summary = Summary {
+            state: state.clone(),
+            tasks: parse_backlog(&backlog),
+            session: session.as_deref().map(parse_session),
+            head: head.clone(),
+        };
+        let view = view_from(&summary, id, map.as_deref(), debt.as_deref(), questions.as_deref(), None)?;
+        let notes = crate::note(root, &view.task.id)?;
+        let mut view = view;
+        view.notes = notes;
+        let opts = TaskOptions { width: opts.width, color: opts.color, all: false };
+        blocks.extend(task_sections(&view, &opts));
+    }
+
+    let tasks = parse_backlog(&backlog);
     for section in ["Now", "Bugs", "Next"] {
-        let tasks: Vec<(TaskStatus, String, String, Option<String>)> = entries
-            .iter()
-            .filter(|entry| entry.section == section)
-            .filter_map(|entry| {
-                let task = parse_task_line(&entry.text)?;
-                Some((task.status, task.id, task.text, task.files))
-            })
-            .collect();
-        if tasks.is_empty() {
+        let listed: Vec<&Task> = tasks.iter().filter(|task| task.section == section).collect();
+        if listed.is_empty() {
             continue;
         }
-        let title = section.to_uppercase();
-        out.section(&title, "plan/BACKLOG.md", None, |body| {
-            render_tasks(body, &tasks, opts.width, opts.color);
-        });
+        let mut block = Section::new(section.to_uppercase(), "plan/BACKLOG.md");
+        render_tasks(&mut block, &listed, style);
+        blocks.push(block);
     }
 
     if state.status == "doing"
         && let Some(session) = session.as_deref()
     {
         let name = session_path.unwrap_or("plan/SESSION.md");
-        out.section("SESSION", name, interrupted.then_some("INTERRUPTED"), |body| {
-            for key in ["task", "now", "blocked", "run", "resume"] {
-                match session_field(session, key) {
-                    Some(value) => {
-                        let _ = writeln!(body, "{key}: {value}");
-                    }
-                    // An empty field still says something: the note left the question open.
-                    None => {
-                        let _ = writeln!(body, "{key}: -");
-                    }
-                }
+        let mut block = Section::new("SESSION", name);
+        if interrupted {
+            block.marker = Some("INTERRUPTED".to_owned());
+        }
+        for key in ["task", "now", "blocked", "run", "resume"] {
+            match session_field(session, key) {
+                Some(value) => block.push(format!("{key}: {value}")),
+                // An empty field still says something: the note left the question open.
+                None => block.push(format!("{key}: -")),
             }
-        });
+        }
+        blocks.push(block);
     }
 
     if let Some(questions) = questions.as_deref() {
         let bullets = markdown_bullets(questions);
         if !bullets.is_empty() {
-            out.section("QUESTIONS", "plan/questions.md", None, |body| {
-                for bullet in bullets.into_iter().take(MAX_TASKS_PER_SECTION) {
-                    let _ = writeln!(body, "· {bullet}");
-                }
-            });
+            blocks.push(
+                Section::new("QUESTIONS", "plan/questions.md")
+                    .lines(bullets.into_iter().take(MAX_TASKS_PER_SECTION).map(|bullet| format!("· {bullet}"))),
+            );
         }
     }
 
     if let Some(debt) = debt.as_deref() {
         let counts = tag_counts(debt);
         if !counts.is_empty() {
-            out.section("DEBT", "plan/debt.md", None, |body| {
-                let _ = writeln!(body, "{}", counts.join(" · "));
-            });
+            blocks.push(Section::new("DEBT", "plan/debt.md").line(counts.join(" · ")));
         }
     }
 
@@ -129,15 +134,14 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     if let Some(map) = map.as_deref() {
         let rows = parse_map(map);
         if !rows.is_empty() {
-            out.section("MAP", "plan/map.md", None, |body| {
-                for row in &rows {
-                    let _ = writeln!(body, "{} — {}", row.feature, row.where_);
-                }
-            });
+            blocks.push(
+                Section::new("MAP", "plan/map.md")
+                    .lines(rows.into_iter().map(|row| format!("{} — {}", row.feature, row.where_))),
+            );
         }
     }
 
-    Ok(out.finish())
+    Ok(sections(&blocks, style))
 }
 
 /// Whether the session looks cut short: work was running, the plan edit rides on commits past the
@@ -180,37 +184,17 @@ fn has_open_steps(session: &str) -> bool {
 }
 
 /// Writes each task as a marker line plus its dim `files:` hint, capped per section.
-fn render_tasks(body: &mut String, tasks: &[(TaskStatus, String, String, Option<String>)], width: usize, color: bool) {
-    let inner = width.saturating_sub(4).max(12);
-    for (status, id, text, files) in tasks.iter().take(MAX_TASKS_PER_SECTION) {
-        let painted = paint(status.marker(), status_color(*status, color));
-        let _ = writeln!(body, "{painted} {id}  {}", truncate(text, inner.saturating_sub(id.len() + 6)));
-        if let Some(files) = files {
-            let shown = truncate(files, inner - 9);
-            let _ = writeln!(body, "         {}", paint(&shown, if color { Some(DIM) } else { None }));
+fn render_tasks(block: &mut Section, tasks: &[&Task], style: Style) {
+    let inner = style.width.saturating_sub(4).max(12);
+    for task in tasks.iter().take(MAX_TASKS_PER_SECTION) {
+        let painted = paint(task.status.marker(), status_color(task.status, style.color));
+        let room = inner.saturating_sub(task.id.len().saturating_add(6));
+        block.push(format!("{painted} {}  {}", task.id, truncate(&task.lead, room)));
+        if let Some(files) = &task.files {
+            let shown = truncate(files, inner.saturating_sub(9));
+            block.push(format!("         {}", paint(&shown, if style.color { Some(DIM) } else { None })));
         }
     }
-}
-
-/// The top-level `- ` bullets of a markdown file, wrapped lines joined onto their bullet.
-fn markdown_bullets(text: &str) -> Vec<String> {
-    let mut bullets: Vec<String> = Vec::new();
-    let mut open = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("- ") {
-            bullets.push(rest.trim().to_owned());
-            open = true;
-        } else if open && line.starts_with([' ', '\t']) && !trimmed.is_empty() {
-            if let Some(bullet) = bullets.last_mut() {
-                bullet.push(' ');
-                bullet.push_str(trimmed);
-            }
-        } else {
-            open = false;
-        }
-    }
-    bullets
 }
 
 /// One `[tag]` count per tag found in the file, in order of appearance.
@@ -230,6 +214,18 @@ fn tag_counts(text: &str) -> Vec<String> {
     counts.into_iter().map(|(tag, seen)| format!("[{tag}] {seen}")).collect()
 }
 
+/// The colour of a backlog marker: neutral open, yellow doing, green done.
+fn status_color(status: TaskStatus, color: bool) -> Option<&'static str> {
+    if !color {
+        return None;
+    }
+    match status {
+        TaskStatus::Open => None,
+        TaskStatus::Doing => Some(YELLOW),
+        TaskStatus::Done => Some(GREEN),
+    }
+}
+
 /// Reads a required plan file, reporting the same message shape as [`crate::check`].
 fn read(root: &Path, name: &str) -> Result<String, Vec<String>> {
     std::fs::read_to_string(root.join(name)).map_err(|error| vec![format!("cannot read `{name}`: {error}")])
@@ -244,181 +240,13 @@ fn read_optional(root: &Path, name: &str) -> Result<Option<String>, Vec<String>>
     }
 }
 
-// Styling: hand-written ANSI codes, nothing else. `None` paints nothing.
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-
-/// Wraps `text` in `code`, when `code` is `Some`; empty text paints nothing.
-fn paint(text: &str, code: Option<&str>) -> String {
-    match code {
-        Some(code) if !text.is_empty() => format!("{code}{text}{RESET}"),
-        _ => text.to_owned(),
-    }
-}
-
-/// The color of a backlog marker: neutral open, yellow doing, green done.
-fn status_color(status: TaskStatus, color: bool) -> Option<&'static str> {
-    if !color {
-        return None;
-    }
-    match status {
-        TaskStatus::Open => None,
-        TaskStatus::Doing => Some(YELLOW),
-        TaskStatus::Done => Some(GREEN),
-    }
-}
-
-/// The visible width of `text`: ANSI escape sequences take no columns on screen.
-fn display_width(text: &str) -> usize {
-    let mut width = 0;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            // An escape sequence: ESC, then `[`, optional digits and `;`, then a final letter.
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
-                    chars.next();
-                }
-                chars.next();
-            }
-            continue;
-        }
-        width += 1;
-    }
-    width
-}
-
-/// Truncates `text` to `width` display columns, ending it with `…`; ANSI codes pass through whole.
-fn truncate(text: &str, width: usize) -> String {
-    if display_width(text) <= width {
-        return text.to_owned();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    if width == 1 {
-        return "…".to_owned();
-    }
-    let mut kept = String::new();
-    let mut used = 0;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            kept.push(ch);
-            if chars.peek() == Some(&'[') {
-                kept.push(chars.next().expect("just peeked"));
-                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
-                    kept.push(chars.next().expect("just peeked"));
-                }
-                if let Some(final_ch) = chars.next() {
-                    kept.push(final_ch);
-                }
-            }
-            continue;
-        }
-        if used + 1 >= width {
-            break;
-        }
-        kept.push(ch);
-        used += 1;
-    }
-    format!("{kept}…")
-}
-
-/// Trims a section header to `width` display columns without an ellipsis: the box rule that follows
-/// is what fills the line, and cutting off mid-word with `…` would only hide the source path.
-fn truncate_head(text: &str, width: usize) -> String {
-    if display_width(text) <= width {
-        return text.to_owned();
-    }
-    let mut kept = String::new();
-    let mut used = 0;
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            kept.push(ch);
-            if chars.peek() == Some(&'[') {
-                kept.push(chars.next().expect("just peeked"));
-                while matches!(chars.peek(), Some(digit) if digit.is_ascii_digit() || *digit == ';') {
-                    kept.push(chars.next().expect("just peeked"));
-                }
-                if let Some(final_ch) = chars.next() {
-                    kept.push(final_ch);
-                }
-            }
-            continue;
-        }
-        if used + 1 > width {
-            break;
-        }
-        kept.push(ch);
-        used += 1;
-    }
-    // Never leave a dangling reset behind a cut escape sequence: close every open color.
-    if kept.contains('\x1b') && !kept.ends_with(RESET) {
-        kept.push_str(RESET);
-    }
-    kept
-}
-
-/// Accumulates the boxed sections and joins them with blank lines.
-struct Boxed {
-    width: usize,
-    color: bool,
-    blocks: Vec<String>,
-}
-
-impl Boxed {
-    fn new(opts: DashboardOptions) -> Self {
-        Self { width: opts.width.max(24), color: opts.color, blocks: Vec::new() }
-    }
-
-    /// Appends one framed section; `marker` is the red flag inside the header, when there is one.
-    fn section(&mut self, title: &str, path: &str, marker: Option<&str>, body: impl FnOnce(&mut String)) {
-        // The frame costs two columns: `┌` and `┐`. A header line is `┌ text ┐`, so its inner field
-        // is `width - 2`; a body line is `│ ` + text + pad + ` │`, whose field is two narrower.
-        let inner = self.width.saturating_sub(2).max(1);
-        let body_inner = inner.saturating_sub(2).max(1);
-        let mut text = String::new();
-        let label = paint(title, self.color.then_some(BOLD));
-        let source = paint(path, self.color.then_some(DIM));
-        let mut head = format!(" {label} ─ {source} ");
-        if let Some(marker) = marker {
-            // Bold red: the flag must stand out inside the header line.
-            let painted = paint(&paint(marker, self.color.then_some(RED)), self.color.then_some(BOLD));
-            let _ = write!(head, "{painted} ");
-        }
-        let head = truncate_head(&head, inner);
-        let filler = "─".repeat(inner.saturating_sub(display_width(&head)));
-        let _ = writeln!(text, "┌{}{}┐", head, filler);
-
-        let mut content = String::new();
-        body(&mut content);
-        for line in content.lines() {
-            let line = truncate(line, body_inner);
-            let pad = " ".repeat(body_inner.saturating_sub(display_width(&line)));
-            let _ = writeln!(text, "│ {line}{pad} │");
-        }
-        let _ = writeln!(text, "└{}┘", "─".repeat(inner));
-        self.blocks.push(text);
-    }
-
-    fn finish(self) -> String {
-        self.blocks.join("\n")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
     use crate::Git;
+    use crate::section::display_width;
 
     /// A fake repository: `HEAD` is ahead of the plan's `base` whenever the test asks for it.
     struct FakeGit {
@@ -474,7 +302,7 @@ mod tests {
     }
 
     fn opts(width: usize, color: bool) -> DashboardOptions {
-        DashboardOptions { width, color }
+        DashboardOptions { width, color, task: None }
     }
 
     fn head_ahead() -> FakeGit {

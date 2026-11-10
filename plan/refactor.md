@@ -34,9 +34,14 @@ from memory:
 ```sh
 # production lines per file (approximate: everything before the last test module)
 for f in $(git ls-files 'crates/*/src/*.rs' 'apps/*/src/*.rs' | grep -v /tests/); do
-  n=$(grep -n 'cfg(test)' "$f" | head -1 | cut -d: -f1); echo "${n:-$(wc -l <"$f")} $f"
+  n=$(grep -n 'cfg(test)' "$f" | tail -1 | cut -d: -f1); echo "${n:-$(wc -l <"$f")} $f"
 done | sort -rn | head -20
 ```
+
+The sweep finds the worst files; for one task, `cargo xtask task <ID>` prints the same production and
+test counts for every path the task names, together with the last commit that touched it. Use it —
+the number in an entry and the number in the report must agree, and only one of them is computed
+twice.
 
 Count public methods per `impl` and fields per struct with `grep -c '^\s\{4\}pub fn'` and
 `grep -c '^\s\{4\}[a-z_]*:'` inside the type's range. A finding is real when it crosses a ceiling in

@@ -13,15 +13,23 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
 
 1. `plan/STATUS.md` — the `STATE:` line and the `Next` section.
 2. `plan/SESSION.md` — only when `state=doing`; it names the live step and the next command.
-3. `plan/BACKLOG.md` — the task id in `STATE:` and the files its `files:` hint names. Read those
-   files and their direct callers. **Do not scan the workspace**; if the hint is wrong, fix the hint.
+3. `cargo xtask task` — the task `STATE:` names, in full: its fields (`Rules`, `Why`, `Shape`, `Done`,
+   `Commits`), the `files:` hint with production and test lines and the last commit that touched each
+   file, the `plan/map.md` rows naming those paths, the `plan/debt.md` and `plan/questions.md` entries
+   the task touches, the ADRs it cites and `plan/notes/<ID>.md`, the research note a previous session
+   left. `cargo xtask task <ID>` answers the same for any task, `--md` is the agent form and `--paths`
+   one file per line. **Read this instead of grepping `plan/*.md`, `docs/` or `git log`**, and read
+   the files and their direct callers. Do not scan the workspace; if the hint is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
 Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the
 whole file. If the anchor is wrong or missing, fix the row — the map is a contract, not a suggestion.
 
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
-area, never read them at start. `plan/rename.md` is the same kind of file: it holds the measured
+area, never read them at start — the task report already quotes the entries that name the task's
+files. `plan/notes/<ID>.md` is the research note of one task: it is where a session writes what it
+measured, decided and ruled out, and the task report prints it, so the next session does not repeat
+the search. Template: `state-contract/templates/NOTE.md`. `plan/rename.md` is the same kind of file: it holds the measured
 inventory and the procedure for the pre-release rename (task R1). `plan/refactor.md` is the third:
 the design rules, the audit procedure and the subtask template for the design-rules refactor
 (task S7). `plan/archive/done.md` is history; `git log --oneline` replaces it.
@@ -321,10 +329,12 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
   (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
-- `plan/BACKLOG.md` — one line per task with a stable id, its order and a `files:` hint; the single list of what is done, in progress and next.
+- `plan/BACKLOG.md` — one entry per task with a stable id, its order, its labelled fields and a `files:` hint; the single list of what is done, in progress and next.
+- `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
-- `cargo xtask dashboard` prints the state with the file each section comes from.
+- `cargo xtask task [<ID>]` prints one task in full — the plan half, the code facts and the ADRs; `--md` for an agent, `--paths` for a shell loop.
+- `cargo xtask dashboard` prints the state with the file each section comes from; `--task <ID>` expands one task in it.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
   measured procedure and its gotchas. Read only when R1 is taken.

@@ -1,6 +1,6 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|plan|status|ci>`
+//! Usage: `cargo xtask <layers|plan|status|task|next|dashboard|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
@@ -9,6 +9,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
+
+mod task;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -88,6 +90,7 @@ fn main() {
         Some("layers") => report(check_layers()),
         Some("plan") => report_plan(check_plan()),
         Some("status") => print_status(),
+        Some("task") | Some("next") => report_task(&args[1..]),
         Some("dashboard") => print_dashboard(),
         Some("ci") => run_ci(),
         Some("help") | Some("--help") | None => {
@@ -104,11 +107,14 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <layers|plan|status|dashboard|ci>");
+    println!("usage: cargo xtask <layers|plan|status|task|next|dashboard|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
     println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
     println!("  status    print the current task and what follows, for a session start");
-    println!("  dashboard print a styled overview of the plan; each section names its source file");
+    println!("  task [id] print one task in full: fields, notes, files with line counts, map, debt, ADRs");
+    println!("            `--md` for an agent, `--paths` for a shell loop, default is the framed report");
+    println!("  next      `task` with no id: the task `STATE:` names");
+    println!("  dashboard print a styled overview of the plan; `--task <id>` expands one task");
     println!("  ci        run the whole gate: fmt, clippy, tests, layers, plan");
 }
 
@@ -159,12 +165,28 @@ fn check_plan() -> Result<state_contract::Summary, Vec<String>> {
 
 /// Prints what the plan files say, without failing on a warning.
 fn print_status() -> i32 {
-    match state_contract::status(workspace_root()) {
+    let detail = Some("cargo xtask task");
+    match state_contract::status_with_detail(
+        workspace_root(),
+        &state_contract::ProcessGit::new(workspace_root()),
+        detail,
+    ) {
         Ok(text) => {
             print!("{text}");
             0
         }
         Err(violations) => report_plan(Err(violations)),
+    }
+}
+
+/// Prints one task in full: the plan half, the code facts and the decisions it cites.
+fn report_task(args: &[String]) -> i32 {
+    match task::run(workspace_root(), args) {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("task: {message}");
+            1
+        }
     }
 }
 

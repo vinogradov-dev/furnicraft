@@ -2,8 +2,10 @@
 //!
 //! A project keeps its plan in three files: `plan/STATUS.md` with exactly one `STATE:` line,
 //! `plan/BACKLOG.md` with `## Now`, `## Next` and `## Done` sections, and `plan/SESSION.md` while a
-//! task is in progress. This crate parses them, checks that they agree with each other and with the
-//! files they name, and renders the block a session starts from.
+//! task is in progress; `plan/notes/<ID>.md` holds the research note of one task. This crate parses
+//! them, checks that they agree with each other and with the files they name, renders the block a
+//! session starts from, and prints one task in full — its fields, map rows, notes, debt, questions
+//! and the session fields — so a host need not grep the plan files.
 //!
 //! It has no dependencies and no knowledge of any product: the inputs are text, the filesystem and
 //! `git`. [`check`] does all of it, [`analyze`] is the pure part, and [`Git`] is the injection point
@@ -23,16 +25,22 @@
 
 mod dashboard;
 mod git;
+mod notes;
 mod parse;
+mod section;
 mod status;
+mod task;
 mod validate;
 
 use std::path::Path;
 
 pub use dashboard::{DashboardOptions, dashboard, dashboard_with};
 pub use git::{Git, ProcessGit};
+pub use notes::{MAX_NOTE_LINES, note, note_path};
 pub use parse::parse_backlog;
-pub use status::render;
+pub use section::{Section, Style, sections, wrap};
+pub use status::{render, render_with_detail};
+pub use task::{TaskOptions, TaskView, task, task_sections, task_view, task_view_with, task_with, touches};
 pub use validate::{MAX_SESSION_LINES, MAX_STATUS_LINES, README_RULE, analyze};
 
 /// What the plan files say right now.
@@ -91,10 +99,33 @@ pub struct Task {
     pub status: TaskStatus,
     /// The `## ` section the line sits in, without the hashes: `Now`, `Next`, `Done`.
     pub section: String,
-    /// The one-line text.
+    /// The whole entry, continuation lines joined into one: what a reader quotes.
     pub text: String,
+    /// The opening sentence, before the first labelled field — the line a dashboard shows.
+    pub lead: String,
+    /// The labelled parts of the entry, in file order: `Rules`, `Why`, `Shape`, `Done`, `Commits`.
+    pub fields: Vec<Field>,
     /// The `files:` hint, when the line has one.
     pub files: Option<String>,
+    /// The `files:` hint split into paths, in the order it names them.
+    pub paths: Vec<String>,
+}
+
+/// One labelled part of a backlog entry, for example `Why: …`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Field {
+    /// The label as the entry spells it, in its canonical form: `Rules`, `Why`, `Shape`, `Done`,
+    /// `Commits`.
+    pub label: String,
+    /// The text after the label, up to the next label.
+    pub body: String,
+}
+
+impl Task {
+    /// The body of the field with this label, if the entry carries one.
+    pub fn field(&self, label: &str) -> Option<&str> {
+        self.fields.iter().find(|field| field.label.eq_ignore_ascii_case(label)).map(|field| field.body.as_str())
+    }
 }
 
 /// The state of one backlog task.
@@ -169,7 +200,14 @@ pub fn status(root: &Path) -> Result<String, Vec<String>> {
 
 /// [`status`] with the git facts supplied by `git`.
 pub fn status_with(root: &Path, git: &dyn Git) -> Result<String, Vec<String>> {
-    check_with(root, git).map(|summary| render(&summary))
+    status_with_detail(root, git, None)
+}
+
+/// [`status_with`] plus the command a host points at for the full task, for example
+/// `cargo xtask task`: the block names it once, under the current task, instead of printing the
+/// whole entry. `None` prints no hint, for a project without a task command.
+pub fn status_with_detail(root: &Path, git: &dyn Git, detail: Option<&str>) -> Result<String, Vec<String>> {
+    check_with(root, git).map(|summary| status::render_with_detail(&summary, detail))
 }
 
 fn read(path: &Path, name: &str) -> Result<String, Vec<String>> {
@@ -178,7 +216,7 @@ fn read(path: &Path, name: &str) -> Result<String, Vec<String>> {
 
 /// Checks what only the filesystem and git can answer: the hinted paths and the `base` commit.
 fn workspace_violations(root: &Path, summary: &Summary, git: &dyn Git) -> Vec<String> {
-    let mut violations = Vec::new();
+    let mut violations = notes::note_violations(root, &summary.tasks);
 
     for task in summary.tasks.iter().filter(|task| task.status != TaskStatus::Done) {
         let Some(hint) = &task.files else { continue };
