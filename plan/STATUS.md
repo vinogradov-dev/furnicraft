@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S14 state=idle base=c27002f updated=2026-11-11
+STATE: milestone=M7 phase=A task=S15 state=idle base=4e6d535 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -15,14 +15,14 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
   0083), and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
-- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
-  render, then `Editor`, then the shell; `main.rs` and `ui/lib.rs` land before U45). S8 gave the shared
-  test fixtures one definition in `model::testing` behind a `testing` feature the testkit re-exports
-  (ADR 0084); S9 split off `geom/segment.rs`, so `geom/contour.rs` keeps the ring that joins, areas,
-  offsets and samples it; S10 split off `geom/rect.rs` (the exact orthogonal boolean and its tracer),
-  S11 the rest: `geom/ring.rs` is what a region is, `geom/boolean.rs` the general boolean (ADR 0043
-  amended); S12 gave the segment maths back to `geom/segment.rs` (X31 is the panic it exposed) and
-  S13 split the figure frames into `contour_frames.rs`; F4 waits in `plan/questions.md`.
+- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene, render,
+  `Editor`, then the shell; `main.rs` and `ui/lib.rs` before U45). S8 gave the shared test fixtures one
+  definition in `model::testing` behind a `testing` feature the testkit re-exports (ADR 0084); S9 split off
+  `geom/segment.rs`; `geom/contour.rs` keeps the ring that joins, areas, offsets and samples it; S10 split
+  off `geom/rect.rs` (the orthogonal boolean and its tracer), S11 the rest: `geom/ring.rs` is a region,
+  `geom/boolean.rs` the general boolean (ADR 0043 amended); S12 gave the segment maths back to
+  `geom/segment.rs` (X31); S13 split the figure frames into `contour_frames.rs`; S14 split
+  `engine/panel_cmds` into `panel`, `machining` and `banding`; F4 waits in `plan/questions.md`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -52,9 +52,10 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S14 is next: `engine/panel_cmds.rs` is 1143 production lines and 21 commands, 547 of them the ten
-banding ones, so they move to `crates/engine/src/panel_cmds/banding.rs`; then S15, S16 in `scene`
-and `render`, S17–S22 after them.
+S15 is next: `scene/lib.rs` is 1277 production lines and 82 public items, so `Camera`, `Projection`,
+`FixedBasis` and the projection helpers move to `crates/scene/src/camera.rs`, and `Ray` with the
+`ray_*` pickers to `crates/scene/src/ray.rs`, leaving the grid, lights, shadows, drawables and
+`SceneFrame` in a `lib.rs` under the ceiling; then S16 and S17 split `render`, and S18–S22 follow.
 
 ## Index
 

@@ -25,18 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
-  Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
-  (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
-  `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
-  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; `panel_cmds.rs`
-  becomes `panel_cmds/mod.rs` that declares its submodules and re-exports every id and spec, so the
-  `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> ~600.
-  Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
-  re-exports only (B3) and `banding.rs` states its one reason to change (H5).
-  Commits: one move.
-  `files: crates/engine/src/panel_cmds.rs, crates/engine/src/commands.rs`
-
 - `[ ]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
   Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
   ray, picking, the grid, the lights, the contact shadows and the frame (F5).
@@ -81,13 +69,13 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   picking and creation-target rules (C7: the UI never holds a document default).
   Shape: `placement_in_parent` becomes `Project::placement_in_parent` beside `world_placement` in
   `crates/model/src/project/query.rs`; `default_panel_size` becomes
-  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds.rs` and the UI asks it; the
+  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds/panel.rs` and the UI asks it; the
   pick and target helpers move to `crates/ui/src/target.rs` (~90); `ui/lib.rs` 1159 -> ~1090, still
   over the ceiling, so S19 follows.
   Done: a model test for a rotated parent and for the root's identity frame; a created panel is still
   600 x 400; suite unchanged; the palette builds the same params.
   Commits: one move.
-  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds.rs`
+  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds/panel.rs`
 
 - `[ ]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
   B1, B3, B4, B5, B8.
@@ -338,6 +326,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
+  Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
+  (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
+  `panel.bow.*`, lines 596-1142) — B4's ceiling and B6's public surface at once.
+  Shape: the ten banding commands move to `crates/engine/src/panel_cmds/banding.rs`; the eleven that
+  remain divide by value family into `panel.rs` (creation, outline, name, size, material) and
+  `machining.rs` (the four records), because `mod.rs` holds declarations and re-exports only (B3)
+  and 580 lines of logic is not one family (B1); `panel_cmds/mod.rs` re-exports every id and spec,
+  so the `COMMANDS` table in `commands.rs` keeps its paths; `panel_cmds` 1143 -> mod.rs 44 +
+  panel.rs 411 + banding.rs 547 + machining.rs 172 production lines, none past 600.
+  Done: the registry test still finds every id; suite unchanged; `mod.rs` holds declarations and
+  re-exports only (B3) and `banding.rs` states its one reason to change (H5).
+  Commits: one move.
+  `files: crates/engine/src/panel_cmds/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/banding.rs, crates/engine/src/panel_cmds/machining.rs` — `4e6d535`
 
 - `[x]` **P9** the tool documents itself — rules: B1, C7.
   Why: the contract is written three times (`AGENTS.md` §1/§6.1, `templates/AGENTS.section.md`, the
