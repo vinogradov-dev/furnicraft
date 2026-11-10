@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X25 state=idle base=617a973 updated=2026-11-10
+STATE: milestone=M7 phase=A task=X27 state=idle base=c992043 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -54,9 +54,10 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X24 gave a drawing its own zero; X25 does the same for a primitive: `place_primitive` converts the
-work plane's world placement with the parent's inverse, and `object.primitive.create` keeps the mesh
-centred with a zero pivot, so a cube lands under the pointer in a moved or turned container.
+X26 anchored a panel at its contour's base corner (ADR 0083): `add_panel_contour` rebases the ring
+and `panel.contour.create` lands it exactly over its source. X27 makes the inspector tell the local
+and the world truth: parent-relative labels, a read-only world position and world pivot, and
+`node.placement.world_zero`, which clears a nested translation without turning the node.
 
 ## Index
 

@@ -974,7 +974,7 @@ mod tests {
     use super::*;
     use crate::*;
 
-    use furnicraft_geom::DQuat;
+    use furnicraft_geom::{DQuat, DVec3};
 
     use crate::fixtures::*;
 
@@ -1182,11 +1182,37 @@ mod tests {
         let ring = panel.outline_contour().expect("ring");
         assert_eq!(ring.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
         assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size"));
+        assert_eq!(panel.placement().translation(), DVec3::new(10.0, 10.0, 0.0), "the base corner is the local zero");
+        assert!(panel.pivot().is_zero(), "the local zero is the pivot");
+        assert_eq!(
+            project.pivot_world(panel_id).expect("world pivot"),
+            DVec3::new(10.0, 10.0, 0.0),
+            "the world pivot sits on the source contour's base corner"
+        );
         assert_eq!(
             ring.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
             moved.entries().iter().map(|entry| entry.id()).collect::<Vec<_>>(),
             "segment ids travel with their curves"
         );
+        let panel_world = project.world_placement(panel_id).expect("world placement");
+        assert_eq!(
+            panel_world.transform_point(DVec3::ZERO),
+            DVec3::new(10.0, 10.0, 0.0),
+            "the placement places the base corner, so no world point moved"
+        );
+        let source_world = project.world_placement(source_id).expect("source world");
+        let source_points = moved.sampled_points(1_000.0).expect("source points");
+        let panel_points = ring.sampled_points(1_000.0).expect("panel points");
+        assert_eq!(source_points.len(), panel_points.len());
+        for (source, panel) in source_points.iter().zip(&panel_points) {
+            let world = |point: [Length; 2], placement: Placement| {
+                placement.transform_point(DVec3::new(point[0].millimetres_f64(), point[1].millimetres_f64(), 0.0))
+            };
+            assert!(
+                (world(*source, source_world) - world(*panel, panel_world)).length() < 1e-3,
+                "{source:?} moved to {panel:?}"
+            );
+        }
 
         let mesh_id = project
             .add_object(project.root().id(), "Mesh", Placement::IDENTITY, Geometry::Mesh(box_mesh()))

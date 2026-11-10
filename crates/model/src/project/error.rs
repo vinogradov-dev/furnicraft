@@ -180,6 +180,12 @@ pub enum ProjectError {
         /// The panel whose frame could not move.
         panel: Id,
     },
+    /// A new node's content cannot be anchored at the frame its creation asks for.
+    #[error("node {id} cannot be anchored at its creation frame")]
+    CreationFrame {
+        /// The node whose frame could not be chosen.
+        id: Id,
+    },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {

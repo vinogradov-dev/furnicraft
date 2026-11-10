@@ -75,7 +75,10 @@ pub struct PanelContourCreate {
     pub source: Id,
     /// Panel-body material from the session catalogue.
     pub material: MaterialId,
-    /// Placement relative to the parent container.
+    /// Offset composed on top of the source's frame, in the parent frame.
+    ///
+    /// The identity means "exactly over the source": the panel's local zero, its contour's base
+    /// corner, is placed on the source's world corner (ADR 0083).
     pub placement: Placement,
 }
 
@@ -119,15 +122,35 @@ fn contour_create_run(
     let material =
         catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
     let contour = project.object_contour(params.source)?.clone();
+    let placement = over_source_placement(project, &params)?;
     let id = project.add_panel_contour(
         params.parent,
         params.name,
         &contour,
         Some(params.material),
         material.nominal_thickness(),
-        params.placement,
+        placement,
     )?;
     Ok(CommandOutcome::created(id))
+}
+
+/// The parent-frame placement that puts the new panel exactly over its source.
+///
+/// A node stores a placement relative to its parent and a panel's local zero is its contour's base
+/// corner, so `offset ∘ inverse(parent_world) ∘ source_world` is the pre-rebase frame: the model
+/// then appends the base corner in the source frame, and no world point moves (ADR 0083).
+fn over_source_placement(project: &Project, params: &PanelContourCreate) -> Result<Placement, CommandError> {
+    let invalid = |error: furnicraft_model::PlacementError| CommandError::InvalidParams {
+        command: CONTOUR_CREATE_ID,
+        message: error.to_string(),
+    };
+    let parent_world =
+        project.world_placement(params.parent).ok_or(ProjectError::ContainerNotFound { id: params.parent })?;
+    let source_world =
+        project.world_placement(params.source).ok_or(ProjectError::NodeNotFound { id: params.source })?;
+    let parent_inverse = parent_world.inverse().map_err(invalid)?;
+    let over_source = Placement::compose(parent_inverse, source_world).map_err(invalid)?;
+    Placement::compose(params.placement, over_source).map_err(invalid)
 }
 
 /// Stable id of the contour-outline replacement command.

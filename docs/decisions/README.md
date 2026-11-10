@@ -84,6 +84,9 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0077](0077-a-pending-arc-is-the-closing-segment.md) | A pending arc is the closing segment | Accepted |
 | [0078](0078-a-view-rolls-about-its-own-axis.md) | A view rolls about its own axis | Accepted |
 | [0079](0079-every-layout-remembers-its-own-views.md) | Every layout remembers its own views | Accepted |
+| [0080](0080-the-tool-strips-float-over-the-design-space.md) | The tool strips float over the design space | Accepted |
+| [0082](0082-the-local-zero-is-the-creation-anchor.md) | The local zero is the creation anchor | Accepted |
+| [0083](0083-a-panel-is-anchored-at-its-base-corner.md) | A panel is anchored at its base corner | Accepted |
 
 ## Format
 

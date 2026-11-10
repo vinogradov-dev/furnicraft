@@ -543,10 +543,12 @@ impl Project {
 
     /// Adds a panel whose outline is a contour ring selected in the scene.
     ///
-    /// The ring is moved so its minimum corner is the panel-local zero, which is the panel frame
-    /// anchor (ADR 0009); a ring that is already anchored is unchanged apart from rounding. The
-    /// panel is created in one revision with the ring as its outline, so a rectangle panel never
-    /// converts into a contour panel and the reverse is impossible too.
+    /// The ring is rebased so its bounds base corner is the panel-local zero (ADR 0083): the ring
+    /// moves by that corner and the placement becomes the parent-frame position of the corner, so
+    /// no world point moves and the pivot starts at zero. A ring that already starts at zero is
+    /// unchanged apart from rounding. The panel is created in one revision with the ring as its
+    /// outline, so a rectangle panel never converts into a contour panel and the reverse is
+    /// impossible too.
     pub fn add_panel_contour(
         &mut self,
         parent: Id,
@@ -561,8 +563,9 @@ impl Project {
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let anchored = Panel::anchored_contour(contour)?;
-        let panel = Panel::new_contour(id, name, anchored, material, last_known_thickness, placement)?;
+        let rebased = rebase_at_anchor(contour.clone(), placement, FrameAnchor::BASE_CORNER)
+            .map_err(|_| ProjectError::CreationFrame { id })?;
+        let panel = Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
             return Err(ProjectError::ContainerNotFound { id: parent });
         };
@@ -781,6 +784,44 @@ fn point_in_polygon(point: [i64; 2], polygon: &[[i64; 2]]) -> bool {
 mod tests {
     use crate::fixtures::*;
     use crate::*;
+
+    use furnicraft_geom::{DQuat, DVec3};
+
+    #[test]
+    fn a_new_panel_is_anchored_at_its_base_corner_in_a_nested_turned_parent() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let parent_placement =
+            Placement::new(DVec3::new(-320.0, 150.0, 700.0), DQuat::from_rotation_z(0.7)).expect("parent");
+        let parent = project.add_component(root, "Frame", parent_placement).expect("container");
+
+        let at_origin = project
+            .add_panel(parent, "Back", sample_nominal(), None, sample_thickness(), Placement::IDENTITY)
+            .expect("panel at the parent origin");
+        let panel = project.panel(at_origin).expect("panel");
+        assert_eq!(panel.placement().translation(), DVec3::ZERO, "a new panel is at the parent origin");
+        assert!(panel.pivot().is_zero(), "the base corner is the pivot");
+        assert_eq!(
+            project.pivot_world(at_origin).expect("world pivot"),
+            parent_placement.translation(),
+            "a zero local pivot is the parent origin"
+        );
+
+        let placement =
+            Placement::new(DVec3::new(50.0, 20.0, 30.0), DQuat::from_rotation_z(-0.4)).expect("panel placement");
+        let turned = project
+            .add_panel(parent, "Top", sample_nominal(), None, sample_thickness(), placement)
+            .expect("turned panel");
+        let world = project.world_placement(turned).expect("world placement");
+        let expected = Placement::compose(parent_placement, placement).expect("expected world");
+        assert!(world.same_transform(expected));
+        assert_eq!(
+            project.pivot_world(turned).expect("world pivot"),
+            world.transform_point(DVec3::ZERO),
+            "a turned placement turns about the base corner, not the bounds centre"
+        );
+        assert_eq!(project.pivot(turned), Some(Pivot::ZERO));
+    }
 
     #[test]
     fn clearing_an_unbanded_edge_is_rejected() {
