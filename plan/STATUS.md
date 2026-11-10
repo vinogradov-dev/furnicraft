@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S6 state=idle base=524f58f updated=2026-11-10
+STATE: milestone=M7 phase=A task=S6 state=idle base=cb5763b updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -52,11 +52,12 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-X30 made a panel's pivot derived: an outline edit re-anchors the frame at the ring's base corner,
-compensates the translation and machining and resets the pivot to zero; the pivot commands refuse a
-panel and a stored non-zero pivot is a readable load error (ADR 0083). S6 is next: the frame
-invariants become one test module, ADRs 0082/0083 are checked against the code, ADRs 0009, 0026,
-0052 and 0058 are corrected, and `PROJECT.md`, `AGENTS.md` §4.10 and the map rows follow.
+S6 is next: the frame invariants become one test module, ADRs 0082/0083 are checked against the code,
+ADRs 0009, 0026, 0052 and 0058 are corrected, and `PROJECT.md`, `AGENTS.md` §4.10 and the map rows
+follow. S7 follows S6: a read-only audit re-measures the tree and files the design-rules refactor as
+small behaviour-preserving subtasks (findings F1-F7 in the entry), with the `main.rs` and `Editor`
+splits landing before U45, which moves those files into `Document`. X30 made a panel's pivot derived
+(ADR 0083).
 
 ## Index
 

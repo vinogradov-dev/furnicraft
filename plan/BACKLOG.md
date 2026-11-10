@@ -41,6 +41,67 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   documents and `cargo xtask ci`.
   `files: crates/model/src/project/mod.rs, docs/decisions, PROJECT.md, plan/map.md, AGENTS.md`
 
+- `[ ]` **S7** the design rules become an ordered refactor plan instead of an analysis: a read-only
+  audit re-measures the tree, checks every finding against the code as it stands then, and files one
+  small behaviour-preserving subtask per finding (`S8`, `S9`, … in dependency order) in `## Now`, then
+  stops. The audit commit touches `plan/` only — no source file and no test. It runs right after S6
+  because it is cheap and gives the rest of `## Now` its order; a subtask that edits `main.rs`,
+  `crates/ui/src/lib.rs` or `apps/furnicraft/src/file_menu.rs` lands before U45, which moves exactly
+  those files into `Document` and `tabs.rs`, and U45 then re-plans against the smaller result; a
+  subtask inside `geom`, `model`, `scene`, `render` or `param` is independent of U45.
+  Findings measured on 2026-11-10, a baseline to re-measure and not a requirement: `F1`
+  `apps/furnicraft/src/main.rs` 2609 production lines, `impl FurniCraftApp` ≈1620, `viewport` 637,
+  40 fields, 113 functions, ≥8 reasons to change; `F2` `crates/ui/src/lib.rs` `Editor` 18 fields, 60
+  public methods, `impl` 1039, four pointer modes plus ribbon state plus eight cards, and three
+  document rules inside it (`placement_in_parent`, `NEW_PANEL_LENGTH_MM/WIDTH_MM`,
+  `resolve_viewport_pick`); `F3` `crates/model/src/contour_edit.rs` 1572 production lines with 27
+  `millimetres_f64`/`radians_f64` conversions and its own projection, split and arc-from-radius
+  trigonometry, which L0 `geom` already owns, while the `model/contour.rs` header still claims to be
+  the single conversion point; `F4` `Project` ≈90 public methods and `Panel` 63, so one new panel
+  field edits `model/panel`, `model/project/panel_cmds`, `engine/panel_cmds` (id, label, params,
+  enabled, run), the `COMMANDS` table, `engine/lib.rs`, `ui/panel_card` and often `ui/palette`; `F5`
+  file-monoliths with no submodule — `geom/region.rs` 1660 (exact rectangle booleans and general
+  contour booleans), `scene/lib.rs` 1277 (camera, ray, grid, light, shadow, frame, picking),
+  `render/lib.rs` 1446; `F6` `ui/panel_card.rs` and `ui/object_card.rs` ≈989 each (`impl PanelCard`
+  ≈857, `run_action` 74) and `ui/toolbars.rs` 982 (`show_group_row` 146); `F7` shared fixtures
+  rewritten in four crates (`millimetres`, `sample_project`, `open_path`) although
+  `furnicraft-testkit` exists. Clean at filing time and not a finding: `cargo xtask layers` green, no
+  `kernel` or GPU edge in `model`, no `egui` or `model` edge in `render`, the UI dispatches and never
+  writes the document, the kernel port is five methods, tests are 39% of the tree.
+  Rules the subtasks follow. `M1` measure, never re-derive: production lines are the lines before the
+  last `#[cfg(test)] mod tests`; a finding is real at one file ≥1000 production lines, one function
+  ≥150 or one `impl` ≥800, a type ≥12 fields or ≥25 public methods, or a rule outside its layer
+  (`AGENTS.md` §4.2, §4.3, §4.5, §4.11). `M2` one verdict per finding: cohesive-but-big → mechanical
+  split by concern with no API change; two reasons to change → extract the type or the module;
+  layering breach → move it down the layer arrow only (`ui` → `engine`/`model`, `model` → `geom`),
+  never up; no action → one line of why, so the next reader does not re-open it. `M3` one subtask, one
+  commit, one concern: a pure move changes no logic and reads as a rename under `git diff -M`; a move
+  and a fix never share a commit; a moved test keeps its assertions and changes only its path and
+  names, so the suite passes without an edited expectation. `M4` no new escape: no `#[allow]`, no new
+  `unwrap`/`expect` outside tests, every public item keeps its doc comment, a new module gets its
+  `plan/map.md` row in the same commit. `M5` a boundary move amends the ADR that placed the rule
+  (0026, 0029, 0060, 0082 are in play) in the same commit; the crate map and `AGENTS.md` §3 change
+  only when a crate or layer changes. `M6` documented debt is not re-filed: `plan/debt.md`
+  `[view-state]` already owns selection and open containers in `Editor`, and F4's
+  `Project::apply(change)` rewrite touches every command, so it goes to `plan/questions.md` unless the
+  owner approves it during the audit. `M7` order by dependency: `geom`/`model`/`scene` first, then
+  `ui::Editor`, then the shell; each subtask names the file it will own, so two subtasks never edit
+  one file at the same time.
+  Re-verify at the start, because the tree will have moved: S6 rewrites the frame tests and the panel
+  and inspector documents, so `model/project`, `model/panel` and ADRs 0009, 0026, 0052, 0058, 0082,
+  0083 are re-read, not quoted; U45, if it lands first, moves `Session`, `Editor`, `viewport` and
+  `FileMenu` into `document.rs`/`tabs.rs`, so F1 and F2 are re-measured on the post-U45 files and the
+  audit files no split that U45 already performs; U46, U48, U49, U50 and U52 edit `toolbars.rs`,
+  `scene_tree.rs`, `main.rs` and the cards, so a subtask over one of those re-measures it first; R1
+  (`plan/rename.md`) renames 13 crates and moves `apps/` to `app/`, so every path here and in
+  `plan/map.md` is re-read after it, never copied from this entry.
+  Done when `cargo xtask ci` is green on the pre-audit tree, every finding carries a verdict and
+  either a subtask id with its `files:` hint or a stated reason, the subtasks sit in `## Now` in
+  dependency order, `plan/map.md` still describes the tree, and `plan/STATUS.md` names the first
+  subtask. Tests: `cargo xtask plan` accepts every new hint and id, and the audit commit touches only
+  `plan/`.
+  `files: plan/BACKLOG.md, plan/map.md, crates/model/src/contour_edit.rs, crates/ui/src/lib.rs`
+
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
