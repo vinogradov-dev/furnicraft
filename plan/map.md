@@ -26,7 +26,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Contour panel card UI | `crates/ui/src/panel_card.rs` (`PanelAction::StartContour`, `PanelAction::ToContour`) | small; *Edit contour* bakes first when the panel is still rectangular |
 | Contour object card UI | `crates/ui/src/object_card.rs` (`ObjectAction::StartContour`) | small |
 | Contour segment value type | `crates/model/src/contour.rs` (`ContourSegment`, Line/Arc) | whole file |
-| Contour geometry math | `crates/geom/src/contour.rs` (`offset`, `trimmed`, `intersections_with`, `sample`) | whole file |
+| Contour geometry math | `crates/geom/src/contour.rs` (`Contour`, `signed_area`, `joint_is_smooth`, `offset`, `sample`), `crates/geom/src/segment.rs` (`Line`, `Arc`, `Segment`, `split_at`, `trimmed`, `intersections_with`) | whole files; a segment is one directed piece of geometry, a contour is the chain that joins, areas, offsets and samples it |
 | Planar regions and booleans | `crates/geom/src/region.rs` (`Region`, `Region::sample`, `union_regions`, `subtract_regions`, `intersect_regions`, `regions_from_rects`) | whole file |
 | Panel core geometry | `crates/model/src/panel/geometry.rs` (`PanelGeometry::from_regions`), `crates/model/src/panel/machining.rs` (`core_violation_of`) | small |
 | Machining descriptors | `crates/model/src/panel/machining.rs` (`MACHINING_DESCRIPTORS`, `MachiningDescriptor`, `MachiningCapabilities`) | small |
