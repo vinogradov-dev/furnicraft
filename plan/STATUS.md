@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S15 state=idle base=4e6d535 updated=2026-11-11
+STATE: milestone=M7 phase=A task=P10 state=doing base=4e6d535 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -52,10 +52,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S15 is next: `scene/lib.rs` is 1277 production lines and 82 public items, so `Camera`, `Projection`,
-`FixedBasis` and the projection helpers move to `crates/scene/src/camera.rs`, and `Ray` with the
-`ray_*` pickers to `crates/scene/src/ray.rs`, leaving the grid, lights, shadows, drawables and
-`SceneFrame` in a `lib.rs` under the ceiling; then S16 and S17 split `render`, and S18–S22 follow.
+P10 is next: the gate follows the links the plan relies on
 
 ## Index
 

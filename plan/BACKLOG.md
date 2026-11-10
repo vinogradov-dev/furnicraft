@@ -25,6 +25,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[~]` **P10** the gate follows the links the plan relies on
+  Why: The gate checks that a hint names a path and that a map row names a file, and nothing
+   else: five closed tasks point at files a later move deleted (`xtask/src/task.rs`,
+   `geom/region.rs`, `panel_cmds.rs`), S14's own arithmetic disagrees with the tool's report
+   (547 and 172 against 574 and 212), `plan/refactor.md` still offers `geom/region.rs` as B1's
+   example, S20 cites an F10 the audit never filed, `plan/questions.md` is read by nothing, and
+   `base` may be any ancestor, so a plan can describe a tree a hundred commits old and stay
+   green.
+  Shape: Every `files:` hint names a path that exists, closed entries included; a closed
+   entry's ADR citation names a decision in `docs/decisions/`; `STATE:` carries only its six
+   keys; `plan/questions.md` and `plan/debt.md` carry no status marker and no `STATE:` line,
+   because they are not the plan; `state=idle` with `base` behind `HEAD` passes only when every
+   commit in between touched `plan/` and nothing else.
+  Done: The five dead hints point at the code that holds the work now; S14's numbers and B1's
+   example are what the tree says; the plan stays green through `cargo xtask ci`; one test per
+   rule.
+  `files: state-contract/src/lib.rs, state-contract/src/validate.rs, state-contract/src/git.rs, plan/refactor.md, plan/BACKLOG.md, AGENTS.md`
+
 - `[ ]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
   Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
   ray, picking, the grid, the lights, the contact shadows and the frame (F5).
