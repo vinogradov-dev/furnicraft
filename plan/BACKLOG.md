@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
-  D1, D2, B8, H2, H4.
-  Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
-  `arc_with_radius`, `arc_between`, `arc_midpoint`, projection (`clamp_to_curve`) and split
-  (`split_document`), although `geom` has `Arc::with_start_point`, `with_end_point`, `split_at`,
-  `Line::split_at`, `nearest_on_support` and `from_endpoints_sagitta` (F3); `model/contour.rs` still
-  calls itself the only place a segment becomes millimetres.
-  Shape: the arc-from-radius, arc-between, projection and split maths become free functions beside the
-  segments in `crates/geom/src/segment.rs`, each taking its tolerance as an argument (D2);
-  `contour_edit.rs` keeps the `Length`/`Degrees` conversion at the call and computes nothing
-  (conversions 27 -> ~8), 1572 -> ~1280. The `model/contour.rs` header states that the document
-  converts once at its edge and that the maths lives in `geom`.
-  Done: every contour-edit test passes unchanged; if a test disagrees with the `geom` formula, stop and
-  file an `X` task instead of bending the test (§12); `cargo test -p furnicraft-model -p furnicraft-geom`.
-  Commits: one move.
-  `files: crates/model/src/contour_edit.rs, crates/geom/src/contour.rs`
-
 - `[ ]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
   Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
   a corner of any ring (`CornerMove`, `move_corner*`, trim and split, `PathCorner`) and the constrained
@@ -317,18 +300,33 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   loop whose visible branch reads as a straight line through the joint and across the viewport.
   Expectation: a corner drag keeps the arc's class — a shallow arc stays shallow, a deliberate major
   arc stays major — and the draft never draws outside the figure. Suspected cause:
-  `arc_with_radius` hands `arc_between` the side of the old arc's midpoint against the *new* chord,
-  and `arc_between` returns the first candidate whose midpoint is on that side. For a shallow arc a
-  1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
+  `Arc::with_radius_through` picks the new centre on the side of the old arc's midpoint against the
+  *new* chord and then returns the first direction whose midpoint is on that side. For a shallow arc
+  a 1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
   test matches the major arc's midpoint and the sweep becomes ~360°. Reproduced with chord 100 mm,
   sagitta 0.5 mm (R 2500 mm, sweep -2.292°): a 1 mm corner drag yields sweep 357.731° and a sampled
   chain spanning x -2425..2575, y -4899..101 mm; the joints still meet, so the ring validates and
-  Apply stores it. Introduced by X13 (`64c11d3`). Fix: choose the candidate by its sweep magnitude
-  against the old arc's — nearest |sweep|, tie broken by the old sign — and pass the old sweep into
-  `arc_between`; the centre side stays as it is. Tests: a shallow arc keeps a small sweep and its
-  points stay inside the figure; a major arc stays major; the three existing `a_free_arc_end_*`
-  tests stay green; a grip drag on a shallow arc keeps its class.
-  `files: crates/model/src/contour_edit.rs, crates/ui/src/contour_grips.rs`
+  Apply stores it. Introduced by X13 (`64c11d3`); S12 moved the maths, not the defect. Fix: choose
+  the direction by its sweep magnitude against the old arc's — nearest |sweep|, tie broken by the
+  old sign — and pass the old sweep into the rebuild; the centre side stays as it is. Tests: a
+  shallow arc keeps a small sweep and its points stay inside the figure; a major arc stays major;
+  the three existing `a_free_arc_end_*` tests stay green; a grip drag on a shallow arc keeps its
+  class.
+  `files: crates/geom/src/segment.rs, crates/ui/src/contour_grips.rs`
+
+- `[ ]` **X31** an along-contour drag on a sub-millimetre segment panics: dragging a corner along a
+  segment shorter than twice the clamp margin (2 µm) aborts the editor instead of clamping or
+  refusing. Expectation: the corner stops at the segment's own ends, or the edit is refused with an
+  error the user can read; a furniture project never crashes. Reproduced: a path with a 1 µm first
+  segment and `move_corner_at(PathCorner::End(id 1), point(50, 0), CornerMove::Along(id 1))` panics
+  in `f64::clamp` with `min = 1.0, max = 0.0`. Suspected cause: `Segment::clamp_to_extent` turns the
+  1 µm margin into a parameter fraction by dividing it by the segment's length, so for a segment
+  shorter than 2 µm the lower bound exceeds the upper; the document's `clamp_to_curve` computed the
+  same fraction before S12, so the move inherited the defect unchanged. A 1 µm line is a legal
+  document segment: `ContourSegment::line` refuses only a coincident pair. Tests: a drag along a
+  1 µm line and along a 1 µm arc returns `Err` instead of panicking; a drag along a normal segment
+  still stops one micrometre short of the far end.
+  `files: crates/geom/src/segment.rs, crates/model/src/contour_edit.rs`
 
 ## Next
 
@@ -354,6 +352,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
+  D1, D2, B8, H2, H4.
+  Why: 1572 production lines with 27 `millimetres_f64`/`radians_f64` conversions and its own
+  `arc_with_radius`, `arc_between`, `arc_midpoint`, projection (`clamp_to_curve`) and split
+  (`split_document`), although `geom` has `Arc::with_start_point`, `with_end_point`, `split_at`,
+  `Line::split_at`, `nearest_on_support` and `from_endpoints_sagitta` (F3); `model/contour.rs` still
+  calls itself the only place a segment becomes millimetres.
+  Shape: the arc-from-radius, arc-between, projection and split maths become free functions beside the
+  segments in `crates/geom/src/segment.rs`, each taking its tolerance as an argument (D2);
+  `contour_edit.rs` keeps the `Length`/`Degrees` conversion at the call and computes nothing
+  (conversions 27 -> ~8), 1572 -> ~1280. The `model/contour.rs` header states that the document
+  converts once at its edge and that the maths lives in `geom`.
+  Done: every contour-edit test passes unchanged; if a test disagrees with the `geom` formula, stop and
+  file an `X` task instead of bending the test (§12); `cargo test -p furnicraft-model -p furnicraft-geom`.
+  Commits: one move.
+  Measured: `geom/segment.rs` grew 701 -> 875 production lines and holds `Arc::with_radius_through`,
+  `Arc::through_ends`, `Arc::sweep_to`, `Arc::midpoint`, `Segment::clamp_to_extent`,
+  `Segment::support_point_within` and `point_on_circle`; `contour_edit.rs` drops 1571 -> 1481 and keeps
+  no cos, sin or split trigonometry. The conversion target was optimistic: 25 -> 21
+  `millimetres_f64`/`radians_f64`, and the 21 that remain are all the document edge §4.3 requires (the
+  rectangle half-extents, a length ratio, the radius argument of an arc rebuild, `geometry_arc`). The
+  339 model and 97 geom tests pass unchanged; the move exposed X31 and did not fix it.
+  `[x]` `392ebff`
+  `files: crates/model/src/contour_edit.rs, crates/geom/src/segment.rs`
 
 - `[x]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
   Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean

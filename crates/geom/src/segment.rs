@@ -1,5 +1,6 @@
 //! One directed piece of a planar contour: a straight [`Line`], a circular [`Arc`] and the
-//! [`Segment`] that unifies them.
+//! [`Segment`] that unifies them, with the reshape operations a corner drag needs — an arc rebuilt
+//! through new ends, a point projected onto a segment's support and a point clamped to its extent.
 //!
 //! Coordinates are millimetres and angles are radians. Every tolerance is the caller's argument;
 //! the module owns no precision policy beyond the degenerate-length threshold [`EPSILON`] and the
@@ -7,12 +8,13 @@
 //! circle.
 //!
 //! It refuses non-finite input, a zero-length line, a zero radius, a sagitta at or beyond half its
-//! chord and a split point outside the segment; it returns [`ContourError`] rather than clamping or
-//! guessing. It does not model a chain: joining segments, offsetting a ring and sampling it are
-//! `contour.rs`'s job.
+//! chord, a split point outside the segment and a point off the support it was meant to lie on; it
+//! returns [`ContourError`] rather than clamping or guessing. It does not model a chain: joining
+//! segments, offsetting a ring and sampling it are `contour.rs`'s job, and the document's
+//! `Length`/`Degrees` conversion is not here.
 //!
 //! Changes when: the geometry of a single segment changes — the arc parameterisation, the
-//! point-to-support projection or the split rule.
+//! point-to-support projection, the reshape of an arc through new ends or the split rule.
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -142,6 +144,26 @@ impl Line {
             return Err(ContourError::SplitOutside);
         }
         Ok((Self::new(self.start, point)?, Self::new(point, self.end)?))
+    }
+
+    /// The point of the line nearest to `point`, held `margin` millimetres short of each end.
+    ///
+    /// A corner sliding along a contour must not reach the opposite node, so the projection
+    /// parameter is clamped to `margin / length .. 1 - margin / length`. `margin` is a linear
+    /// distance in millimetres; the segment must be longer than twice it, otherwise the clamped
+    /// range is empty.
+    pub(crate) fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
+        if !point.is_finite() {
+            return Err(ContourError::InvalidInput("the clamped point must be finite"));
+        }
+        let direction = self.end - self.start;
+        let length_squared = direction.length_squared();
+        if !length_squared.is_finite() || length_squared <= 0.0 {
+            return Err(ContourError::ZeroLength);
+        }
+        let fraction = margin / (self.end - self.start).length().max(f64::MIN_POSITIVE);
+        let parameter = ((point - self.start).dot(direction) / length_squared).clamp(fraction, 1.0 - fraction);
+        Ok(self.start + direction * parameter)
     }
 
     /// The unit tangent at the start.
@@ -290,7 +312,7 @@ impl Arc {
 
     /// A point on the supporting circle at an angle.
     fn point_at_angle(self, angle: f64) -> DVec2 {
-        self.center + DVec2::new(angle.cos(), angle.sin()) * self.radius
+        point_on_circle(self.center, self.radius, angle)
     }
 
     /// The start point.
@@ -346,6 +368,11 @@ impl Arc {
             return None;
         }
         Some(self.point_at_angle(self.start_angle + self.sweep_angle * t))
+    }
+
+    /// The point halfway along the sweep.
+    pub fn midpoint(self) -> DVec2 {
+        self.point_at_angle(self.start_angle + self.sweep_angle * 0.5)
     }
 
     /// The point of the supporting circle nearest to `point`.
@@ -508,23 +535,124 @@ impl Arc {
         Self::new(self.center, self.radius, self.start_angle, self.sweep_angle.signum() * ahead)
     }
 
+    /// The arc from `start` to `end` with `radius`, bulging to the side this arc bulges to.
+    ///
+    /// The chord fits two circles of that radius; the one on this arc's side of the chord is used,
+    /// and the direction of travel is chosen so the new arc also bows to the side this one bows to.
+    /// That is what lets a corner drag rebuild an arc without flipping a curve the user drew.
+    ///
+    /// `tolerance` is a linear distance in millimetres: it accepts a chord within it of the
+    /// diameter, which a radius rounded to whole micrometres needs. A non-finite point, a chord
+    /// shorter than `tolerance`, a non-positive radius and a radius that cannot reach both ends
+    /// are refused.
+    pub fn with_radius_through(
+        self,
+        start: DVec2,
+        end: DVec2,
+        radius: f64,
+        tolerance: f64,
+    ) -> Result<Self, ContourError> {
+        if !start.is_finite() || !end.is_finite() || !radius.is_finite() || radius <= 0.0 {
+            return Err(ContourError::InvalidInput("the rebuilt arc needs finite points and a positive radius"));
+        }
+        if !tolerance.is_finite() || tolerance < 0.0 {
+            return Err(ContourError::InvalidInput("the arc tolerance must be a finite distance"));
+        }
+        let chord = end - start;
+        let chord_length = chord.length();
+        if !chord_length.is_finite() || chord_length < tolerance {
+            return Err(ContourError::ZeroLength);
+        }
+        if radius < chord_length * 0.5 - tolerance {
+            return Err(ContourError::InvalidRadius);
+        }
+        let midpoint = (start + end) * 0.5;
+        let direction = chord / chord_length;
+        let normal = DVec2::new(-direction.y, direction.x);
+        let half = (radius * radius - (chord_length * 0.5) * (chord_length * 0.5)).max(0.0).sqrt();
+        let toward = (self.center - midpoint).dot(normal);
+        let center = if toward >= 0.0 { midpoint + normal * half } else { midpoint - normal * half };
+        let start_angle = (start.y - center.y).atan2(start.x - center.x);
+        let end_angle = (end.y - center.y).atan2(end.x - center.x);
+        let counter_clockwise = (end_angle - start_angle).rem_euclid(TAU);
+        if !counter_clockwise.is_finite() || counter_clockwise <= 0.0 {
+            return Err(ContourError::InvalidSweep);
+        }
+        let forward = Self::new(center, radius, start_angle, counter_clockwise)?;
+        let left = (self.midpoint() - start).perp_dot(direction) >= 0.0;
+        if ((forward.midpoint() - start).perp_dot(chord) >= 0.0) == left {
+            return Ok(forward);
+        }
+        Self::new(center, radius, start_angle, counter_clockwise - TAU)
+    }
+
+    /// The arc from `start` to `end` that keeps this arc's radius and bulge where it can.
+    ///
+    /// When the chord fits two circles of this arc's radius, [`Arc::with_radius_through`] picks the
+    /// one on this arc's side, so the curve keeps its direction of travel. When the chord is longer
+    /// than the diameter the radius becomes half the chord, which is the one semicircle that still
+    /// reaches both ends. `tolerance` is a linear distance in millimetres, as there.
+    pub fn through_ends(self, start: DVec2, end: DVec2, tolerance: f64) -> Result<Self, ContourError> {
+        let chord_length = (end - start).length();
+        if !chord_length.is_finite() || chord_length < tolerance {
+            return Err(ContourError::ZeroLength);
+        }
+        let radius = if chord_length <= 2.0 * self.radius { self.radius } else { chord_length * 0.5 };
+        self.with_radius_through(start, end, radius, tolerance)
+    }
+
+    /// The point of the arc nearest to `point`, held `margin` millimetres short of each end.
+    ///
+    /// The point is taken at its own angle around the centre, and the travel along the sweep is
+    /// clamped to `margin / arc_length` at both ends, so a corner sliding along the arc cannot
+    /// reach the opposite node. `margin` is a linear distance in millimetres; the arc must be
+    /// longer than twice it, otherwise the clamped range is empty. A point in the centre, where
+    /// every point of the circle is equally near, is returned unchanged.
+    pub(crate) fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
+        if !point.is_finite() {
+            return Err(ContourError::InvalidInput("the clamped point must be finite"));
+        }
+        let offset = point - self.center;
+        if offset.length() <= f64::EPSILON {
+            return Ok(point);
+        }
+        let angle = offset.y.atan2(offset.x);
+        let travel = if self.sweep_angle >= 0.0 {
+            (angle - self.start_angle).rem_euclid(TAU)
+        } else {
+            -((-angle + self.start_angle).rem_euclid(TAU))
+        };
+        let arc_length = (self.sweep_angle.abs() * self.radius).max(f64::MIN_POSITIVE);
+        let fraction = margin / arc_length;
+        let slack = fraction * self.sweep_angle.abs();
+        let low = 0.0_f64.min(self.sweep_angle);
+        let high = 0.0_f64.max(self.sweep_angle);
+        let clamped = travel.clamp(low + slack, high - slack);
+        Ok(self.point_at_angle(self.start_angle + clamped))
+    }
+
+    /// The signed sweep from the start to `point`, in radians, in the direction of travel.
+    ///
+    /// `point` must lie on the supporting circle within [`SUPPORT_TOLERANCE`] and strictly inside
+    /// the sweep. A caller that stores the joint in its own units uses this to quantise the angle
+    /// once, so the two parts of a split share exactly one stored end.
+    pub fn sweep_to(self, point: DVec2) -> Result<f64, ContourError> {
+        let ahead = self.travel_delta(point)?;
+        if ahead <= EPSILON || ahead >= self.sweep_angle.abs() - EPSILON {
+            return Err(ContourError::SplitOutside);
+        }
+        Ok(self.sweep_angle.signum() * ahead)
+    }
+
     /// Splits the arc at a point strictly inside its sweep.
     ///
     /// Both parts keep the centre, the radius and the direction of travel, so the joint they share
     /// is exactly the split point. A point on an endpoint or off the circle is rejected.
     pub fn split_at(self, point: DVec2) -> Result<(Self, Self), ContourError> {
-        let ahead = self.travel_delta(point)?;
-        if ahead <= EPSILON || ahead >= self.sweep_angle.abs() - EPSILON {
-            return Err(ContourError::SplitOutside);
-        }
-        let sign = self.sweep_angle.signum();
-        let first = Self::new(self.center, self.radius, self.start_angle, sign * ahead)?;
-        let second = Self::new(
-            self.center,
-            self.radius,
-            self.start_angle + sign * ahead,
-            sign * (self.sweep_angle.abs() - ahead),
-        )?;
+        let first_sweep = self.sweep_to(point)?;
+        let second_sweep = self.sweep_angle - first_sweep;
+        let first = Self::new(self.center, self.radius, self.start_angle, first_sweep)?;
+        let second = Self::new(self.center, self.radius, self.start_angle + first_sweep, second_sweep)?;
         Ok((first, second))
     }
 }
@@ -600,6 +728,42 @@ impl Segment {
         match self {
             Self::Line(line) => line.nearest_on_support(point),
             Self::Arc(arc) => arc.nearest_on_support(point),
+        }
+    }
+
+    /// The point of the segment's supporting line or circle nearest to `point`, if `point` lies on
+    /// that support.
+    ///
+    /// `tolerance` is a linear distance in millimetres; a point farther off the supporting line or
+    /// circle is refused, as is a non-finite point and the centre of an arc, where every point of
+    /// the circle is equally near. A trim or a split uses this to accept only a point on the curve
+    /// the user drew.
+    pub fn support_point_within(self, point: DVec2, tolerance: f64) -> Result<DVec2, ContourError> {
+        if !point.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+            return Err(ContourError::InvalidInput("the point and the tolerance must be finite"));
+        }
+        let nearest = self
+            .nearest_on_support(point)
+            .ok_or(ContourError::InvalidInput("the point has no nearest point on the support"))?;
+        if (nearest - point).length() > tolerance {
+            return Err(ContourError::InvalidInput("the point does not lie on the segment's support"));
+        }
+        Ok(nearest)
+    }
+
+    /// The point of the segment's own extent nearest to `point`, held `margin` millimetres short of
+    /// each end.
+    ///
+    /// A corner sliding along a contour must not pass the opposite node, so the point is projected
+    /// onto the segment rather than its supporting line and pulled back by `margin` at both ends.
+    /// `margin` is a linear distance in millimetres; the segment must be longer than twice it.
+    pub fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
+        if !margin.is_finite() || margin < 0.0 {
+            return Err(ContourError::InvalidInput("the clamp margin must be a finite distance"));
+        }
+        match self {
+            Self::Line(line) => line.clamp_to_extent(point, margin),
+            Self::Arc(arc) => arc.clamp_to_extent(point, margin),
         }
     }
 
@@ -690,6 +854,16 @@ impl Segment {
             }
         }
     }
+}
+
+/// A point of a circle.
+///
+/// `center` and `radius` are millimetres and `angle` is radians measured from `+X`. The function is
+/// the one place the module turns an angle into a point, so a frame that holds a centre, a radius
+/// and angles in its own units asks for a point instead of computing the trigonometry. A non-finite
+/// angle gives a non-finite point, which a caller converting to its own units refuses.
+pub fn point_on_circle(center: DVec2, radius: f64, angle: f64) -> DVec2 {
+    center + DVec2::new(angle.cos(), angle.sin()) * radius
 }
 
 fn positive_angle(angle: f64) -> f64 {

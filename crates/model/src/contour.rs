@@ -5,7 +5,9 @@
 //! ring size it eventually has to become. The document keeps micrometres and millidegrees; this
 //! module is the only place where a segment becomes floating-point millimetres, and the only place
 //! where it comes back. Callers never see a `furnicraft_geom` type, so the geometry layer stays
-//! free to change.
+//! free to change. The maths over a segment — a projection, a split, an arc rebuilt through new
+//! ends — is `furnicraft_geom::segment`'s; this module converts once at its edge and computes no
+//! trigonometry of its own.
 //!
 //! Validation is total: every coordinate is inside [`MAX_CONTOUR_COORDINATE`], a line has two
 //! distinct endpoints, an arc has a positive radius and a non-zero sweep no larger than a full

@@ -25,7 +25,7 @@ pub use contour::{Contour, ContourError, DEFAULT_TANGENT_TOLERANCE};
 pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4, EulerRot};
 pub use rect::{Rect, RectError, connected_count, regions_from_rects, subtract_rects, total_area, union_rects};
 pub use ring::{Region, RegionError, RegionSamples};
-pub use segment::{Arc, Line, MAX_ARC_EXTENSION, Segment};
+pub use segment::{Arc, Line, MAX_ARC_EXTENSION, Segment, point_on_circle};
 pub use triangulate::{MAX_FACE_POINTS, TriangulateError, triangulate_face};
 
 /// A right-handed local frame: `x` and `y` span the profile plane, `z` is the extrusion axis.
