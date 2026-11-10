@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X26** a panel is anchored at its base corner: a panel is a parametric entity, not a mesh —
-  the core draws a closed contour, extrudes the thickness and then explicitly re-anchors the frame with
-  `rebase_at_anchor(BBoxBaseCorner)`, so the local zero *is* the base corner (min-X/min-Y for a
-  rectangle, the chosen bbox corner for any other ring), `pivot_local = 0`, and `translation` is the
-  parent-frame position of that corner. This is the owner's exception to "a closed body pivots at its
-  bounds centre", not to "the local zero is the pivot" (ADR 0083). `add_panel_contour` today subtracts
-  the ring's minimum corner when it anchors the outline but never adds it back to the placement, so a
-  panel made from a scene contour moves; it is rebased instead, and `panel.contour.create` places the
-  panel over its source: the source's world placement converted into the target parent's frame, with
-  `params.placement` composed on top as a parent-frame offset (identity means "exactly over the
-  source"). Machining, banding and the nominal rectangle keep their panel-local frame. Tests: a new
-  rectangle panel is at the parent origin with a zero pivot; a ring panel's world vertices equal the
-  source contour's and its pivot sits at the bbox base corner; a ring whose bounds do not start at zero
-  is anchored without moving a world point; a nested parent and a rotated panel placement both keep the
-  world corner equal to `world_placement ∘ (0, 0, 0)`; one undo entry.
-  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/engine/src/panel_cmds.rs`
-
 - `[ ]` **X27** the inspector tells the local and the world truth: the Transform card's X/Y/Z is the
   placement *relative to the parent* and the Pivot card's X/Y/Z is the pivot in the node's own frame,
   so at a nested node nothing on screen says where the node is in the world or what point the gizmo
@@ -310,6 +293,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X26** a panel is anchored at its base corner: a panel is a parametric entity, not a mesh —
+  the core draws a closed contour, extrudes the thickness and then explicitly re-anchors the frame with
+  `rebase_at_anchor(BBoxBaseCorner)`, so the local zero *is* the base corner (min-X/min-Y for a
+  rectangle, the chosen bbox corner for any other ring), `pivot_local = 0`, and `translation` is the
+  parent-frame position of that corner. This is the owner's exception to "a closed body pivots at its
+  bounds centre", not to "the local zero is the pivot" (ADR 0083). `add_panel_contour` today subtracts
+  the ring's minimum corner when it anchors the outline but never adds it back to the placement, so a
+  panel made from a scene contour moves; it is rebased instead, and `panel.contour.create` places the
+  panel over its source: the source's world placement converted into the target parent's frame, with
+  `params.placement` composed on top as a parent-frame offset (identity means "exactly over the
+  source"). Machining, banding and the nominal rectangle keep their panel-local frame. Tests: a new
+  rectangle panel is at the parent origin with a zero pivot; a ring panel's world vertices equal the
+  source contour's and its pivot sits at the bbox base corner; a ring whose bounds do not start at zero
+  is anchored without moving a world point; a nested parent and a rotated panel placement both keep the
+  world corner equal to `world_placement ∘ (0, 0, 0)`; one undo entry.
+  `c992043`
+  `files: crates/model/src/panel/mod.rs, crates/model/src/project/panel_cmds.rs, crates/engine/src/panel_cmds.rs`
 
 - `[x]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` handed
   `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
