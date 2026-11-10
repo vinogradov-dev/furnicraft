@@ -1573,11 +1573,9 @@ fn shift(point: [Length; 2], offset: [Length; 2]) -> Result<[Length; 2], Contour
 mod tests {
     #![allow(clippy::expect_used, clippy::panic, clippy::unreachable)]
 
-    use super::*;
+    use crate::testing::{millimetres, open_path};
 
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
+    use super::*;
 
     fn micrometres(value: i64) -> Length {
         Length::from_micrometres(value)
@@ -1814,10 +1812,6 @@ mod tests {
             contour.split_segment(id(1), point(150, 0)),
             Err(ContourEditError::Geometry(GeomError::SplitOutside))
         ));
-    }
-
-    fn open_path(points: Vec<[Length; 2]>) -> Path {
-        Path::polyline(points, false).expect("an open path")
     }
 
     fn path_ids(path: &Path) -> Vec<u32> {

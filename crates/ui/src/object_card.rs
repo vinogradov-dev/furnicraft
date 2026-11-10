@@ -993,7 +993,7 @@ mod tests {
     use furnicraft_engine::ObjectExtrudeCreate;
     use furnicraft_engine::object_cmds::OBJECT_EXTRUDE_CREATE_ID;
     use furnicraft_model::{Mesh, Placement};
-    use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
     use furnicraft_units::Length;
 
     use super::*;
@@ -1296,10 +1296,6 @@ mod tests {
         let summary = object_summary(session.project(), id).expect("summary");
         assert_eq!(summary.kind, "Constructive");
         assert_eq!(summary.height, Some(Length::from_millimetres(18).expect("height")));
-    }
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("length")
     }
 
     fn path_project(path: Path) -> (Session, Id) {

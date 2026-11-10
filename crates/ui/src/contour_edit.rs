@@ -1120,13 +1120,9 @@ mod tests {
     use furnicraft_model::{
         Constructive, Container, CutoutDepth, FaceSide, Geometry, MachiningAnchor, Panel, Placement, Project,
     };
-    use furnicraft_testkit::{sample_catalog, sample_panel_thickness, sample_project};
+    use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
 
     fn rectangle(width: i64, height: i64) -> Contour {
         Contour::from_polygon(vec![
@@ -1202,16 +1198,13 @@ mod tests {
         (project, id)
     }
 
-    fn open_path() -> Path {
-        Path::polyline(
-            vec![
-                [millimetres(0), millimetres(0)],
-                [millimetres(600), millimetres(0)],
-                [millimetres(600), millimetres(400)],
-            ],
-            false,
-        )
-        .expect("open path")
+    /// A 600 × 400 mm three-point chain, open at both ends.
+    fn sketch_path() -> Path {
+        open_path(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(600), millimetres(0)],
+            [millimetres(600), millimetres(400)],
+        ])
     }
 
     fn session(project: Project) -> Session {
@@ -1399,7 +1392,7 @@ mod tests {
 
     #[test]
     fn an_open_path_edit_is_one_revision_and_one_undo() {
-        let path = open_path();
+        let path = sketch_path();
         let (project, object) = path_project(path.clone());
         let mut session = session(project);
         let target = ContourTarget::Path(object);
@@ -1450,7 +1443,7 @@ mod tests {
 
     #[test]
     fn splitting_a_path_side_keeps_it_open_and_one_undo() {
-        let path = open_path();
+        let path = sketch_path();
         let (project, object) = path_project(path);
         let mut session = session(project);
         let mut edit = ContourEdit::start(session.project(), ContourTarget::Path(object)).expect("editable");
@@ -1472,7 +1465,7 @@ mod tests {
 
     #[test]
     fn a_constructive_target_does_not_edit_a_path() {
-        let (project, object) = path_project(open_path());
+        let (project, object) = path_project(sketch_path());
         assert!(ContourEdit::start(&project, ContourTarget::Object(object)).is_none());
         assert!(!ContourEdit::is_editable(&project, ContourTarget::Object(object)));
     }
@@ -2131,7 +2124,7 @@ mod tests {
 
     #[test]
     fn a_path_collapse_removes_the_segment_and_keeps_one_undo_entry() {
-        let (project, object) = path_project(open_path());
+        let (project, object) = path_project(sketch_path());
         let mut session = session(project);
         let mut edit = ContourEdit::start(session.project(), ContourTarget::Path(object)).expect("editable");
         let segment = edit.draft().id_at(0).expect("first segment");

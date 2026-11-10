@@ -490,11 +490,9 @@ fn paint_size(painter: &egui::Painter, pointer: Pos2, label: &str) {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::*;
+    use furnicraft_testkit::millimetres;
 
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
+    use super::*;
 
     fn draft(tool: DrawTool, points: &[(i64, i64)]) -> DrawDraft {
         let mut draft = DrawDraft::new(tool);

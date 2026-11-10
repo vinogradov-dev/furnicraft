@@ -84,14 +84,10 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::{Geometry, Mesh, Placement};
-    use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
     use furnicraft_units::Length;
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("length")
-    }
 
     /// A session with one cube at its root, and the cube's id.
     fn cube_session() -> (Session, Id) {

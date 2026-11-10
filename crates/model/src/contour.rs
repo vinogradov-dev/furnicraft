@@ -414,10 +414,6 @@ mod tests {
 
     use super::*;
 
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits")
-    }
-
     #[test]
     fn a_line_round_trips_through_serde() {
         let segment = ContourSegment::line([millimetres(0), millimetres(0)], [millimetres(100), millimetres(40)])

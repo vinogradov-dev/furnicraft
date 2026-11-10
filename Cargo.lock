@@ -1358,6 +1358,7 @@ dependencies = [
  "furnicraft-kernel-truck",
  "furnicraft-model",
  "furnicraft-param",
+ "furnicraft-testkit",
  "furnicraft-units",
  "thiserror 2.0.21",
 ]
@@ -1381,6 +1382,7 @@ dependencies = [
  "furnicraft-kernel",
  "furnicraft-kernel-truck",
  "furnicraft-model",
+ "furnicraft-testkit",
  "furnicraft-units",
  "thiserror 2.0.21",
 ]

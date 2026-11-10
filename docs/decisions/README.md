@@ -87,6 +87,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0080](0080-the-tool-strips-float-over-the-design-space.md) | The tool strips float over the design space | Accepted |
 | [0082](0082-the-local-zero-is-the-creation-anchor.md) | The local zero is the creation anchor | Accepted |
 | [0083](0083-a-panel-is-anchored-at-its-base-corner.md) | A panel is anchored at its base corner | Accepted |
+| [0084](0084-shared-test-fixtures-behind-a-testing-feature.md) | Shared test fixtures live in the model behind a `testing` feature | Accepted |
 
 ## Format
 

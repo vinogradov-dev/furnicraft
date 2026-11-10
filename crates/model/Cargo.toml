@@ -14,3 +14,8 @@ furnicraft-units = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[features]
+# Test support: `furnicraft-testkit` re-exports `testing`'s fixtures and this crate's own tests use
+# them, so the shared fixtures have one definition (S8). Off in a release build.
+testing = []

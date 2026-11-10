@@ -321,14 +321,12 @@ fn validate_dimension(id: MaterialId, field: &'static str, value: Length, max: L
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::millimetres;
+
     use super::*;
 
     fn id(value: u64) -> MaterialId {
         MaterialId::new(value).expect("test ids are non-zero")
-    }
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
     }
 
     fn panel_material() -> PanelMaterial {

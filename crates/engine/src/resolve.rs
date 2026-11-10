@@ -42,12 +42,9 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{EdgeBanding, EdgeBandingMaterial, PanelMaterial};
-    use furnicraft_testkit::{sample_edge_material_id, sample_material_id, sample_panel_thickness, sample_project};
-    use furnicraft_units::Length;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("millimetres fit")
-    }
+    use furnicraft_testkit::{
+        millimetres, sample_edge_material_id, sample_material_id, sample_panel_thickness, sample_project,
+    };
 
     #[test]
     fn catalogue_values_override_stored_fallbacks() {

@@ -840,13 +840,10 @@ mod tests {
 
     use furnicraft_geom::DVec2;
     use furnicraft_model::{ContourSegment, Path};
+    use furnicraft_testkit::{millimetres, open_path};
     use furnicraft_units::Degrees;
 
     use super::*;
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("a whole millimetre fits a length")
-    }
 
     /// The viewport the gizmo projects into.
     fn viewport() -> egui::Rect {
@@ -863,16 +860,13 @@ mod tests {
         .expect("rectangle")
     }
 
-    fn open_path() -> Path {
-        Path::polyline(
-            vec![
-                [millimetres(0), millimetres(0)],
-                [millimetres(100), millimetres(0)],
-                [millimetres(100), millimetres(60)],
-            ],
-            false,
-        )
-        .expect("open path")
+    /// A 100 × 60 mm three-point chain, open at both ends.
+    fn l_path() -> Path {
+        open_path(vec![
+            [millimetres(0), millimetres(0)],
+            [millimetres(100), millimetres(0)],
+            [millimetres(100), millimetres(60)],
+        ])
     }
 
     /// A line joined to a quarter arc of radius 40, open at both ends.
@@ -907,7 +901,7 @@ mod tests {
 
     #[test]
     fn an_open_chain_puts_a_handle_on_its_free_end() {
-        let path = open_path();
+        let path = l_path();
         let draft = ContourDraft::Chain(path.clone());
         let handles = corner_handles(&draft);
         let first = path.id_at(0).expect("first segment");
@@ -961,7 +955,7 @@ mod tests {
     #[test]
     fn an_open_chain_paints_as_an_open_polyline_ending_on_its_free_end() {
         let camera = Camera::default();
-        let path = open_path();
+        let path = l_path();
         let draft = ContourDraft::Chain(path.clone());
         let shape = draft_shape(camera, viewport(), Placement::IDENTITY, &draft, egui::Stroke::new(2.0, DRAFT_COLOR))
             .expect("three points make a polyline");
@@ -1031,7 +1025,7 @@ mod tests {
                 camera,
                 egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::ZERO),
                 Placement::IDENTITY,
-                &ContourDraft::Chain(open_path()),
+                &ContourDraft::Chain(l_path()),
                 egui::Stroke::new(2.0, DRAFT_COLOR)
             )
             .is_none(),
@@ -1051,7 +1045,7 @@ mod tests {
 
     #[test]
     fn painting_an_open_chain_adds_one_open_polyline_and_a_handle_on_every_corner() {
-        let path = open_path();
+        let path = l_path();
         let (project, object) = path_project(path.clone());
         let edit = ContourEdit::start(&project, ContourTarget::Path(object)).expect("a path is editable");
         let camera = Camera::default();
@@ -1267,7 +1261,7 @@ mod tests {
 
     #[test]
     fn an_along_contour_numeric_entry_shows_the_length_from_the_far_end() {
-        let draft = ContourDraft::Chain(open_path());
+        let draft = ContourDraft::Chain(l_path());
         let first = draft.id_at(0).expect("first segment");
         let second = draft.id_at(1).expect("second segment");
         let corner = PathCorner::Start(second);

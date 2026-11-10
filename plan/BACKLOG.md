@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
+- `[~]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
   Why: `fn millimetres` is written 20 times across 8 crates, `open_path` 5 times and `sample_project`
   twice, although `furnicraft-testkit` exists for exactly this (F7). Test-only: no production line
   changes, no ceiling is crossed — the finding is duplicated knowledge in ~26 test modules.

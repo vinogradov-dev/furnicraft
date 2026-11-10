@@ -115,10 +115,7 @@ mod tests {
 
     use super::*;
     use furnicraft_model::{DEFAULT_BANDS, DEFAULT_SEGMENTS};
-
-    fn millimetres(value: i64) -> Length {
-        Length::from_millimetres(value).expect("whole millimetres fit a length")
-    }
+    use furnicraft_testkit::millimetres;
 
     /// Newell's normal of a polygon.
     fn normal(mesh: &Mesh, face: &[u32]) -> [f64; 3] {
