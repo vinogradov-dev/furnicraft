@@ -1,10 +1,9 @@
 # Status
 
-STATE: milestone=M7 phase=A task=P4 state=doing base=d8864be updated=2026-11-10
+STATE: milestone=M7 phase=A task=S14 state=idle base=7df9401 updated=2026-11-10
 
-Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
-only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
-`cargo xtask status` prints both; `AGENTS.md` §1.1 orders a broken plan.
+Read this file first; `cargo xtask status` prints `STATE` and `## Now`, and `cargo xtask task` one
+task in full. `AGENTS.md` §1.1 orders a broken plan.
 
 ## Where we are
 
@@ -48,8 +47,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   floating ribbon (ADR 0080). U43/U63 gave each view its display style (ADR 0070), X10 made the edges
   mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
   closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
-- Faber's architecture is recorded (ADRs 0028–0032) but not implemented; `state-contract` (L0)
-  checks the plan. Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
+- Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) checks
+  the plan and prints one task in full (P4); `cargo xtask task` adds line counts, commits and ADRs.
+  Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 

@@ -152,3 +152,7 @@ module size, layer arrows and duplicated knowledge, `[vendor]`.
   family whose header states what holds it together (`geom` segments, `model/contour.rs`,
   `model/primitive.rs`, `engine/node_cmds.rs`, `model/panel/machining.rs`, `ui/theme.rs`); the audit
   filed only the two over B4's size ceiling (S9, S14).
+- `[design]` The task report selects `plan/debt.md` and `plan/questions.md` entries by the task's
+  `files:` paths, their crate directory, a file stem and the crate tag (`[engine]`); an entry that
+  names the area in prose only is not selected, and `cargo xtask task --all` prints every entry.
+  Keeping the tags and the `files:` hints honest is what makes the selection useful (P4).

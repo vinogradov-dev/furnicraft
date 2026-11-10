@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **P4** `cargo xtask task` prints one task in full — rules: B1, B7, C7, C10.
-  Why: starting S14 costs `status`, then a grep of `plan/BACKLOG.md`, `plan/map.md`, `plan/debt.md`,
-  `docs/decisions/` and `git log`, plus the production-line loop in `plan/refactor.md`; the gate
-  already parses every one of those files, so the reads are one command's work, not the agent's.
-  Shape: `state-contract` parses the labelled fields of an entry (`Rules`, `Why`, `Shape`, `Done`,
-  `Commits`), reads a per-task note `plan/notes/<ID>.md`, and renders one task as a block a human
-  reads (`task`, and `dashboard --task <ID>`); `xtask` adds what the plan does not carry — production
-  and test lines per hinted file, the last commit that touched it, the ADR titles — and an agent
-  form (`--md`, `--paths`) that needs no grep. The gate checks a note's id, staleness and budget.
-  Done: `cargo xtask task S14` prints the entry with its fields, both files' line counts and last
-  commits, the map row, matching debt, the ADRs, the note and the next task; `--md` carries no box
-  drawing and `--paths` one path per line; a note for an unknown or finished task fails `plan`;
-  `status` prints the lead sentence instead of the whole entry; the suite covers the new parse.
-  Commits: one.
-  `files: state-contract/src/lib.rs, state-contract/src/parse.rs, xtask/src/main.rs`
-
 - `[ ]` **S14** `engine/panel_cmds.rs` gives up its banding commands — rules: B1, B4, B6, B8.
   Why: 1143 production lines and 21 commands in one file with no test module, 547 of them banding
   (`panel.edge_banding.*`, `panel.corner_banding.*`, `panel.ring_banding.*`, `panel.corner.*`,
@@ -354,6 +338,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **P4** `cargo xtask task` prints one task in full — rules: B1, B7, C7, C10.
+  Why: starting S14 costs `status`, then a grep of `plan/BACKLOG.md`, `plan/map.md`, `plan/debt.md`,
+  `docs/decisions/` and `git log`, plus the production-line loop in `plan/refactor.md`; the gate
+  already parses every one of those files, so the reads are one command's work, not the agent's.
+  Shape: `state-contract` parses the labelled fields of an entry (`Rules`, `Why`, `Shape`, `Done`,
+  `Commits`), reads a per-task note `plan/notes/<ID>.md`, and renders one task as a block a human
+  reads (`task`, and `dashboard --task <ID>`); `xtask` adds what the plan does not carry — production
+  and test lines per hinted file, the last commit that touched it, the ADR titles — and an agent
+  form (`--md`, `--paths`) that needs no grep. The gate checks a note's id, staleness and budget.
+  Done: `cargo xtask task S14` prints the entry with its fields, both files' line counts and last
+  commits, the map row, matching debt, the ADRs, the note and the next task; `--md` carries no box
+  drawing and `--paths` one path per line; a note for an unknown or finished task fails `plan`;
+  `status` prints the lead sentence instead of the whole entry; the suite covers the new parse.
+  Commits: one. `[x]` `7df9401`
+  `files: state-contract/src/lib.rs, state-contract/src/parse.rs, xtask/src/main.rs`
 
 - `[x]` **S13** `model/contour_edit.rs` splits into corner moves and shape frames — rules: B1, B4, B8.
   Why: after S12 the module is ~1280 lines, over B4's ceiling, and holds two reasons to change: moving
