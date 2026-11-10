@@ -115,7 +115,7 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("usage: cargo xtask <layers|plan|status|task|next|dashboard|ci>");
+    println!("usage: cargo xtask <layers|plan|status|task|next|dashboard|docs|state|ci>");
     println!("  layers    check crate rules: layering, forbidden/dev-only dependencies, and no C/C++ sources");
     println!("  plan      check that plan/STATUS.md, plan/BACKLOG.md and plan/SESSION.md agree");
     println!("  status    print the current task and what follows, for a session start");
@@ -123,7 +123,7 @@ fn print_usage() {
     println!("            `--md` for an agent, `--paths` for a shell loop, default is the framed report");
     println!("  task list print one line per task; `--section/--status/--phase/--grep` filter");
     println!("  task add|start|set|step|note|close|reopen|drop — write the plan, `--dry-run` prints the diff");
-    println!("  state set k=v  set a field of the `STATE:` line");
+    println!("  state set k=v  set a field of the `STATE:` line; `state next --stdin` rewrites `## Next`");
     println!("  next      `task` with no id: the task `STATE:` names");
     println!("  dashboard print a styled overview of the plan; `--task <id>` expands one task");
     println!("  docs      check that `docs/decisions/README.md` lists every decision and nothing else");
