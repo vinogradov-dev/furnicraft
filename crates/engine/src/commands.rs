@@ -124,6 +124,7 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_GROUP,
     node_cmds::NODE_UNGROUP,
     node_cmds::NODE_PLACEMENT_SET,
+    node_cmds::NODE_PLACEMENT_WORLD_ZERO,
     node_cmds::NODE_PLACEMENT_SET_MANY,
     node_cmds::NODE_PIVOT_SET,
     node_cmds::NODE_PIVOT_CENTER,
@@ -294,6 +295,10 @@ mod tests {
         let placement = registry.get("node.placement.set").expect("node.placement.set is registered");
         assert_eq!(placement.id(), "node.placement.set");
         assert_eq!(placement.label(), "Place");
+        let placement_world_zero =
+            registry.get("node.placement.world_zero").expect("node.placement.world_zero is registered");
+        assert_eq!(placement_world_zero.id(), "node.placement.world_zero");
+        assert_eq!(placement_world_zero.label(), "Zero translation");
         let placement_many = registry.get("node.placement.set_many").expect("node.placement.set_many is registered");
         assert_eq!(placement_many.id(), "node.placement.set_many");
         assert_eq!(placement_many.label(), "Place selection");
@@ -333,6 +338,6 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label(), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 50);
+        assert_eq!(registry.specs().len(), 51);
     }
 }

@@ -1,18 +1,22 @@
 //! The placement card shared by panels and assemblies.
 //!
-//! Coordinates are local to the parent container and entered in millimetres. Rotation is shown as
-//! intrinsic XYZ Euler angles in degrees; the document keeps a unit quaternion, so the angles are
-//! only a view of it. The card keeps the typed text until the edit ends: Enter in any field or the
-//! Apply button parses all six fields and dispatches one `node.placement.set`, so an edit is one
-//! undo entry. The half that did not change is kept bit-for-bit.
+//! Coordinates are local to the parent container and entered in millimetres; a read-only *World
+//! position* row shows what the parent chain composes to, read from `Project::world_placement`.
+//! Rotation is shown as intrinsic XYZ Euler angles in degrees; the document keeps a unit
+//! quaternion, so the angles are only a view of it. The card keeps the typed text until the edit
+//! ends: Enter in any field or the Apply button parses all six fields and dispatches one
+//! `node.placement.set`, so an edit is one undo entry. The half that did not change is kept
+//! bit-for-bit. *Zero translation* dispatches `node.placement.world_zero`, which clears the
+//! parent-frame translation and keeps the rotation.
 
 use egui::{Color32, RichText, TextEdit, Ui};
-use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID;
-use furnicraft_engine::{NodePlacementSet, Session};
+use furnicraft_engine::node_cmds::{NODE_PLACEMENT_SET_ID, NODE_PLACEMENT_WORLD_ZERO_ID};
+use furnicraft_engine::{NodePlacementSet, NodePlacementWorldZero, Session};
 use furnicraft_model::{EulerAngles, Id, Placement};
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
+use crate::coords;
 use crate::section::section;
 
 /// Persistent state of the placement card.
@@ -71,20 +75,28 @@ impl PlacementCard {
         }
 
         ui.label(RichText::new("Placement").strong());
-        if let Some(parent) = session.project().parent_of(node) {
-            let name = session.project().container(parent).map_or("parent container", |container| container.name());
-            ui.label(format!("Local to {name}"));
-        }
+        let parent_name = session
+            .project()
+            .parent_of(node)
+            .and_then(|parent| session.project().container(parent))
+            .map(|container| container.name().to_owned());
+        let translation_title = match parent_name {
+            Some(name) => format!("Translation (local to {name})"),
+            None => "Translation (local to the parent)".to_owned(),
+        };
 
         let Some(draft) = self.draft.as_mut() else {
             ui.colored_label(Color32::LIGHT_RED, "The stored translation is outside the editable millimetre range.");
             return;
         };
 
+        let world = coords::world_position(session.project(), node);
+        let can_zero = draft.base.translation_lengths().is_some_and(|translation| translation != [Length::ZERO; 3]);
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;
+        let mut zero = false;
         section(ui, "placement.transform", "Transform", true, |ui| {
-            section(ui, "placement.transform.translation", "Translation", true, |ui| {
+            section(ui, "placement.transform.translation", translation_title, true, |ui| {
                 for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
                     ui.horizontal(|ui| {
                         ui.label(label);
@@ -93,6 +105,15 @@ impl PlacementCard {
                         commit |= response.lost_focus() && enter;
                     });
                 }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(can_zero, egui::Button::new("Zero translation")).clicked() {
+                        zero = true;
+                    }
+                });
+                match &world {
+                    Some(world) => ui.label(format!("World position  {world}")),
+                    None => ui.label("World position  outside the editable range"),
+                };
             });
             section(
                 ui,
@@ -116,6 +137,18 @@ impl PlacementCard {
         });
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
+        }
+
+        if zero {
+            match apply_world_zero(session, node) {
+                Ok(()) => {
+                    self.error = None;
+                    self.draft = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
+            ui.ctx().request_repaint();
+            return;
         }
 
         if !commit {
@@ -183,6 +216,15 @@ fn apply_placement(session: &mut Session, node: Id, fields: &Fields) -> Result<(
     }
     let params = json(&NodePlacementSet { node, placement })?;
     dispatch(session, NODE_PLACEMENT_SET_ID, &params).map(|_| ())
+}
+
+/// Clears the parent-frame translation through `node.placement.world_zero`, keeping the rotation.
+fn apply_world_zero(session: &mut Session, node: Id) -> Result<(), String> {
+    if session.project().node(node).is_none() {
+        return Err(format!("node {node} is not in the scene"));
+    }
+    let params = json(&NodePlacementWorldZero { node })?;
+    dispatch(session, NODE_PLACEMENT_WORLD_ZERO_ID, &params).map(|_| ())
 }
 
 fn parse_length(label: &str, text: &str) -> Result<Length, String> {
@@ -386,6 +428,33 @@ mod tests {
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.rotation(), placement.rotation());
         assert_eq!(after.translation_lengths(), Some([Length::from_micrometres(10_000), Length::ZERO, Length::ZERO]));
+    }
+
+    #[test]
+    fn zeroing_clears_the_translation_and_keeps_the_rotation_as_one_undo_step() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let half = std::f64::consts::FRAC_PI_4;
+        let start: Placement = serde_json::from_value(serde_json::json!({
+            "translation": [10.0, -2.5, 3.0],
+            "rotation": [0.0, 0.0, half.sin(), half.cos()]
+        }))
+        .expect("turned placement");
+        project.set_node_placement(panel, start).expect("place the panel");
+        let mut session = Session::with_catalog(project, sample_catalog());
+
+        apply_world_zero(&mut session, panel).expect("zero the translation");
+
+        let after = session.project().panel(panel).expect("panel").placement();
+        assert_eq!(after.translation_lengths(), Some([Length::ZERO; 3]));
+        assert_eq!(after.rotation(), start.rotation());
+
+        session.undo().expect("undo world zero");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), start);
+        assert!(!session.can_undo(), "world zero must be exactly one undo entry");
+
+        let error = apply_world_zero(&mut session, Id::new(999).expect("id")).expect_err("missing node");
+        assert!(error.contains("not in the scene"), "error was {error}");
     }
 
     #[test]
