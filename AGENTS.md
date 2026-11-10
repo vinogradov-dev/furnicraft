@@ -46,6 +46,16 @@ The contract is a template, not prose duplicated here: read
 `STATE` and `## Now` decide the answer, an interrupted session resumes at `now:` instead of starting
 over, and a broken plan is reported rather than answered around.
 
+### 1.2 Reading code with the language server
+
+The session carries a project MCP server `rust-analyzer` (`.pi/mcp.json`). Find its tools with
+`tool_search` (`mcp__rust-analyzer__rust_analyzer_*`) and prefer them over reading files to learn a
+signature or to find callers: `references` for every user of an item, `definition`/`hover` instead
+of opening a file, `symbols` to outline a large one, `workspace_diagnostics` after an edit.
+`rust_analyzer_rename` returns edits and writes nothing: apply them with `edit`. Keep `rg` for
+strings, TOML, docs, `plan/` and anything the compiler does not index; `plan/map.md` still says
+where a feature lives.
+
 ## 2. Non-negotiable constraints
 
 - **Rust only.** No JS/TS, no scripting runtime, no code generation into other languages.
