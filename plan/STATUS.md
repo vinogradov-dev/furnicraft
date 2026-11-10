@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X24 state=idle base=d6a09a5 updated=2026-11-10
+STATE: milestone=M7 phase=A task=X25 state=idle base=617a973 updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -15,7 +15,8 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
   0073), and an extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054);
   every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
-  S5 landed the frame rule: `rebase_at_anchor` and `Placement::inverse` (ADR 0082).
+  S5 chose the frame rule and X24 made a drawing use it: `rebase_at_anchor`, `Placement::inverse`,
+  and a drawing's creation pivot as its local zero (ADR 0082).
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -26,7 +27,7 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 - The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view and draw/pick/snap
   for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061): the projection button
   draws its view, a creation lands at the scene root unless a container is armed, the armed tool
-  draws pressed, the pole views look down their plane, a drawing pivots on its own shape, every
+  draws pressed, the pole views look down their plane, a drawing's frame is set at creation, every
   contour kind edits as one draft.
 - X20 gives a pole view a canonical up: the top is `+Y` up and `+X` right, the bottom `+Y` up and
   `-X` right, and the side and front views keep `+Z` up (ADR 0057). U59 names the six standard views
@@ -53,10 +54,9 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-S5 chose the frame; X24 makes a drawing use it: `object.path.create` and `object.extrude.create`
-rebase with `CreationPivot`, the editor converts the work plane's world placement into the
-parent's frame with `Placement::inverse`, and a line at (600, 400) stores that point as its
-translation (ADR 0082).
+X24 gave a drawing its own zero; X25 does the same for a primitive: `place_primitive` converts the
+work plane's world placement with the parent's inverse, and `object.primitive.create` keeps the mesh
+centred with a zero pivot, so a cube lands under the pointer in a moved or turned container.
 
 ## Index
 

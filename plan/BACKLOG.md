@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X24** a drawing is born at its own zero: a line drawn at (600, 400) stores
-  `translation = (0, 0, 0)` and puts (600, 400) into `pivot_local`, so the card honestly reports a
-  translation of zero and the node cannot be moved to the world origin by its translation; a drawing
-  made inside a moved or rotated container lands somewhere else, because the editor passes the work
-  plane's *world* placement where the command expects a placement *relative to the parent*.
-  Expectation: `object.path.create` and `object.extrude.create` rebase the figure with
-  `rebase_at_anchor(CreationPivot)` and store `Pivot::ZERO`, so an open line's local zero is its first
-  point, a closed ring's is its bounds centre, and every world point stays on the clicked point; the
-  editor converts the one world placement the shell hands it into the target parent's frame with
-  `Placement::inverse(parent_world)` in `commit_drawing`. `object.path.extrude` turns a node into a
-  body in place and leaves its frame alone. The command docs that call the path "local" and the
-  `add_object_with_pivot` doc are corrected here; the ADRs that describe the old behaviour are
-  rewritten in S6. Tests: a line at (600, 400) has its first point in `translation`, zero in
-  `pivot_local` and vertices around zero; a closed rectangle has its bounds centre in `translation`; a
-  figure drawn into a rotated, moved container has `world_placement ∘ vertices_local` on the clicked
-  points and a parent-frame `translation`; extrusion keeps the frame of the path it grew from; each
-  creation is one undo entry.
-  `files: crates/engine/src/object_cmds.rs, crates/model/src/project/object_cmds.rs, crates/ui/src/lib.rs`
-
 - `[ ]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` hands
   `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
   to the parent, so an armed container that is moved or turned puts the cube somewhere else.
@@ -339,6 +320,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X24** a drawing is born at its own zero: a line drawn at (600, 400) stores
+  `translation = (0, 0, 0)` and puts (600, 400) into `pivot_local`, so the card honestly reports a
+  translation of zero and the node cannot be moved to the world origin by its translation; a drawing
+  made inside a moved or rotated container lands somewhere else, because the editor passes the work
+  plane's *world* placement where the command expects a placement *relative to the parent*.
+  Expectation: `object.path.create` and `object.extrude.create` rebase the figure with
+  `rebase_at_anchor(CreationPivot)` and store `Pivot::ZERO`, so an open line's local zero is its first
+  point, a closed ring's is its bounds centre, and every world point stays on the clicked point; the
+  editor converts the one world placement the shell hands it into the target parent's frame with
+  `Placement::inverse(parent_world)` in `commit_drawing`. `object.path.extrude` turns a node into a
+  body in place and leaves its frame alone. The command docs that call the path "local" and the
+  `add_object_with_pivot` doc are corrected here; the ADRs that describe the old behaviour are
+  rewritten in S6. Tests: a line at (600, 400) has its first point in `translation`, zero in
+  `pivot_local` and vertices around zero; a closed rectangle has its bounds centre in `translation`; a
+  figure drawn into a rotated, moved container has `world_placement ∘ vertices_local` on the clicked
+  points and a parent-frame `translation`; extrusion keeps the frame of the path it grew from; each
+  creation is one undo entry.
+  `617a973`
+  `files: crates/engine/src/object_cmds.rs, crates/model/src/project/object_cmds.rs, crates/ui/src/lib.rs`
 
 - `[x]` **S5** one operation chooses a node's frame: a new `crates/model/src/frame.rs` holds
   `rebase_at_anchor(strategy)` and the three strategies the owner approved — `CreationPivot` (an open
