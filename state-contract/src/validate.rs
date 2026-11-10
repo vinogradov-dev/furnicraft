@@ -461,6 +461,17 @@ fn parse_violations(status: &str, backlog: &str, tasks: &[Task]) -> Vec<String> 
     if markers != 1 {
         violations.push(format!("`plan/STATUS.md` has {markers} `STATE:` lines, expected exactly one"));
     }
+    // A repeated heading is a section written twice: the second copy is the one a reader skips.
+    let mut headings: Vec<String> = Vec::new();
+    for line in status.lines() {
+        let Some(name) = line.trim().strip_prefix("## ") else { continue };
+        let name = name.trim();
+        if headings.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+            violations.push(format!("`plan/STATUS.md` has two `## {name}` sections"));
+        } else {
+            headings.push(name.to_owned());
+        }
+    }
     if let Some(line) = state_line
         && line.trim() != line.trim_start()
     {
@@ -760,6 +771,13 @@ mod tests {
         let error = analyze("STATE: milestone=M7 task=A3\n", backlog(), None).expect_err("missing fields must fail");
         assert!(error.iter().any(|violation| violation.contains("needs `state=`")), "{error:?}");
         assert!(error.iter().any(|violation| violation.contains("needs `base=`")), "{error:?}");
+    }
+
+    #[test]
+    fn a_repeated_status_section_is_reported() {
+        let doubled = format!("{HEADER}\n## Next\n\nA3 is next.\n\n## Next\n\nA3 again.\n");
+        let error = analyze(&doubled, backlog(), None).expect_err("one section, one body");
+        assert!(error.iter().any(|violation| violation.contains("two `## Next` sections")), "{error:?}");
     }
 
     #[test]
