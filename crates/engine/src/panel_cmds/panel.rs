@@ -3,7 +3,7 @@
 //! A panel is born from a nominal size or from another object's contour ring, and it stores its
 //! outline as a ring once baked. Parameters are JSON objects with `deny_unknown_fields`; each
 //! command validates through `Project` before it mutates and leaves the document untouched on
-//! error, because the session restores its snapshot.
+//! error, because the session runs it on a copy and swaps that copy in only on success.
 //!
 //! It refuses an empty name, a nominal size outside the panel's limit, a material the catalogue
 //! does not hold or whose thickness the panel's geometry rejects, a source object without a
