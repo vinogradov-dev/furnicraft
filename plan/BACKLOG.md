@@ -25,31 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S9** `geom/contour.rs` keeps the ring and gives the segment family its own module — rules:
-  B1, B4, B8, H2, H5.
-  Why: 1046 production lines crosses B4's 1000-line ceiling and the file holds two value families
-  with 74 public items between them: `Line`, `Arc` and `Segment` with their impls (108-775) and the
-  ring `Contour` with its operations (776-1046).
-  Shape: `Line`/`Arc`/`Segment` and their impls move to `crates/geom/src/segment.rs` (~690);
-  `ContourError` and `Contour` stay in `contour.rs` (~390); `geom/lib.rs` re-exports both, so no call
-  site and no test changes (B8, T1).
-  Done: the suite passes with a `use` line at most; both headers state their family, the millimetre
-  and radian units, the tolerance that matters and `//! Changes when:` (H1, H2, H5).
-  Commits: one move.
-  `files: crates/geom/src/contour.rs, crates/geom/src/lib.rs`
-
-- `[ ]` **S10** `geom/region.rs` gives up the exact rectangle booleans — rules: B1, B4, B8, H2.
-  Why: 1660 production lines, the largest geometry module, holds two unrelated layers (F5): the exact
-  orthogonal boolean (`Rect`, `RectError`, `total_area`, `union_rects`, `subtract_rects`,
-  `connected_count`, `regions_from_rects` and its loop tracer, 432-980) and the general contour
-  boolean over `Region` (981-1660).
-  Shape: the rectangle layer moves to `crates/geom/src/rect.rs` (~570) with its tests; `region.rs`
-  1660 -> ~1120; `geom/lib.rs` re-exports `Rect` and the rectangle functions.
-  Done: the rectangle tests move unchanged (T1); `rect.rs` states that a corner is a point and never a
-  sample, that its arithmetic is exact, and `//! Changes when:` (H2, H4).
-  Commits: one move.
-  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
-
 - `[ ]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
   Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
   algorithm, so a change to "what a region is" and a change to "how sets combine" reopen one file.
@@ -392,6 +367,36 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S10** `geom/region.rs` gives up the exact rectangle booleans — rules: B1, B4, B8, H2.
+  Why: 1660 production lines, the largest geometry module, holds two unrelated layers (F5): the exact
+  orthogonal boolean (`Rect`, `RectError`, `total_area`, `union_rects`, `subtract_rects`,
+  `connected_count`, `regions_from_rects` and its loop tracer, 432-980) and the general contour
+  boolean over `Region` (981-1660).
+  Shape: the rectangle layer moves to `crates/geom/src/rect.rs` (~570) with its tests; `region.rs`
+  1660 -> ~1120; `geom/lib.rs` re-exports `Rect` and the rectangle functions.
+  Done: the 23 rectangle tests move unchanged (T1); `rect.rs` holds 575 production lines, `region.rs`
+  drops 1660 -> 1126, the moved block and the moved tests are byte-identical, and the 62 geom tests
+  pass unchanged; `rect.rs` states that a corner is a point and never a sample, that its arithmetic
+  is exact, and its `//! Changes when:` (H2, H4); the `plan/map.md` row and ADR 0043 name both files.
+  `186a5bc`
+  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
+
+- `[x]` **S9** `geom/contour.rs` keeps the ring and gives the segment family its own module — rules:
+  B1, B4, B8, H2, H5.
+  Why: 1046 production lines crossed B4's 1000-line ceiling and the file held two value families with
+  74 public items between them: `Line`, `Arc` and `Segment` with their impls (108-775) and the ring
+  `Contour` with its operations (776-1046).
+  Shape: `Line`/`Arc`/`Segment`, their impls and the private `positive_angle` moved verbatim to
+  `crates/geom/src/segment.rs` (1046 -> 701 production lines); `ContourError`, `Contour`, the joint
+  tolerances and the sampling caps stayed in `contour.rs` (1046 -> 374); `EPSILON`,
+  `SUPPORT_TOLERANCE` and `MAX_ARC_EXTENSION` moved with the code that reads them; `geom/lib.rs`
+  re-exports both modules and now also `MAX_ARC_EXTENSION`, which a model doc link already named.
+  Done: 97 geom tests pass with one `use` line added for the constants the test module used to inherit
+  (T1, B8); both headers state their family, millimetres and radians, the tolerance that matters and
+  `//! Changes when:` (H1, H2, H5); the `plan/map.md` row names both files; `cargo xtask ci` green.
+  `4a16ee8`
+  `files: crates/geom/src/contour.rs, crates/geom/src/segment.rs, crates/geom/src/lib.rs`
 
 - `[x]` **S8** the shared test fixtures move into `furnicraft-testkit` — rules: C7, T1, C4.
   Why: `fn millimetres` was written 20 times across 8 crates, `open_path` 5 times and `sample_project`

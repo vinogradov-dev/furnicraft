@@ -62,7 +62,8 @@ third-party boolean crate, adds a dependency for a task the crate graph already 
 
 ## Related
 
-- [`crates/geom/src/region.rs`](../../crates/geom/src/region.rs) — `Region` and the booleans.
+- [`crates/geom/src/region.rs`](../../crates/geom/src/region.rs) — `Region` and the general boolean;
+  [`crates/geom/src/rect.rs`](../../crates/geom/src/rect.rs) — the exact orthogonal one.
 - [`docs/domain/panels.md`](../domain/panels.md) — machining and the core invariant.
 - [0010](0010-analytic-line-arc-contours.md) — why rings stay analytic.
 - [0012](0012-in-panel-cutout-union.md) — the in-house boolean decision this completes.
