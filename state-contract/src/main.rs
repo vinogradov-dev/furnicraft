@@ -4,6 +4,16 @@
 //! flags are parsed by hand — the crate stays zero-dependency, so there is no argument-parsing
 //! library here either.
 
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 

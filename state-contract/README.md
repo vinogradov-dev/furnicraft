@@ -18,8 +18,8 @@ The contract is three files under `plan/`:
 session measured and ruled out — file and line pointers, dead ends, choices — never status, a
 `files:` hint or a commit, so it cannot contradict the plan. `task` prints it; nothing else reads it.
 
-`state_contract::check(root)` parses them, cross-checks them and returns a `Summary`, or every
-violation as a readable sentence. `state_contract::task(root, id, opts)` returns everything the plan
+`state_contract::check(root)` parses them, cross-checks them and returns a `Summary` — including
+whether the session looks interrupted — or every violation as a readable sentence. `state_contract::task(root, id, opts)` returns everything the plan
 says about one task, framed for a human, and `state_contract::task_view(root, id)` returns the same
 as data for a host that adds facts of its own (git, file sizes, decisions). `state_contract::status(root)` returns the block a task runner
 prints at the start of a session: the state line, the head commit, the session note's
@@ -39,8 +39,11 @@ header.
 
 `cargo run -p state-contract -- task <id>` is the whole task on one screen: the entry with its
 fields, the `files:` hint, the `plan/map.md` rows that name those paths, the debt and questions that
-name them (or all of them, with `--all`), the note, and the live session fields while it is the
-current task. `--width` and `--no-color` apply as above.
+name them (or all of them, with `--all`; the block says how many it left out), the note, the notes of
+*other* tasks that name the same files, the commit that closed a done task, and the live session
+fields while it is the current task. `cargo run -p state-contract -- task list` prints one line per
+task; a host adds the filters it needs (`xtask` has `--section`, `--status`, `--phase`, `--grep`).
+`--width` and `--no-color` apply as above.
 
 ### Entry fields
 

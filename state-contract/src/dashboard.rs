@@ -55,7 +55,7 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
 
     let state = parse_state(&status)?;
     let head = git.head();
-    let interrupted = is_interrupted(&state, session.as_deref(), head.as_deref(), git);
+    let interrupted = crate::session_interrupted(&state, session.as_deref(), head.as_deref(), git);
     let style = Style::new(opts.width, opts.color);
     let mut blocks: Vec<Section> = Vec::new();
 
@@ -75,11 +75,11 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
             tasks: parse_backlog(&backlog),
             session: session.as_deref().map(parse_session),
             head: head.clone(),
+            interrupted,
         };
-        let view = view_from(&summary, id, map.as_deref(), debt.as_deref(), questions.as_deref(), None)?;
-        let notes = crate::note(root, &view.task.id)?;
-        let mut view = view;
-        view.notes = notes;
+        let notes = crate::note(root, id)?;
+        let mut view = view_from(&summary, id, map.as_deref(), debt.as_deref(), questions.as_deref(), notes, git)?;
+        view.related = crate::notes::related_notes(root, &view.task);
         let opts = TaskOptions { width: opts.width, color: opts.color, all: false };
         blocks.extend(task_sections(&view, &opts));
     }
@@ -142,45 +142,6 @@ pub fn dashboard_with(root: &Path, opts: &DashboardOptions, git: &dyn Git) -> Re
     }
 
     Ok(sections(&blocks, style))
-}
-
-/// Whether the session looks cut short: work was running, the plan edit rides on commits past the
-/// `base`, and the session note still has unchecked steps.
-fn is_interrupted(state: &crate::State, session: Option<&str>, head: Option<&str>, git: &dyn Git) -> bool {
-    if state.status != "doing" || session.is_none() {
-        return false;
-    }
-    let Some(head) = head else {
-        return false;
-    };
-    if state.base == head || !git.is_ancestor(&state.base, head) {
-        return false;
-    }
-    has_open_steps(session.unwrap_or(""))
-}
-
-/// Whether the `steps:` block of a session note still lists `[ ]` items.
-fn has_open_steps(session: &str) -> bool {
-    let mut in_steps = false;
-    for line in session.lines() {
-        let trimmed = line.trim();
-        if trimmed.ends_with("steps:") {
-            in_steps = true;
-            continue;
-        }
-        if in_steps {
-            if trimmed.is_empty() {
-                break;
-            }
-            if !line.starts_with([' ', '\t']) && !trimmed.starts_with("[ ]") && !trimmed.starts_with("[x]") {
-                break;
-            }
-            if trimmed.starts_with("[ ]") {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Writes each task as a marker line plus its dim `files:` hint, capped per section.

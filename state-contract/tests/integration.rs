@@ -189,17 +189,19 @@ fn the_status_block_names_the_current_task_and_its_files() {
 }
 
 #[test]
-fn the_status_block_carries_the_note_a_session_resumes_from() {
+fn the_status_block_carries_every_field_a_session_resumes_from() {
     let text = status_with(&fixture("good-note"), &FakeGit::repository()).expect("a consistent plan renders");
     for line in [
         "  task: T1\n",
+        "  goal: the first user-visible result\n",
         "  now: the parser arm in `src/lib.rs`\n",
         "  blocked: nothing\n",
         "  run: cargo test -p state-contract\n",
+        "  resume: finish the parser arm",
     ] {
         assert!(text.contains(line), "the block must carry `{line}`: {text}");
     }
-    assert!(!text.contains("resume:"), "the four fields are task/now/blocked/run: {text}");
+    assert!(text.contains("  interrupted: yes\n"), "the note has an open step and `HEAD` is past `base`: {text}");
 }
 
 #[test]

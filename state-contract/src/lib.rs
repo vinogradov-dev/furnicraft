@@ -6,6 +6,16 @@
 //! them, checks that they agree with each other and with the files they name, renders the block a
 //! session starts from, and prints one task in full — its fields, map rows, notes, debt, questions
 //! and the session fields — so a host need not grep the plan files.
+
+#![forbid(unsafe_code)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
 //!
 //! It has no dependencies and no knowledge of any product: the inputs are text, the filesystem and
 //! `git`. [`check`] does all of it, [`analyze`] is the pure part, and [`Git`] is the injection point
@@ -40,7 +50,9 @@ pub use notes::{MAX_NOTE_LINES, note, note_path};
 pub use parse::parse_backlog;
 pub use section::{Section, Style, sections, wrap};
 pub use status::{render, render_with_detail};
-pub use task::{TaskOptions, TaskView, task, task_sections, task_view, task_view_with, task_with, touches};
+pub use task::{
+    Closed, RelatedNote, TaskOptions, TaskView, task, task_sections, task_view, task_view_with, task_with, touches,
+};
 pub use validate::{MAX_SESSION_LINES, MAX_STATUS_LINES, README_RULE, analyze};
 
 /// What the plan files say right now.
@@ -54,6 +66,8 @@ pub struct Summary {
     pub session: Option<Session>,
     /// The `HEAD` commit, filled in by whichever caller resolved it; `None` outside a checkout.
     pub head: Option<String>,
+    /// Whether the session looks cut short: `doing`, a note with open steps, and commits past `base`.
+    pub interrupted: bool,
 }
 
 /// The parts of `plan/SESSION.md` a fresh session resumes from.
@@ -180,6 +194,7 @@ pub fn check_with(root: &Path, git: &dyn Git) -> Result<Summary, Vec<String>> {
     if let Some(summary) = summary.as_mut() {
         // One git call answers both the `base` rule and the head line the block prints.
         summary.head = git.head();
+        summary.interrupted = session_interrupted(&summary.state, session.as_deref(), summary.head.as_deref(), git);
         violations.extend(workspace_violations(root, summary, git));
     }
     match std::fs::read_to_string(root.join("README.md")) {
@@ -212,6 +227,44 @@ pub fn status_with_detail(root: &Path, git: &dyn Git, detail: Option<&str>) -> R
 
 fn read(path: &Path, name: &str) -> Result<String, Vec<String>> {
     std::fs::read_to_string(path).map_err(|error| vec![format!("cannot read `{name}`: {error}")])
+}
+
+/// Whether the session looks cut short: work was running, the plan edit rides on commits past the
+/// `base`, and the note still has an open step. One definition, two readers — the status block and
+/// the dashboard flag.
+pub(crate) fn session_interrupted(state: &State, session: Option<&str>, head: Option<&str>, git: &dyn Git) -> bool {
+    if state.status != "doing" {
+        return false;
+    }
+    let (Some(session), Some(head)) = (session, head) else { return false };
+    if state.base == head || !git.is_ancestor(&state.base, head) {
+        return false;
+    }
+    has_open_steps(session)
+}
+
+/// Whether the `steps:` block of a session note still lists `[ ]` items.
+fn has_open_steps(session: &str) -> bool {
+    let mut in_steps = false;
+    for line in session.lines() {
+        let trimmed = line.trim();
+        if trimmed.ends_with("steps:") {
+            in_steps = true;
+            continue;
+        }
+        if in_steps {
+            if trimmed.is_empty() {
+                break;
+            }
+            if !line.starts_with([' ', '\t']) && !trimmed.starts_with("[ ]") && !trimmed.starts_with("[x]") {
+                break;
+            }
+            if trimmed.starts_with("[ ]") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Checks what only the filesystem and git can answer: the hinted paths and the `base` commit.

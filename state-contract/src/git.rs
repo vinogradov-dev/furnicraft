@@ -23,6 +23,13 @@ pub trait Git {
         let _ = path;
         None
     }
+    /// The subject line of a commit, when it resolves to one.
+    ///
+    /// The default answers `None`, for the same reason as [`Git::last_touch`].
+    fn subject(&self, hash: &str) -> Option<String> {
+        let _ = hash;
+        None
+    }
 }
 
 /// [`Git`] implemented by running the `git` binary in a directory.
@@ -82,6 +89,10 @@ impl Git for ProcessGit {
 
     fn last_touch(&self, path: &str) -> Option<String> {
         self.output(&["log", "-1", "--format=%h %s", "--", path]).filter(|line| !line.is_empty())
+    }
+
+    fn subject(&self, hash: &str) -> Option<String> {
+        self.output(&["show", "-s", "--format=%s", hash]).filter(|line| !line.is_empty())
     }
 }
 

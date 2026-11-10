@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::Task;
+use crate::{RelatedNote, Task};
 
 /// Longest accepted note, in lines: a note is a working memory, not a report.
 pub const MAX_NOTE_LINES: usize = 150;
@@ -28,6 +28,44 @@ pub fn note(root: &Path, id: &str) -> Result<Option<String>, Vec<String>> {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(vec![format!("cannot read `plan/notes/{id}.md`: {error}")]),
+    }
+}
+
+/// The notes of the *other* tasks whose text names one of `task`'s files, in id order.
+///
+/// This is the answer to "has anyone already looked at this?" — research that outlived its task is
+/// still research, and a reader who starts an adjacent task should see it without grepping
+/// `plan/notes/`.
+pub(crate) fn related_notes(root: &Path, task: &Task) -> Vec<RelatedNote> {
+    let directory = root.join("plan").join("notes");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Vec::new();
+    };
+    let mut related: Vec<RelatedNote> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".md") else { continue };
+        if id == task.id {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        if crate::touches(&text, task) {
+            related.push(RelatedNote { id: id.to_owned(), title: title(&text, id) });
+        }
+    }
+    related.sort_by(|left, right| left.id.cmp(&right.id));
+    related
+}
+
+/// The first non-empty line of a note without its heading marker or its own id, so a report that
+/// prints `id — title` does not say the id twice.
+fn title(notes: &str, id: &str) -> String {
+    let line = notes.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("");
+    let heading = line.trim_start_matches('#').trim().to_owned();
+    let rest = heading.strip_prefix(id).map(|rest| rest.trim_start_matches(['—', '-', ':', '.', ' ']).trim());
+    match rest {
+        Some(rest) if !rest.is_empty() => rest.to_owned(),
+        _ => heading,
     }
 }
 
@@ -141,6 +179,25 @@ mod tests {
         let root = project("named", &[("scratch.md", "x\n")]);
         let named = note_violations(&root, &[task("A3", TaskStatus::Open)]);
         assert!(named.iter().any(|v| v.contains("is named after scratch")), "{named:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn another_tasks_note_that_names_this_tasks_file_is_related() {
+        let root = project(
+            "related",
+            &[
+                ("A3.md", "# A3 — the same file\n\nthe card in `crates/ui` is 400 lines\n"),
+                ("A7.md", "# A7 — elsewhere\n\nnothing about this task\n"),
+                ("A9.md", "# A9 again\nthe card in `crates/ui` is 400 lines\n"),
+            ],
+        );
+        let task = task("A5", TaskStatus::Open);
+        let related = related_notes(&root, &task);
+        assert_eq!(related.len(), 2, "own file is a normal note, not a neighbour: {related:?}");
+        assert_eq!(related[0].id, "A3");
+        assert_eq!(related[0].title, "the same file", "the id is not repeated");
+        assert_eq!(related[1].id, "A9");
         let _ = std::fs::remove_dir_all(&root);
     }
 

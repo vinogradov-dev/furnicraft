@@ -34,6 +34,11 @@ pub fn render_with_detail(summary: &Summary, detail: Option<&str>) -> String {
     if let Some(session) = &summary.session {
         render_session(&mut text, session);
     }
+    if summary.interrupted {
+        // The one fact `AGENTS.md` §1.1 otherwise asks the reader to derive from `base`, `HEAD` and
+        // the note's steps.
+        text.push_str("  interrupted: yes\n");
+    }
     let current = summary.tasks.iter().position(|task| task.id == state.task);
     let from = current.unwrap_or(0);
     let upcoming = summary.tasks.iter().skip(from).filter(|task| task.status != TaskStatus::Done);
@@ -59,11 +64,16 @@ fn short(hash: &str) -> &str {
     hash.get(..7).unwrap_or(hash)
 }
 
-/// The four fields a fresh session resumes from; an absent one prints as `-`.
+/// The fields a fresh session resumes from; an absent one prints as `-`.
 fn render_session(text: &mut String, session: &Session) {
-    for (key, value) in
-        [("task", &session.task), ("now", &session.now), ("blocked", &session.blocked), ("run", &session.run)]
-    {
+    for (key, value) in [
+        ("task", &session.task),
+        ("goal", &session.goal),
+        ("now", &session.now),
+        ("blocked", &session.blocked),
+        ("run", &session.run),
+        ("resume", &session.resume),
+    ] {
         let _ = writeln!(text, "  {key}: {}", value.as_deref().unwrap_or("-"));
     }
 }
@@ -103,6 +113,7 @@ mod tests {
             ],
             session,
             head: head.map(str::to_owned),
+            interrupted: false,
         }
     }
 
@@ -179,14 +190,27 @@ mod tests {
     }
 
     #[test]
-    fn a_session_note_prints_the_four_resume_fields() {
+    fn a_session_note_prints_every_field_a_session_resumes_from() {
         let text = render(&summary("doing", Some("fedcba9"), Some(note())));
-        for line in
-            ["  task: A3\n", "  now: the arc arm\n", "  blocked: nothing\n", "  run: cargo test -p furnicraft-ui\n"]
-        {
+        for line in [
+            "  task: A3\n",
+            "  goal: arcs in the card\n",
+            "  now: the arc arm\n",
+            "  blocked: nothing\n",
+            "  run: cargo test -p furnicraft-ui\n",
+            "  resume: finish the arc arm\n",
+        ] {
             assert!(text.contains(line), "the block must carry `{line}`: {text}");
         }
-        assert!(!text.contains("finish the arc arm"), "`resume:` is not one of the four: {text}");
+    }
+
+    #[test]
+    fn an_interrupted_session_says_so() {
+        let mut list = summary("doing", Some("fedcba9"), Some(note()));
+        list.interrupted = true;
+        let text = render(&list);
+        assert!(text.contains("  interrupted: yes\n"), "the flag the reader would derive is printed: {text}");
+        assert!(!render(&summary("idle", Some("fedcba9"), None)).contains("interrupted"), "an idle plan says nothing");
     }
 
     #[test]

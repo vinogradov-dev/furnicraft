@@ -106,7 +106,7 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     }
 
     if violations.is_empty() {
-        Ok(Summary { state, tasks, session: session.map(parse_session), head: None })
+        Ok(Summary { state, tasks, session: session.map(parse_session), head: None, interrupted: false })
     } else {
         Err(violations)
     }

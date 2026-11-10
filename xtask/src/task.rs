@@ -67,8 +67,12 @@ impl Fact {
     }
 }
 
-/// `task [<id>] [--md|--paths] [--all] [--width <n>] [--no-color]`, or `next` with no arguments.
+/// `task [<id>] [--md|--paths] [--all] [--width <n>] [--no-color]`, `task list [filters]`, or `next`
+/// with no arguments.
 pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
+    if args.first().is_some_and(|word| word == "list") {
+        return list(root, &args[1..]);
+    }
     let flags = Flags::parse(args)?;
     let summary = state_contract::check(root).map_err(report)?;
     let id = flags.id.clone().unwrap_or_else(|| summary.state.task.clone());
@@ -82,6 +86,118 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     };
     print!("{text}");
     Ok(())
+}
+
+/// One line per task, grouped by section, in file order: the read side without reading the file.
+fn list(root: &Path, args: &[String]) -> Result<(), String> {
+    let filters = Filters::parse(args)?;
+    let summary = state_contract::check(root).map_err(report)?;
+    let mut section = String::new();
+    let mut shown = 0usize;
+    for task in &summary.tasks {
+        if !filters.matches(task) {
+            continue;
+        }
+        if task.section != section {
+            if shown > 0 {
+                println!();
+            }
+            println!("## {}", task.section);
+            section = task.section.clone();
+        }
+        println!("{} {}  {}", task.status.marker(), task.id, brief(&task.lead));
+        shown = shown.saturating_add(1);
+    }
+    if shown == 0 {
+        println!("no task matches");
+    }
+    Ok(())
+}
+
+/// The filters `task list` accepts: a section, a status, a phase and a text fragment.
+struct Filters {
+    section: Option<String>,
+    status: Option<state_contract::TaskStatus>,
+    phase: Option<String>,
+    grep: Option<String>,
+}
+
+impl Filters {
+    /// No filter at all: every task matches.
+    #[cfg(test)]
+    fn none() -> Self {
+        Filters { section: None, status: None, phase: None, grep: None }
+    }
+
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut filters = Filters { section: None, status: None, phase: None, grep: None };
+        let mut index = 0;
+        while index < args.len() {
+            let arg = args[index].as_str();
+            index += 1;
+            let value = |index: &mut usize| -> Result<String, String> {
+                let value = args.get(*index).ok_or_else(|| format!("{arg} needs a value"))?;
+                *index += 1;
+                Ok(value.clone())
+            };
+            match arg {
+                "--section" => filters.section = Some(value(&mut index)?.to_lowercase()),
+                "--phase" => filters.phase = Some(value(&mut index)?.to_uppercase()),
+                "--grep" => filters.grep = Some(value(&mut index)?.to_lowercase()),
+                "--status" => {
+                    let word = value(&mut index)?.to_lowercase();
+                    filters.status = Some(match word.as_str() {
+                        "open" => state_contract::TaskStatus::Open,
+                        "doing" => state_contract::TaskStatus::Doing,
+                        "done" => state_contract::TaskStatus::Done,
+                        other => return Err(format!("--status takes open, doing or done, got `{other}`")),
+                    });
+                }
+                other => return Err(format!("unknown filter `{other}`")),
+            }
+        }
+        Ok(filters)
+    }
+
+    fn matches(&self, task: &state_contract::Task) -> bool {
+        if let Some(section) = &self.section
+            && !task.section.eq_ignore_ascii_case(section)
+        {
+            return false;
+        }
+        if self.status.is_some_and(|status| status != task.status) {
+            return false;
+        }
+        if let Some(wanted) = &self.phase
+            && phase(&task.id) != wanted
+        {
+            return false;
+        }
+        if let Some(grep) = &self.grep
+            && !task.text.to_lowercase().contains(&grep.to_lowercase())
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// One line of a list entry: the lead cut at `width` characters, so a bug's long observation stays
+/// one row. The full text is one `cargo xtask task <id>` away.
+fn brief(text: &str) -> String {
+    const WIDTH: usize = 120;
+    if text.chars().count() <= WIDTH {
+        return text.to_owned();
+    }
+    let mut kept: String = text.chars().take(WIDTH.saturating_sub(1)).collect();
+    kept.push('…');
+    kept
+}
+
+/// The letters an id starts with: `S14` is in phase `S`.
+fn phase(id: &str) -> &str {
+    let end = id.find(|ch: char| !ch.is_ascii_alphabetic()).unwrap_or(id.len());
+    id.get(..end).unwrap_or(id)
 }
 
 /// The framed report: the plan blocks, the code facts after the files, the decisions last.
@@ -117,6 +233,14 @@ fn markdown(summary: &Summary, view: &TaskView, facts: &[Fact], decisions: &[Str
     }
     if let Some(files) = &task.files {
         out.push_str(&format!("files: {files}\n"));
+    }
+    if let Some(closed) = &view.closed {
+        out.push_str(&format!(
+            "closed: {} · {} · {}\n",
+            closed.hash,
+            closed.date.as_deref().unwrap_or("-"),
+            closed.subject.as_deref().unwrap_or("-")
+        ));
     }
     out.push('\n');
 
@@ -154,15 +278,19 @@ fn markdown(summary: &Summary, view: &TaskView, facts: &[Fact], decisions: &[Str
         out.push('\n');
     }
 
-    for (title, source, entries) in
-        [("Debt", "plan/debt.md", view.debt_for(all)), ("Questions", "plan/questions.md", view.questions_for(all))]
-    {
+    for (title, source, entries, total) in [
+        ("Debt", "plan/debt.md", view.debt_for(all), view.debt.len()),
+        ("Questions", "plan/questions.md", view.questions_for(all), view.questions.len()),
+    ] {
         if entries.is_empty() {
             continue;
         }
         out.push_str(&format!("## {title} — {source}\n\n"));
-        for entry in entries {
+        for entry in &entries {
             out.push_str(&format!("- {entry}\n"));
+        }
+        if let Some(hidden) = total.checked_sub(entries.len()).filter(|hidden| *hidden > 0) {
+            out.push_str(&format!("\n+{hidden} other entries name other areas; `--all` prints them\n"));
         }
         out.push('\n');
     }
@@ -178,6 +306,14 @@ fn markdown(summary: &Summary, view: &TaskView, facts: &[Fact], decisions: &[Str
     match &view.notes {
         Some(notes) => out.push_str(&format!("## Notes — plan/notes/{}.md\n\n{notes}\n", task.id)),
         None => out.push_str(&format!("## Notes — plan/notes/{}.md\n\nnone\n\n", task.id)),
+    }
+
+    if !view.related.is_empty() {
+        out.push_str("## Related — plan/notes/\n\n");
+        for note in &view.related {
+            out.push_str(&format!("- {} — {}\n", note.id, note.title));
+        }
+        out.push('\n');
     }
 
     if let Some(session) = &view.session {
@@ -473,6 +609,46 @@ mod tests {
     }
 
     #[test]
+    fn the_phase_is_the_letter_prefix_of_an_id() {
+        assert_eq!(phase("S14"), "S");
+        assert_eq!(phase("P5"), "P");
+        assert_eq!(phase("X31"), "X");
+        assert_eq!(phase("R1"), "R");
+        assert_eq!(phase("14"), "");
+    }
+
+    #[test]
+    fn a_long_lead_is_cut_for_the_list() {
+        let long = "x".repeat(400);
+        let short = brief(&long);
+        assert_eq!(short.chars().count(), 120, "{short}");
+        assert!(short.ends_with('…'));
+        assert_eq!(brief("nothing to cut"), "nothing to cut");
+    }
+
+    #[test]
+    fn the_list_filters_narrow_by_section_status_phase_and_text() {
+        let task = task();
+        let empty = Filters { section: None, status: None, phase: None, grep: None };
+        assert!(empty.matches(&task), "no filter keeps every task");
+
+        let section = Filters { section: Some("bugs".to_owned()), ..empty };
+        assert!(!section.matches(&task), "the task sits in `## Now`");
+        let section = Filters { section: Some("now".to_owned()), status: Some(TaskStatus::Doing), ..Filters::none() };
+        assert!(section.matches(&task));
+        let status = Filters { status: Some(TaskStatus::Open), ..Filters::none() };
+        assert!(!status.matches(&task));
+        let phase = Filters { phase: Some("S".to_owned()), ..Filters::none() };
+        assert!(phase.matches(&task));
+        let phase = Filters { phase: Some("U".to_owned()), ..Filters::none() };
+        assert!(!phase.matches(&task));
+        let grep = Filters { grep: Some("a TASK".to_owned()), ..Filters::none() };
+        assert!(grep.matches(&task), "the text match ignores case");
+        let grep = Filters { grep: Some("nothing".to_owned()), ..Filters::none() };
+        assert!(!grep.matches(&task));
+    }
+
+    #[test]
     fn the_flags_choose_one_form_and_one_id() {
         let flags = Flags::parse(&["S14".to_owned(), "--md".to_owned(), "--all".to_owned()]).expect("the flags parse");
         assert_eq!(flags.id.as_deref(), Some("S14"));
@@ -504,8 +680,10 @@ mod tests {
             task: task.clone(),
             next: None,
             notes: Some("measured `old.rs`\n".to_owned()),
+            related: vec![state_contract::RelatedNote { id: "S1".to_owned(), title: "the same file".to_owned() }],
+            closed: None,
             map: Vec::new(),
-            debt: vec!["[mesh] a gap".to_owned()],
+            debt: vec!["[mesh] a gap in crates/x".to_owned(), "[render] elsewhere".to_owned()],
             questions: Vec::new(),
             session: None,
         };
@@ -521,6 +699,7 @@ mod tests {
             tasks: vec![task],
             session: None,
             head: Some("fedcba9c0ffee".to_owned()),
+            interrupted: false,
         };
         let facts = vec![Fact {
             path: "crates/x/src/old.rs".to_owned(),
@@ -529,12 +708,14 @@ mod tests {
             tests: 2,
             last: Some("fedcba9 split".to_owned()),
         }];
-        let text = markdown(&summary, &view, &facts, &["0073. A shape".to_owned()], true);
+        let text = markdown(&summary, &view, &facts, &["0073. A shape".to_owned()], false);
         assert!(text.starts_with("# S14 — a task\n"), "{text}");
         assert!(text.contains("**Why** because"), "{text}");
         assert!(text.contains("| `crates/x/src/old.rs` | 2 | 2 | fedcba9 split |"), "{text}");
         assert!(text.contains("## Map — plan/map.md\n\nno row names"), "{text}");
-        assert!(text.contains("- [mesh] a gap"), "{text}");
+        assert!(text.contains("- [mesh] a gap in crates/x"), "{text}");
+        assert!(text.contains("+1 other entries name other areas"), "what was filtered out is named: {text}");
+        assert!(text.contains("## Related — plan/notes/\n\n- S1 — the same file"), "{text}");
         assert!(text.contains("- 0073. A shape"), "{text}");
         assert!(text.contains("## Notes — plan/notes/S14.md\n\nmeasured `old.rs`"), "{text}");
         assert!(!text.contains('┌'), "the agent form carries no box drawing: {text}");

@@ -9,8 +9,10 @@
 //! The rendering is framed like the dashboard because a human reads both; an agent-facing form is
 //! the host's, and it reads [`TaskView`] rather than the text.
 
+use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::notes::related_notes;
 use crate::parse::{MapRow, markdown_bullets, parse_map};
 use crate::section::{BOLD, GREEN, Section, Style, YELLOW, paint, sections, wrap};
 use crate::{Git, ProcessGit, Session, Summary, Task, TaskStatus, note};
@@ -32,6 +34,26 @@ impl Default for TaskOptions {
     }
 }
 
+/// What another task's note says about this task's files: its id and its first line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelatedNote {
+    /// The task id the note belongs to.
+    pub id: String,
+    /// The note's first line, without its heading marker.
+    pub title: String,
+}
+
+/// The commit a finished task landed in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Closed {
+    /// The seven-character hash the entry names.
+    pub hash: String,
+    /// The author date of that commit, `YYYY-MM-DD`.
+    pub date: Option<String>,
+    /// The commit's subject line.
+    pub subject: Option<String>,
+}
+
 /// Everything the plan files say about one task.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TaskView {
@@ -41,6 +63,10 @@ pub struct TaskView {
     pub next: Option<Task>,
     /// The raw note under `plan/notes/<ID>.md`, when the task has one.
     pub notes: Option<String>,
+    /// Other tasks' notes that name one of this task's files.
+    pub related: Vec<RelatedNote>,
+    /// The commit a finished task landed in, when the entry names one.
+    pub closed: Option<Closed>,
     /// The `plan/map.md` rows whose paths meet the task's `files:` hint.
     pub map: Vec<MapRow>,
     /// Every `plan/debt.md` entry, in file order; [`touches`] says which are the task's.
@@ -116,7 +142,9 @@ pub fn task_view_with(root: &Path, id: &str, git: &dyn Git) -> Result<TaskView, 
     let debt = read_optional(root, "plan/debt.md")?;
     let questions = read_optional(root, "plan/questions.md")?;
     let notes = note(root, id)?;
-    view_from(&summary, id, map.as_deref(), debt.as_deref(), questions.as_deref(), notes)
+    let mut view = view_from(&summary, id, map.as_deref(), debt.as_deref(), questions.as_deref(), notes, git)?;
+    view.related = related_notes(root, &view.task);
+    Ok(view)
 }
 
 /// The view over a plan that is already checked, for a caller that holds the summary.
@@ -127,18 +155,23 @@ pub(crate) fn view_from(
     debt: Option<&str>,
     questions: Option<&str>,
     notes: Option<String>,
+    git: &dyn Git,
 ) -> Result<TaskView, Vec<String>> {
     let Some(task) = summary.tasks.iter().find(|task| task.id.eq_ignore_ascii_case(id)).cloned() else {
         return Err(vec![format!("`plan/BACKLOG.md` has no task `{id}`")]);
     };
+    // Only a task in `## Now` has a place in the work order; a bug, a future task and a done one
+    // have no "next".
     let mut next = None;
-    let mut passed = false;
-    for other in &summary.tasks {
-        if other.id == task.id {
-            passed = true;
-        } else if passed && other.section == "Now" && other.status != TaskStatus::Done {
-            next = Some(other.clone());
-            break;
+    if task.section == "Now" {
+        let mut passed = false;
+        for other in &summary.tasks {
+            if other.id == task.id {
+                passed = true;
+            } else if passed && other.section == "Now" && other.status != TaskStatus::Done {
+                next = Some(other.clone());
+                break;
+            }
         }
     }
     let session = summary.session.clone().filter(|_| summary.state.status == "doing" && summary.state.task == task.id);
@@ -151,11 +184,25 @@ pub(crate) fn view_from(
             .collect(),
         debt: debt.map(markdown_bullets).unwrap_or_default(),
         questions: questions.map(markdown_bullets).unwrap_or_default(),
+        closed: closed_by(git, &task),
+        related: Vec::new(),
         task,
         next,
         notes,
         session,
     })
+}
+
+/// The commit a finished task names in its entry, with what git knows about it.
+fn closed_by(git: &dyn Git, task: &Task) -> Option<Closed> {
+    if task.status != TaskStatus::Done {
+        return None;
+    }
+    let hash = task.text.rsplit('`').nth(1)?;
+    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(Closed { hash: hash.to_owned(), date: git.commit_date(hash), subject: git.subject(hash) })
 }
 
 /// Whether two plan paths name the same place, allowing a directory hint for a file row.
@@ -179,6 +226,16 @@ pub fn task_sections(view: &TaskView, opts: &TaskOptions) -> Vec<Section> {
         task.section
     ));
     head.lines.extend(wrap(&task.lead, width));
+    if let Some(closed) = &view.closed {
+        let mut line = format!("closed: {}", closed.hash);
+        if let Some(date) = &closed.date {
+            let _ = write!(line, " · {date}");
+        }
+        if let Some(subject) = &closed.subject {
+            let _ = write!(line, " · {subject}");
+        }
+        head.lines.extend(wrap(&line, width));
+    }
     if let Some(next) = &view.next {
         head.push(format!("next: {} · {}", next.id, next.lead));
     }
@@ -204,13 +261,27 @@ pub fn task_sections(view: &TaskView, opts: &TaskOptions) -> Vec<Section> {
         blocks.push(Section::new("NOTES", format!("plan/notes/{}.md", task.id)).lines(note_lines(notes, width)));
     }
 
-    for (title, entries) in [("DEBT", view.debt_for(opts.all)), ("QUESTIONS", view.questions_for(opts.all))] {
+    if !view.related.is_empty() {
+        blocks.push(
+            Section::new("RELATED", "plan/notes/")
+                .lines(view.related.iter().map(|note| format!("{} — {}", note.id, note.title))),
+        );
+    }
+
+    for (title, source, entries, total) in [
+        ("DEBT", "plan/debt.md", view.debt_for(opts.all), view.debt.len()),
+        ("QUESTIONS", "plan/questions.md", view.questions_for(opts.all), view.questions.len()),
+    ] {
         if entries.is_empty() {
             continue;
         }
-        let mut block = Section::new(title, if title == "DEBT" { "plan/debt.md" } else { "plan/questions.md" });
-        for entry in entries {
+        let mut block = Section::new(title, source);
+        for entry in &entries {
             block.lines.extend(wrap(&format!("· {entry}"), width));
+        }
+        // What the tool filtered out is part of the answer: the reader must know it chose.
+        if let Some(hidden) = total.checked_sub(entries.len()).filter(|hidden| *hidden > 0) {
+            block.push(format!("+{hidden} other entries name other areas; `--all` prints them"));
         }
         blocks.push(block);
     }
@@ -365,8 +436,103 @@ fn read_optional(root: &Path, name: &str) -> Result<Option<String>, Vec<String>>
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
-    use crate::Field;
+    use crate::{Field, Git, State};
+
+    /// The git facts a view needs, without a repository.
+    struct FakeGit;
+
+    impl Git for FakeGit {
+        fn head(&self) -> Option<String> {
+            Some("fedcba9".to_owned())
+        }
+
+        fn commit_exists(&self, hash: &str) -> bool {
+            hash.chars().all(|ch| ch.is_ascii_hexdigit())
+        }
+
+        fn is_ancestor(&self, _ancestor: &str, _descendant: &str) -> bool {
+            false
+        }
+
+        fn commit_date(&self, _hash: &str) -> Option<String> {
+            Some("2026-11-10".to_owned())
+        }
+
+        fn subject(&self, hash: &str) -> Option<String> {
+            Some(format!("a commit {hash}"))
+        }
+    }
+
+    /// A summary holding `tasks` with the state line the tests need.
+    fn summary(tasks: Vec<Task>) -> Summary {
+        Summary {
+            state: State {
+                milestone: "M7".to_owned(),
+                phase: None,
+                task: "S14".to_owned(),
+                status: "idle".to_owned(),
+                base: "abc1234".to_owned(),
+                updated: "2026-11-10".to_owned(),
+            },
+            tasks,
+            session: None,
+            head: Some("fedcba9".to_owned()),
+            interrupted: false,
+        }
+    }
+
+    fn in_section(id: &str, section: &str, status: TaskStatus) -> Task {
+        Task { id: id.to_owned(), section: section.to_owned(), status, ..task() }
+    }
+
+    #[test]
+    fn only_a_task_in_now_has_a_next() {
+        let tasks = vec![
+            in_section("S14", "Now", TaskStatus::Open),
+            in_section("X31", "Bugs", TaskStatus::Open),
+            in_section("S15", "Now", TaskStatus::Open),
+        ];
+        let view = view_from(&summary(tasks.clone()), "S14", None, None, None, None, &FakeGit).expect("S14 reads");
+        assert_eq!(view.next.as_ref().map(|task| task.id.as_str()), Some("S15"));
+
+        let bug = view_from(&summary(tasks), "X31", None, None, None, None, &FakeGit).expect("X31 reads");
+        assert!(bug.next.is_none(), "a bug has no place in the work order: {:?}", bug.next);
+    }
+
+    #[test]
+    fn a_done_task_reports_the_commit_that_closed_it() {
+        let done = Task {
+            id: "S13".to_owned(),
+            section: "Done".to_owned(),
+            status: TaskStatus::Done,
+            text: "a task. `[x]` `7df9401`".to_owned(),
+            lead: "a task".to_owned(),
+            ..task()
+        };
+        let view = view_from(&summary(vec![done]), "S13", None, None, None, None, &FakeGit).expect("S13 reads");
+        let closed = view.closed.expect("the entry names a commit");
+        assert_eq!(closed.hash, "7df9401");
+        assert_eq!(closed.date.as_deref(), Some("2026-11-10"));
+        assert_eq!(closed.subject.as_deref(), Some("a commit 7df9401"));
+    }
+
+    #[test]
+    fn an_open_task_is_not_closed() {
+        let view = view_from(
+            &summary(vec![in_section("S14", "Now", TaskStatus::Open)]),
+            "S14",
+            None,
+            None,
+            None,
+            None,
+            &FakeGit,
+        )
+        .expect("S14 reads");
+        assert!(view.closed.is_none());
+    }
 
     fn task() -> Task {
         Task {

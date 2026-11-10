@@ -18,8 +18,10 @@ Opening a session is cheap by design: read the plan, not the codebase. Start wit
    file, the `plan/map.md` rows naming those paths, the `plan/debt.md` and `plan/questions.md` entries
    the task touches, the ADRs it cites and `plan/notes/<ID>.md`, the research note a previous session
    left. `cargo xtask task <ID>` answers the same for any task, `--md` is the agent form and `--paths`
-   one file per line. **Read this instead of grepping `plan/*.md`, `docs/` or `git log`**, and read
-   the files and their direct callers. Do not scan the workspace; if the hint is wrong, fix the hint.
+   one file per line; `cargo xtask task list --phase S --status open` enumerates the work order
+   instead of grepping the backlog. **Read this instead of grepping `plan/*.md`, `docs/` or
+   `git log`**, and read the files and their direct callers. Do not scan the workspace; if the hint
+   is wrong, fix the hint.
 4. Only then the documents the task itself needs.
 
 Before reading a large file, check `plan/map.md` for the anchor; read the range around it, not the
@@ -333,7 +335,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.
 - `plan/SESSION.md` — the live task note; exists only while `state=doing`, template in `plan/SESSION.template.md`.
 - `plan/map.md` — where each feature lives (feature → path + anchor); the dashboard prints it as `MAP`.
-- `cargo xtask task [<ID>]` prints one task in full — the plan half, the code facts and the ADRs; `--md` for an agent, `--paths` for a shell loop.
+- `cargo xtask task [<ID>]` prints one task in full — the plan half, the code facts, the ADRs, the notes of other tasks that name the same files; `--md` for an agent, `--paths` for a shell loop, `list` to enumerate.
 - `cargo xtask dashboard` prints the state with the file each section comes from; `--task <ID>` expands one task in it.
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
