@@ -209,6 +209,9 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
                         return Err(ProjectError::DuplicateId(panel.id()));
                     }
                     max_id = max_id.max(panel.id().get());
+                    if !panel.pivot().is_zero() {
+                        return Err(ProjectError::PanelPivotIsDerived { panel: panel.id() });
+                    }
                     validate_panel_banding(panel)?;
                     for machining in panel.machining() {
                         if !seen.insert(machining.id().get()) {
@@ -359,6 +362,17 @@ mod tests {
         let panel = sample_panel(duplicate, "Panel");
         let root = Container::new(duplicate, "Root", Placement::IDENTITY, vec![panel.into()]);
         assert_eq!(Project::new(root), Err(ProjectError::DuplicateId(duplicate)));
+    }
+
+    #[test]
+    fn a_loaded_panel_with_an_authored_pivot_is_a_readable_error() {
+        let project = sample_project();
+        let mut wire = serde_json::to_value(&project).expect("serialize project");
+        let panel = &mut wire["root"]["children"][0]["panel"];
+        panel["pivot"] = serde_json::json!([1_000, 0, 0]);
+
+        let error = serde_json::from_value::<Project>(wire).expect_err("a panel pivot cannot be authored");
+        assert!(error.to_string().contains("pivot is derived"), "error was {error}");
     }
 
     #[test]

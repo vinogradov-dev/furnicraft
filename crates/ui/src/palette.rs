@@ -621,10 +621,13 @@ mod tests {
 
     #[test]
     fn last_used_commands_come_first_when_the_search_is_empty() {
-        let (mut session, context, _shelf) = fixture();
+        let (mut session, _context, _shelf) = fixture();
+        // The pivot commands author a container's pivot; a panel's is derived.
+        let drawer = NodeId::new(3).expect("the sample drawer id");
+        let context = PaletteContext::new(vec![drawer], session.project().root().id());
         let mut palette = Palette::new();
         palette.open();
-        palette.activate(&mut session, &context, NODE_PIVOT_CENTER_ID).expect("centre the shelf pivot");
+        palette.activate(&mut session, &context, NODE_PIVOT_CENTER_ID).expect("centre the drawer pivot");
         palette.open();
 
         let entries = palette.entries(&session, &context);

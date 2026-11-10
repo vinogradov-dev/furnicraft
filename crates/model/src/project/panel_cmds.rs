@@ -853,14 +853,34 @@ mod tests {
         let mut project = sample_project();
         let panel_id = Id::new(4).expect("id");
         let nominal = PanelNominalSize::new(millimetres(900), millimetres(600)).expect("valid size");
+        let placement = Placement::new(DVec3::new(100.0, 20.0, 30.0), DQuat::from_rotation_z(0.25)).expect("placement");
+        project.set_node_placement(panel_id, placement).expect("place the panel");
+        let revision = project.revision();
 
-        let revision = project.set_panel_nominal_size(panel_id, nominal).expect("resize panel");
-        assert_eq!(revision.get(), 1);
-        assert_eq!(project.revision(), revision);
-        assert_eq!(project.panel(panel_id).expect("panel exists").nominal_size(), nominal);
+        let resized = project.set_panel_nominal_size(panel_id, nominal).expect("resize panel");
+        assert_eq!(resized.get(), revision.get() + 1);
+        assert_eq!(project.revision(), resized);
+        let panel = project.panel(panel_id).expect("panel exists");
+        assert_eq!(panel.nominal_size(), nominal);
+        assert_eq!(panel.placement(), placement, "a resize keeps the base corner, so the translation stays");
+        assert_eq!(panel.pivot(), Pivot::ZERO, "a panel's pivot is derived and stays at its base corner");
 
         let missing = Id::new(999).expect("id");
         assert_eq!(project.set_panel_nominal_size(missing, nominal), Err(ProjectError::PanelNotFound { id: missing }));
+        assert_eq!(project.revision(), resized);
+    }
+
+    #[test]
+    fn a_vertex_edit_never_reaches_a_panel() {
+        let mut project = sample_project();
+        let panel_id = Id::new(2).expect("id");
+        let revision = project.revision();
+        let target = [millimetres(1), millimetres(1), millimetres(1)];
+
+        assert_eq!(
+            project.move_mesh_vertices(panel_id, &[(0, target)]),
+            Err(ProjectError::NotAMeshObject { id: panel_id })
+        );
         assert_eq!(project.revision(), revision);
     }
 

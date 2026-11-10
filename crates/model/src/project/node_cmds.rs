@@ -12,17 +12,22 @@ impl Project {
     /// Moves a node's pivot within its own frame and bumps the revision once.
     ///
     /// The pivot is authored data: changing it never moves the node, and changing the geometry never
-    /// moves it. The root defines the world frame and has no pivot to edit.
+    /// moves it. The root defines the world frame and has no pivot to edit, and a panel's pivot is
+    /// derived from its base corner (ADR 0083), so both are refused.
     pub fn set_node_pivot(&mut self, id: Id, pivot: Pivot) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
+        }
+        if self.panel(id).is_some() {
+            return Err(ProjectError::PanelPivotIsDerived { panel: id });
         }
         let next_revision = self.next_revision()?;
         let Some(node) = find_node_mut(&mut self.root, id) else {
             return Err(ProjectError::NodeNotFound { id });
         };
         match node {
-            Node::Panel(panel) => panel.set_pivot(pivot),
+            // A panel never reaches this arm: the check above refuses it before the revision moves.
+            Node::Panel(_) => return Err(ProjectError::PanelPivotIsDerived { panel: id }),
             Node::Container(container) => container.set_pivot(pivot),
             Node::Object(object) => object.set_pivot(pivot),
             Node::Camera(camera) => camera.set_pivot(pivot),
@@ -35,10 +40,14 @@ impl Project {
     /// Sets a node's pivot to the centre of its local bounds and bumps the revision once.
     ///
     /// A container with no panels has no bounds and is centred at its own origin. Returns
-    /// [`ProjectError::RootImmutable`] for the root.
+    /// [`ProjectError::RootImmutable`] for the root and [`ProjectError::PanelPivotIsDerived`] for a
+    /// panel, whose pivot is always its base corner.
     pub fn center_node_pivot(&mut self, id: Id) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
+        }
+        if self.panel(id).is_some() {
+            return Err(ProjectError::PanelPivotIsDerived { panel: id });
         }
         let center = self.bounds_center_local(id).unwrap_or(DVec3::ZERO);
         let pivot = Pivot::from_local(center).unwrap_or(Pivot::ZERO);
@@ -742,5 +751,20 @@ mod tests {
         assert_eq!(project.ungroup_group(drawer), Err(ProjectError::NotAComponent { id: drawer }));
         assert_eq!(project.ungroup_group(panel), Err(ProjectError::NotAnOrdinaryContainer { id: panel }));
         assert_eq!(project.ungroup_group(root), Err(ProjectError::RootImmutable { id: root }));
+    }
+
+    #[test]
+    fn a_panel_pivot_is_derived_and_both_pivot_commands_refuse_it() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let revision = project.revision();
+        let stored = project.panel(panel).expect("panel").placement();
+        let pivot = Pivot::new(millimetres(1), millimetres(2), millimetres(3));
+
+        assert_eq!(project.set_node_pivot(panel, pivot), Err(ProjectError::PanelPivotIsDerived { panel }));
+        assert_eq!(project.center_node_pivot(panel), Err(ProjectError::PanelPivotIsDerived { panel }));
+        assert_eq!(project.revision(), revision, "a refused pivot edit does not bump the revision");
+        assert_eq!(project.pivot(panel), Some(Pivot::ZERO), "a panel's pivot stays at its base corner");
+        assert_eq!(project.panel(panel).expect("panel").placement(), stored, "the refusal changes nothing");
     }
 }

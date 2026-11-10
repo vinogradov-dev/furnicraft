@@ -395,7 +395,14 @@ mod tests {
         let panel = session.project().panel(created).expect("panel");
         assert_eq!(panel.outline_contour(), Some(&moved));
         assert_eq!(panel.nominal_size().length(), Length::from_millimetres(800).expect("length"));
+        assert_eq!(session.project().pivot(created), Some(Pivot::ZERO), "the outline edit keeps the pivot derived");
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
+
+        // The re-anchored panel is a valid document: a save and load keeps it as it is.
+        let text = serde_json::to_string(session.project()).expect("serialize the edited project");
+        let decoded: furnicraft_model::Project = serde_json::from_str(&text).expect("reload the edited project");
+        assert_eq!(decoded.panel(created).expect("reloaded panel").outline_contour(), Some(&moved));
+        assert_eq!(decoded.pivot(created), Some(Pivot::ZERO));
 
         session.undo().expect("one undo restores the whole edit");
         assert_eq!(session.project().panel(created).expect("panel").outline_contour(), Some(&original));
@@ -1972,5 +1979,21 @@ mod tests {
             .dispatch("node.pivot.set", &json_params(&NodePivotSet { node: root, pivot }))
             .expect_err("the root has no pivot");
         assert!(matches!(error, CommandError::Model(ProjectError::RootImmutable { .. })));
+
+        // A panel's pivot is derived from its base corner, so neither command authors one.
+        let panel = Id::new(2).expect("panel id");
+        let revision = session.project().revision();
+        assert!(!set.enabled(&session, &json_params(&NodePivotSet { node: panel, pivot })));
+        assert!(!center.enabled(&session, &json_params(&NodePivotCenter { node: panel })));
+        let error = session
+            .dispatch("node.pivot.set", &json_params(&NodePivotSet { node: panel, pivot }))
+            .expect_err("a panel pivot is derived");
+        assert!(matches!(error, CommandError::Model(ProjectError::PanelPivotIsDerived { panel: id }) if id == panel));
+        let error = session
+            .dispatch("node.pivot.center", &json_params(&NodePivotCenter { node: panel }))
+            .expect_err("a panel pivot is derived");
+        assert!(matches!(error, CommandError::Model(ProjectError::PanelPivotIsDerived { panel: id }) if id == panel));
+        assert_eq!(session.project().pivot(panel), Some(Pivot::ZERO));
+        assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
     }
 }

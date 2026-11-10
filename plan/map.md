@@ -31,7 +31,7 @@ The plan gate does not check this file; a stale row is a defect the reader fixes
 | Panel core geometry | `crates/model/src/panel/geometry.rs` (`PanelGeometry::from_regions`), `crates/model/src/panel/machining.rs` (`core_violation_of`) | small |
 | Machining descriptors | `crates/model/src/panel/machining.rs` (`MACHINING_DESCRIPTORS`, `MachiningDescriptor`, `MachiningCapabilities`) | small |
 | Face triangulation | `crates/geom/src/triangulate.rs` (`triangulate_face`), `crates/mesh/src/lib.rs` (`object_mesh`) | whole files |
-| Contour panel outline | `crates/model/src/panel/contour.rs` (`nominal_contour`, `contour_paths`, `to_contour_ring`, `BakedOutline`, `document_ring`) | whole file; a rectangle bakes into a ring and moves its banding (ADR 0061) |
+| Contour panel outline | `crates/model/src/panel/contour.rs` (`nominal_contour`, `contour_paths`, `to_contour_ring`, `BakedOutline`, `document_ring`), `crates/model/src/panel/mod.rs` (`Panel::anchored_contour`, `Panel::move_frame_to`) | whole file; a rectangle bakes into a ring and moves its banding (ADR 0061); a later outline edit re-anchors the frame at the ring's base corner, compensates the translation and machining so the drawn shape keeps its world place, and leaves the derived pivot at zero (ADR 0083, X30) |
 | Panel commands | `crates/engine/src/panel_cmds.rs` (`panel.*`) | small |
 | Model panel | `crates/model/src/panel/` (`Panel`, `geometry.rs`, `banding.rs`, `machining.rs`, `contour.rs`) | whole files |
 | Model project | `crates/model/src/project/mod.rs` (`Project`, ids, revision, `scan_tree`) | whole file |

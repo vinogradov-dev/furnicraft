@@ -394,7 +394,7 @@ pub const NODE_PIVOT_SET_LABEL: &str = "Set pivot";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePivotSet {
-    /// Panel or container whose pivot moves.
+    /// Node whose pivot moves; a panel's pivot is derived and is refused.
     pub node: Id,
     /// The new pivot in the node's own frame, in exact micrometres.
     pub pivot: Pivot,
@@ -408,7 +408,8 @@ fn node_pivot_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<NodePivotSet>(params, NODE_PIVOT_SET_ID) else {
         return false;
     };
-    session.project().node(params.node).is_some()
+    let project = session.project();
+    project.node(params.node).is_some() && project.panel(params.node).is_none()
 }
 
 fn node_pivot_set_run(
@@ -431,7 +432,7 @@ pub const NODE_PIVOT_CENTER_LABEL: &str = "Center pivot";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePivotCenter {
-    /// Panel or container whose pivot moves to its local bounds centre.
+    /// Node whose pivot moves to its local bounds centre; a panel's pivot is derived and is refused.
     pub node: Id,
 }
 
@@ -443,7 +444,8 @@ fn node_pivot_center_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = parse::<NodePivotCenter>(params, NODE_PIVOT_CENTER_ID) else {
         return false;
     };
-    session.project().node(params.node).is_some()
+    let project = session.project();
+    project.node(params.node).is_some() && project.panel(params.node).is_none()
 }
 
 fn node_pivot_center_run(
