@@ -66,6 +66,12 @@ pivot it was given; `node.pivot.center` is still how the user centres one explic
 above about "a container created with children" describe version 6 behaviour and the schema-5
 migration, which remains the only writer of such a centre.
 
+The shape-derived pivot of [0058](0058-a-new-drawing-pivots-on-its-own-shape.md) is gone for the same
+reason: a drawing now passes `Pivot::ZERO` and puts the point the user drew first (or the ring's
+bounds centre) into the translation, so the pivot is never a second copy of information the frame
+already carries. The contract tested in `crates/model/src/project/frame_contract.rs` covers every
+creation path.
+
 ## Related
 
 - [0025](0025-one-manipulation-pivot.md) introduced the shared pivot and is superseded here.

@@ -156,7 +156,8 @@ FurniCraft separates the model from the way it is viewed.
 - Every container and part has a local frame. A `Placement` is a rigid transform (translation and rotation; no scale or shear) relative to the parent frame.
 - A node's world transform is the composition of placements from the root.
 - Imported assets are normalised on import: Z-up, scale baked, origin at the mounting point. Placements stay rigid.
-- A panel's local frame is fixed: origin at the minimum corner of the nominal rectangle (`z = 0`), `+X` length, `+Y` width, `+Z` thickness; the panel occupies `z` from `0` to its thickness. Faces are A (`z = thickness`) and B (`z = 0`); vertices run 1..n counter-clockwise from the nominal zero and edge `i` joins vertex `i` to `i+1`. Included bottom and left banding move the core inward; machining is core-local.
+- A node's frame is chosen once, at creation: the content's anchor becomes the local zero, the translation is that anchor's position in the parent frame, the rotation is kept and the pivot starts at zero ([ADR 0082](docs/decisions/0082-the-local-zero-is-the-creation-anchor.md)). An open chain anchors at its first point, a closed ring at its bounds centre, a panel at its base corner ([ADR 0083](docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md)), a primitive at its own origin and a group at the centre of its children's union.
+- A panel's local frame is fixed: origin at the base corner of its outline (`z = 0`), the minimum corner of the nominal rectangle for a rectangle panel, `+X` length, `+Y` width, `+Z` thickness; the panel occupies `z` from `0` to its thickness. Faces are A (`z = thickness`) and B (`z = 0`); vertices run 1..n counter-clockwise from the nominal zero and edge `i` joins vertex `i` to `i+1`. Included bottom and left banding move the core inward; machining is stored in panel-local coordinates.
 
 ### Views
 

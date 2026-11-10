@@ -22,8 +22,9 @@ whole file. If the anchor is wrong or missing, fix the row — the map is a cont
 
 `plan/debt.md` and `plan/questions.md` are reference files: search them when the task touches their
 area, never read them at start. `plan/rename.md` is the same kind of file: it holds the measured
-inventory and the procedure for the pre-release rename (task R1). `plan/archive/done.md` is history;
-`git log --oneline` replaces it.
+inventory and the procedure for the pre-release rename (task R1). `plan/refactor.md` is the third:
+the design rules, the audit procedure and the subtask template for the design-rules refactor
+(task S7). `plan/archive/done.md` is history; `git log --oneline` replaces it.
 
 Answering the next step has its own procedure (§1.1); it never re-derives the state from the code.
 
@@ -141,6 +142,7 @@ FurniCraft is a Rust product: no dependency may compile or vendor C/C++/Objectiv
 
 - The document stores model-space data: the node tree, placements, stored pivots, geometry features, materials, and the camera and light **objects** the user authored, together with the active camera. The built-in camera and light are defaults, not nodes. The document never stores a viewport, a selection, a hover highlight, a node's open state or the navigation of a viewport camera.
 - A `Placement` is a rigid transform relative to the parent frame. World transforms are composed from the root; scale and shear are not placements.
+- A node's frame is chosen once, at creation: the content's anchor becomes the local zero, the translation is that anchor's position in the parent frame, the rotation is kept and the pivot starts at zero (ADR 0082). An open chain anchors at its first point, a closed ring at its bounds centre, a panel at its base corner (ADR 0083), a primitive at its own origin and a group at the centre of its children's union. A later edit, move or turn never recomputes an object's frame; a panel's outline edit or rectangle-to-contour conversion is the only re-anchor, and it compensates the translation so every world point stays put.
 - A placement stores a unit quaternion. The inspector presents it as intrinsic XYZ Euler angles in degrees (ADR 0024); the rotate gizmo writes the quaternion directly. Both gizmos act at one stored pivot expressed in the node's own frame (`Project::pivot_local` / `pivot_world`): a panel starts at its local zero, a container is born at its own origin, a group puts the centre of its children's union into its translation (so its pivot is zero), and the root is always zero and not editable. The pivot is document data edited by `node.pivot.set` / `node.pivot.center`; it never follows a resize or a reparent (ADR 0026). The rotate rings are world X/Y/Z aligned and do not turn with the node; a drag pre-multiplies the parent-frame turn onto the quaternion. A turn about a non-zero pivot also adjusts the translation so the pivot stays fixed; at a zero pivot the translation is untouched (ADR 0027). Move/Rotate mode is view state.
 - View state — viewport navigation, projection, grid, shading, selection, hover, open containers — lives in the session or the shell (ADR 0029). Cameras and lights the user adds are scene objects with undo (ADR 0036). Named views are the only optional exception and are presentation metadata.
 - A viewport is a UI adapter: it turns input into camera moves or commands and draws a scene. Picking returns document `Id`s, never mesh indices or pointers.
@@ -316,5 +318,9 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `plan/debt.md` — accepted gaps, tagged by area; append-only, an entry leaves when the fix lands.
 - `plan/rename.md` — the pre-release rename (task R1): what the product name touches today, the
   measured procedure and its gotchas. Read only when R1 is taken.
+- `plan/refactor.md` — the design-rules refactor (task S7 and its subtasks): how to measure a module,
+  the boundary, data, clean-code, documentation and test rules (`B`, `D`, `C`, `H`, `T` ids), the
+  legibility test, what to borrow from a reference project, the audit procedure and the subtask
+  template. Read when S7 starts; a subtask reads §3–§8. It leaves the plan with the last subtask.
 - `plan/questions.md` — decisions waiting for the owner.
 - `plan/archive/done.md` — the history the old status file carried; `git log --oneline` is the live record.

@@ -1,6 +1,6 @@
 # 0058. A new drawing pivots on its own shape
 
-- Status: Accepted
+- Status: Superseded by 0082
 - Date: 2026-11-05
 
 ## Context
@@ -35,3 +35,13 @@ The gizmos grab a new drawing where it was drawn, without a second "centre pivot
 one derived function per payload and a small asymmetry between a flat figure and a body: the body's
 pivot is on its base plane, not at half its height, until the user centres it. If a body should be
 authored around its volume centre, that is a separate decision.
+
+## Supersession (2026-11-10)
+
+[0082](0082-the-local-zero-is-the-creation-anchor.md) moved the same choice from the stored pivot into
+the stored translation. A new figure still keeps the point the user drew — an open chain's first
+point, a closed ring's bounds centre — but that point is now the node's **local zero**, and the
+pivot starts at zero. The user-visible grab point is unchanged; what changed is that the inspector's
+translation names it and the pivot carries no hidden copy of it. Every creation path now passes
+`Pivot::ZERO`, and `Project::add_object_with_pivot` exists only for the frame rule to hand back the
+zero pivot it returns.
