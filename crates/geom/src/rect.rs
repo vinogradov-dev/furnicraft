@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::region::{POINT_EPSILON, Region, RingKind, loop_to_contour, ring_contains};
+use crate::ring::{POINT_EPSILON, Region, RingKind, loop_to_contour, ring_contains};
 use crate::{Contour, DVec2};
 
 /// Why a [`Rect`] cannot be constructed.
@@ -575,7 +575,7 @@ fn coalesce_horizontal(parts: Vec<Rect>) -> Vec<Rect> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::region::Region;
+    use crate::ring::Region;
 
     fn bounds(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect::new(DVec2::new(x, y), DVec2::new(x + width, y + height)).expect("valid rectangle")

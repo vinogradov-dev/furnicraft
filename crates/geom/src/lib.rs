@@ -13,16 +13,18 @@
     clippy::unreachable
 )]
 
+pub mod boolean;
 pub mod contour;
 pub mod rect;
-pub mod region;
+pub mod ring;
 pub mod segment;
 pub mod triangulate;
 
+pub use boolean::{intersect_regions, subtract_regions, union_regions};
 pub use contour::{Contour, ContourError, DEFAULT_TANGENT_TOLERANCE};
 pub use glam::{DMat4, DQuat, DVec2, DVec3, DVec4, EulerRot};
 pub use rect::{Rect, RectError, connected_count, regions_from_rects, subtract_rects, total_area, union_rects};
-pub use region::{Region, RegionError, RegionSamples, intersect_regions, subtract_regions, union_regions};
+pub use ring::{Region, RegionError, RegionSamples};
 pub use segment::{Arc, Line, MAX_ARC_EXTENSION, Segment};
 pub use triangulate::{MAX_FACE_POINTS, TriangulateError, triangulate_face};
 

@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
+- `[~]` **S11** `geom/region.rs` becomes the general boolean alone — rules: B1, B3, B4, B8, H4.
   Why: after S10 the file is ~1120 lines and still mixes the ring model `Region` with the boolean
   algorithm, so a change to "what a region is" and a change to "how sets combine" reopen one file.
   Shape: `Region`, `RegionSamples`, `RingKind`, `RegionError`, the area, containment and validation
@@ -36,7 +36,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   (self-intersection, tolerance), with `//! Changes when:` (H4, H6); the `plan/map.md` row for planar
   regions points at `ring.rs` and `boolean.rs`.
   Commits: one move; the rename is part of the move, not a separate edit.
-  `files: crates/geom/src/region.rs, crates/geom/src/lib.rs`
+  `files: crates/geom/src/boolean.rs, crates/geom/src/ring.rs, crates/geom/src/lib.rs`
 
 - `[ ]` **S12** `model/contour_edit.rs` stops computing the trigonometry `geom` already owns — rules:
   D1, D2, B8, H2, H4.
