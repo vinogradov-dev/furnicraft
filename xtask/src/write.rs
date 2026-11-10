@@ -152,6 +152,12 @@ fn start(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
             other.id, other.id
         ));
     }
+    // Starting the task that is already running would overwrite the note a session is working from.
+    if task.status == TaskStatus::Doing && !options.flag("force") {
+        return Err(format!(
+            "task {id} is already in progress; `--force` rewrites `plan/SESSION.md`, `task step` adds to it"
+        ));
+    }
     let backlog = read(root, "plan/BACKLOG.md")?;
     let backlog = edit::set_marker(&backlog, &id, edit::DOING)?;
     let status = read(root, "plan/STATUS.md")?;
@@ -785,6 +791,47 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert_eq!(snapshot(&root), before);
         run(&root, &["drop", "S14"]).expect("S14 is not current");
         assert!(!text(&root, "plan/BACKLOG.md").contains("S14"), "the entry is gone");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_start_on_a_running_task_does_not_rewrite_its_note() {
+        let running = STATUS.replace("state=idle", "state=doing");
+        let backlog = BACKLOG.replace("- `[ ]` **P6**", "- `[~]` **P6**");
+        let root = project("start-again", &running, &backlog, Some(NOTE));
+        let before = snapshot(&root);
+        let error = run(&root, &["start", "P6"]).expect_err("a running task is not restarted");
+        assert!(error.contains("already in progress") && error.contains("--force"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        run(&root, &["start", "P6", "--force"]).expect("--force rewrites the note");
+        assert!(text(&root, "plan/SESSION.md").contains("now: "), "the note is rebuilt");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn closing_a_done_task_and_reopening_an_open_one_are_refused() {
+        let done = STATUS.replace("task=P6", "task=S14");
+        let backlog = BACKLOG.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n", "");
+        let backlog = format!("{backlog}\n- `[x]` **P6** the writer\n  `files: src/a.rs` — `abc1234`\n");
+        let root = project("transitions", &done, &backlog, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["close", "P6"]).expect_err("P6 is already done");
+        assert!(error.contains("already done"), "{error}");
+        assert_eq!(snapshot(&root), before);
+
+        let error = run(&root, &["reopen", "S14"]).expect_err("S14 is not done");
+        assert!(error.contains("is not done"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_step_without_a_session_note_is_refused() {
+        let root = project("step-none", STATUS, BACKLOG, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["step", "P6", "--tick"]).expect_err("there is no note");
+        assert!(error.contains("cannot read `plan/SESSION.md`"), "{error}");
+        assert_eq!(snapshot(&root), before);
         let _ = std::fs::remove_dir_all(&root);
     }
 

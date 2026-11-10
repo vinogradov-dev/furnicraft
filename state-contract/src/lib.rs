@@ -5,7 +5,9 @@
 //! task is in progress; `plan/notes/<ID>.md` holds the research note of one task. This crate parses
 //! them, checks that they agree with each other and with the files they name, renders the block a
 //! session starts from, and prints one task in full — its fields, map rows, notes, debt, questions
-//! and the session fields — so a host need not grep the plan files.
+//! and the session fields — so a host need not grep the plan files. It changes nothing by itself:
+//! [`edit`] splices the lines a command owns and [`check_text`] validates the result before a host
+//! writes it.
 
 #![forbid(unsafe_code)]
 #![deny(

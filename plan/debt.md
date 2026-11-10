@@ -156,3 +156,6 @@ module size, layer arrows and duplicated knowledge, `[vendor]`.
   `files:` paths, their crate directory, a file stem and the crate tag (`[engine]`); an entry that
   names the area in prose only is not selected, and `cargo xtask task --all` prints every entry.
   Keeping the tags and the `files:` hints honest is what makes the selection useful (P4).
+- `[design]` `cargo xtask task set --field files` replaces a `files:` hint only when it sits on its own
+  line, which is the layout `task add` writes; an inline hint on the marker line must be moved by
+  hand first. Every entry in `plan/BACKLOG.md` already uses the line form (P6).

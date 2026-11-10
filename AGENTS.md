@@ -282,7 +282,9 @@ Commit after every coherent, fully verified unit of work — not at the end of a
 The commit closes the operation; the plan files close it too, in the same change:
 
 1. Mark the task `[x]` in `plan/BACKLOG.md` with the short hash of the commit that delivers it. When a
-   task needs several commits, mark it on the last one.
+   task needs several commits, mark it on the last one. `cargo xtask task close <ID> --commit <hash>
+   --next <text>` does this, rewrites `plan/STATUS.md` and deletes `plan/SESSION.md` in one gated
+   write; do it by hand only when the tool refuses a shape the plan has never had.
 2. Rewrite `plan/STATUS.md`: a new `STATE:` line (`task` = the next task, `updated` = today, `base` =
    the commit whose tree the plan describes — `HEAD` when the plan edit is its own commit, the parent
    when the edit rides in the commit it describes) and a new `Next` paragraph. Never append to it.
@@ -292,9 +294,14 @@ The commit closes the operation; the plan files close it too, in the same change
 5. If the feature moved (a new module, a rename), update its row in `plan/map.md`; if the feature is
    new, add a row. A stale row is a defect the reader fixes.
 
-Starting a task is the mirror image: copy `plan/SESSION.template.md` to `plan/SESSION.md`, fill it in,
-set `state=doing` and `[~]` on that one task, and update `SESSION.md` after every meaningful step and
-after every green gate run — a session that dies must not lose more than the current sub-step.
+Starting a task is the mirror image: `cargo xtask task start <ID>` sets `[~]`, `state=doing` and
+writes `plan/SESSION.md` from the entry in one validated step (the manual fallback is the template
+beside it). Keep `now:`, `run:` and `resume:` current with `cargo xtask task step` and
+`cargo xtask task set` after every meaningful step and every green gate run — a session that dies
+must not lose more than the current sub-step — and close the task with
+`cargo xtask task close <ID> --commit <hash>`, which marks it `[x]`, records the hash, moves it to
+`## Done`, points `STATE:` at the next task, takes the new `## Next` paragraph (`--next`) and deletes
+the note.
 
 ### 6.2 Branch workflow
 
