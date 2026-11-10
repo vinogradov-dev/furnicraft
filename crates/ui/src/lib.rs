@@ -495,9 +495,46 @@ impl Editor {
         Ok(DrawnPath { object, tool })
     }
 
+    /// Closes the running ring and commits it as one path object.
+    ///
+    /// This is the only operation behind *Close*, whichever surface asked for it: the ribbon, the
+    /// status bar and a click on the first draft point all end here (ADR 0052). Closing and
+    /// committing belong together, because a closed draft that never reached the document is a ring
+    /// the user already finished and cannot edit.
+    ///
+    /// A refused close changes nothing — the ring stays open and editable, and no command ran. A
+    /// close the document then refuses reopens the ring for the same reason: the user keeps the
+    /// shape they drew and can fix it without redrawing.
+    pub fn close_and_commit_drawing(
+        &mut self,
+        session: &mut Session,
+        placement: Placement,
+    ) -> Result<DrawnPath, String> {
+        self.close_drawing().map_err(|error| error.to_string())?;
+        match self.commit_drawing(session, placement) {
+            Ok(drawn) => Ok(drawn),
+            Err(error) => {
+                self.reopen_drawing();
+                Err(error)
+            }
+        }
+    }
+
     /// Closes the running draft back to its first point.
-    pub fn close_drawing(&mut self) -> Result<(), DrawDraftError> {
+    ///
+    /// A primitive that only closes: the one operation the chrome runs is
+    /// [`Self::close_and_commit_drawing`], so a closed draft cannot be left behind.
+    pub(crate) fn close_drawing(&mut self) -> Result<(), DrawDraftError> {
         self.drawing.as_mut().ok_or(DrawDraftError::NotStarted)?.close()
+    }
+
+    /// Reopens a closed ring, so a refused commit leaves the drawing editable.
+    fn reopen_drawing(&mut self) {
+        if let Some(draft) = self.drawing.as_mut()
+            && draft.is_closed()
+        {
+            draft.undo();
+        }
     }
 
     /// Drops the running draft; the document never changed.
@@ -641,7 +678,9 @@ impl Editor {
     /// creation tool lands at the scene root unless a container was armed through an explicit entry
     /// (ADR 0056). The tool that owns the next click draws pressed, so the ribbon never hides what
     /// the pointer will do. The view actions it returns — frame all, the projection, the grid snap —
-    /// belong to the shell, which owns the view camera and the drawing gizmo.
+    /// belong to the shell, which owns the view camera and the drawing gizmo. So does the *Close* of
+    /// a draft: the ribbon reports it, because closing owns the work plane, the gizmo state and the
+    /// scene rebuild (ADR 0052).
     pub fn show_ribbon(
         &mut self,
         ui: &mut Ui,
@@ -649,7 +688,6 @@ impl Editor {
         view: toolbars::RibbonView,
     ) -> Result<toolbars::RibbonOutcome, String> {
         self.retain_creation_parent(session.project());
-        let target = self.creation_target(session.project());
         let has_panel_material = !session.catalog().panel_materials().is_empty();
         let selected = self.selection.primary();
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
@@ -670,6 +708,20 @@ impl Editor {
         };
         let mut actions = Vec::new();
         toolbars::show(ui, &mut self.toolbars, context, &mut actions);
+        self.apply_ribbon_actions(session, actions)
+    }
+
+    /// Runs the actions one drawn ribbon asked for and reports what the shell must still do.
+    ///
+    /// Split from [`Self::show_ribbon`] so the mapping from a clicked tool to its effect is testable
+    /// without a window: the *Close* of a draft is reported as [`toolbars::RibbonOutcome::close_draft`]
+    /// rather than run, because only the shell owns the work plane and the gizmo state.
+    fn apply_ribbon_actions(
+        &mut self,
+        session: &mut Session,
+        actions: Vec<ToolAction>,
+    ) -> Result<toolbars::RibbonOutcome, String> {
+        let target = self.creation_target(session.project());
         let mut outcome = toolbars::RibbonOutcome::default();
         for action in actions {
             match action {
@@ -687,7 +739,7 @@ impl Editor {
                     outcome.extruded = Some((object, height));
                 }
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
-                ToolAction::CloseDrawing => self.close_drawing().map_err(|error| error.to_string())?,
+                ToolAction::CloseDrawing => outcome.close_draft = true,
                 ToolAction::CancelDrawing => self.cancel_drawing(),
                 ToolAction::FrameAll => outcome.view = Some(toolbars::RibbonViewAction::FrameAll),
                 ToolAction::ToggleProjection => {
@@ -1517,9 +1569,10 @@ mod tests {
 
         assert!(editor.drawing().is_some_and(DrawDraft::can_close), "Close is offered and will work");
         let revision = session.project().revision();
-        editor.close_drawing().expect("close through the pending arc");
-        assert!(editor.drawing().is_some_and(DrawDraft::is_finished), "the closed draft commits");
-        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit");
+        let drawn = editor
+            .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+            .expect("close through the pending arc and commit");
+        assert!(editor.drawing().is_none(), "the close ends the tool");
         assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
 
         let path = session.project().object_path(drawn.object).expect("a path object");
@@ -1529,6 +1582,64 @@ mod tests {
         session.undo().expect("one undo removes the whole drawing");
         assert!(session.project().object(drawn.object).is_none());
         assert!(!session.can_undo(), "the drawing was one undo entry");
+    }
+
+    /// The project with its revision counter at the end of its range, so the next command is refused.
+    fn exhausted_revision(project: Project) -> Project {
+        let mut wire = serde_json::to_value(&project).expect("the project serialises");
+        wire["revision"] = serde_json::Value::from(u64::MAX);
+        serde_json::from_value(wire).expect("the project loads with a full revision counter")
+    }
+
+    #[test]
+    fn the_ribbon_reports_a_close_instead_of_running_it() {
+        // The ribbon has no work plane, no gizmo and no scene, so it cannot close on its own: it
+        // reports the close and the shell runs the one path that closes and commits (X23). A ring
+        // closed here and never committed was the bug — the document has to stay untouched until
+        // the shell acts.
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        let mut editor = Editor::new();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(0), mm(0)]).expect("start");
+        editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
+        editor.drawing_point([mm(600), mm(400)]).expect("right run");
+        let revision = session.project().revision();
+
+        let outcome =
+            editor.apply_ribbon_actions(&mut session, vec![ToolAction::CloseDrawing]).expect("the ribbon runs");
+        assert!(outcome.close_draft, "the ribbon asks the shell for the close and its commit");
+        assert_eq!(session.project().revision(), revision, "reporting a close writes nothing");
+        assert!(!session.can_undo(), "and leaves no undo entry behind");
+        let draft = editor.drawing().expect("the draft stays");
+        assert!(!draft.is_closed(), "the ribbon never closes the ring itself");
+        assert_eq!(draft.len(), 2, "every segment is still there");
+    }
+
+    #[test]
+    fn a_refused_close_leaves_the_ring_open_and_the_document_untouched() {
+        // The revision counter is full, so the close succeeds and the commit that belongs to it is
+        // refused. The ring reopens: the shape the user drew stays editable instead of becoming a
+        // finished draft nothing can change (ADR 0052, "a refused path keeps the draft").
+        let (project, _panel) = contour_panel_project();
+        let mut session = Session::with_catalog(exhausted_revision(project), sample_catalog());
+        let mut editor = Editor::new();
+        let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+        editor.start_drawing(DrawTool::Polyline);
+        editor.drawing_point([mm(0), mm(0)]).expect("start");
+        editor.drawing_point([mm(600), mm(0)]).expect("bottom run");
+        editor.drawing_point([mm(600), mm(400)]).expect("right run");
+        let revision = session.project().revision();
+
+        editor
+            .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+            .expect_err("the document refuses the commit");
+        assert_eq!(session.project().revision(), revision, "a refused close writes nothing");
+        assert!(!session.can_undo(), "and leaves no undo entry behind");
+        let draft = editor.drawing().expect("the draft survives a refusal");
+        assert!(!draft.is_closed(), "the ring reopens, so the shape stays editable");
+        assert_eq!(draft.len(), 2, "and keeps every segment");
     }
 
     #[test]

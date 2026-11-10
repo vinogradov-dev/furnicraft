@@ -55,7 +55,7 @@ use furnicraft_ui::{
 use furnicraft_units::Length;
 
 use crate::contour_gizmo::ContourGizmo;
-use crate::draw_gizmo::{DrawGizmo, DrawModifiers};
+use crate::draw_gizmo::{DrawAction, DrawGizmo, DrawModifiers};
 use crate::extrude_gizmo::{ExtrudeAction, ExtrudeEvent, ExtrudeGizmo};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
@@ -504,16 +504,36 @@ impl FurniCraftApp {
     /// The plane is the one the draft started on, so a commit does not depend on where the camera
     /// has orbited since. A refused path leaves the draft live and reports why.
     fn commit_drawing(&mut self) -> Result<(), String> {
-        let placement = self
-            .draw_gizmo
+        let placement = self.drawing_placement()?;
+        self.editor.commit_drawing(&mut self.session, placement)?;
+        self.end_drawing()
+    }
+
+    /// Closes the running ring and commits it in one step.
+    ///
+    /// The only close path: a click on the first draft point, the ribbon's *Close* and the status
+    /// bar's *Close* all end here, so no surface can close a ring and forget to commit it (ADR 0052).
+    /// The ring is closed before the commit and reopened if the document refuses it, so a refusal
+    /// leaves the shape the user drew editable instead of a finished draft that cannot be changed.
+    fn close_draft(&mut self) -> Result<(), String> {
+        let placement = self.drawing_placement()?;
+        self.editor.close_and_commit_drawing(&mut self.session, placement)?;
+        self.end_drawing()
+    }
+
+    /// The placement of the work plane the live draft draws on.
+    fn drawing_placement(&self) -> Result<Placement, String> {
+        self.draw_gizmo
             .plane(self.scene.camera)
             .placement()
-            .ok_or_else(|| "the work plane has no usable placement".to_owned())?;
-        self.editor.commit_drawing(&mut self.session, placement)?;
+            .ok_or_else(|| "the work plane has no usable placement".to_owned())
+    }
+
+    /// Drops the pointer state a finished drawing leaves behind and rebuilds the scene.
+    fn end_drawing(&mut self) -> Result<(), String> {
         self.draw_gizmo.reset();
         self.highlighted.clear();
-        self.sync_scene()?;
-        Ok(())
+        self.sync_scene()
     }
 
     /// Re-uploads the scene when the drag preview moved to a new position.
@@ -867,7 +887,7 @@ impl FurniCraftApp {
                 axis_lock: ui.input(|input| input.modifiers.shift),
                 ignore_snaps: ui.input(|input| input.modifiers.alt),
             };
-            let finished = match self.draw_gizmo.update(
+            let action = match self.draw_gizmo.update(
                 &response,
                 rect,
                 self.scene.camera,
@@ -875,24 +895,39 @@ impl FurniCraftApp {
                 pointer_over_widget,
                 modifiers,
             ) {
-                Ok(true) => {
-                    ui.ctx().request_repaint();
-                    // A fixed tool is done on its last point and a closed polyline on its close
-                    // click: the finished draft commits right away, as a CAD tool does.
-                    self.editor.drawing().is_some_and(DrawDraft::is_finished)
-                }
-                Ok(false) => false,
+                Ok(action) => action,
                 Err(error) => {
                     self.last_error = Some(error);
-                    false
+                    DrawAction::Nothing
                 }
             };
-            if finished && let Err(error) = self.commit_drawing() {
-                self.last_error = Some(error);
-            }
+            // A fixed tool is done on its last point, and a polyline is closed through its first
+            // point: both finish the drawing the way a CAD tool does, but only a close commits
+            // through the shared close path.
+            let ended = match action {
+                DrawAction::Point => {
+                    ui.ctx().request_repaint();
+                    if self.editor.drawing().is_some_and(DrawDraft::is_finished) {
+                        if let Err(error) = self.commit_drawing() {
+                            self.last_error = Some(error);
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+                DrawAction::Close => {
+                    ui.ctx().request_repaint();
+                    if let Err(error) = self.close_draft() {
+                        self.last_error = Some(error);
+                    }
+                    true
+                }
+                DrawAction::Nothing => false,
+            };
             // The right button commits the figure like Enter; it is the CAD habit and keeps the
             // left button free for placing points.
-            if !finished
+            if !ended
                 && !pointer_over_widget
                 && response.clicked_by(egui::PointerButton::Secondary)
                 && let Err(error) = self.commit_drawing()
@@ -1506,8 +1541,11 @@ impl FurniCraftApp {
         // one that the side panels use behind their content. The settings slider scales that fill's
         // alpha, letting the scene it covers show through without changing any other surface.
         let fill = theme::surface(ui).gamma_multiply(self.settings.ribbon.opacity);
-        let height = furnicraft_ui::toolbars::height(self.editor.ribbon_open());
-        let rect = strip_area(ui.ctx(), "ribbon", design, height, fill, |ui| {
+        // The band the strip occupies is also the band it owns the pointer over, so the tools behind
+        // it never see a hover or a click there. The measured rectangle wins once egui has sized the
+        // area, which is what keeps the blocked band and the drawn one the same.
+        let band = self.ribbon_band(design);
+        let rect = strip_area(ui.ctx(), "ribbon", band, fill, |ui| {
             match self.editor.show_ribbon(ui, &mut self.session, view) {
                 Ok(result) => outcome = Some(result),
                 Err(error) => self.last_error = Some(error),
@@ -1532,6 +1570,13 @@ impl FurniCraftApp {
                 self.contour_gizmo.reset();
                 self.draw_gizmo.reset();
                 self.extrude_gizmo.start(object, height);
+            }
+            // The ribbon reports a *Close* instead of running it: the shell owns the work plane,
+            // the gizmo state and the scene rebuild, and every close takes the same path (ADR 0052).
+            if outcome.close_draft
+                && let Err(error) = self.close_draft()
+            {
+                self.last_error = Some(error);
             }
             match outcome.view {
                 Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.frame_all(),
@@ -1629,14 +1674,11 @@ impl FurniCraftApp {
             Some(StatusAction::CancelContour) => self.cancel_contour_edit(),
             Some(StatusAction::ToggleContourAlong) => self.contour_gizmo.toggle_along(),
             Some(StatusAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
-            Some(StatusAction::CloseDraft) => match self.editor.close_drawing() {
-                Ok(()) => {
-                    if let Err(error) = self.commit_drawing() {
-                        self.last_error = Some(error);
-                    }
+            Some(StatusAction::CloseDraft) => {
+                if let Err(error) = self.close_draft() {
+                    self.last_error = Some(error);
                 }
-                Err(error) => self.last_error = Some(error.to_string()),
-            },
+            }
             Some(StatusAction::FinishDraft) => {
                 if let Err(error) = self.commit_drawing() {
                     self.last_error = Some(error);
@@ -1970,27 +2012,37 @@ fn strip_rect(design: egui::Rect, height: f32) -> egui::Rect {
     egui::Rect::from_min_size(design.min, egui::vec2(design.width().max(0.0), height.max(0.0)))
 }
 
-/// Draws a tool strip over `design` as a floating overlay and returns the rectangle it covered.
+/// Draws a tool strip over the band `band` as a floating overlay and returns the rectangle it covered.
 ///
 /// The strip spans the design space's width — the window's width — and sits on the middle layer, so
-/// the rendered scene runs under it, a translucent fill blends with the furniture, and a click on the
-/// strip never reaches the viewport behind it (U51, ADR 0080). The height is fixed by the strip's own
-/// state, so the shell reserves the same band before the strip is drawn. `None` is egui's sizing pass,
-/// where the content is measured but not shown.
+/// the rendered scene runs under it and a translucent fill blends with the furniture (U51, ADR 0080).
+/// The band is the strip's own: the whole of it is chrome, so the pointer over any part of it — a
+/// tool, a gap, a margin — belongs to the ribbon and never to the view behind it. A hover-only area
+/// left the gaps transparent to the viewport, which let a drawing tool's rubber band follow the
+/// pointer onto the toolbar (X23). `None` is egui's sizing pass, where the content is measured but
+/// not shown.
 fn strip_area(
     ctx: &egui::Context,
     id: &str,
-    design: egui::Rect,
-    height: f32,
+    band: egui::Rect,
     fill: egui::Color32,
     add: impl FnOnce(&mut egui::Ui),
 ) -> Option<egui::Rect> {
     let [margin_x, margin_y] = furnicraft_ui::toolbars::RIBBON_FRAME_MARGIN;
-    let width = design.width().max(0.0);
+    let width = band.width().max(0.0);
+    let height = band.height().max(0.0);
     let mut sizing = false;
     let response =
-        egui::Area::new(egui::Id::unique(id)).order(egui::Order::Middle).fixed_pos(design.min).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique(id)).order(egui::Order::Middle).fixed_pos(band.min).show(ctx, |ui| {
             sizing = ui.is_sizing_pass();
+            // Registered before the tools so the buttons drawn after it stay on top and keep their
+            // clicks, and on the sizing pass not at all: that pass shows nothing the pointer can
+            // hit. It senses a drag as well as a click because the viewport behind it does: a widget
+            // that only senses clicks leaves a drag-sensing widget under it hovered, and the drawing
+            // tools read the hover, not the click.
+            if !sizing {
+                ui.interact(band, egui::Id::unique((id, "chrome")), egui::Sense::click_and_drag());
+            }
             egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(margin_x, margin_y)).show(ui, |ui| {
                 ui.set_width((width - 2.0 * f32::from(margin_x)).max(0.0));
                 ui.set_min_height((height - 2.0 * f32::from(margin_y)).max(0.0));
@@ -3101,7 +3153,8 @@ mod tests {
                     // The viewport stand-in: the whole design space, under the strip.
                     let (_, response) = ui.allocate_exact_size(design.size(), egui::Sense::click());
                     result.0 |= response.clicked();
-                    strip_area(ui.ctx(), "ribbon_click_test", design, height, theme::surface(ui), |ui| {
+                    let band = strip_rect(design, height);
+                    strip_area(ui.ctx(), "ribbon_click_test", band, theme::surface(ui), |ui| {
                         let (_, response) = ui.allocate_exact_size(egui::vec2(200.0, 20.0), egui::Sense::click());
                         result.1 |= response.clicked();
                     });
@@ -3120,6 +3173,50 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_over_the_ribbon_band_does_not_hover_the_viewport() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let design = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let height = furnicraft_ui::toolbars::height(true);
+        let band = strip_rect(design, height);
+        // Hovers `pos` for a few frames: the first frame sizes the strip, and egui resolves the
+        // hover against the previous frame's layers. Returns whether the viewport took the hover.
+        let hover_at = |pos: egui::Pos2| -> bool {
+            let mut hovered = false;
+            for _ in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 840.0))),
+                    events: vec![egui::Event::PointerMoved(pos)],
+                    ..Default::default()
+                };
+                let output = ctx.run_ui(input, |ui| {
+                    // The viewport stand-in: the whole design space, under the strip. It senses a
+                    // drag like the real one, which is what makes the strip's band the harder case.
+                    let (_, response) = ui.allocate_exact_size(design.size(), egui::Sense::click_and_drag());
+                    hovered = response.hovered();
+                    // The strip draws one small tool and leaves the rest of its band empty.
+                    strip_area(ui.ctx(), "ribbon_hover_test", band, theme::surface(ui), |ui| {
+                        ui.allocate_exact_size(egui::vec2(200.0, 20.0), egui::Sense::click());
+                    });
+                });
+                output.drop_without_applying_deltas();
+            }
+            hovered
+        };
+        // A point on the strip's empty chrome: the whole band is the strip's, so the viewport behind
+        // it takes neither the hover nor the rubber band that follows it (X23).
+        assert!(
+            !hover_at(egui::pos2(500.0, band.bottom() - 1.0)),
+            "the strip's own band must not hover the viewport behind it"
+        );
+        // The same gesture below the strip still hovers the viewport.
+        assert!(
+            hover_at(egui::pos2(500.0, band.bottom() + 100.0)),
+            "the viewport keeps the pointer the strip does not cover"
+        );
+    }
+
+    #[test]
     fn the_strip_overlay_fills_the_design_width_and_its_reserved_height() {
         let ctx = egui::Context::default();
         theme::install(&ctx);
@@ -3133,7 +3230,8 @@ mod tests {
                 ..Default::default()
             };
             let output = ctx.run_ui(input, |ui| {
-                rect = strip_area(ui.ctx(), "ribbon_size_test", design, height, theme::surface(ui), |_ui| {});
+                let band = strip_rect(design, height);
+                rect = strip_area(ui.ctx(), "ribbon_size_test", band, theme::surface(ui), |_ui| {});
             });
             output.drop_without_applying_deltas();
         }

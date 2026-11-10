@@ -529,6 +529,12 @@ pub enum RibbonViewAction {
 pub struct RibbonOutcome {
     /// A drawing tool started, so the shell resets its pointer state.
     pub started_drawing: bool,
+    /// The running ring must be closed and committed.
+    ///
+    /// The ribbon reports the *Close* instead of running it, because closing owns the work plane,
+    /// the gizmo state and the scene rebuild — all of them the shell's. One close path serves the
+    /// ribbon, the status bar and a click on the first draft point (ADR 0052).
+    pub close_draft: bool,
     /// The view action the ribbon asked for, if any.
     pub view: Option<RibbonViewAction>,
     /// The body a path extrusion just created, with the height it used.
