@@ -25,16 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` hands
-  `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
-  to the parent, so an armed container that is moved or turned puts the cube somewhere else.
-  Expectation: the editor converts the placement with the parent's inverse exactly as X24 does, and
-  `object.primitive.create` keeps its mesh centred with a zero pivot, so the primitive's translation is
-  the parent-frame position of the clicked point. Tests: the same click at the root and inside a
-  rotated, moved container puts the primitive on the pointer; its pivot is zero, its mesh bounds are
-  symmetric about the local zero, and the document changes once.
-  `files: crates/ui/src/lib.rs, apps/furnicraft/src/gizmo_math.rs, crates/engine/src/object_cmds.rs`
-
 - `[ ]` **X26** a panel is anchored at its base corner: a panel is a parametric entity, not a mesh —
   the core draws a closed contour, extrudes the thickness and then explicitly re-anchors the frame with
   `rebase_at_anchor(BBoxBaseCorner)`, so the local zero *is* the base corner (min-X/min-Y for a
@@ -320,6 +310,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X25** a primitive lands under the pointer in a nested container: `place_primitive` handed
+  `WorkPlane::placement_at` — a world placement — to `object.primitive.create` as a placement relative
+  to the parent, so an armed container that was moved or turned put the cube somewhere else.
+  Expectation: the editor converts the placement with the parent's inverse exactly as X24 does, and
+  `object.primitive.create` keeps its mesh centred with a zero pivot, so the primitive's translation is
+  the parent-frame position of the clicked point. Tests: the same click at the root and inside a
+  rotated, moved container puts the primitive on the pointer; its pivot is zero, its mesh bounds are
+  symmetric about the local zero, and the document changes once.
+  `5370454`
+  `files: crates/ui/src/lib.rs, apps/furnicraft/src/gizmo_math.rs, crates/engine/src/object_cmds.rs`
 
 - `[x]` **X24** a drawing is born at its own zero: a line drawn at (600, 400) stores
   `translation = (0, 0, 0)` and puts (600, 400) into `pivot_local`, so the card honestly reports a
