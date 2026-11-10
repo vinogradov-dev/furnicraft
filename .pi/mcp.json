@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "rust-analyzer": {
+      "command": "rust-analyzer-mcp",
+      "args": [
+        "."
+      ],
+      "cwd": ".",
+      "exposure": "deferred",
+      "description": "rust-analyzer LSP for this Rust workspace: symbols, definitions, references, hover, diagnostics, code actions, rename edits"
+    }
+  }
+}
