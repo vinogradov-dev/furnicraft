@@ -163,9 +163,15 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "state",
-        usage: "state <set key=value …|next (--body <text>|--stdin)>",
-        summary: "change the `STATE:` line, or the `## Next` paragraph",
+        usage: "state <set key=value …|next|where (--body <text>|--stdin)> [--task <id>] [--repair]",
+        summary: "change the `STATE:` line, the `## Next` paragraph or the `## Where we are` prose",
         run: |global, _, args| write::state(&global.root, args, &ProcessGit::new(&global.root)),
+    },
+    Command {
+        name: "file",
+        usage: "file <plan/map.md|plan/debt.md|…> (--body <text>|--stdin) [--dry-run]",
+        summary: "write one reference file of the plan through the gate, so two sessions never fight",
+        run: |global, _, args| write::file(&global.root, args, &ProcessGit::new(&global.root)),
     },
 ];
 

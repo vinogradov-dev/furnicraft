@@ -98,7 +98,7 @@ impl Layout {
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case(section))
             .map(|(_, at)| *at)
-            .ok_or_else(|| format!("`plan/BACKLOG.md` has no `## {section}` section"))
+            .ok_or_else(|| format!("the plan has no `## {section}` section"))
     }
 
     /// The lines joined back into text, with the original trailing newline.
@@ -336,8 +336,9 @@ fn join(lines: Vec<String>, original: &str) -> String {
 
 /// Replaces the body of a `## <heading>` section, keeping the heading and the blank lines around it.
 ///
-/// The prose under `## Next` is the one part of `plan/STATUS.md` a command has to own, because the
-/// gate requires it to name the current task and a close changes which task that is.
+/// The prose under `## Next` and `## Where we are` is the part of `plan/STATUS.md` a command owns:
+/// the gate requires the first to name the current task, and the second has to describe the tree
+/// `STATE: base` points at.
 pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, String> {
     let mut layout = Layout::parse(text);
     let at = layout.heading(heading)?;
@@ -351,8 +352,12 @@ pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, Stri
     Ok(layout.render())
 }
 
-/// Sets one or more `key=value` fields on the single `STATE:` line.
-///
+/// Whether `text` has a `## <heading>` section, so a verb knows whether it has to own it.
+pub fn has_section(text: &str, heading: &str) -> bool {
+    Layout::parse(text).sections.iter().any(|(name, _)| name.eq_ignore_ascii_case(heading))
+}
+
+/// Sets one or more `key=value` fields on the single `STATE:` line.///
 /// A key the line does not carry is appended, so a new field costs one command and no rewrite.
 pub fn set_state(status: &str, values: &[(String, String)]) -> Result<String, String> {
     let mut lines: Vec<String> = status.lines().map(str::to_owned).collect();

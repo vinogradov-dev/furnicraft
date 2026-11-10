@@ -40,8 +40,9 @@ table, so one help lists everything.
 | `task [<id>]` | one task in full: fields, files with line counts and last commits, map rows, notes, `RELATED`, debt, questions, ADRs, the closing commit |
 | `task list` | one line per task, filtered by `--section`, `--status`, `--phase` and `--grep` |
 | `task --md` / `--paths` | the same task for an agent, or one path per line for a shell loop |
-| `task add\|start\|set\|step\|note\|close\|reopen\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run` |
-| `state set k=v` / `state next` | one field of the `STATE:` line, or the `## Next` paragraph |
+| `task add\|start\|set\|step\|note\|close\|reopen\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run`; `--repair` lets a write through that removes a violation and adds none |
+| `state set k=v` / `state next` / `state where` | one field of the `STATE:` line, the `## Next` paragraph, or the `## Where we are` prose; `state next --task <id>` moves the paragraph and the current task in one write |
+| `file <plan/map.md\|…>` | one reference file (`map`, `debt`, `questions`, `refactor`, `rename`, the template) through the same gate and diff |
 | `dashboard [--task <id>]` | the framed overview, optionally with one task expanded |
 | `docs` | the decisions `README.md` against the files it indexes |
 | `agents` | the session contract below, filled with the project's own command lines |
