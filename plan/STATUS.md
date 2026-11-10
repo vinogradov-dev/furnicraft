@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=f5270e2 updated=2026-11-09
+STATE: milestone=M7 phase=A task=X23 state=doing base=ed0e8af updated=2026-11-10
 
 Read this file first. While `state=doing`, read `plan/SESSION.md` next; otherwise skip it. Then read
 only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and `## Now` —
@@ -57,7 +57,7 @@ only the files the task names in `plan/BACKLOG.md`, and answer from `STATE` and 
 
 ## Next
 
-U45 opens several scenes at once: one tab per open file, each with its own session, undo history, selection, camera and dirty marker; activating a tab swaps the workspace, and closing the last one leaves an empty *Untitled*.
+S5 lands the canonical frame: `rebase_at_anchor` with its three strategies, `Path::translated` and `Placement::inverse`, so the drawing, panel, group and migration steps that follow share one operation (owner's audit decisions, 2026-11-10).
 
 ## Index
 
