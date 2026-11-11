@@ -25,30 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S21** the shell's Home surface moves out of `main.rs` — rules: B4, B8, H2, H5.
-  Why: `home_surface` is one 632-line function inside `impl FurniCraftApp` (1620 lines, 40 fields),
-  four times B4's 150-line function ceiling (F1).
-  Shape: `home_surface` becomes a free function in `apps/furnicraft/src/home.rs` (~640) over the state
-  it reads, called from `ui()`; `main.rs` 2609 -> ~1980.
-  Done: the existing Home tests move unchanged; `home.rs` states that it draws the start surface and
-  returns one action, that it never touches the document, and `//! Changes when:`.
-  Commits: one move.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src`
-
-- `[ ]` **S22** `main.rs` keeps the frame loop and gives up its chrome — rules: B1, B4, B8, H5.
-  Why: after S21 the file is ~1980 lines, and four chrome pieces each have their own reason to change:
-  the status bar (`StatusInfo`, `StatusOut`, `status_state_ui`, `apply_status`, `hint`, `rule`), the
-  folding side panels (`PanelHead`, `side_panel`, `panel_header`, `count_chip`, `collapsed_strip`), the
-  ribbon-band geometry (`strip_rect`, `strip_area`, `uncovered`, `fit_uncovered`, `view_region`) and
-  the shortcut readers (`Shortcuts`, `take_shortcuts`, `take_drawing_shortcut`) — F1, B4.
-  Shape: they move to `apps/furnicraft/src/status_bar.rs`, `side_panels.rs`, `strip.rs` and
-  `shortcuts.rs`; `main.rs` 1980 -> ~1460, and U45 then takes `viewport` (635) onto `Document` and
-  leaves the shell near 800.
-  Done: suite unchanged; each module states what it draws or reads and `//! Changes when:`; the
-  `plan/map.md` rows for the status bar and the folding panels name the new files.
-  Commits: one move.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src`
-
 - `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
@@ -246,6 +222,34 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S22** `main.rs` keeps the frame loop and gives up its chrome — rules: B1, B4, B8, H5.
+  Why: after S21 the file is ~1980 lines, and four chrome pieces each have their own reason to change:
+  the status bar (`StatusInfo`, `StatusOut`, `status_state_ui`, `apply_status`, `hint`, `rule`), the
+  folding side panels (`PanelHead`, `side_panel`, `panel_header`, `count_chip`, `collapsed_strip`), the
+  ribbon-band geometry (`strip_rect`, `strip_area`, `uncovered`, `fit_uncovered`, `view_region`) and
+  the shortcut readers (`Shortcuts`, `take_shortcuts`, `take_drawing_shortcut`) — F1, B4.
+  Shape: they move to `apps/furnicraft/src/status_bar.rs`, `side_panels.rs`, `strip.rs` and
+  `shortcuts.rs`; `main.rs` 1980 -> ~1460, and U45 then takes `viewport` (635) onto `Document` and
+  leaves the shell near 800.
+  Done: suite unchanged (the same 34 tests, 14 of them left in `main.rs`); each module states
+   what it draws or reads and carries `//! Changes when:`; the `plan/map.md` rows for the
+   status bar, the folding panels, the split views, the ribbon and the scene tree name the new
+   files. Measured: `main.rs` 2608 -> 2037 production and 859 -> 265 test lines;
+   `status_bar.rs` 287, `side_panels.rs` 159, `strip.rs` 114, `shortcuts.rs` 82 production
+   lines, no ceiling of `plan/refactor.md` §3 crossed.
+  Commits: one move.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src` — `a543599`
+
+- `[x]` **S21** the shell's Home surface moves out of `main.rs` — rules: B4, B8, H2, H5.
+  Why: `home_surface` is one 632-line function inside `impl FurniCraftApp` (1620 lines, 40 fields),
+  four times B4's 150-line function ceiling (F1).
+  Shape: `home_surface` becomes a free function in `apps/furnicraft/src/home.rs` (~640) over the state
+  it reads, called from `ui()`; `main.rs` 2609 -> ~1980.
+  Done: the existing Home tests move unchanged; `home.rs` states that it draws the start surface and
+  returns one action, that it never touches the document, and `//! Changes when:`.
+  Commits: one move.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src` — `c83ace5`
 
 - `[x]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
   Why: 1112 production lines in one file cover two operations: editing an existing contour

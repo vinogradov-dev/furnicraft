@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S21 state=idle base=ecf924f updated=2026-11-11
+STATE: milestone=M7 phase=A task=U45 state=idle base=a543599 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -19,8 +19,10 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   render, then `Editor` and the shell; `main.rs` and `ui/lib.rs` before U45): S8–S13 split `geom` and
   gave the shared test fixtures one definition (ADR 0084), S14 `engine/panel_cmds` into `panel`,
   `machining` and `banding`, S15–S17 `scene`'s camera and ray and `render`'s pipelines, buffers and
-  vertex builders, then S18–S19 the document rules and the whole `Editor` out of `ui/lib.rs`, whose
-  crate root is now the module list and the re-exports, 50 lines. F4 waits in `plan/questions.md`.
+  vertex builders, then S18–S19 the document rules and the whole `Editor` out of `ui/lib.rs`, 50
+  lines, S20 the drawing draft out of `contour_edit.rs` and S22 the shell's chrome out of `main.rs`
+  (2608 -> 2037 production lines). S21 was delivered before it was filed (`plan/notes/S21.md`);
+  F4 waits in `plan/questions.md`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -52,10 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S21 is next: `home_surface` is one 632-line function inside `FurniCraftApp`, so the shell's start
-surface moves to `apps/furnicraft/src/home.rs` as a free function over the state it reads, called
-from `ui()`; S22 then leaves `main.rs` its frame loop and takes the chrome, and U45's tab row lands
-last, once the shell is small enough to split.
+U45 is next: the shell opens several scenes at once — one `Document` per tab with its own session,
+undo history, selection, camera and renderer target, a saved `viewport` moved onto it and a tab row
+in the header.
 
 ## Index
 
