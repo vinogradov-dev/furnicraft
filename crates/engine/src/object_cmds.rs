@@ -22,18 +22,19 @@ use serde_json::Value;
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::node_cmds::{parse, validate_name};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the primitive creation command.
 pub const OBJECT_PRIMITIVE_CREATE_ID: &str = "object.primitive.create";
 
 /// User-facing label of the primitive creation command.
-pub const OBJECT_PRIMITIVE_CREATE_LABEL: &str = "Create primitive";
+pub const OBJECT_PRIMITIVE_CREATE_LABEL: Message = Message::CmdCreatePrimitive;
 
 /// Stable id of the primitive parameter replacement command.
 pub const OBJECT_PRIMITIVE_REPLACE_ID: &str = "object.primitive.replace";
 
 /// User-facing label of the primitive parameter replacement command.
-pub const OBJECT_PRIMITIVE_REPLACE_LABEL: &str = "Replace primitive parameters";
+pub const OBJECT_PRIMITIVE_REPLACE_LABEL: Message = Message::CmdReplacePrimitive;
 
 /// The primitive shapes the command can build, re-exported from the document payload.
 pub use furnicraft_model::{MAX_PRIMITIVE_SIZE, PrimitiveKind};
@@ -128,7 +129,7 @@ fn object_primitive_replace_run(
 pub const OBJECT_EXTRUDE_CREATE_ID: &str = "object.extrude.create";
 
 /// User-facing label of the extrusion creation command.
-pub const OBJECT_EXTRUDE_CREATE_LABEL: &str = "Create extrusion";
+pub const OBJECT_EXTRUDE_CREATE_LABEL: Message = Message::CmdCreateExtrusion;
 
 /// Parameters for `object.extrude.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -213,7 +214,7 @@ fn evaluate_contour(command: &'static str, contour: &Contour) -> Result<(), Comm
 pub const OBJECT_CONTOUR_REPLACE_ID: &str = "object.contour.replace";
 
 /// User-facing label of the contour replacement command.
-pub const OBJECT_CONTOUR_REPLACE_LABEL: &str = "Replace contour";
+pub const OBJECT_CONTOUR_REPLACE_LABEL: Message = Message::CmdReplaceContour;
 
 /// Parameters for `object.contour.replace`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -269,7 +270,7 @@ fn extrusion_path_ready(path: &Path) -> Result<Contour, CommandError> {
 pub const OBJECT_PATH_EXTRUDE_ID: &str = "object.path.extrude";
 
 /// User-facing label of the path extrusion command.
-pub const OBJECT_PATH_EXTRUDE_LABEL: &str = "Extrude path";
+pub const OBJECT_PATH_EXTRUDE_LABEL: Message = Message::CmdExtrudePath;
 
 /// Parameters for `object.path.extrude`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -329,7 +330,7 @@ fn object_path_extrude_run(
 pub const OBJECT_EXTRUDE_HEIGHT_SET_ID: &str = "object.extrude.height.set";
 
 /// User-facing label of the extrusion height command.
-pub const OBJECT_EXTRUDE_HEIGHT_SET_LABEL: &str = "Set extrusion height";
+pub const OBJECT_EXTRUDE_HEIGHT_SET_LABEL: Message = Message::CmdSetExtrusionHeight;
 
 /// Parameters for `object.extrude.height.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -383,7 +384,7 @@ fn object_extrude_height_set_run(
 pub const OBJECT_PATH_CREATE_ID: &str = "object.path.create";
 
 /// User-facing label of the path creation command.
-pub const OBJECT_PATH_CREATE_LABEL: &str = "Create path";
+pub const OBJECT_PATH_CREATE_LABEL: Message = Message::CmdCreatePath;
 
 /// Parameters for `object.path.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -438,7 +439,7 @@ fn object_path_create_run(
 pub const OBJECT_PATH_REPLACE_ID: &str = "object.path.replace";
 
 /// User-facing label of the path replacement command.
-pub const OBJECT_PATH_REPLACE_LABEL: &str = "Replace path";
+pub const OBJECT_PATH_REPLACE_LABEL: Message = Message::CmdReplacePath;
 
 /// Parameters for `object.path.replace`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -479,7 +480,7 @@ fn object_path_replace_run(
 pub const OBJECT_COLLAPSE_ID: &str = "object.collapse";
 
 /// User-facing label of the collapse command.
-pub const OBJECT_COLLAPSE_LABEL: &str = "Collapse to mesh";
+pub const OBJECT_COLLAPSE_LABEL: Message = Message::CmdCollapseToMesh;
 
 /// Parameters for `object.collapse`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

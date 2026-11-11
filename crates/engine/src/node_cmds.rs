@@ -17,12 +17,13 @@ use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the component container creation command.
 pub const ASSEMBLY_CREATE_ID: &str = "assembly.create";
 
 /// User-facing label of the component container creation command.
-pub const ASSEMBLY_CREATE_LABEL: &str = "Create assembly";
+pub const ASSEMBLY_CREATE_LABEL: Message = Message::CmdCreateAssembly;
 
 /// Parameters for `assembly.create`.
 ///
@@ -64,7 +65,7 @@ fn assembly_create_run(
 pub const NODE_RENAME_ID: &str = "node.rename";
 
 /// User-facing label of the node rename command.
-pub const NODE_RENAME_LABEL: &str = "Rename";
+pub const NODE_RENAME_LABEL: Message = Message::CmdRename;
 
 /// Parameters for `node.rename`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,7 +102,7 @@ fn node_rename_run(project: &mut Project, _catalog: &Catalog, params: &Value) ->
 pub const NODE_DELETE_ID: &str = "node.delete";
 
 /// User-facing label of the node deletion command.
-pub const NODE_DELETE_LABEL: &str = "Delete";
+pub const NODE_DELETE_LABEL: Message = Message::CmdDelete;
 
 /// Parameters for `node.delete`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,7 +133,7 @@ fn node_delete_run(project: &mut Project, _catalog: &Catalog, params: &Value) ->
 pub const NODE_DUPLICATE_ID: &str = "node.duplicate";
 
 /// User-facing label of the node duplication command.
-pub const NODE_DUPLICATE_LABEL: &str = "Duplicate";
+pub const NODE_DUPLICATE_LABEL: Message = Message::CmdDuplicate;
 
 /// Parameters for `node.duplicate`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,7 +168,7 @@ fn node_duplicate_run(
 pub const NODE_GROUP_ID: &str = "node.group";
 
 /// User-facing label of the grouping command.
-pub const NODE_GROUP_LABEL: &str = "Group";
+pub const NODE_GROUP_LABEL: Message = Message::CmdGroup;
 
 /// Parameters for `node.group`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,7 +202,7 @@ fn node_group_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> 
 pub const NODE_UNGROUP_ID: &str = "node.ungroup";
 
 /// User-facing label of the ungrouping command.
-pub const NODE_UNGROUP_LABEL: &str = "Ungroup";
+pub const NODE_UNGROUP_LABEL: Message = Message::CmdUngroup;
 
 /// Parameters for `node.ungroup`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -233,7 +234,7 @@ fn node_ungroup_run(project: &mut Project, _catalog: &Catalog, params: &Value) -
 pub const NODE_PLACEMENT_SET_ID: &str = "node.placement.set";
 
 /// User-facing label of the node placement command.
-pub const NODE_PLACEMENT_SET_LABEL: &str = "Place";
+pub const NODE_PLACEMENT_SET_LABEL: Message = Message::CmdPlace;
 
 /// Parameters for `node.placement.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -274,7 +275,7 @@ fn node_placement_set_run(
 pub const NODE_PLACEMENT_WORLD_ZERO_ID: &str = "node.placement.world_zero";
 
 /// User-facing label of the world-zero placement command.
-pub const NODE_PLACEMENT_WORLD_ZERO_LABEL: &str = "Zero translation";
+pub const NODE_PLACEMENT_WORLD_ZERO_LABEL: Message = Message::CmdZeroTranslation;
 
 /// Parameters for `node.placement.world_zero`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -325,7 +326,7 @@ fn node_placement_world_zero_run(
 pub const NODE_PLACEMENT_SET_MANY_ID: &str = "node.placement.set_many";
 
 /// User-facing label of the multi-node placement command.
-pub const NODE_PLACEMENT_SET_MANY_LABEL: &str = "Place selection";
+pub const NODE_PLACEMENT_SET_MANY_LABEL: Message = Message::CmdPlaceSelection;
 
 /// One node and the placement it receives.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -388,7 +389,7 @@ fn valid_placement_batch(project: &Project, placements: &[NodePlacement]) -> boo
 pub const NODE_PIVOT_SET_ID: &str = "node.pivot.set";
 
 /// User-facing label of the pivot edit command.
-pub const NODE_PIVOT_SET_LABEL: &str = "Set pivot";
+pub const NODE_PIVOT_SET_LABEL: Message = Message::CmdSetPivot;
 
 /// Parameters for `node.pivot.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -426,7 +427,7 @@ fn node_pivot_set_run(
 pub const NODE_PIVOT_CENTER_ID: &str = "node.pivot.center";
 
 /// User-facing label of the pivot centring command.
-pub const NODE_PIVOT_CENTER_LABEL: &str = "Center pivot";
+pub const NODE_PIVOT_CENTER_LABEL: Message = Message::CmdCenterPivot;
 
 /// Parameters for `node.pivot.center`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -462,25 +463,25 @@ fn node_pivot_center_run(
 pub const NODE_PROPERTY_SET_ID: &str = "node.property.set";
 
 /// User-facing label of the property edit command.
-pub const NODE_PROPERTY_SET_LABEL: &str = "Set property";
+pub const NODE_PROPERTY_SET_LABEL: Message = Message::CmdSetProperty;
 
 /// Stable id of the multi-node property edit command.
 pub const NODE_PROPERTY_SET_MANY_ID: &str = "node.property.set_many";
 
 /// User-facing label of the multi-node property edit command.
-pub const NODE_PROPERTY_SET_MANY_LABEL: &str = "Set properties";
+pub const NODE_PROPERTY_SET_MANY_LABEL: Message = Message::CmdSetProperties;
 
 /// Stable id of the property removal command.
 pub const NODE_PROPERTY_CLEAR_ID: &str = "node.property.clear";
 
 /// User-facing label of the property removal command.
-pub const NODE_PROPERTY_CLEAR_LABEL: &str = "Clear property";
+pub const NODE_PROPERTY_CLEAR_LABEL: Message = Message::CmdClearProperty;
 
 /// Stable id of the component-to-group conversion command.
 pub const NODE_COMPONENT_CONVERT_TO_GROUP_ID: &str = "node.component.convert_to_group";
 
 /// User-facing label of the component-to-group conversion command.
-pub const NODE_COMPONENT_CONVERT_TO_GROUP_LABEL: &str = "Convert to group";
+pub const NODE_COMPONENT_CONVERT_TO_GROUP_LABEL: Message = Message::CmdConvertToGroup;
 
 /// Parameters for `node.property.set`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

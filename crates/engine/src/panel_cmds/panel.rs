@@ -21,12 +21,13 @@ use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the panel creation command.
 pub const CREATE_ID: &str = "panel.create";
 
 /// User-facing label of the panel creation command.
-pub const CREATE_LABEL: &str = "Create panel";
+pub const CREATE_LABEL: Message = Message::CmdCreatePanel;
 
 /// Parameters for `panel.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,7 +95,7 @@ pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL,
 pub const CONTOUR_CREATE_ID: &str = "panel.contour.create";
 
 /// User-facing label of the contour-panel creation command.
-pub const CONTOUR_CREATE_LABEL: &str = "Create contour panel";
+pub const CONTOUR_CREATE_LABEL: Message = Message::CmdCreateContourPanel;
 
 /// Parameters for `panel.contour.create`.
 ///
@@ -193,7 +194,7 @@ fn over_source_placement(project: &Project, params: &PanelContourCreate) -> Resu
 pub const OUTLINE_SET_ID: &str = "panel.outline.set";
 
 /// User-facing label of the contour-outline replacement command.
-pub const OUTLINE_SET_LABEL: &str = "Set panel outline";
+pub const OUTLINE_SET_LABEL: Message = Message::CmdSetPanelOutline;
 
 /// Parameters for `panel.outline.set`.
 ///
@@ -236,7 +237,7 @@ fn outline_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) ->
 pub const OUTLINE_CONTOUR_ID: &str = "panel.outline.to_contour";
 
 /// User-facing label of the outline-bake command.
-pub const OUTLINE_CONTOUR_LABEL: &str = "Bake panel outline into a contour";
+pub const OUTLINE_CONTOUR_LABEL: Message = Message::CmdBakePanelOutline;
 
 /// Parameters for `panel.outline.to_contour`.
 ///
@@ -307,7 +308,7 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
 pub const RENAME_ID: &str = "panel.rename";
 
 /// User-facing label of the panel rename command.
-pub const RENAME_LABEL: &str = "Rename panel";
+pub const RENAME_LABEL: Message = Message::CmdRenamePanel;
 
 /// Parameters for `panel.rename`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -357,7 +358,7 @@ fn rename_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Resu
 pub const RESIZE_ID: &str = "panel.resize";
 
 /// User-facing label of the panel resize command.
-pub const RESIZE_LABEL: &str = "Resize panel";
+pub const RESIZE_LABEL: Message = Message::CmdResizePanel;
 
 /// Parameters for `panel.resize`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -396,7 +397,7 @@ fn resize_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Resu
 pub const MATERIAL_SET_ID: &str = "panel.material.set";
 
 /// User-facing label of the panel material command.
-pub const MATERIAL_SET_LABEL: &str = "Set panel material";
+pub const MATERIAL_SET_LABEL: Message = Message::CmdSetPanelMaterial;
 
 /// Parameters for `panel.material.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

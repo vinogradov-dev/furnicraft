@@ -19,12 +19,13 @@ use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the machining creation command.
 pub const MACHINING_ADD_ID: &str = "panel.machining.add";
 
 /// User-facing label of the machining creation command.
-pub const MACHINING_ADD_LABEL: &str = "Add machining";
+pub const MACHINING_ADD_LABEL: Message = Message::CmdAddMachining;
 
 /// Parameters for `panel.machining.add`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,7 +71,7 @@ fn machining_add_run(
 pub const MACHINING_UPDATE_ID: &str = "panel.machining.update";
 
 /// User-facing label of the machining update command.
-pub const MACHINING_UPDATE_LABEL: &str = "Update machining";
+pub const MACHINING_UPDATE_LABEL: Message = Message::CmdUpdateMachining;
 
 /// Parameters for `panel.machining.update`.
 ///
@@ -121,7 +122,7 @@ fn machining_update_run(
 pub const MACHINING_REMOVE_ID: &str = "panel.machining.remove";
 
 /// User-facing label of the machining removal command.
-pub const MACHINING_REMOVE_LABEL: &str = "Remove machining";
+pub const MACHINING_REMOVE_LABEL: Message = Message::CmdRemoveMachining;
 
 /// Parameters for `panel.machining.remove`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -165,7 +166,7 @@ fn machining_remove_run(
 pub const MACHINING_MOVE_ID: &str = "panel.machining.move";
 
 /// User-facing label of the machining reorder command.
-pub const MACHINING_MOVE_LABEL: &str = "Move machining";
+pub const MACHINING_MOVE_LABEL: Message = Message::CmdMoveMachining;
 
 /// Parameters for `panel.machining.move`.
 ///

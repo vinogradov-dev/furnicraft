@@ -13,12 +13,13 @@ use serde_json::Value;
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::node_cmds::{parse, validate_name};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the camera creation command.
 pub const CAMERA_CREATE_ID: &str = "camera.create";
 
 /// User-facing label of the camera creation command.
-pub const CAMERA_CREATE_LABEL: &str = "Create camera";
+pub const CAMERA_CREATE_LABEL: Message = Message::CmdCreateCamera;
 
 /// Parameters for `camera.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,7 +61,7 @@ fn camera_create_run(
 pub const LIGHT_CREATE_ID: &str = "light.create";
 
 /// User-facing label of the light creation command.
-pub const LIGHT_CREATE_LABEL: &str = "Create light";
+pub const LIGHT_CREATE_LABEL: Message = Message::CmdCreateLight;
 
 /// Parameters for `light.create`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -118,7 +119,7 @@ fn light_create_run(project: &mut Project, _catalog: &Catalog, params: &Value) -
 pub const SCENE_ACTIVE_CAMERA_SET_ID: &str = "scene.active_camera.set";
 
 /// User-facing label of the active-camera command.
-pub const SCENE_ACTIVE_CAMERA_SET_LABEL: &str = "Set active camera";
+pub const SCENE_ACTIVE_CAMERA_SET_LABEL: Message = Message::CmdSetActiveCamera;
 
 /// Parameters for `scene.active_camera.set`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,7 +161,7 @@ fn scene_active_camera_set_run(
 pub const CAMERA_PROJECTION_SET_ID: &str = "camera.projection.set";
 
 /// User-facing label of the camera projection command.
-pub const CAMERA_PROJECTION_SET_LABEL: &str = "Set camera projection";
+pub const CAMERA_PROJECTION_SET_LABEL: Message = Message::CmdSetCameraProjection;
 
 /// Parameters for `camera.projection.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,7 +202,7 @@ fn camera_projection_set_run(
 pub const LIGHT_PARAMS_SET_ID: &str = "light.params.set";
 
 /// User-facing label of the light parameter command.
-pub const LIGHT_PARAMS_SET_LABEL: &str = "Set light parameters";
+pub const LIGHT_PARAMS_SET_LABEL: Message = Message::CmdSetLightParameters;
 
 /// Parameters for `light.params.set`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

@@ -23,12 +23,13 @@ use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the edge-banding command.
 pub const EDGE_BANDING_SET_ID: &str = "panel.edge_banding.set";
 
 /// User-facing label of the edge-banding command.
-pub const EDGE_BANDING_SET_LABEL: &str = "Set edge banding";
+pub const EDGE_BANDING_SET_LABEL: Message = Message::CmdSetEdgeBanding;
 
 /// Parameters for `panel.edge_banding.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -90,7 +91,7 @@ fn edge_banding_set_run(
 pub const EDGE_BANDING_CLEAR_ID: &str = "panel.edge_banding.clear";
 
 /// User-facing label of the edge-banding clear command.
-pub const EDGE_BANDING_CLEAR_LABEL: &str = "Clear edge banding";
+pub const EDGE_BANDING_CLEAR_LABEL: Message = Message::CmdClearEdgeBanding;
 
 /// Parameters for `panel.edge_banding.clear`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,7 +142,7 @@ fn edge_banding_clear_run(
 pub const CORNER_BANDING_SET_ID: &str = "panel.corner_banding.set";
 
 /// User-facing label of the corner-banding command.
-pub const CORNER_BANDING_SET_LABEL: &str = "Set corner banding";
+pub const CORNER_BANDING_SET_LABEL: Message = Message::CmdSetCornerBanding;
 
 /// Parameters for `panel.corner_banding.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -213,7 +214,7 @@ fn corner_banding_set_run(
 pub const CORNER_BANDING_CLEAR_ID: &str = "panel.corner_banding.clear";
 
 /// User-facing label of the corner-banding clear command.
-pub const CORNER_BANDING_CLEAR_LABEL: &str = "Clear corner banding";
+pub const CORNER_BANDING_CLEAR_LABEL: Message = Message::CmdClearCornerBanding;
 
 /// Parameters for `panel.corner_banding.clear`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,7 +264,7 @@ fn corner_banding_clear_run(
 pub const RING_BANDING_SET_ID: &str = "panel.ring_banding.set";
 
 /// User-facing label of the ring-banding command.
-pub const RING_BANDING_SET_LABEL: &str = "Set contour banding";
+pub const RING_BANDING_SET_LABEL: Message = Message::CmdSetContourBanding;
 
 /// Parameters for `panel.ring_banding.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -331,7 +332,7 @@ fn ring_banding_set_run(
 pub const RING_BANDING_CLEAR_ID: &str = "panel.ring_banding.clear";
 
 /// User-facing label of the ring-banding clear command.
-pub const RING_BANDING_CLEAR_LABEL: &str = "Clear contour banding";
+pub const RING_BANDING_CLEAR_LABEL: Message = Message::CmdClearContourBanding;
 
 /// Parameters for `panel.ring_banding.clear`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -379,7 +380,7 @@ fn ring_banding_clear_run(
 pub const CORNER_SET_ID: &str = "panel.corner.set";
 
 /// User-facing label of the corner-feature command.
-pub const CORNER_SET_LABEL: &str = "Set corner feature";
+pub const CORNER_SET_LABEL: Message = Message::CmdSetCornerFeature;
 
 /// Parameters for `panel.corner.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -435,7 +436,7 @@ fn corner_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> 
 pub const CORNER_CLEAR_ID: &str = "panel.corner.clear";
 
 /// User-facing label of the corner-feature clear command.
-pub const CORNER_CLEAR_LABEL: &str = "Clear corner feature";
+pub const CORNER_CLEAR_LABEL: Message = Message::CmdClearCornerFeature;
 
 /// Parameters for `panel.corner.clear`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -475,7 +476,7 @@ fn corner_clear_run(project: &mut Project, _catalog: &Catalog, params: &Value) -
 pub const BOW_SET_ID: &str = "panel.bow.set";
 
 /// User-facing label of the edge-bow command.
-pub const BOW_SET_LABEL: &str = "Set edge bow";
+pub const BOW_SET_LABEL: Message = Message::CmdSetEdgeBow;
 
 /// Parameters for `panel.bow.set`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -529,7 +530,7 @@ fn bow_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Res
 pub const BOW_CLEAR_ID: &str = "panel.bow.clear";
 
 /// User-facing label of the edge-bow clear command.
-pub const BOW_CLEAR_LABEL: &str = "Clear edge bow";
+pub const BOW_CLEAR_LABEL: Message = Message::CmdClearEdgeBow;
 
 /// Parameters for `panel.bow.clear`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

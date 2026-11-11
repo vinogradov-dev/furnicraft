@@ -14,12 +14,13 @@ use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
+use furnicraft_text::Message;
 
 /// Stable id of the mesh vertex move command.
 pub const MESH_VERTICES_MOVE_ID: &str = "mesh.vertices.move";
 
 /// User-facing label of the mesh vertex move command.
-pub const MESH_VERTICES_MOVE_LABEL: &str = "Move vertices";
+pub const MESH_VERTICES_MOVE_LABEL: Message = Message::CmdMoveVertices;
 
 /// Parameters for `mesh.vertices.move`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

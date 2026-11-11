@@ -62,6 +62,7 @@ struct CrateRule {
 
 /// The crate map. Keep in sync with `PROJECT.md` › Crate map.
 const CRATES: &[CrateRule] = &[
+    CrateRule { name: "furnicraft-text", layer: 0, forbidden: UI_GPU_DEPS },
     CrateRule { name: "furnicraft-units", layer: 0, forbidden: UI_GPU_DEPS },
     CrateRule { name: "furnicraft-geom", layer: 0, forbidden: UI_GPU_DEPS },
     // The geometry port. It must not know the third-party engine: the global
