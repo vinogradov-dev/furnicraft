@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
-  Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
-  ray, picking, the grid, the lights, the contact shadows and the frame (F5).
-  Shape: `Camera`, `Projection`, `FixedBasis`, `CameraError`, the fov, pitch and distance constants and
-  the projection helpers move to `crates/scene/src/camera.rs` (~600); `Ray`, `ray_segment`,
-  `ray_triangle`, `ray_hit_drawable` and `ray_hit_polyline` move to `crates/scene/src/ray.rs` (~180);
-  `scene/lib.rs` 1277 -> ~520 (grid, lights, shadows, drawables, `SceneFrame`), under the ceiling, so
-  no further split is filed.
-  Done: suite unchanged; `scene/lib.rs` re-exports every moved name; both headers state millimetres,
-  radians, near and far planes and the pick radius tolerance (H2).
-  Commits: one move.
-  `files: crates/scene/src/lib.rs`
-
 - `[ ]` **S16** `render/lib.rs` gives up the pipelines and the GPU buffer helpers — rules: B1, B4, B8, H2.
   Why: 1446 production lines (F5) mix the renderer with eleven pipeline constructors, the depth-state
   builders and the buffer wrappers, so a shader change and an upload change reopen one file.
@@ -327,6 +314,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
+  Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
+  ray, picking, the grid, the lights, the contact shadows and the frame (F5).
+  Shape: `Camera`, `Projection`, `FixedBasis`, `CameraError`, the fov, pitch and distance constants and
+  the projection helpers move to `crates/scene/src/camera.rs` (~600); `Ray`, `ray_segment`,
+  `ray_triangle`, `ray_hit_drawable` and `ray_hit_polyline` move to `crates/scene/src/ray.rs` (~180);
+  `scene/lib.rs` 1277 -> ~520 (grid, lights, shadows, drawables, `SceneFrame`), under the ceiling, so
+  no further split is filed.
+  Done: suite unchanged; `scene/lib.rs` re-exports every moved name; both headers state millimetres,
+  radians, near and far planes and the pick radius tolerance (H2).
+  Commits: one move.
+  `files: crates/scene/src/lib.rs` — `7372e80`
 
 - `[x]` **P10** the gate follows the links the plan relies on
   Why: The gate checks that a hint names a path and that a map row names a file, and nothing
