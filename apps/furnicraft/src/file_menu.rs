@@ -1,10 +1,14 @@
-//! The File menu and the open/save path dialog.
+//! The File menu, the open/save path dialog and the unsaved-changes question a close asks.
 //!
-//! The menu is a view over three pieces of shell state: the current scene path, the pending dialog
-//! and the unsaved-changes flag the session owns. It never touches the document or the filesystem
-//! itself; it returns a [`FileAction`] and the application performs it through the scene store.
-//! A path dialog is a plain text field with a short list of nearby `.fcs` files, so the build needs
-//! no native file-dialog dependency.
+//! The menu is a view over one piece of the document's shell state — the path the scene came from —
+//! plus its pending dialog. It never touches the document or the filesystem itself; it returns a
+//! [`FileAction`] and the application performs it through the scene store. A path dialog is a plain
+//! text field with a short list of nearby `.fcs` files, so the build needs no native file-dialog
+//! dependency.
+//!
+//! Opening and *New* both mean "a new tab" (U45), so the menu never discards a scene and never has
+//! to ask: the one question left is a tab close with unsaved changes, which [`ConfirmClose`] draws
+//! for the shell because a tab belongs to the window, not to one document.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -16,7 +20,7 @@ use eframe::egui::{Color32, Id, Modal, TextEdit, Ui};
 /// One file operation the user asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FileAction {
-    /// Start a new, empty scene.
+    /// Open a new, empty scene in a new tab.
     New,
     /// Read the scene at this path.
     Open(PathBuf),
@@ -48,12 +52,56 @@ struct PathDialog {
     error: Option<String>,
 }
 
+/// What the unsaved-changes question was answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CloseAnswer {
+    /// Drop the tab and everything it holds.
+    Discard,
+    /// Leave the tab open.
+    Cancel,
+}
+
+/// The question a close asks when the scene it would drop has unsaved changes.
+///
+/// The shell owns one of these while the question is up: it is about a tab, so it outlives the
+/// document it names, and switching tabs must not lose it.
+#[derive(Clone, Debug)]
+pub(crate) struct ConfirmClose {
+    title: String,
+}
+
+impl ConfirmClose {
+    /// Asks about the scene `title` names, the way the tab row shows it.
+    pub(crate) fn new(title: impl Into<String>) -> Self {
+        Self { title: title.into() }
+    }
+
+    /// Draws the question and returns the answer the user picked, if any.
+    pub(crate) fn show(&self, ctx: &egui::Context) -> Option<CloseAnswer> {
+        let mut answer = None;
+        Modal::new(Id::unique("scene-confirm-close")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading(format!("Close \u{201c}{}\u{201d}?", self.title));
+            ui.label("This scene has unsaved changes. Closing the tab discards them.");
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Discard and close").clicked() {
+                    answer = Some(CloseAnswer::Discard);
+                }
+                if ui.button("Cancel").clicked() {
+                    answer = Some(CloseAnswer::Cancel);
+                }
+            });
+        });
+        answer
+    }
+}
+
 /// The File menu, its current path and its pending modal dialogs.
 #[derive(Debug, Default)]
 pub(crate) struct FileMenu {
     current: Option<PathBuf>,
     dialog: Option<PathDialog>,
-    confirm_new: bool,
 }
 
 impl FileMenu {
@@ -70,57 +118,48 @@ impl FileMenu {
     /// Draws the File menu button on an existing row and any open dialog.
     ///
     /// The button is a plain menu: the header decides where it sits and draws its own dividers, so
-    /// this function creates no panel of its own. `dirty` marks the current scene as having unsaved
-    /// changes: Save is still allowed, New asks for confirmation and Open warns that it replaces the
-    /// document.
-    pub(crate) fn show(&mut self, ui: &mut Ui, dirty: bool) -> Option<FileAction> {
+    /// this function creates no panel of its own. *New* and *Open* open a tab, so neither of them
+    /// discards the scene in front of the user and neither has to ask.
+    pub(crate) fn show(&mut self, ui: &mut Ui) -> Option<FileAction> {
         let mut action = None;
         let button = egui::Button::new("File")
             .min_size(egui::vec2(crate::theme::HEADER_TEXT_WIDTH, crate::theme::HEADER_CONTROL_HEIGHT));
         egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
             if ui.button("New").clicked() {
                 ui.close();
-                action = self.command(MenuCommand::New, dirty);
+                action = self.command(MenuCommand::New);
             }
             if ui.button("Open…").clicked() {
                 ui.close();
-                action = self.command(MenuCommand::Open, dirty);
+                action = self.command(MenuCommand::Open);
             }
             ui.separator();
             if ui.button("Save").clicked() {
                 ui.close();
-                action = self.command(MenuCommand::Save, dirty);
+                action = self.command(MenuCommand::Save);
             }
             if ui.button("Save As…").clicked() {
                 ui.close();
-                action = self.command(MenuCommand::SaveAs, dirty);
+                action = self.command(MenuCommand::SaveAs);
             }
         });
-        action.or_else(|| self.show_dialogs(ui.ctx(), dirty))
+        action.or_else(|| self.show_dialogs(ui.ctx()))
     }
 
     /// Draws any open modal dialog and returns the operation it asked for.
     ///
     /// A dialog is a window over the whole application, not a child of the header, so the shell
     /// calls this once per frame however the header is laid out.
-    pub(crate) fn show_dialogs(&mut self, ctx: &egui::Context, dirty: bool) -> Option<FileAction> {
-        if self.confirm_new { self.confirm_new_ui(ctx) } else { self.path_dialog_ui(ctx, dirty) }
+    pub(crate) fn show_dialogs(&mut self, ctx: &egui::Context) -> Option<FileAction> {
+        self.path_dialog_ui(ctx)
     }
 
     /// The Save path of the header's save button.
     ///
     /// The header calls the same [`MenuCommand::Save`] the File menu does, so the two cannot drift
     /// into one saving silently and the other opening a path dialog.
-    pub(crate) fn save(&mut self, dirty: bool) -> Option<FileAction> {
-        self.command(MenuCommand::Save, dirty)
-    }
-
-    /// The New entry of the Home surface.
-    ///
-    /// It takes the same path as the menu: without unsaved changes it returns [`FileAction::New`],
-    /// and with them it opens the confirmation dialog instead of discarding the scene.
-    pub(crate) fn new_scene(&mut self, dirty: bool) -> Option<FileAction> {
-        self.command(MenuCommand::New, dirty)
+    pub(crate) fn save(&mut self) -> Option<FileAction> {
+        self.command(MenuCommand::Save)
     }
 
     /// Opens the path dialog from the Home surface.
@@ -129,6 +168,11 @@ impl FileMenu {
     /// already warns when the current scene has unsaved changes.
     pub(crate) fn request_open(&mut self) {
         self.open_dialog();
+    }
+
+    /// The file the scene came from, if it has one.
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.current.as_deref()
     }
 
     /// The bare file name the header's tab draws; the dirty marker is its own glyph there.
@@ -142,16 +186,9 @@ impl FileMenu {
     }
 
     /// Turns a menu entry into an action or a dialog.
-    fn command(&mut self, command: MenuCommand, dirty: bool) -> Option<FileAction> {
+    fn command(&mut self, command: MenuCommand) -> Option<FileAction> {
         match command {
-            MenuCommand::New => {
-                if dirty {
-                    self.confirm_new = true;
-                    None
-                } else {
-                    Some(FileAction::New)
-                }
-            }
+            MenuCommand::New => Some(FileAction::New),
             MenuCommand::Open => {
                 self.open_dialog();
                 None
@@ -187,38 +224,7 @@ impl FileMenu {
         directory.join("scene.fcs").display().to_string()
     }
 
-    /// The name shown in the menu bar, with a dirty marker.
-    #[cfg(test)]
-    fn display_name(&self, dirty: bool) -> String {
-        let name =
-            self.current.as_deref().and_then(Path::file_name).and_then(|name| name.to_str()).unwrap_or("Untitled");
-        if dirty { format!("{name}  *") } else { name.to_owned() }
-    }
-
-    fn confirm_new_ui(&mut self, ctx: &egui::Context) -> Option<FileAction> {
-        let mut discard = false;
-        let mut cancel = false;
-        Modal::new(Id::unique("scene-confirm-new")).show(ctx, |ui| {
-            ui.set_width(360.0);
-            ui.heading("Start a new scene?");
-            ui.label("The current scene has unsaved changes. Starting a new scene discards them.");
-            ui.separator();
-            ui.horizontal(|ui| {
-                discard = ui.button("Discard and start new").clicked();
-                cancel = ui.button("Cancel").clicked();
-            });
-        });
-        if discard {
-            self.confirm_new = false;
-            return Some(FileAction::New);
-        }
-        if cancel {
-            self.confirm_new = false;
-        }
-        None
-    }
-
-    fn path_dialog_ui(&mut self, ctx: &egui::Context, dirty: bool) -> Option<FileAction> {
+    fn path_dialog_ui(&mut self, ctx: &egui::Context) -> Option<FileAction> {
         let mut dialog = self.dialog.take()?;
         let mut action = None;
         let mut keep = true;
@@ -229,11 +235,10 @@ impl FileMenu {
                 PathMode::SaveAs => ("Save scene as", "Save"),
             };
             ui.heading(title);
-            if dirty && dialog.mode == PathMode::Open {
-                ui.colored_label(
-                    Color32::YELLOW,
-                    "The current scene has unsaved changes; opening another file discards them.",
-                );
+            if dialog.mode == PathMode::Open {
+                // Opening a file adds a tab, so the scene in front of the user stays exactly where
+                // it is: the dialog only says where the new one comes from.
+                ui.label("The scene opens in a new tab; the open scenes are left as they are.");
             }
             ui.horizontal(|ui| {
                 ui.label("Path");
@@ -336,7 +341,7 @@ mod tests {
     #[test]
     fn save_without_a_path_opens_the_save_dialog() {
         let mut menu = FileMenu::new();
-        assert_eq!(menu.command(MenuCommand::Save, false), None);
+        assert_eq!(menu.command(MenuCommand::Save), None);
         assert!(matches!(menu.dialog, Some(PathDialog { mode: PathMode::SaveAs, .. })));
     }
 
@@ -345,25 +350,34 @@ mod tests {
         let mut menu = FileMenu::new();
         let path = PathBuf::from("/tmp/scene.fcs");
         menu.set_path(Some(path.clone()));
-        assert_eq!(menu.command(MenuCommand::Save, false), Some(FileAction::Save(path)));
+        assert_eq!(menu.command(MenuCommand::Save), Some(FileAction::Save(path)));
         assert!(menu.dialog.is_none());
     }
 
     #[test]
-    fn a_new_scene_asks_before_discarding_unsaved_changes() {
+    fn a_new_scene_opens_a_tab_without_asking() {
+        // Opening a tab discards nothing, so neither New nor Open has a question to ask (U45); the
+        // one question left is a tab close, which the shell draws through `ConfirmClose`.
         let mut menu = FileMenu::new();
-        assert_eq!(menu.command(MenuCommand::New, true), None);
-        assert!(menu.confirm_new);
+        menu.set_path(Some(PathBuf::from("/tmp/cabinet.fcs")));
+        assert_eq!(menu.command(MenuCommand::New), Some(FileAction::New));
+        assert_eq!(menu.save(), Some(FileAction::Save(PathBuf::from("/tmp/cabinet.fcs"))));
+        assert!(menu.dialog.is_none(), "the menu keeps the scene's path: it is another tab, not another file");
+    }
 
-        let mut menu = FileMenu::new();
-        assert_eq!(menu.command(MenuCommand::New, false), Some(FileAction::New));
-        assert!(!menu.confirm_new);
+    #[test]
+    fn the_close_question_names_the_tab_and_offers_both_answers() {
+        // The question belongs to the shell, so this test only proves it is the document's name it
+        // asks about and that both answers exist; the modal itself needs an egui pass.
+        let question = ConfirmClose::new("cabinet.fcs");
+        assert_eq!(question.title, "cabinet.fcs");
+        assert_ne!(CloseAnswer::Discard, CloseAnswer::Cancel, "cancel and discard are different answers");
     }
 
     #[test]
     fn open_opens_a_dialog_prefilled_with_a_scene_name() {
         let mut menu = FileMenu::new();
-        assert_eq!(menu.command(MenuCommand::Open, false), None);
+        assert_eq!(menu.command(MenuCommand::Open), None);
         let dialog = menu.dialog.as_ref().expect("the open dialog");
         assert_eq!(dialog.mode, PathMode::Open);
         assert!(dialog.path.ends_with("scene.fcs"), "path was {}", dialog.path);
@@ -393,11 +407,14 @@ mod tests {
     }
 
     #[test]
-    fn the_dirty_marker_is_part_of_the_display_name() {
+    fn the_file_name_and_the_path_come_from_the_open_file() {
         let mut menu = FileMenu::new();
-        assert_eq!(menu.display_name(false), "Untitled");
-        assert_eq!(menu.display_name(true), "Untitled  *");
+        assert_eq!(menu.file_name(), "Untitled");
+        assert_eq!(menu.path(), None);
         menu.set_path(Some(PathBuf::from("/tmp/cabinet.fcs")));
-        assert_eq!(menu.display_name(false), "cabinet.fcs");
+        assert_eq!(menu.file_name(), "cabinet.fcs");
+        assert_eq!(menu.path(), Some(Path::new("/tmp/cabinet.fcs")), "the path names the tab for a re-open");
+        menu.set_path(None);
+        assert_eq!(menu.file_name(), "Untitled", "a new scene has no file to overwrite");
     }
 }

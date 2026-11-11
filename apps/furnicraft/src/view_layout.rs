@@ -501,18 +501,6 @@ impl LayoutState {
         id
     }
 
-    /// Refits every leaf on a new scene and restores the layout's standard presets.
-    ///
-    /// `fit` is the camera framed on the new scene. The tree and its ratios stay, so opening a file
-    /// keeps the workspace the user arranged; only the cameras move to the new model (ADR 0079).
-    fn reset_cameras(&mut self, kind: LayoutKind, fit: Camera, opening: OpeningView) {
-        for (index, leaf) in self.leaves.iter_mut().enumerate() {
-            leaf.camera = fit;
-            leaf.preset = None;
-            leaf.apply_preset(kind.standard_view(index, opening));
-        }
-    }
-
     fn leaf(&self, id: LeafId) -> Option<&Leaf> {
         self.leaves.iter().find(|leaf| leaf.id == id)
     }
@@ -645,19 +633,6 @@ impl Layout {
     /// style per view instead (U63).
     pub(crate) fn apply_frame_style(&self, frame: &mut SceneFrame) {
         frame.shading = self.active_style();
-    }
-
-    /// Refits every remembered layout on a new scene and restores its standard presets.
-    ///
-    /// Opening a file must not leave a view looking where the old model was, and must not throw
-    /// away the split or the display style the user arranged. Every layout therefore keeps its tree,
-    /// ratios and styles, takes the new `fit` camera, and returns to the standard preset of each of
-    /// its views (ADR 0079).
-    pub(crate) fn reset_cameras(&mut self, fit: Camera, opening: OpeningView) {
-        for (kind, state) in LayoutKind::ALL.into_iter().zip(self.states.iter_mut()) {
-            state.reset_cameras(kind, fit, opening);
-        }
-        self.drag = None;
     }
 
     /// Shows `kind`, restoring the state that layout last had.
@@ -1179,14 +1154,13 @@ mod tests {
     }
 
     #[test]
-    fn opening_a_scene_keeps_each_layouts_display_styles() {
+    fn every_layout_keeps_its_own_display_style() {
+        // A style belongs to a leaf, so a layout the user arranged keeps its look when another one is
+        // shown — a tab opens on the settings default and never rewrites the others (ADR 0079, U45).
         let mut layout = layout(LayoutKind::Quad);
         layout.leaf_mut(layout.current().leaves[0].id).expect("first").set_style(ShadingStyle::Wireframe);
         layout.set_kind(LayoutKind::Single);
         layout.set_active_style(ShadingStyle::Translucent);
-
-        let home = Camera::new(furnicraft_geom::DVec3::new(100.0, 200.0, 300.0), 950.0).expect("camera");
-        layout.reset_cameras(home, OpeningView::Top);
 
         assert_eq!(layout.active_style(), ShadingStyle::Translucent, "the shown layout keeps its style");
         layout.set_kind(LayoutKind::Quad);
@@ -1195,36 +1169,6 @@ mod tests {
             ShadingStyle::Wireframe,
             "a layout the user arranged keeps its styles too"
         );
-    }
-
-    #[test]
-    fn opening_a_scene_refits_every_layout_and_keeps_its_standard_presets() {
-        let area = area();
-        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
-        // Arrange two layouts, so the reset has more than the shown layout to refit.
-        layout.set_kind(LayoutKind::Quad);
-        layout.set_active(layout.current().leaves[3].id);
-        layout.leaf_mut(layout.active()).expect("leaf").orbit(0.3, 0.1);
-        layout.set_kind(LayoutKind::TwoRows);
-
-        let home = Camera::new(furnicraft_geom::DVec3::new(100.0, 200.0, 300.0), 950.0).expect("camera");
-        layout.reset_cameras(home, OpeningView::Top);
-
-        for kind in LayoutKind::ALL {
-            layout.set_kind(kind);
-            let active = layout.active();
-            assert!(layout.leaf(active).is_some(), "{kind:?} keeps a valid active view");
-            for (index, leaf) in layout.current().leaves.iter().enumerate() {
-                assert_eq!(leaf.camera().target(), home.target(), "{kind:?} view {index} frames the new scene");
-                assert!((leaf.camera().distance() - home.distance()).abs() < 1.0e-9);
-                assert_eq!(
-                    layout.preset(leaf.id),
-                    Some(kind.standard_view(index, OpeningView::Top)),
-                    "{kind:?} view {index} returns to its standard preset"
-                );
-            }
-            assert_eq!(layout.regions(area).len(), kind.leaves(), "{kind:?} keeps its tree");
-        }
     }
 
     #[test]

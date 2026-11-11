@@ -470,6 +470,8 @@ fn shortcuts_ui(ui: &mut Ui) -> bool {
 /// ribbon hints use, so a renamed shortcut cannot leave this page stale.
 pub fn shortcut_table() -> Vec<(String, String)> {
     let mut rows = vec![
+        ("Ctrl+N".to_owned(), "Open an empty scene in a new tab".to_owned()),
+        ("Ctrl+W".to_owned(), "Close the active tab".to_owned()),
         ("Ctrl+S".to_owned(), "Save the scene".to_owned()),
         ("Ctrl+Z".to_owned(), "Undo".to_owned()),
         ("Ctrl+Y".to_owned(), "Redo".to_owned()),
