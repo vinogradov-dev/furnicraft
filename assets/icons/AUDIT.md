@@ -146,7 +146,8 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
   README's "a shared drawing is two files" rule is the open question.
 - **Step 4 — coverage.** Done in U46: every declared theme is drawn except `primitives/cone`, which
   waits for the cone primitive itself (`plan/debt.md`). U46 added `actions/command` for the palette,
-  so the declared set is 81 files and one zero-byte placeholder remains.
+  so the declared set was 81 files then; U69 drew the sixteen sketch tools (§9), so it is 97 files
+  and `primitives/cone` is the one zero-byte placeholder left.
 
 ## 6. Deliberately not copied
 
@@ -206,3 +207,26 @@ leaves the shape byte-identical and a photo of both variants overlays exactly.
   theme's foreground over it and the accent still never appears in a master.
 - Second files per theme or per state: the substitution happens at raster time, and hover, press and
   disabled are tone steps of the same texture family, not artwork.
+
+## 9. The sketch tool icons (U69)
+
+Date: 2026-11-12. The approved sketch map needed sixteen tools with no artwork: the six edit tools
+(`trim`, `extend`, `offset`, `fillet`, `chamfer`, `break`), four construction guides
+(`construction-horizontal`, `construction-vertical`, `construction-parallel`, `construction-angle`),
+three dimensions (`dimension-linear`, `dimension-angular`, `dimension-radius`) and three booleans
+(`boolean-union`, `boolean-subtract`, `boolean-intersect`). All sixteen live in the `contour` theme,
+which is now complete: 28 drawn files.
+
+- Families: the edit tools and the construction guides carry the `draw` ink; the dimensions override
+  to `scene` and the booleans to `model`, because a family is what an icon means and not which
+  toolbar shows it (§8).
+- Geometry: `stroke-dasharray` is not in the README's closed paint list, so a dash is a literal short
+  path. The "before in dashes" grammar (`trim`, `offset`, `fillet`, `chamfer`) is one weight step
+  (1.5) under the result (2.2–2.6); the booleans reuse the passive 0.12–0.15 and result 0.45–0.55
+  tones so a removed operand reads as an outline and the result as a face.
+- Measured bbox and coverage for each file are in `plan/notes/U69.md`: 20.5–34.7 % coverage, inside
+  the 3..21 footprint, and the UI test measures the same raster. The `README.md` theme row and the
+  `ALL` list are now tied by `the_readme_theme_table_lists_exactly_the_declared_icons`.
+- Eye review: a throwaway contact sheet of all 28 contour icons at 22 px in both variants, through
+  the same role substitution. U68's single-loop ribbon does not exist yet, so the ribbon review
+  happens there (the task's Done clause names it); the sheet replaced it for this change.

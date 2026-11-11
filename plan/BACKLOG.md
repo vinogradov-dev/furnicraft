@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
+- `[~]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
   Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
    glyphs are a starting point, not a specification. The names, meanings and composition rules
    are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.

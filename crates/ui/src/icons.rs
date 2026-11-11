@@ -314,6 +314,22 @@ icons!(Contour, "contour", Draw, contour {
     CIRCLE => "circle",
     CIRCLE_THREE_POINTS => "circle-three-points",
     POLYGON => "polygon",
+    TRIM => "trim",
+    EXTEND => "extend",
+    OFFSET => "offset",
+    FILLET => "fillet",
+    CHAMFER => "chamfer",
+    BREAK => "break",
+    CONSTRUCTION_HORIZONTAL => "construction-horizontal",
+    CONSTRUCTION_VERTICAL => "construction-vertical",
+    CONSTRUCTION_PARALLEL => "construction-parallel",
+    CONSTRUCTION_ANGLE => "construction-angle",
+    DIMENSION_LINEAR => "dimension-linear": Scene,
+    DIMENSION_ANGULAR => "dimension-angular": Scene,
+    DIMENSION_RADIUS => "dimension-radius": Scene,
+    BOOLEAN_UNION => "boolean-union": Model,
+    BOOLEAN_SUBTRACT => "boolean-subtract": Model,
+    BOOLEAN_INTERSECT => "boolean-intersect": Model,
     CLOSE => "close",
     CANCEL => "cancel",
 });
@@ -1053,7 +1069,24 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 81);
+        assert_eq!(seen.len(), 97);
+    }
+
+    #[test]
+    fn the_readme_theme_table_lists_exactly_the_declared_icons() {
+        // The table in `assets/README.md` is the contract a drawing session reads before it adds a
+        // file; a missing row or a stale name sends it to a file the code does not embed.
+        let readme = include_str!("../../../assets/README.md");
+        for theme in Theme::ALL {
+            let prefix = format!("| `{}` |", theme.as_str());
+            let row = readme
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("{:?} has no row in the theme table", theme));
+            let documented: HashSet<&str> = row[prefix.len()..].split('`').skip(1).step_by(2).collect();
+            let declared: HashSet<&str> = theme.icons().iter().map(|icon| icon.name()).collect();
+            assert_eq!(documented, declared, "the {:?} row and its `ALL` list disagree", theme);
+        }
     }
 
     #[test]
