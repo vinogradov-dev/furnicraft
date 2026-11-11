@@ -195,6 +195,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X32** the cross on a tab does not close it, the File menu offers no Close and no Exit, the active tab is barely distinguishable and the new-scene button is a text label
+  Done: the cross closes its tab (a click on the cross is a close, a click on the body
+   activates), File carries Close tab and Exit (Exit asks once when any scene has unsaved
+   changes), the active tab draws an accent bar and an accent-tinted fill, and the new-scene
+   button draws assets/icons/actions/add.svg instead of its label; a test proves the cross wins
+   over the body and the two File entries land in the right path
+  `files: apps/furnicraft/src/header.rs, apps/furnicraft/src/file_menu.rs, apps/furnicraft/src/main.rs, assets/icons/actions/add.svg` — `71a636f`
+
 - `[x]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
   each with its own session, undo history, selection, camera and dirty marker, and activating a tab
   swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
