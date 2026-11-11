@@ -1,13 +1,13 @@
-//! The pivot card shared by panels and containers.
+//! The pivot card shared by every node kind.
 //!
-//! The pivot is stored in the node's own frame and is entered in millimetres. For a container it is
-//! authored data: it never follows a resize or a reparent, and both gizmos use the same point.
-//! Enter in a field or the Apply button dispatches one `node.pivot.set`; the Center button
-//! dispatches `node.pivot.center`, which puts the pivot at the centre of the node's local bounds.
-//! Each accepted edit is one undo entry, and an unchanged value does not touch history. A panel's
-//! pivot is derived from its geometry — the base corner — so the card shows it read-only. A
-//! read-only *Pivot (world)* row prints `Project::pivot_world`; the card never turns the point
-//! itself.
+//! The pivot is a `PivotLocal` offset from the node's origin and is entered in millimetres. For a
+//! container, object, camera or light it is authored data: it never follows a resize or a reparent,
+//! and both gizmos use the same point. Enter in a field or the Apply button dispatches one
+//! `node.pivot.set`; the Center button dispatches `node.pivot.center`, which puts the offset at the
+//! centre of the node's local bounds. Each accepted edit is one undo entry, and an unchanged value
+//! does not touch history. A panel's pivot is derived from its geometry — the base corner — so the
+//! card shows *Pivot follows origin (offset 0)* read-only. A read-only *Pivot (world)* row prints
+//! `Project::pivot_world`; the card never turns the point itself.
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PIVOT_CENTER_ID, NODE_PIVOT_SET_ID};
@@ -63,12 +63,8 @@ impl PivotCard {
         if pivot_is_derived(session.project(), node) {
             self.draft = None;
             self.error = None;
-            ui.label(Message::PivotDerived.text(lang));
-            section(ui, "pivot.local", Message::SectionLocalPivot.text(lang), true, |ui| {
-                ui.label(Message::ZeroMillimetres.text(lang));
-                ui.label(Message::PivotBaseCorner.text(lang));
-            });
-            match coords::world_origin(session.project(), node) {
+            ui.label(Message::PanelPivotFollowsOrigin.text(lang));
+            match coords::world_pivot(session.project(), node) {
                 Some(world) => ui.label(Message::PivotWorld.with(lang, [world])),
                 None => ui.label(Message::PivotWorldOutOfRange.text(lang)),
             };
@@ -90,7 +86,7 @@ impl PivotCard {
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;
         let mut center = false;
-        section(ui, "pivot.local", Message::SectionLocalPivot.text(lang), true, |ui| {
+        section(ui, "pivot.local", Message::PivotLocalOffset.text(lang), true, |ui| {
             for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
                 ui.horizontal(|ui| {
                     ui.label(label);

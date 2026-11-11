@@ -1,6 +1,6 @@
 //! Read-only world values the inspector shows.
 //!
-//! Every value is a project query — `world_placement` or `pivot_world` — formatted for the card.
+//! Every value is a project query — `origin_world` or `pivot_world` — formatted for the card.
 //! The cards never compose placements or turn a point themselves; they print what the model
 //! already derived.
 

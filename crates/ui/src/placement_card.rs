@@ -1,12 +1,13 @@
-//! The placement card shared by panels and assemblies.
+//! The origin card shared by every node kind.
 //!
-//! Coordinates are local to the parent container and entered in millimetres; a read-only *World
-//! position* row shows what the parent chain composes to, read from `Project::world_placement`.
+//! The coordinates are the origin local to the parent container and are entered in millimetres; a
+//! read-only *World origin* row shows what the parent chain composes to, read from
+//! `Project::origin_world`.
 //! Rotation is shown as intrinsic XYZ Euler angles in degrees; the document keeps a unit
 //! quaternion, so the angles are only a view of it. The card keeps the typed text until the edit
 //! ends: Enter in any field or the Apply button parses all six fields and dispatches one
 //! `node.placement.set`, so an edit is one undo entry. The half that did not change is kept
-//! bit-for-bit. *Zero translation* dispatches `node.placement.world_zero`, which clears the
+//! bit-for-bit. *Place at world zero* dispatches `node.placement.world_zero`, which clears the
 //! parent-frame translation and keeps the rotation.
 
 use egui::{Color32, RichText, TextEdit, Ui};
@@ -75,20 +76,20 @@ impl PlacementCard {
             self.draft = Draft::new(node, current);
         }
 
-        ui.label(RichText::new(Message::Placement.text(crate::language(ui.ctx()))).strong());
+        ui.label(RichText::new(Message::Origin.text(crate::language(ui.ctx()))).strong());
         let parent_name = session
             .project()
             .parent_of(node)
             .and_then(|parent| session.project().container(parent))
             .map(|container| container.name().to_owned());
         let lang = crate::language(ui.ctx());
-        let translation_title = match parent_name {
-            Some(name) => Message::TranslationLocalTo.with(lang, [name]),
-            None => Message::TranslationLocalToParent.text(lang).to_owned(),
+        let origin_title = match parent_name {
+            Some(name) => Message::OriginLocalTo.with(lang, [name]),
+            None => Message::OriginLocalToParent.text(lang).to_owned(),
         };
 
         let Some(draft) = self.draft.as_mut() else {
-            ui.colored_label(Color32::LIGHT_RED, Message::TranslationOutOfRange.text(crate::language(ui.ctx())));
+            ui.colored_label(Color32::LIGHT_RED, Message::OriginOutOfRange.text(crate::language(ui.ctx())));
             return;
         };
 
@@ -99,7 +100,7 @@ impl PlacementCard {
         let mut zero = false;
         let lang = crate::language(ui.ctx());
         section(ui, "placement.transform", Message::SectionTransform.text(lang), true, |ui| {
-            section(ui, "placement.transform.translation", translation_title, true, |ui| {
+            section(ui, "placement.transform.origin", origin_title.clone(), true, |ui| {
                 for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
                     ui.horizontal(|ui| {
                         ui.label(label);
@@ -109,13 +110,13 @@ impl PlacementCard {
                     });
                 }
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(can_zero, egui::Button::new(Message::CmdZeroTranslation.text(lang))).clicked() {
+                    if ui.add_enabled(can_zero, egui::Button::new(Message::CmdPlaceAtWorldZero.text(lang))).clicked() {
                         zero = true;
                     }
                 });
                 match &world {
-                    Some(world) => ui.label(Message::WorldPosition.with(lang, [world])),
-                    None => ui.label(Message::WorldPositionOutOfRange.text(lang)),
+                    Some(world) => ui.label(Message::WorldOrigin.with(lang, [world])),
+                    None => ui.label(Message::WorldOriginOutOfRange.text(lang)),
                 };
             });
             section(
