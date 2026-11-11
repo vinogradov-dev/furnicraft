@@ -2,7 +2,8 @@
 //!
 //! Turns one scene frame into pixels: it owns the offscreen colour target, the depth and stencil
 //! attachment, the uploaded geometry and the passes that draw it. The pipeline state lives in
-//! `pipelines.rs` and the buffer wrappers in `gpu.rs`. It knows nothing about `egui` and never
+//! `pipelines.rs`, the buffer wrappers in `gpu.rs` and the vertex builders in `geometry.rs`. It
+//! knows nothing about `egui` and never
 //! creates a window: the shell registers the colour texture with `egui_wgpu` and displays it as an
 //! image. Scene geometry is uploaded when the document changes; camera changes only rewrite a small
 //! uniform buffer.
@@ -12,8 +13,9 @@
 //! Refuses: malformed geometry is a [`RenderError`] the shell can report, never a panic and never a
 //! silently missing object; a hostile target size is clamped, not trusted.
 //!
-//! Does not create geometry or measure anything: a vertex builder flattens what `scene` hands over
-//! and a pass draws it. It does not decide which frame to draw, and it holds no document data.
+//! Does not build a single vertex: `geometry.rs` flattens what `scene` hands over, and a pass here
+//! draws the buffers that came back. It does not decide which frame to draw, and it holds no
+//! document data.
 //!
 //! Changes when: what a frame uploads, how a pass draws it, or the order the passes run in changes.
 #![forbid(unsafe_code)]
@@ -26,22 +28,23 @@
     clippy::unreachable
 )]
 
+mod geometry;
 mod gpu;
 mod pipelines;
 
 use bytemuck::{Pod, Zeroable};
-use furnicraft_geom::{DMat4, DVec3, MeshData};
-use furnicraft_scene::{
-    Camera, ContactShadow, ContactShadows, Drawable, Grid, Lighting, MAX_POINT_LIGHTS, Polyline, SceneFrame,
-    ShadingStyle,
-};
+use furnicraft_geom::DVec3;
+use furnicraft_scene::{Camera, ContactShadows, Lighting, MAX_POINT_LIGHTS, SceneFrame, ShadingStyle};
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
+use self::geometry::{
+    EdgeSlice, edge_geometry, grid_vertices, mesh_centre, polyline_vertices, sanitize_color, shadow_geometry,
+    sort_back_to_front, stencil_slot, world_vertices,
+};
 use self::gpu::{GpuLineList, GpuMesh, GpuTriangles, clamp_size, line_list, triangle_list};
 use self::pipelines::{
-    MAX_STENCIL_OWNERS, create_line_pipeline, create_shadow_pipeline, create_triangle_pipeline, edge_depth_state,
-    line_depth_state,
+    create_line_pipeline, create_shadow_pipeline, create_triangle_pipeline, edge_depth_state, line_depth_state,
 };
 
 /// The offscreen colour format. `egui_wgpu::Renderer::register_native_texture` requires this
@@ -54,33 +57,8 @@ pub(crate) const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8U
 /// object and never through the object in front of it.
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
-/// Largest vertex count the renderer accepts for one uploaded primitive: a drawable's mesh or the
-/// whole frame's line list.
-const MAX_VERTICES: usize = 4_000_000;
-
-/// Largest number of grid divisions on each side of the origin.
-const MAX_GRID_DIVISIONS: i64 = 512;
-
-/// Segments in one contact-shadow ellipse.
-///
-/// The falloff is interpolated across the fan, so a small count is already smooth; 48 keeps the
-/// edge round at a close zoom for 49 vertices per object.
-const SHADOW_SEGMENTS: usize = 48;
-
-/// Most contact shadows one frame may upload.
-///
-/// A shadow is a fan of [`SHADOW_SEGMENTS`] triangles; this cap is far above any furniture scene and
-/// keeps a hostile frame from allocating unbounded geometry.
-const MAX_CONTACT_SHADOWS: usize = 4096;
-
 /// The most views one frame may split into; the camera uniform holds one slot per view.
 pub const MAX_VIEWS: usize = 4;
-
-/// Gamma-space ink for a light viewport.
-const EDGE_COLOR_DARK: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
-
-/// Gamma-space ink for a dark viewport: the dark ink disappears on the default background.
-const EDGE_COLOR_LIGHT: [f32; 4] = [0.86, 0.88, 0.91, 1.0];
 
 /// The passes one display style turns on, derived without a GPU.
 ///
@@ -165,15 +143,6 @@ pub enum RenderError {
     },
 }
 
-/// A shaded vertex in world space.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
-struct MeshVertex {
-    pub(crate) position: [f32; 3],
-    pub(crate) normal: [f32; 3],
-    pub(crate) color: [f32; 4],
-}
-
 /// Uniform data shared by the mesh and grid pipelines.
 ///
 /// One slot describes one view: the view-projection, the eye, and the lighting that view shades
@@ -192,18 +161,6 @@ struct CameraUniform {
     point_color: [[f32; 4]; MAX_POINT_LIGHTS],
     /// Gamma-space RGB and, in `a`, the contact-shadow strength.
     shadow: [f32; 4],
-}
-
-/// One drawable's contiguous run inside the flattened edge buffer.
-///
-/// `stencil_reference` is the value its opaque faces wrote, so the hidden-edge pass can tell its own
-/// inside from the object in front of it. A drawable whose slot is zero owns no pixels and its
-/// hidden edges draw only over the background.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct EdgeSlice {
-    first_vertex: u32,
-    vertex_count: u32,
-    stencil_reference: u32,
 }
 
 struct RenderTargets {
@@ -757,358 +714,6 @@ impl ViewportRenderer {
     }
 }
 
-/// The world-space centre of a drawable's local bounds, used to order translucent objects.
-///
-/// A missing or non-finite position is ignored, and a mesh with none has no centre to sort by.
-fn mesh_centre(mesh: &MeshData, transform: DMat4) -> DVec3 {
-    let mut min = DVec3::splat(f64::INFINITY);
-    let mut max = DVec3::splat(f64::NEG_INFINITY);
-    let mut seen = false;
-    for position in &mesh.positions {
-        let world = transform.transform_point3(vector(*position));
-        if !world.is_finite() {
-            continue;
-        }
-        min = min.min(world);
-        max = max.max(world);
-        seen = true;
-    }
-    if seen { (min + max) * 0.5 } else { DVec3::ZERO }
-}
-
-/// Flattens the edge list of every drawable into one line list in world space, and records where
-/// each drawable's run begins so the hidden-edge pass can address it by stencil reference.
-///
-/// The edge list is derived data that `crates/mesh` cached beside the mesh (ADR 0053), so this is a
-/// transform and a copy, never a search. `all_edges` selects the full triangulation instead of the
-/// form edges, for the diagnostic style. A malformed edge or a non-finite vertex is skipped: an edge
-/// is decoration and must never turn a whole frame into an error.
-///
-/// The colour follows the background: light ink on the dark viewport, dark ink when a light theme
-/// brings a light clear colour, so the form stays readable in both palettes. The slice list is
-/// parallel to `drawables`, so a drawable with no lines still gets its own (empty) entry.
-fn edge_geometry(drawables: &[Drawable], all_edges: bool, background: [f32; 4]) -> (Vec<MeshVertex>, Vec<EdgeSlice>) {
-    let color = edge_color(background);
-    let mut vertices = Vec::new();
-    let mut slices = Vec::with_capacity(drawables.len());
-    for (index, drawable) in drawables.iter().enumerate() {
-        let first_vertex = vertices.len();
-        let edges = if all_edges { drawable.all_edges.as_deref() } else { drawable.edges.as_deref() };
-        if let Some(edges) = edges
-            && drawable.world_transform.is_finite()
-        {
-            for edge in edges.as_chunks::<2>().0 {
-                let (Some(a), Some(b)) = (position_at(&drawable.mesh, edge[0]), position_at(&drawable.mesh, edge[1]))
-                else {
-                    continue;
-                };
-                let a = drawable.world_transform.transform_point3(a);
-                let b = drawable.world_transform.transform_point3(b);
-                if !a.is_finite() || !b.is_finite() {
-                    continue;
-                }
-                if vertices.len().saturating_add(2) > MAX_VERTICES {
-                    break;
-                }
-                push_line(&mut vertices, [a.x, a.y, a.z], [b.x, b.y, b.z], color);
-            }
-        }
-        let added = vertices.len().saturating_sub(first_vertex);
-        slices.push(EdgeSlice {
-            // A saturating cast keeps a hostile count from wrapping; the buffer budget already
-            // caps the real value.
-            first_vertex: u32::try_from(first_vertex).unwrap_or(u32::MAX),
-            vertex_count: u32::try_from(added).unwrap_or(u32::MAX),
-            stencil_reference: stencil_slot(index),
-        });
-    }
-    (vertices, slices)
-}
-
-/// The stencil value one drawable stamps, counted from one so zero keeps meaning "no surface".
-///
-/// The count wraps at [`MAX_STENCIL_OWNERS`], so a scene with more drawables than slots reuses the
-/// low values. Two objects sharing a slot can show one inside the other at a pixel; no object can
-/// appear where it is not, which is the property that matters.
-fn stencil_slot(index: usize) -> u32 {
-    (index % MAX_STENCIL_OWNERS) as u32 + 1
-}
-
-/// Light ink for a dark viewport and dark ink for a light one.
-fn edge_color(background: [f32; 4]) -> [f32; 4] {
-    let background = sanitize_color(background);
-    let luminance = 0.2126 * background[0] + 0.7152 * background[1] + 0.0722 * background[2];
-    if luminance < 0.45 { EDGE_COLOR_LIGHT } else { EDGE_COLOR_DARK }
-}
-
-/// Rewrites `order` so far objects come first, which is the order a blended pass needs.
-///
-/// The comparison is on squared distance to the eye, so no square root is taken per pair. A
-/// non-finite eye or centre sorts as the origin, which keeps the order total instead of panicking.
-fn sort_back_to_front(centres: &[DVec3], eye: DVec3, order: &mut Vec<usize>) {
-    order.clear();
-    order.extend(0..centres.len());
-    let eye = if eye.is_finite() { eye } else { DVec3::ZERO };
-    order.sort_by(|&a, &b| {
-        let far = centres.get(a).map_or(0.0, |centre| (centre - eye).length_squared());
-        let near = centres.get(b).map_or(0.0, |centre| (centre - eye).length_squared());
-        near.total_cmp(&far)
-    });
-}
-
-/// Builds one triangle fan per contact shadow on the ground plane.
-///
-/// The centre vertex has full vertex alpha and the rim has none, so the fragment interpolates a
-/// radial falloff; the uniform multiplies it by the shadow strength, which is why the colour and
-/// the switch never reach this buffer. A malformed ellipse is an error instead of a silently
-/// missing shadow.
-fn shadow_geometry(shadows: &[ContactShadow]) -> Result<(Vec<MeshVertex>, Vec<u32>), RenderError> {
-    if shadows.len() > MAX_CONTACT_SHADOWS {
-        return Err(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS });
-    }
-    let vertices_per_shadow = SHADOW_SEGMENTS.saturating_add(1);
-    let indices_per_shadow = SHADOW_SEGMENTS.saturating_mul(3);
-    let vertex_count = shadows
-        .len()
-        .checked_mul(vertices_per_shadow)
-        .ok_or(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS })?;
-    let index_count = shadows
-        .len()
-        .checked_mul(indices_per_shadow)
-        .ok_or(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS })?;
-    if vertex_count > MAX_VERTICES || index_count > MAX_VERTICES {
-        return Err(RenderError::TooManyShadows { count: shadows.len(), max: MAX_CONTACT_SHADOWS });
-    }
-    let mut vertices = Vec::with_capacity(vertex_count);
-    let mut indices = Vec::with_capacity(index_count);
-    for (index, shadow) in shadows.iter().enumerate() {
-        let [radius_x, radius_y] = shadow.radii;
-        if !shadow.center.is_finite() || !radius_x.is_finite() || !radius_y.is_finite() {
-            return Err(RenderError::InvalidShadow { index });
-        }
-        if radius_x <= 0.0 || radius_y <= 0.0 {
-            return Err(RenderError::InvalidShadow { index });
-        }
-        let center = to_array(shadow.center);
-        let base = u32::try_from(vertices.len()).map_err(|_| RenderError::InvalidShadow { index })?;
-        vertices.push(MeshVertex { position: center, normal: [0.0, 0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] });
-        for step in 0..SHADOW_SEGMENTS {
-            let angle = std::f64::consts::TAU * (step as f64) / (SHADOW_SEGMENTS as f64);
-            let position = [
-                (shadow.center.x + radius_x * angle.cos()) as f32,
-                (shadow.center.y + radius_y * angle.sin()) as f32,
-                shadow.center.z as f32,
-            ];
-            vertices.push(MeshVertex { position, normal: [0.0, 0.0, 1.0], color: [1.0, 1.0, 1.0, 0.0] });
-        }
-        for step in 0..SHADOW_SEGMENTS {
-            let current = base + 1 + step as u32;
-            let next = base + 1 + ((step + 1) % SHADOW_SEGMENTS) as u32;
-            indices.extend_from_slice(&[base, current, next]);
-        }
-    }
-    Ok((vertices, indices))
-}
-
-/// Flattens every frame polyline into one line-list vertex buffer.
-///
-/// Points are transformed into world space here, the same way a drawable's mesh is. A malformed
-/// chain is an error instead of a silently missing path, so the shell can report it.
-fn polyline_vertices(polylines: &[Polyline]) -> Result<Vec<MeshVertex>, RenderError> {
-    let mut vertices = Vec::new();
-    for (index, polyline) in polylines.iter().enumerate() {
-        push_polyline_vertices(index, polyline, &mut vertices)?;
-    }
-    Ok(vertices)
-}
-
-/// Appends one polyline as pairs of line-list vertices in world space.
-fn push_polyline_vertices(
-    index: usize,
-    polyline: &Polyline,
-    vertices: &mut Vec<MeshVertex>,
-) -> Result<(), RenderError> {
-    let point_count = polyline.points.len();
-    if point_count < 2 {
-        return Err(RenderError::EmptyPolyline { index });
-    }
-    let needed = (point_count - 1).checked_mul(2).ok_or(RenderError::PolylineTooLarge { index })?;
-    let total = vertices.len().checked_add(needed).ok_or(RenderError::PolylineTooLarge { index })?;
-    if total > MAX_VERTICES {
-        return Err(RenderError::PolylineTooLarge { index });
-    }
-    if !polyline.world_transform.is_finite() || polyline.points.iter().any(|point| !point.is_finite()) {
-        return Err(RenderError::InvalidPolyline { index });
-    }
-    let color = sanitize_color(polyline.color);
-    let mut previous = None;
-    for point in polyline.points.iter() {
-        let world = polyline.world_transform.transform_point3(*point);
-        if !world.is_finite() {
-            return Err(RenderError::InvalidPolyline { index });
-        }
-        let position = to_array(world);
-        if let Some(previous) = previous {
-            vertices.push(MeshVertex { position: previous, normal: [0.0, 0.0, 1.0], color });
-            vertices.push(MeshVertex { position, normal: [0.0, 0.0, 1.0], color });
-        }
-        previous = Some(position);
-    }
-    Ok(())
-}
-
-/// Converts a local mesh into world-space vertices and indices.
-///
-/// A mesh without normals is expanded into flat-shaded triangles. The fallback matters because
-/// the geometry port allows normals to be absent; panels normally arrive with per-face normals.
-fn world_vertices(
-    index: usize,
-    mesh: &MeshData,
-    transform: DMat4,
-    color: [f32; 4],
-) -> Result<(Vec<MeshVertex>, Vec<u32>), RenderError> {
-    if mesh.positions.is_empty() || mesh.indices.is_empty() || !mesh.indices.len().is_multiple_of(3) {
-        return Err(RenderError::EmptyMesh { index });
-    }
-    if mesh.positions.len() > MAX_VERTICES {
-        return Err(RenderError::MeshTooLarge { index });
-    }
-    if !transform.is_finite()
-        || mesh.positions.iter().flatten().any(|value| !value.is_finite())
-        || mesh.normals.iter().flatten().any(|value| !value.is_finite())
-        || (!mesh.normals.is_empty() && mesh.normals.len() != mesh.positions.len())
-    {
-        return Err(RenderError::InvalidMesh { index });
-    }
-    let vertex_count = u32::try_from(mesh.positions.len()).map_err(|_| RenderError::MeshTooLarge { index })?;
-    if mesh.indices.iter().any(|vertex| *vertex >= vertex_count) {
-        return Err(RenderError::InvalidMesh { index });
-    }
-    let color = sanitize_color(color);
-
-    if mesh.normals.is_empty() {
-        return flat_vertices(index, mesh, transform, color);
-    }
-
-    let mut vertices = Vec::with_capacity(mesh.positions.len());
-    for (position, normal) in mesh.positions.iter().zip(&mesh.normals) {
-        let position = transform.transform_point3(vector(*position));
-        if !position.is_finite() {
-            return Err(RenderError::InvalidMesh { index });
-        }
-        let normal = transform.transform_vector3(vector(*normal)).try_normalize().unwrap_or(DVec3::Z);
-        vertices.push(MeshVertex { position: to_array(position), normal: to_array(normal), color });
-    }
-    Ok((vertices, mesh.indices.clone()))
-}
-
-fn flat_vertices(
-    index: usize,
-    mesh: &MeshData,
-    transform: DMat4,
-    color: [f32; 4],
-) -> Result<(Vec<MeshVertex>, Vec<u32>), RenderError> {
-    let triangle_count = mesh.indices.len() / 3;
-    let capacity = triangle_count.checked_mul(3).ok_or(RenderError::MeshTooLarge { index })?;
-    if capacity > MAX_VERTICES {
-        return Err(RenderError::MeshTooLarge { index });
-    }
-    let mut vertices = Vec::with_capacity(capacity);
-    let mut indices = Vec::with_capacity(capacity);
-    for triangle in mesh.indices.as_chunks::<3>().0 {
-        let a = position_at(mesh, triangle[0]);
-        let b = position_at(mesh, triangle[1]);
-        let c = position_at(mesh, triangle[2]);
-        let (Some(a), Some(b), Some(c)) = (a, b, c) else {
-            return Err(RenderError::InvalidMesh { index });
-        };
-        let a = transform.transform_point3(a);
-        let b = transform.transform_point3(b);
-        let c = transform.transform_point3(c);
-        if !a.is_finite() || !b.is_finite() || !c.is_finite() {
-            return Err(RenderError::InvalidMesh { index });
-        }
-        let normal = (b - a).cross(c - a).try_normalize().unwrap_or(DVec3::Z);
-        let base = u32::try_from(vertices.len()).map_err(|_| RenderError::MeshTooLarge { index })?;
-        for position in [a, b, c] {
-            vertices.push(MeshVertex { position: to_array(position), normal: to_array(normal), color });
-        }
-        indices.extend_from_slice(&[base, base + 1, base + 2]);
-    }
-    Ok((vertices, indices))
-}
-
-fn position_at(mesh: &MeshData, index: u32) -> Option<DVec3> {
-    let position = mesh.positions.get(index as usize)?;
-    Some(vector(*position))
-}
-
-fn grid_vertices(grid: &Grid) -> Vec<MeshVertex> {
-    if !grid.visible {
-        return Vec::new();
-    }
-    let spacing = if grid.spacing_mm.is_finite() && grid.spacing_mm >= 1.0 {
-        grid.spacing_mm.min(furnicraft_scene::MAX_DISTANCE_MM)
-    } else {
-        100.0
-    };
-    let requested_extent = if grid.extent_mm.is_finite() {
-        grid.extent_mm.clamp(spacing, furnicraft_scene::MAX_DISTANCE_MM)
-    } else {
-        5000.0
-    };
-    let divisions = ((requested_extent / spacing).floor() as i64).clamp(0, MAX_GRID_DIVISIONS);
-    let extent = divisions as f64 * spacing;
-    let major_every = i64::from(grid.major_every.max(1));
-    let mut vertices = Vec::with_capacity((2 * divisions as usize + 1) * 4);
-
-    for step in -divisions..=divisions {
-        let offset = step as f64 * spacing;
-        let x_color = if step == 0 {
-            sanitize_color(grid.axis_x_color)
-        } else if step % major_every == 0 {
-            sanitize_color(grid.major_color)
-        } else {
-            sanitize_color(grid.minor_color)
-        };
-        let y_color = if step == 0 {
-            sanitize_color(grid.axis_y_color)
-        } else if step % major_every == 0 {
-            sanitize_color(grid.major_color)
-        } else {
-            sanitize_color(grid.minor_color)
-        };
-        // Lift the grid a fraction of a millimetre above the floor so a panel resting at z = 0
-        // does not z-fight with it.
-        push_line(&mut vertices, [-extent, offset, 0.02], [extent, offset, 0.02], x_color);
-        push_line(&mut vertices, [offset, -extent, 0.02], [offset, extent, 0.02], y_color);
-    }
-
-    vertices
-}
-
-fn push_line(vertices: &mut Vec<MeshVertex>, start: [f64; 3], end: [f64; 3], color: [f32; 4]) {
-    for point in [start, end] {
-        vertices.push(MeshVertex {
-            position: [point[0] as f32, point[1] as f32, point[2] as f32],
-            normal: [0.0, 0.0, 1.0],
-            color,
-        });
-    }
-}
-
-fn vector(value: [f32; 3]) -> DVec3 {
-    DVec3::new(f64::from(value[0]), f64::from(value[1]), f64::from(value[2]))
-}
-
-fn to_array(value: DVec3) -> [f32; 3] {
-    [value.x as f32, value.y as f32, value.z as f32]
-}
-
-fn sanitize_color(color: [f32; 4]) -> [f32; 4] {
-    if color.iter().all(|component| component.is_finite()) { color } else { [0.8, 0.8, 0.8, 1.0] }
-}
-
 /// The shadow colour and strength the fragment shader reads.
 ///
 /// A switch that is off, a zero strength or a hostile value collapses to zero alpha, so the pass
@@ -1141,8 +746,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::pipelines::{FACE_DEPTH_BIAS, STENCIL_MASK, face_depth_state, shadow_depth_state};
+    use crate::geometry::{
+        EDGE_COLOR_DARK, EDGE_COLOR_LIGHT, MAX_CONTACT_SHADOWS, MAX_GRID_DIVISIONS, SHADOW_SEGMENTS, edge_color,
+    };
+    use crate::pipelines::{FACE_DEPTH_BIAS, MAX_STENCIL_OWNERS, STENCIL_MASK, face_depth_state, shadow_depth_state};
+    use furnicraft_geom::{DMat4, MeshData};
     use furnicraft_model::Id;
+    use furnicraft_scene::{ContactShadow, Drawable, Grid, Polyline};
 
     fn triangle() -> MeshData {
         MeshData {

@@ -25,17 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S17** `render/lib.rs` gives up the vertex builders — rules: B1, B4, B8.
-  Why: after S16 the file is 1124 production lines and still holds the CPU-side builders
-  (`edge_geometry`, `shadow_geometry`, `world_vertices`, `flat_vertices`, `grid_vertices`,
-  `polyline_vertices`, `mesh_centre`, `stencil_slot`, `edge_color`, `sort_back_to_front`).
-  Shape: they move to `crates/render/src/geometry.rs` (~400); `render/lib.rs` 1124 -> ~700 and
-  `impl ViewportRenderer` (421) stays under B4's target.
-  Done: suite unchanged; `geometry.rs` states that a builder reads frame data and writes vertices,
-  never a device, and names the units it works in (H1, H2, H6).
-  Commits: one move.
-  `files: crates/render/src/lib.rs`
-
 - `[ ]` **S18** `ui/lib.rs`'s `Editor` gives up the document rules it holds — rules: C7, D1, B1, H2.
   Why: three document rules live inside the UI's edit session (F2): `placement_in_parent` repeats the
   model's frame composition, `NEW_PANEL_LENGTH_MM`/`NEW_PANEL_WIDTH_MM` (600 x 400) are a document
@@ -301,6 +290,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S17** `render/lib.rs` gives up the vertex builders — rules: B1, B4, B8.
+  Why: after S16 the file was 1136 production lines (`2c183d4`) and still held the CPU-side
+   builders (`edge_geometry`, `shadow_geometry`, `world_vertices`, `flat_vertices`,
+   `grid_vertices`, `polyline_vertices`, `mesh_centre`, `stencil_slot`, `edge_color`,
+   `sort_back_to_front`).
+  Shape: they moved to `crates/render/src/geometry.rs` (433 production lines); `render/lib.rs`
+   1136 -> 742 and `impl ViewportRenderer` stays at 421, so both the file and the impl clear
+   B4's ceilings (1000, 800).
+  Done: suite unchanged; `geometry.rs` states that a builder reads frame data and writes vertices,
+  never a device, and names the units it works in (H1, H2, H6).
+  Commits: one move.
+  `files: crates/render/src/lib.rs` — `1f361e1`
 
 - `[x]` **S16** `render/lib.rs` gives up the pipelines and the GPU buffer helpers — rules: B1, B4, B8, H2.
   Why: 1446 production lines (F5) mix the renderer with eleven pipeline constructors, the depth-state
