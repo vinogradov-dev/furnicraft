@@ -235,12 +235,14 @@ pub(crate) fn shadow_geometry(shadows: &[ContactShadow]) -> Result<(Vec<MeshVert
 
 /// Flattens every frame polyline into one line-list vertex buffer.
 ///
-/// Points are transformed into world space here, the same way a drawable's mesh is. A malformed
-/// chain is an error instead of a silently missing path, so the shell can report it.
-pub(crate) fn polyline_vertices(polylines: &[Polyline]) -> Result<Vec<MeshVertex>, RenderError> {
+/// Points are transformed into world space here, the same way a drawable's mesh is. A chain that
+/// names no colour of its own is drawn in `line_ink`, the frame's own ink, so a theme switch
+/// repaints it without rebuilding the frame. A malformed chain is an error instead of a silently
+/// missing path, so the shell can report it.
+pub(crate) fn polyline_vertices(polylines: &[Polyline], line_ink: [f32; 4]) -> Result<Vec<MeshVertex>, RenderError> {
     let mut vertices = Vec::new();
     for (index, polyline) in polylines.iter().enumerate() {
-        push_polyline_vertices(index, polyline, &mut vertices)?;
+        push_polyline_vertices(index, polyline, line_ink, &mut vertices)?;
     }
     Ok(vertices)
 }
@@ -249,6 +251,7 @@ pub(crate) fn polyline_vertices(polylines: &[Polyline]) -> Result<Vec<MeshVertex
 fn push_polyline_vertices(
     index: usize,
     polyline: &Polyline,
+    line_ink: [f32; 4],
     vertices: &mut Vec<MeshVertex>,
 ) -> Result<(), RenderError> {
     let point_count = polyline.points.len();
@@ -263,7 +266,7 @@ fn push_polyline_vertices(
     if !polyline.world_transform.is_finite() || polyline.points.iter().any(|point| !point.is_finite()) {
         return Err(RenderError::InvalidPolyline { index });
     }
-    let color = sanitize_color(polyline.color);
+    let color = sanitize_color(polyline.drawn_color(line_ink));
     let mut previous = None;
     for point in polyline.points.iter() {
         let world = polyline.world_transform.transform_point3(*point);

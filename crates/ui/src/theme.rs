@@ -12,6 +12,7 @@
 use egui::{
     Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals, style::WidgetVisuals, style::Widgets, vec2,
 };
+use furnicraft_scene::SceneColors;
 
 /// The darkest chrome: the window frame around the panels.
 pub const CHROME: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x20);
@@ -468,6 +469,22 @@ pub fn install_with(ctx: &egui::Context, preference: egui::ThemePreference, acce
     ctx.set_theme(preference);
 }
 
+/// The viewport colours of the active variant, for the `wgpu` frame.
+///
+/// The viewport is not an `egui` surface, so it cannot read the chrome palette at draw time; this is
+/// the one bridge from the active [`egui::Theme`] to the scene's non-material colours. The shell
+/// reads it once per frame, so a preference switch, including *System* following the OS, reaches the
+/// background, the grid and the unlit ink on the next frame (X8).
+///
+/// The palette's `dark` flag is the same bit `egui` switches on, so the two can never disagree about
+/// which variant is active.
+pub fn scene_colors(theme: egui::Theme) -> SceneColors {
+    match theme {
+        egui::Theme::Dark => SceneColors::DARK,
+        egui::Theme::Light => SceneColors::LIGHT,
+    }
+}
+
 /// A frame for one chrome surface: the fill and the hairline that closes it.
 pub fn surface_frame(fill: Color32) -> egui::Frame {
     egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(6, 2))
@@ -549,6 +566,17 @@ mod tests {
             assert_eq!(style.spacing.item_spacing.y, STEP, "{theme:?} keeps the rhythm");
             assert_eq!(style.text_styles.get(&TextStyle::Body).map(|font| font.size), Some(12.0));
         }
+    }
+
+    #[test]
+    fn the_two_variants_paint_the_viewport_in_their_own_colours() {
+        let dark = scene_colors(egui::Theme::Dark);
+        let light = scene_colors(egui::Theme::Light);
+        assert_eq!(dark, SceneColors::DARK, "the dark workspace draws the palette it always had");
+        assert_eq!(light, SceneColors::LIGHT);
+        assert!(dark.background[0] < light.background[0], "the light viewport clears to paper");
+        assert!(light.grid.minor_color[0] < light.background[0], "the light grid is drawn in dark ink");
+        assert!(dark.grid.minor_color[0] > dark.background[0], "the dark grid is drawn in light ink");
     }
 
     #[test]

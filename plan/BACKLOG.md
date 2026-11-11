@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
-  still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
-  frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
-  background, the grid and the non-material lines to the active variant at once, leaving the
-  furniture's own material colours untouched, and switching back restores the dark values.
-  Suspected cause: the frame background and the grid line colours are literals in `crates/scene`,
-  and the shipped frame never gets them from the active `egui::Visuals` when `theme::install_with`
-  changes. Tests: a light frame carries the light background and grid; switching variant changes the
-  uploaded scene without touching the document revision.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
-
-## Bugs
-
 - `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
   arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
   loop whose visible branch reads as a straight line through the joint and across the viewport.
@@ -56,6 +43,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   the three existing `a_free_arc_end_*` tests stay green; a grip drag on a shallow arc keeps its
   class.
   `files: crates/geom/src/segment.rs, crates/ui/src/contour_grips.rs`
+
+## Bugs
 
 - `[ ]` **X31** an along-contour drag on a sub-millimetre segment panics: dragging a corner along a
   segment shorter than twice the clamp margin (2 µm) aborts the editor instead of clamping or
@@ -95,6 +84,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
+  still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
+  frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
+  background, the grid and the non-material lines to the active variant at once, leaving the
+  furniture's own material colours untouched, and switching back restores the dark values.
+  Suspected cause: the frame background and the grid line colours are literals in `crates/scene`,
+  and the shipped frame never gets them from the active `egui::Visuals` when `theme::install_with`
+  changes. Tests: a light frame carries the light background and grid; switching variant changes the
+  uploaded scene without touching the document revision.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs` — `eba2f51`
 
 - `[x]` **X33** a drag on the UI scale makes the window jump and loses the scale
   Why: Dragging the UI-scale field makes the window jump between values: with the Settings

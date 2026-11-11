@@ -92,6 +92,10 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
 - `[gizmo]` The orientation widget is hidden in a viewport smaller than 124 pt wide plus margins
   (148 pt), or 148 pt tall plus margins; there is no menu fallback for the six views or the roll
   ring yet.
+- `[gizmo]` The screen-space overlays over the viewport — the contour grips, the drawing draft and
+  the size label — still carry fixed dark-theme colours, so on the light workspace a near-white grip
+  and the pale draft line read weakly against the paper. They are `egui` paint, not frame ink, so
+  they are the leftover of X8 (ADR 0087).
 - `[gizmo]` An extrusion pull previews its new height as a wireframe prism, not a shaded solid. A
   solid preview needs the evaluation cache to accept a previewed height without a document write.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a

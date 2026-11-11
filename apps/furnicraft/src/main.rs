@@ -48,6 +48,7 @@ use std::path::Path;
 
 use eframe::egui;
 use eframe::egui_wgpu;
+use furnicraft_scene::SceneColors;
 use furnicraft_ui::settings::{Settings, SettingsSection};
 use furnicraft_ui::ui_scale;
 use furnicraft_ui::{Palette, icons, theme};
@@ -99,6 +100,11 @@ pub(crate) struct Shell {
     pub(crate) viewport_area: Option<egui::Rect>,
     /// Whether a view border owns the primary button until it is released.
     pub(crate) divider_dragging: bool,
+    /// The background, grid and line ink of the theme variant the window draws with.
+    ///
+    /// The viewport is a `wgpu` surface, so it cannot read the `egui` palette at draw time; the
+    /// shell resolves the variant once per frame and every tab paints its frame with it (X8).
+    pub(crate) colors: SceneColors,
 }
 
 impl Default for Shell {
@@ -112,6 +118,7 @@ impl Default for Shell {
             ribbon_rect: None,
             viewport_area: None,
             divider_dragging: false,
+            colors: SceneColors::DARK,
         }
     }
 }
@@ -191,10 +198,11 @@ impl FurniCraftApp {
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
         let shell = Shell {
             cluster: ViewCluster { all_edges: settings.viewport.all_edges, ..ViewCluster::default() },
+            colors: theme::scene_colors(cc.egui_ctx.theme()),
             ..Shell::default()
         };
         let session = sample_session()?;
-        let document = Document::new(&render_state, &settings, &shell.cluster, session, PreservedSections::new())?;
+        let document = Document::new(&render_state, &settings, &shell, session, PreservedSections::new())?;
         Ok(Self {
             tabs: Tabs::new(document),
             render_state,
@@ -297,7 +305,7 @@ impl FurniCraftApp {
             return Ok(());
         }
         let catalog = self.tabs.active().session.catalog().clone();
-        let document = Document::open(&self.render_state, &self.settings, &self.shell.cluster, path, &catalog)?;
+        let document = Document::open(&self.render_state, &self.settings, &self.shell, path, &catalog)?;
         self.tabs.add(document);
         Ok(())
     }
@@ -306,8 +314,8 @@ impl FurniCraftApp {
     fn new_tab(&mut self) -> Result<(), String> {
         let session = empty_session()?;
         let settings = &self.settings;
-        let cluster = &self.shell.cluster;
-        let document = Document::new(&self.render_state, settings, cluster, session, PreservedSections::new())?;
+        let shell = &self.shell;
+        let document = Document::new(&self.render_state, settings, shell, session, PreservedSections::new())?;
         self.tabs.add(document);
         Ok(())
     }
@@ -385,7 +393,7 @@ impl FurniCraftApp {
     /// Replaces the last tab with an empty *Untitled* scene.
     fn empty_tab(&mut self, id: TabId) {
         let built = empty_session().and_then(|session| {
-            Document::new(&self.render_state, &self.settings, &self.shell.cluster, session, PreservedSections::new())
+            Document::new(&self.render_state, &self.settings, &self.shell, session, PreservedSections::new())
         });
         match built {
             Ok(document) => {
@@ -512,18 +520,22 @@ impl FurniCraftApp {
     ///
     /// Appearance is the window's, so the theme and the zoom apply at once; the viewport section is
     /// pushed into the active scene, because a grid, an edge list or a style default is derived
-    /// state that scene has to rebuild. The other tabs pick the new defaults up when they become
-    /// active again.
+    /// state that scene has to rebuild, and a theme switch repaints that scene's own colours in the
+    /// same frame. The other tabs pick the new defaults up when they become active again.
     fn apply_settings(&mut self, before: &Settings, ctx: &egui::Context) {
         self.settings.sanitize();
+        let colors_before = self.shell.colors;
         if self.settings.appearance != before.appearance {
             theme::install_with(ctx, self.settings.appearance.theme.preference(), self.settings.appearance.accent);
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
             furnicraft_ui::set_language(ctx, self.settings.appearance.language.lang());
         }
-        if self.settings.viewport != before.viewport {
+        // The active variant is read after the install, so a theme switch in this very window
+        // repaints the viewport now instead of on the next frame.
+        self.shell.colors = theme::scene_colors(ctx.theme());
+        if self.settings.viewport != before.viewport || self.shell.colors != colors_before {
             let Self { tabs, shell, settings, .. } = self;
-            tabs.active_mut().apply_viewport_settings(&before.viewport, &settings.viewport, &mut shell.cluster);
+            tabs.active_mut().apply_viewport_settings(&before.viewport, &settings.viewport, shell);
         }
     }
 
@@ -557,9 +569,12 @@ impl eframe::App for FurniCraftApp {
         // The language is workspace settings, published once per frame so every surface draws the
         // same words without threading a `Lang` through every signature (U49).
         furnicraft_ui::set_language(ui.ctx(), self.settings.appearance.language.lang());
+        // The theme variant is the window's, and `System` can follow the OS while the window is
+        // open, so the shell re-reads it every frame instead of trusting the last settings change.
+        self.shell.colors = theme::scene_colors(ui.ctx().theme());
         {
             let Self { tabs, shell, settings, .. } = self;
-            if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster) {
+            if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster, shell.colors) {
                 tabs.active_mut().last_error = Some(error);
             }
         }

@@ -30,7 +30,7 @@ use furnicraft_mesh::{EvaluationCache, object_mesh};
 use furnicraft_model::{Catalog, CornerMove, Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
-use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
+use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneColors, SceneFrame};
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{ContourGrip, DrawDraft, Editor, GripValue, MeshElement, PaletteContext, ViewFlags};
@@ -91,9 +91,9 @@ const SELECTION_UNDERLAY: egui::Color32 = egui::Color32::from_rgba_premultiplied
 
 /// The display state the window owns and every frame of this tab is built with.
 ///
-/// The floor grid, the edge list and the contact-shadow pass are the window's (ADR 0029), so the
-/// shell hands them to the active document; a frame rebuilt by a command, a card or a shortcut then
-/// draws the same display state the viewport shows.
+/// The floor grid, the edge list, the contact-shadow pass and the colours of the active theme
+/// variant are the window's (ADR 0029), so the shell hands them to the active document; a frame
+/// rebuilt by a command, a card or a shortcut then draws the same display state the viewport shows.
 #[derive(Clone, Copy, Debug)]
 struct Display {
     /// Whether the floor grid draws.
@@ -104,16 +104,19 @@ struct Display {
     all_edges: bool,
     /// The switch and the strength of the contact-shadow pass.
     shadows: ContactShadows,
+    /// The background, grid and line ink of the theme variant the window draws with.
+    colors: SceneColors,
 }
 
 impl Display {
     /// Reads the display state the window currently shows.
-    fn of(viewport: &ViewportSettings, cluster: &ViewCluster) -> Self {
+    fn of(viewport: &ViewportSettings, cluster: &ViewCluster, colors: SceneColors) -> Self {
         Self {
             grid: viewport.grid,
             grid_step_mm: viewport.grid_step_mm,
             all_edges: cluster.all_edges,
             shadows: cluster.shadow_settings(),
+            colors,
         }
     }
 
@@ -123,6 +126,7 @@ impl Display {
         scene.grid.spacing_mm = f64::from(self.grid_step_mm.max(1));
         scene.all_edges = self.all_edges;
         scene.contact_shadows = self.shadows;
+        scene.apply_colors(self.colors);
     }
 }
 
@@ -179,12 +183,13 @@ impl Document {
     /// Builds a document around a session: evaluates the scene, fits every view and registers its
     /// own render target.
     ///
-    /// The workspace defaults come from `settings` and the display diagnostics from `cluster`;
-    /// neither ever enters the scene file.
+    /// The workspace defaults come from `settings` and the display diagnostics, including the
+    /// active theme's viewport colours, from the window's `shell`; none of it ever enters the scene
+    /// file.
     pub(crate) fn new(
         render_state: &egui_wgpu::RenderState,
         settings: &Settings,
-        cluster: &ViewCluster,
+        shell: &Shell,
         session: Session,
         extra: PreservedSections,
     ) -> Result<Self, String> {
@@ -194,7 +199,7 @@ impl Document {
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
         let layout = Layout::new(fit, settings.viewport.opening_view, settings.viewport.style);
-        let display = Display::of(&settings.viewport, cluster);
+        let display = Display::of(&settings.viewport, &shell.cluster, shell.colors);
         let mut scene = evaluated.frame;
         layout.apply_frame_style(&mut scene);
         display.apply(&mut scene);
@@ -245,7 +250,7 @@ impl Document {
     pub(crate) fn open(
         render_state: &egui_wgpu::RenderState,
         settings: &Settings,
-        cluster: &ViewCluster,
+        shell: &Shell,
         path: &Path,
         catalog: &Catalog,
     ) -> Result<Self, String> {
@@ -253,7 +258,7 @@ impl Document {
         let extra = scene.extra().clone();
         let project = scene.into_document();
         let session = Session::with_catalog(project, catalog.clone());
-        let mut document = Self::new(render_state, settings, cluster, session, extra)?;
+        let mut document = Self::new(render_state, settings, shell, session, extra)?;
         document.file.set_path(Some(path.to_owned()));
         Ok(document)
     }
@@ -378,22 +383,24 @@ impl Document {
 
     /// Applies the viewport section of the workspace settings to this scene.
     ///
-    /// The style default applies to the active view at once and the other views keep theirs; a grid
-    /// or edge-list change rebuilds the uploaded frame, while an edge style is frame data the
+    /// The style default applies to the active view at once and the other views keep theirs; a grid,
+    /// edge-list or theme change rebuilds the uploaded frame, while an edge style is frame data the
     /// renderer reads at draw time.
     pub(crate) fn apply_viewport_settings(
         &mut self,
         before: &ViewportSettings,
         settings: &ViewportSettings,
-        cluster: &mut ViewCluster,
+        shell: &Shell,
     ) {
-        self.display = Display::of(settings, cluster);
+        let previous = self.display;
+        self.display = Display::of(settings, &shell.cluster, shell.colors);
         self.layout.set_active_style(settings.style);
         self.layout.apply_frame_style(&mut self.scene);
         self.display.apply(&mut self.scene);
         let geometry_changed = settings.grid != before.grid
             || settings.grid_step_mm != before.grid_step_mm
-            || settings.all_edges != before.all_edges;
+            || settings.all_edges != before.all_edges
+            || self.display.colors != previous.colors;
         if geometry_changed && let Err(error) = self.upload_scene() {
             self.last_error = Some(error);
         }
@@ -429,8 +436,20 @@ impl Document {
     ///
     /// The shell calls this once per frame for the active tab: the display switches belong to the
     /// window, the geometry to the tab, and a scene that did not move costs nothing.
-    pub(crate) fn sync_scene(&mut self, viewport: &ViewportSettings, cluster: &ViewCluster) -> Result<(), String> {
-        self.display = Display::of(viewport, cluster);
+    pub(crate) fn sync_scene(
+        &mut self,
+        viewport: &ViewportSettings,
+        cluster: &ViewCluster,
+        colors: SceneColors,
+    ) -> Result<(), String> {
+        let previous = self.display;
+        self.display = Display::of(viewport, cluster, colors);
+        if self.display.colors != previous.colors {
+            // A theme switch touches only the frame's own colours, so the uploaded frame is repainted
+            // without evaluating a single node: the document revision does not move (X8).
+            self.display.apply(&mut self.scene);
+            return self.upload_scene();
+        }
         self.refresh()
     }
 
@@ -1906,6 +1925,32 @@ mod tests {
             )
             .expect("light");
         Fixture { project, rig, camera, light }
+    }
+
+    #[test]
+    fn a_theme_switch_repaints_the_frame_without_touching_the_document() {
+        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let mut cache = EvaluationCache::new();
+        let mut kernel = TruckKernel::new();
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
+        let revision = session.project().revision();
+        let settings = ViewportSettings::default();
+        let cluster = ViewCluster::default();
+        let mut dark = evaluated.frame.clone();
+        let mut light = evaluated.frame;
+        Display::of(&settings, &cluster, SceneColors::DARK).apply(&mut dark);
+        Display::of(&settings, &cluster, SceneColors::LIGHT).apply(&mut light);
+
+        assert_eq!(dark.background, SceneColors::DARK.background);
+        assert_eq!(light.background, SceneColors::LIGHT.background, "the viewport clears to the light chrome");
+        assert_eq!(light.grid.minor_color, SceneColors::LIGHT.grid.minor_color, "the floor grid follows the variant");
+        assert_eq!(light.line_ink, SceneColors::LIGHT.line_ink, "the unlit chains follow it too");
+        assert!(light.polylines().iter().all(|line| line.color.is_none()), "a drawn path takes the frame ink");
+        let materials =
+            |frame: &SceneFrame| frame.drawables().iter().map(|drawable| drawable.color).collect::<Vec<_>>();
+        assert_eq!(materials(&light), materials(&dark), "the furniture keeps its material colours");
+        assert_eq!(dark.grid.visible, light.grid.visible, "the viewport's grid switch is not the theme's");
+        assert_eq!(session.project().revision(), revision, "a variant is view state, never an edit");
     }
 
     #[test]

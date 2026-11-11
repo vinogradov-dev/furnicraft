@@ -458,7 +458,8 @@ impl ViewportRenderer {
         }
 
         let grid = line_list(device, "FurniCraft grid vertices", grid_vertices(&frame.grid))?;
-        let polylines = line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines())?)?;
+        let polylines =
+            line_list(device, "FurniCraft path vertices", polyline_vertices(frame.polylines(), frame.line_ink)?)?;
         let (edge_vertices, edge_slices) = edge_geometry(frame.drawables(), frame.all_edges, frame.background);
         let edges = line_list(device, "FurniCraft edge vertices", edge_vertices)?;
         let (shadow_vertices, shadow_indices) = shadow_geometry(frame.shadows())?;
@@ -804,7 +805,8 @@ mod tests {
     #[test]
     fn a_polyline_becomes_one_line_list_segment_per_pair() {
         let transform = DMat4::from_translation(DVec3::new(100.0, 20.0, 5.0));
-        let vertices = polyline_vertices(&[line_chain(transform)]).expect("valid polyline");
+        let vertices =
+            polyline_vertices(&[line_chain(transform)], SceneFrame::default().line_ink).expect("valid polyline");
 
         assert_eq!(vertices.len(), 4, "two segments, two vertices each");
         assert_eq!(vertices[0].position, [100.0, 20.0, 5.0]);
@@ -818,11 +820,17 @@ mod tests {
     fn a_polyline_needs_two_finite_points() {
         let id = Id::new(1).expect("id");
         let empty = Polyline::new(id, Arc::from(Vec::<DVec3>::new()), DMat4::IDENTITY, [1.0; 4]);
-        assert_eq!(polyline_vertices(&[empty]), Err(RenderError::EmptyPolyline { index: 0 }));
+        assert_eq!(
+            polyline_vertices(&[empty], SceneFrame::default().line_ink),
+            Err(RenderError::EmptyPolyline { index: 0 })
+        );
 
         let bad_point =
             Polyline::new(id, Arc::from(vec![DVec3::ZERO, DVec3::new(f64::NAN, 0.0, 0.0)]), DMat4::IDENTITY, [1.0; 4]);
-        assert_eq!(polyline_vertices(&[bad_point]), Err(RenderError::InvalidPolyline { index: 0 }));
+        assert_eq!(
+            polyline_vertices(&[bad_point], SceneFrame::default().line_ink),
+            Err(RenderError::InvalidPolyline { index: 0 })
+        );
 
         let bad_transform = Polyline::new(
             id,
@@ -830,7 +838,24 @@ mod tests {
             DMat4::from_translation(DVec3::new(f64::NAN, 0.0, 0.0)),
             [1.0; 4],
         );
-        assert_eq!(polyline_vertices(&[bad_transform]), Err(RenderError::InvalidPolyline { index: 0 }));
+        assert_eq!(
+            polyline_vertices(&[bad_transform], SceneFrame::default().line_ink),
+            Err(RenderError::InvalidPolyline { index: 0 })
+        );
+    }
+
+    #[test]
+    fn a_polyline_without_a_colour_draws_in_the_frame_ink() {
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X]);
+        let id = Id::new(1).expect("id");
+        let chain = Polyline::in_ink(id, points, DMat4::IDENTITY);
+
+        let mut frame = SceneFrame::default();
+        frame.push_polyline(chain);
+        frame.apply_colors(furnicraft_scene::SceneColors::LIGHT);
+        let vertices = polyline_vertices(frame.polylines(), frame.line_ink).expect("valid polyline");
+        assert_eq!(vertices[0].color, furnicraft_scene::SceneColors::LIGHT.line_ink);
+        assert_ne!(vertices[0].color, furnicraft_scene::SceneColors::DARK.line_ink, "the ink followed the theme");
     }
 
     #[test]

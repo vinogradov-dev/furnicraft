@@ -125,18 +125,72 @@ pub struct Grid {
     pub axis_y_color: [f32; 4],
 }
 
+impl Grid {
+    /// The floor grid of the dark variant: light lines on the dark viewport.
+    pub const DARK: Self = Self {
+        visible: true,
+        spacing_mm: 100.0,
+        extent_mm: 5000.0,
+        major_every: 5,
+        minor_color: [0.28, 0.30, 0.34, 1.0],
+        major_color: [0.42, 0.45, 0.50, 1.0],
+        axis_x_color: [0.72, 0.28, 0.28, 1.0],
+        axis_y_color: [0.28, 0.62, 0.34, 1.0],
+    };
+
+    /// The floor grid of the light variant: dark lines on the paper viewport.
+    ///
+    /// The greys are the mirror of [`Self::DARK`], so the same line reads at the same strength on
+    /// either background; the axes keep their hue and lose brightness, which is what makes them
+    /// readable on paper.
+    pub const LIGHT: Self = Self {
+        visible: true,
+        spacing_mm: 100.0,
+        extent_mm: 5000.0,
+        major_every: 5,
+        minor_color: [0.66, 0.68, 0.72, 1.0],
+        major_color: [0.50, 0.53, 0.58, 1.0],
+        axis_x_color: [0.70, 0.26, 0.26, 1.0],
+        axis_y_color: [0.20, 0.52, 0.28, 1.0],
+    };
+}
+
 impl Default for Grid {
     fn default() -> Self {
-        Self {
-            visible: true,
-            spacing_mm: 100.0,
-            extent_mm: 5000.0,
-            major_every: 5,
-            minor_color: [0.28, 0.30, 0.34, 1.0],
-            major_color: [0.42, 0.45, 0.50, 1.0],
-            axis_x_color: [0.72, 0.28, 0.28, 1.0],
-            axis_y_color: [0.28, 0.62, 0.34, 1.0],
-        }
+        Self::DARK
+    }
+}
+
+/// The viewport's own colours: what the active theme variant paints the frame with.
+///
+/// These are the frame's non-material colours — the clear colour, the floor grid and the ink of an
+/// unlit line that leaves its colour to the frame (see [`Polyline::in_ink`]). A variant never
+/// touches a drawable's material colour, so the furniture keeps its own colours in both themes.
+/// The renderer derives the edge ink from [`SceneColors::background`], so a light workspace draws
+/// dark form edges without a second switch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneColors {
+    /// The clear colour, in gamma space.
+    pub background: [f32; 4],
+    /// The grid ink; its switch, spacing and size stay the viewport's own display state.
+    pub grid: Grid,
+    /// The colour of an unlit line that names no colour of its own, in gamma space.
+    pub line_ink: [f32; 4],
+}
+
+impl SceneColors {
+    /// The dark variant the editor has drawn with since U38.
+    pub const DARK: Self =
+        Self { background: [0.10, 0.11, 0.13, 1.0], grid: Grid::DARK, line_ink: [0.95, 0.72, 0.20, 1.0] };
+
+    /// The light variant: the same scene on paper instead of slate.
+    pub const LIGHT: Self =
+        Self { background: [0.87, 0.88, 0.90, 1.0], grid: Grid::LIGHT, line_ink: [0.70, 0.44, 0.03, 1.0] };
+}
+
+impl Default for SceneColors {
+    fn default() -> Self {
+        Self::DARK
     }
 }
 
@@ -329,14 +383,30 @@ pub struct Polyline {
     pub points: Arc<[DVec3]>,
     /// Rigid local-to-world transform.
     pub world_transform: DMat4,
-    /// Gamma-space RGB and opacity.
-    pub color: [f32; 4],
+    /// Gamma-space RGB and opacity, or `None` for the frame's own line ink.
+    ///
+    /// [`Polyline::in_ink`] leaves the colour to [`SceneFrame::line_ink`], so a line that carries
+    /// no colour of its own follows the active theme variant without a rebuild.
+    pub color: Option<[f32; 4]>,
 }
 
 impl Polyline {
     /// Creates a polyline from a document id, local points, a rigid world transform and a colour.
     pub fn new(id: Id, points: Arc<[DVec3]>, world_transform: DMat4, color: [f32; 4]) -> Self {
-        Self { id, points, world_transform, color }
+        Self { id, points, world_transform, color: Some(color) }
+    }
+
+    /// Creates a polyline that the frame paints in its own ink.
+    ///
+    /// The chain has no colour of its own, so the renderer draws it with [`SceneFrame::line_ink`]
+    /// and a theme switch repaints it without touching the frame's geometry.
+    pub fn in_ink(id: Id, points: Arc<[DVec3]>, world_transform: DMat4) -> Self {
+        Self { id, points, world_transform, color: None }
+    }
+
+    /// The colour this chain draws with: its own, or the frame's line ink.
+    pub fn drawn_color(&self, line_ink: [f32; 4]) -> [f32; 4] {
+        self.color.unwrap_or(line_ink)
     }
 }
 
@@ -361,6 +431,8 @@ pub struct SceneFrame {
     pub lighting: Lighting,
     /// The clear colour, in gamma space.
     pub background: [f32; 4],
+    /// The ink of a line chain that names no colour of its own, in gamma space.
+    pub line_ink: [f32; 4],
     /// Shaded meshes in world space.
     pub drawables: Vec<Drawable>,
     /// Unlit line chains in world space.
@@ -369,15 +441,17 @@ pub struct SceneFrame {
 
 impl Default for SceneFrame {
     fn default() -> Self {
+        let colors = SceneColors::DARK;
         Self {
             camera: Camera::default(),
             shading: ShadingStyle::default(),
             all_edges: false,
-            grid: Grid::default(),
+            grid: colors.grid,
             contact_shadows: ContactShadows::default(),
             shadows: Vec::new(),
             lighting: Lighting::default(),
-            background: [0.10, 0.11, 0.13, 1.0],
+            background: colors.background,
+            line_ink: colors.line_ink,
             drawables: Vec::new(),
             polylines: Vec::new(),
         }
@@ -385,6 +459,21 @@ impl Default for SceneFrame {
 }
 
 impl SceneFrame {
+    /// Paints the frame's non-material colours from `colors`, leaving every material colour alone.
+    ///
+    /// The background, the grid inks and the line ink are display state, so this is how a theme
+    /// variant reaches a frame that is already built: no geometry is evaluated, no document
+    /// revision moves and the furniture keeps its own colours. The grid's switch, spacing, size
+    /// and major count stay with the viewport, so a variant change never turns a hidden grid on.
+    pub fn apply_colors(&mut self, colors: SceneColors) {
+        self.background = colors.background;
+        self.grid.minor_color = colors.grid.minor_color;
+        self.grid.major_color = colors.grid.major_color;
+        self.grid.axis_x_color = colors.grid.axis_x_color;
+        self.grid.axis_y_color = colors.grid.axis_y_color;
+        self.line_ink = colors.line_ink;
+    }
+
     /// Adds a drawable to the frame.
     pub fn push(&mut self, drawable: Drawable) {
         self.drawables.push(drawable);
@@ -465,7 +554,7 @@ impl SceneFrame {
         }
         for polyline in &mut frame.polylines {
             if selected.contains(&polyline.id) {
-                polyline.color = SELECTION_LINE_COLOR;
+                polyline.color = Some(SELECTION_LINE_COLOR);
             }
         }
         frame
@@ -579,6 +668,11 @@ mod tests {
 
     fn assert_close(actual: DVec3, expected: DVec3) {
         assert!((actual - expected).length() < 1.0e-9, "actual {actual:?}, expected {expected:?}");
+    }
+
+    /// The relative luminance of a gamma-space colour: enough to tell paper from slate.
+    fn luminance(color: [f32; 4]) -> f32 {
+        0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
     }
 
     #[test]
@@ -1176,10 +1270,65 @@ mod tests {
         frame.push_polyline(line_chain(other));
 
         let highlighted = frame.with_selection_highlight(&[selected]);
-        assert_eq!(highlighted.polylines()[0].color, SELECTION_LINE_COLOR);
-        assert_ne!(SELECTION_LINE_COLOR, frame.polylines()[0].color, "picking the colour must be visible");
+        assert_eq!(highlighted.polylines()[0].color, Some(SELECTION_LINE_COLOR));
+        assert_ne!(Some(SELECTION_LINE_COLOR), frame.polylines()[0].color, "picking the colour must be visible");
         assert_eq!(highlighted.polylines()[1].color, frame.polylines()[1].color);
-        assert_eq!(frame.polylines()[0].color, [0.5, 0.5, 0.5, 1.0], "the base frame keeps its colour");
+        assert_eq!(frame.polylines()[0].color, Some([0.5, 0.5, 0.5, 1.0]), "the base frame keeps its colour");
+    }
+
+    #[test]
+    fn a_light_frame_carries_the_light_background_and_grid() {
+        let id = Id::new(7).expect("id");
+        let mut frame = SceneFrame::default();
+        frame.push(Drawable::new(id, quad_mesh(), DMat4::IDENTITY, [0.62, 0.42, 0.22, 1.0]));
+        assert_eq!(frame.background, SceneColors::DARK.background, "the default frame is the dark variant");
+
+        frame.apply_colors(SceneColors::LIGHT);
+        assert_eq!(frame.background, SceneColors::LIGHT.background);
+        assert_eq!(frame.grid.minor_color, Grid::LIGHT.minor_color);
+        assert_eq!(frame.grid.major_color, Grid::LIGHT.major_color);
+        assert_eq!(frame.grid.axis_x_color, Grid::LIGHT.axis_x_color);
+        assert_eq!(frame.grid.axis_y_color, Grid::LIGHT.axis_y_color);
+        assert_eq!(frame.line_ink, SceneColors::LIGHT.line_ink);
+        assert!(luminance(frame.background) > 0.5, "the light workspace clears to a light colour");
+        assert!(luminance(frame.grid.major_color) < luminance(frame.background), "the grid reads on paper");
+        assert_eq!(frame.drawables()[0].color, [0.62, 0.42, 0.22, 1.0], "a material colour never follows a theme");
+
+        frame.apply_colors(SceneColors::DARK);
+        assert_eq!(frame.background, SceneColors::DARK.background, "switching back restores the dark values");
+        assert_eq!(frame.grid, Grid::DARK);
+        assert_eq!(frame.line_ink, SceneColors::DARK.line_ink);
+    }
+
+    #[test]
+    fn a_theme_switch_keeps_the_viewports_grid_switches() {
+        let mut frame = SceneFrame::default();
+        frame.grid.visible = false;
+        frame.grid.spacing_mm = 25.0;
+        frame.grid.major_every = 2;
+
+        frame.apply_colors(SceneColors::LIGHT);
+        assert!(!frame.grid.visible, "a variant never turns a hidden grid on");
+        assert_eq!(frame.grid.spacing_mm, 25.0);
+        assert_eq!(frame.grid.major_every, 2);
+    }
+
+    #[test]
+    fn a_line_without_a_colour_draws_in_the_frame_ink() {
+        let id = Id::new(7).expect("id");
+        let points: Arc<[DVec3]> = Arc::from(vec![DVec3::ZERO, DVec3::X]);
+        let inked = Polyline::in_ink(id, Arc::clone(&points), DMat4::IDENTITY);
+        let painted = Polyline::new(id, points, DMat4::IDENTITY, [1.0, 0.0, 0.0, 1.0]);
+
+        let mut frame = SceneFrame::default();
+        frame.push_polyline(inked);
+        frame.push_polyline(painted);
+        assert_eq!(frame.polylines()[0].drawn_color(frame.line_ink), SceneColors::DARK.line_ink);
+        assert_eq!(frame.polylines()[1].drawn_color(frame.line_ink), [1.0, 0.0, 0.0, 1.0]);
+
+        frame.apply_colors(SceneColors::LIGHT);
+        assert_eq!(frame.polylines()[0].drawn_color(frame.line_ink), SceneColors::LIGHT.line_ink);
+        assert_eq!(frame.polylines()[1].drawn_color(frame.line_ink), [1.0, 0.0, 0.0, 1.0], "an own colour stays put");
     }
 
     fn quad_mesh() -> Arc<MeshData> {
