@@ -19,7 +19,7 @@
 
 use furnicraft_scene::ShadingStyle;
 
-use crate::{COLOR_FORMAT, DEPTH_FORMAT, MeshVertex};
+use crate::{COLOR_FORMAT, DEPTH_FORMAT, geometry::MeshVertex};
 
 const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];

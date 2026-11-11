@@ -21,7 +21,8 @@
 use furnicraft_geom::DVec3;
 use wgpu::util::DeviceExt as _;
 
-use crate::{MeshVertex, RenderError};
+use crate::RenderError;
+use crate::geometry::MeshVertex;
 
 /// One drawable's uploaded triangles and the values the draw calls need.
 pub(crate) struct GpuMesh {
