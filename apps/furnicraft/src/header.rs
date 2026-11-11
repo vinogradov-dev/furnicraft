@@ -28,6 +28,15 @@ use crate::theme;
 /// for the next tab, and the full name stays in the tooltip.
 const TAB_TITLE_WIDTH: f32 = 150.0;
 
+/// How much of the accent the active tab's fill carries, from 0 to 1.
+///
+/// Enough to separate it from the header surface at a glance, not so much that the file name stops
+/// reading as text: the accent also marks the bottom edge at full strength.
+const ACTIVE_TAB_TINT: f32 = 0.28;
+
+/// The height of the accent bar under the active tab, in points.
+const ACTIVE_TAB_BAR: f32 = 2.0;
+
 /// What the header asks the shell to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeaderAction {
@@ -165,50 +174,75 @@ enum TabClick {
 
 /// One open file: its name, the unsaved marker, its close button and its pressed state.
 ///
-/// The tab draws pressed when it is the active document. Returns what the click asked for; a click
-/// on the body activates the scene, and the cross wins over the body it sits on.
+/// The active tab is filled with the accent and underlined by an accent bar, because the header
+/// surface and the tab surface were too close to tell apart at a glance. The cross always closes and
+/// the body always activates: the whole tab is one click target, so the answer comes from where the
+/// pointer was, not from which of the two overlapping widgets egui handed the click to.
 fn tab_view(ui: &mut Ui, tab: &TabView) -> Option<TabClick> {
-    let mut click = None;
+    let mut close_rect = None;
+    let mut close_clicked = false;
     let frame = egui::Frame::new()
-        .fill(if tab.active { theme::panel(ui) } else { egui::Color32::TRANSPARENT })
+        .fill(if tab.active { active_tab_fill(ui) } else { egui::Color32::TRANSPARENT })
         .inner_margin(egui::Margin::symmetric(10, 3))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS));
     let inner = frame.show(ui, |ui| {
         ui.horizontal(|ui| {
-            // The scene in front of the user carries the full text colour, the others step back: the
-            // fill alone is too close to the header surface to read at a glance.
+            // The scene in front of the user carries the full text colour, the others step back.
             let colour = if tab.active { theme::text(ui) } else { theme::text_dim(ui) };
             // The title takes the width its name needs, capped so a long path-free name cannot push
             // its neighbour out of the row; the full name stays in the tooltip.
-            let title = ui
-                .scope(|ui| {
-                    ui.set_max_width(TAB_TITLE_WIDTH);
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&tab.title).size(12.0).color(colour))
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                    )
-                })
-                .inner;
-            title.clone().on_hover_text(&tab.title);
-            if title.clicked() {
-                click = Some(TabClick::Activate);
-            }
+            ui.scope(|ui| {
+                ui.set_max_width(TAB_TITLE_WIDTH);
+                ui.add(egui::Label::new(egui::RichText::new(&tab.title).size(12.0).color(colour)).truncate())
+                    .on_hover_text(&tab.title);
+            });
             if tab.dirty {
                 ui.label(egui::RichText::new("●").size(9.0).color(theme::warn(ui))).on_hover_text("Unsaved changes");
             }
-            if icons::icon_button_at(ui, icons::window::CLOSE, 11.0, "Close the tab", true, false).clicked() {
-                click = Some(TabClick::Close);
-            }
+            let close = icons::icon_button_at(ui, icons::window::CLOSE, 11.0, "Close the tab", true, false);
+            close_clicked = close.clicked();
+            close_rect = Some(close.rect);
         });
     });
+    let rect = inner.response.rect;
+    if tab.active {
+        // A bar on the bottom edge, its corners rounded like the tab's, so the mark follows the
+        // shape instead of boxing it: one accent line says which scene the workspace shows.
+        let radius = theme::RADIUS;
+        let bar =
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - ACTIVE_TAB_BAR), rect.right_bottom());
+        ui.painter().rect_filled(bar, egui::CornerRadius { nw: 0, ne: 0, sw: radius, se: radius }, theme::accent(ui));
+    }
     // The padding around the body is part of the tab too: a click on it activates the scene instead
     // of doing nothing, which is what a tab strip is expected to do.
-    let hit = ui.interact(inner.response.rect, ui.scope_id().with(("tab", tab.id)), egui::Sense::click());
-    if hit.clicked() && click.is_none() {
-        click = Some(TabClick::Activate);
+    let hit = ui.interact(rect, ui.scope_id().with(("tab", tab.id)), egui::Sense::click());
+    if !hit.clicked() && !close_clicked {
+        return None;
     }
-    click
+    let pointer = hit.interact_pointer_pos().or_else(|| ui.input(|input| input.pointer.interact_pos()));
+    tab_click(close_rect, pointer)
+}
+
+/// What a click on a tab asked for: the cross closes it, anything else activates it.
+///
+/// The rule is a function of the pointer rather than of the widget responses, because the tab body
+/// and its cross overlap: whichever of the two egui gives the click to, the answer must be the same.
+fn tab_click(close: Option<egui::Rect>, pointer: Option<egui::Pos2>) -> Option<TabClick> {
+    match pointer {
+        Some(pointer) if close.is_some_and(|close| close.contains(pointer)) => Some(TabClick::Close),
+        Some(_) => Some(TabClick::Activate),
+        None => None,
+    }
+}
+
+/// The fill of the active tab: the tab surface pulled towards the accent.
+///
+/// A mix rather than a translucent overlay, so the result is one opaque colour that reads the same
+/// on the dark and the light theme and never lets the header surface show through.
+fn active_tab_fill(ui: &Ui) -> egui::Color32 {
+    let base = egui::Rgba::from(theme::panel(ui));
+    let accent = egui::Rgba::from(theme::accent(ui));
+    egui::Color32::from(base * (1.0 - ACTIVE_TAB_TINT) + accent * ACTIVE_TAB_TINT)
 }
 
 /// The header's icon button: a drawn icon, or its label if the asset is still empty.
@@ -258,6 +292,19 @@ mod tests {
             Shape::Vec(shapes) => {
                 for shape in shapes {
                     walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every filled rectangle the header drew, by colour.
+    fn fills(shape: &Shape, out: &mut Vec<egui::Color32>) {
+        match shape {
+            Shape::Rect(rect) => out.push(rect.fill),
+            Shape::Vec(shapes) => {
+                for shape in shapes {
+                    fills(shape, out);
                 }
             }
             _ => {}
@@ -318,5 +365,51 @@ mod tests {
             show(ui, &state, |_ui| {});
         });
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_cross_closes_the_tab_and_the_body_activates_it() {
+        // The body and the cross overlap, so the answer is read from the pointer: a click that
+        // landed on the cross used to activate the tab it was meant to close (X32).
+        let close = egui::Rect::from_min_size(egui::pos2(104.0, 4.0), egui::vec2(12.0, 12.0));
+        assert_eq!(
+            tab_click(Some(close), Some(egui::pos2(110.0, 10.0))),
+            Some(TabClick::Close),
+            "a click on the cross closes the scene"
+        );
+        assert_eq!(
+            tab_click(Some(close), Some(egui::pos2(40.0, 10.0))),
+            Some(TabClick::Activate),
+            "a click on the name shows the scene"
+        );
+        assert_eq!(
+            tab_click(Some(close), Some(egui::pos2(8.0, 19.0))),
+            Some(TabClick::Activate),
+            "the padding belongs to the tab body"
+        );
+        assert_eq!(tab_click(Some(close), None), None, "a click with no position asks for nothing");
+    }
+
+    #[test]
+    fn the_active_tab_carries_the_accent_bar() {
+        // The tab surface and the header surface are close enough that the fill alone did not read:
+        // the scene in front of the user is marked by an accent bar under its name (X32).
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let accent = ctx.style_of(egui::Theme::Dark).visuals.hyperlink_color;
+        let state = state(vec![tab(0, "cabinet.fcs", false, true), tab(1, "shelf.fcs", false, false)], false);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, &state, |_ui| {});
+        });
+        let mut drawn = Vec::new();
+        for clipped in &output.shapes {
+            fills(&clipped.shape, &mut drawn);
+        }
+        output.drop_without_applying_deltas();
+        assert_eq!(
+            drawn.iter().filter(|fill| **fill == accent).count(),
+            1,
+            "exactly the active tab draws the accent, and it draws it solid: {drawn:?}"
+        );
     }
 }
