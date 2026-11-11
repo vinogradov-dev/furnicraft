@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X8 state=idle base=929b780 updated=2026-11-11
+STATE: milestone=M7 phase=A task=X33 state=doing base=929b780 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-X8 is next: the scene stays dark in the light theme, so a theme change has to repaint the frame
-background, the floor grid and the non-material lines and leave the furniture's own material colours
-alone.
+X33 is next: a drag on the UI scale makes the window jump and loses the scale
 
 ## Index
 
