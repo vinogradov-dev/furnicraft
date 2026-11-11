@@ -22,7 +22,7 @@ use crate::{FurniCraftApp, TransformMode};
 struct StatusInfo {
     error: Option<String>,
     /// Why the workspace defaults were used instead of the saved settings, if they were.
-    notice: Option<String>,
+    notice: Option<crate::settings_store::Notice>,
     mode: TransformMode,
     contour: Option<(usize, bool, bool)>,
     drawing: Option<(DrawTool, usize, bool, bool)>,
@@ -79,7 +79,7 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
     } else if let Some(notice) = &info.notice {
         // A workspace that fell back to its defaults is a fact, not a failure: it uses the quiet
         // text colour and keeps the rest of the bar usable.
-        hint(ui, notice);
+        hint(ui, &notice.text(lang));
         theme::divider(ui);
     }
     // A locked selection refuses the gizmo and the destructive commands, so the bar says which node
@@ -237,7 +237,7 @@ impl FurniCraftApp {
     /// navigation gesture — are applied here rather than in the document.
     pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {
         let notice = self.settings_notice.clone();
-        let info = self.tabs.active().status_info(notice.as_deref(), self.shell.mode, self.shell.cluster.navigation);
+        let info = self.tabs.active().status_info(notice.as_ref(), self.shell.mode, self.shell.cluster.navigation);
         let mut out = StatusOut::default();
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.set_height(theme::STATUS_HEIGHT);
@@ -263,10 +263,15 @@ impl Document {
     ///
     /// The mode and the armed navigation gesture are the window's, so they are handed in instead of
     /// read here; everything else belongs to the scene the tab holds.
-    fn status_info(&self, notice: Option<&str>, mode: TransformMode, navigation: Option<NavigationMode>) -> StatusInfo {
+    fn status_info(
+        &self,
+        notice: Option<&crate::settings_store::Notice>,
+        mode: TransformMode,
+        navigation: Option<NavigationMode>,
+    ) -> StatusInfo {
         StatusInfo {
             error: self.last_error.clone(),
-            notice: notice.map(str::to_owned),
+            notice: notice.cloned(),
             mode,
             contour: self
                 .editor

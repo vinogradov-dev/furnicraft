@@ -65,6 +65,22 @@ messages! {
     PathLabel = ["Path", "Путь"],
     NearbyScenes = ["Nearby scenes", "Сцены рядом"],
     EnterFilePath = ["Enter a file path.", "Введите путь к файлу."],
+    NoticeNoSettingsLocation = [
+        "No workspace settings location; using defaults.",
+        "Нет расположения настроек рабочей области; используются значения по умолчанию."
+    ],
+    NoticeNoSavedSettings = [
+        "No saved workspace settings yet; using the defaults.",
+        "Сохранённых настроек ещё нет; используются значения по умолчанию."
+    ],
+    NoticeReadFailed = [
+        "Could not read the workspace settings ({}); using defaults.",
+        "Не удалось прочитать настройки рабочей области ({}); используются значения по умолчанию."
+    ],
+    NoticeUnusable = [
+        "Could not use the workspace settings ({}); using defaults.",
+        "Не удалось применить настройки рабочей области ({}); используются значения по умолчанию."
+    ],
 
     // ── Status bar ──────────────────────────────────────────────────────────
     LockedStatus = ["Locked · {}", "Заблокировано · {}"],

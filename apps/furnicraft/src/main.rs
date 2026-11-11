@@ -172,7 +172,7 @@ struct FurniCraftApp {
     /// The command palette and its last-used order; session state, never document data.
     palette: Palette,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
-    settings_notice: Option<String>,
+    settings_notice: Option<crate::settings_store::Notice>,
     /// The tab or the window whose unsaved changes are waiting for the close question.
     pending_close: Option<CloseQuestion>,
     /// Whether the frame should close the window: the context that sends the command is only at
