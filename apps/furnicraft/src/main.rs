@@ -425,6 +425,24 @@ impl FurniCraftApp {
     /// document draws it because the fold is the document's; the band it occupies is the window's.
     fn ribbon(&mut self, ui: &mut egui::Ui, design: egui::Rect) {
         self.tabs.active_mut().show_ribbon(ui, design, &mut self.shell, &self.settings);
+        self.sync_ribbon_fold();
+    }
+
+    /// Remembers the ribbon's fold as a workspace setting and hands it to every open scene.
+    ///
+    /// The fold is chrome for the whole window rather than a property of one tab, so a tab that folds
+    /// the ribbon folds it everywhere, and the next launch opens the way this one was left. The write
+    /// happens on the one frame the fold changes, not per frame (U68).
+    fn sync_ribbon_fold(&mut self) {
+        let open = self.tabs.active().ribbon_open();
+        if open == self.settings.ribbon.open {
+            return;
+        }
+        self.settings.ribbon.open = open;
+        for (_, document) in self.tabs.iter_mut() {
+            document.set_ribbon_open(open);
+        }
+        self.persist_settings();
     }
 
     /// The scene tree, as a folding window.

@@ -89,73 +89,38 @@ pub const HEADER_TEXT_WIDTH: f32 = 52.0;
 
 /// The height of a ribbon group's tool row, in points.
 ///
-/// Tall enough for the reference's proportion: the icon, the gap under it and the caption form one
-/// block of about 43 pt, which leaves about 6 pt of air above and below in a 56 pt row. A shorter row
-/// pushed the caption against the bottom edge of its cell.
-pub const RIBBON_ROW_HEIGHT: f32 = 56.0;
+/// One icon cell: a [`RIBBON_ICON_POINT_SIZE`] glyph with the air it needs around it. The row carries
+/// the glyph only — the tools are named by their hints and by U67's list, and the group's caption
+/// sits in the band under the row — so it is short enough for the ribbon to float over the scene
+/// without taking a usable strip of it (U68, `plan/notes/U71.md`).
+pub const RIBBON_ROW_HEIGHT: f32 = 30.0;
 
-/// The narrowest a ribbon cell may be, in points.
+/// The width of one ribbon cell, in points.
 ///
-/// The cell is the same for every tool of a row and grows with the window between this floor and
-/// [`RIBBON_BUTTON_MAX_WIDTH`], because a caption must never size its own button (ADR 0067). The
-/// floor is set by the longest caption the ribbon can draw: the Russian `Прямоугольник` measures
-/// 91 pt at [`crate::icons::RIBBON_CAPTION_POINT_SIZE`], and the longest U49 caption measures 98,
-/// so the cell padding brings the floor to 106, rounded up to 108.
-pub const RIBBON_BUTTON_MIN_WIDTH: f32 = 108.0;
-
-/// The widest a ribbon cell may be, in points.
-///
-/// Past this a row of tools stops reading as a route through the tools and starts reading as a row of
-/// wide plates; the owner's reference at full screen has a step of about 105 pt.
-pub const RIBBON_BUTTON_MAX_WIDTH: f32 = 112.0;
-
-/// The pitch of one ribbon row: the width one tool cell takes.
-///
-/// Every cell of a ribbon is the same width, taken from one measurement of the window and the widest
-/// tab and clamped to [`RIBBON_BUTTON_MIN_WIDTH`]..[`RIBBON_BUTTON_MAX_WIDTH`]. The owner's two
-/// observations are both rules here: a caption never sizes its own button, and a maximised window
-/// still grows the cells — but only up to a maximum, past which the row would read as plates.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RibbonMetrics {
-    /// The width of one tool cell, in points.
-    pub cell: f32,
-}
-
-impl RibbonMetrics {
-    /// Measures the cells of a ribbon being drawn into `ui` on a tab of `columns` tools.
-    ///
-    /// `columns` is the widest tab's count rather than the active tab's, so the cells do not jump when
-    /// the user switches tab; the ribbon's own margins and the hairlines between groups come off the
-    /// available width first. A window so narrow that the share falls under the floor gives the floor,
-    /// and the body scrolls instead of clipping a group.
-    pub fn measure(ui: &egui::Ui, columns: usize) -> Self {
-        let columns = columns.max(1) as f32;
-        let gaps = (columns - 1.0) * (1.0 + 2.0 * STEP);
-        let inner = (ui.available_width() - gaps - 2.0 * RIBBON_BUTTON_PADDING).max(0.0);
-        Self { cell: (inner / columns).clamp(RIBBON_BUTTON_MIN_WIDTH, RIBBON_BUTTON_MAX_WIDTH) }
-    }
-}
-
-/// The horizontal padding inside a ribbon cell, in points.
-pub const RIBBON_BUTTON_PADDING: f32 = STEP;
-
-/// The gap between a ribbon button's icon and its caption, in points.
-///
-/// The reference has more air here than a spacing step: the caption sits clearly under the glyph
-/// rather than touching it, which is what makes a two-line caption still read as one label.
-pub const RIBBON_CAPTION_GAP: f32 = 6.0;
+/// Every tool of every group takes the same cell, so a row is one pitch and a tool never sizes itself
+/// from its name (ADR 0067, revised by ADR 0091): 34 points hold the 22-point glyph with six points of
+/// air on each side. A numeric field takes two cells, because a number has to be readable while it is
+/// being typed.
+pub const RIBBON_CELL_WIDTH: f32 = 34.0;
 
 /// The narrowest a ribbon tab may be, so a short name does not become a stamp.
 pub const RIBBON_TAB_MIN_WIDTH: f32 = 64.0;
 
 /// The height of the ribbon's tab row, in points.
-pub const RIBBON_TAB_HEIGHT: f32 = 32.0;
+pub const RIBBON_TAB_HEIGHT: f32 = 28.0;
 
 /// The height of the caption band under a ribbon group, in points.
 ///
-/// The band carries the 10.5 pt group name in capitals and is type-derived, so it is the one row
-/// height that is not a multiple of [`STEP`]: a caption is a line of small type, not a control.
-pub const RIBBON_CAPTION_HEIGHT: f32 = 14.0;
+/// The band is the darker strip under the tool row and carries the 9.5 pt group name in capitals; it
+/// is type-derived, so it is not a multiple of [`STEP`]: a caption is a line of small type, not a
+/// control.
+pub const RIBBON_CAPTION_HEIGHT: f32 = 12.0;
+
+/// The thickness of the hairline that closes a chrome surface, in points.
+///
+/// The ribbon draws one under its tab row and one under its caption band, which is what makes
+/// [`super::toolbars::height`] the 29 and 72 points of the approved metrics.
+pub const RIBBON_RULE: f32 = 1.0;
 
 /// The height of the viewport bar at the bottom of the window, in points.
 pub const STATUS_HEIGHT: f32 = 28.0;
@@ -497,6 +462,21 @@ pub fn text_dim(ui: &egui::Ui) -> Color32 {
 /// The raised surface fill of the active theme.
 pub fn surface(ui: &egui::Ui) -> Color32 {
     ui.visuals().window_fill
+}
+
+/// The ribbon's own shade: the surface lifted one step toward the panel.
+///
+/// The approved presets give the ribbon a value of its own, and it sits one step above `surface` in
+/// both variants (lighter on paper and on graphite). Deriving it keeps `Palette` at the tokens `egui`
+/// can carry; a fifth colour would need a second store for no visible gain
+/// (`plan/notes/U71.md`, `plan/notes/U68.md`).
+pub fn ribbon(ui: &egui::Ui) -> Color32 {
+    mix(surface(ui), panel(ui), 40)
+}
+
+/// The darker strip a ribbon group is captioned in: the list and the band under the tool row.
+pub fn band(ui: &egui::Ui) -> Color32 {
+    chrome(ui)
 }
 
 /// The panel fill of the active theme.
@@ -987,24 +967,26 @@ mod tests {
         assert_eq!(HEADER_CONTROL_HEIGHT % STEP, 2.0, "a header control is half a step off, so it centres");
         const { assert!(HEADER_CONTROL_HEIGHT < HEADER_HEIGHT) };
         assert_eq!(STATUS_HEIGHT % STEP, 0.0, "the viewport bar sits on the grid");
-        assert_eq!(RIBBON_ROW_HEIGHT % STEP, 0.0, "the ribbon tool row sits on the grid");
-        assert_eq!(RIBBON_TAB_HEIGHT % STEP, 0.0, "the ribbon tab row sits on the grid");
-        assert_eq!(RIBBON_CAPTION_HEIGHT, 14.0, "the caption band is one line of small type");
-        // The ribbon's cell band: the floor is the longest Russian caption plus the cell's padding,
-        // and the ceiling is what a maximised window may reach, so the two cannot cross.
-        const CELL_FLOOR: f32 = RIBBON_BUTTON_MIN_WIDTH;
-        const CELL_CEILING: f32 = RIBBON_BUTTON_MAX_WIDTH;
-        const { assert!(CELL_FLOOR < CELL_CEILING) };
-        const { assert!(CELL_FLOOR >= 2.0 * RIBBON_BUTTON_PADDING + 98.0) };
-        // The chrome rows keep one order: the header is busiest, the bar is the quietest, and the
-        // ribbon is the tallest because it carries an icon over a caption.
+        assert_eq!(RIBBON_CAPTION_HEIGHT, 12.0, "the caption band is one line of small type");
+        // The ribbon's metrics are the owner's approved ones (`plan/notes/U71.md`): a 28 pt tab row,
+        // a 30 pt tool row, a 12 pt caption band, a 34 x 30 cell and a 22 pt glyph inside it.
+        assert_eq!(RIBBON_CELL_WIDTH % STEP, 2.0, "a cell is a step and a half wide, so the glyph breathes");
+        const { assert!(RIBBON_CELL_WIDTH > crate::icons::RIBBON_ICON_POINT_SIZE) };
+        const { assert!(RIBBON_CELL_WIDTH - crate::icons::RIBBON_ICON_POINT_SIZE >= 2.0 * STEP) };
+        const { assert!(RIBBON_ROW_HEIGHT > crate::icons::RIBBON_ICON_POINT_SIZE) };
+        // The chrome rows keep one order: the header is the tallest because it carries the window
+        // buttons, the tool row follows because it carries a glyph, then the tab row, the status bar
+        // and the caption band.
+        const { assert!(HEADER_HEIGHT > RIBBON_ROW_HEIGHT) };
         const { assert!(HEADER_HEIGHT > STATUS_HEIGHT) };
-        const { assert!(HEADER_HEIGHT < RIBBON_ROW_HEIGHT) };
+        const { assert!(RIBBON_ROW_HEIGHT > RIBBON_TAB_HEIGHT) };
+        const { assert!(RIBBON_TAB_HEIGHT > RIBBON_CAPTION_HEIGHT) };
         const { assert!(RIBBON_CAPTION_HEIGHT < RIBBON_TAB_HEIGHT) };
         const { assert!(RIBBON_TAB_HEIGHT < RIBBON_ROW_HEIGHT) };
-        // A body is a tool row plus the caption band under it; the owner's reference is about 90 pt
-        // once the two margins are added.
-        const RIBBON_BODY: f32 = RIBBON_ROW_HEIGHT + RIBBON_CAPTION_HEIGHT;
-        const { assert!(RIBBON_BODY >= 60.0 && RIBBON_BODY <= 72.0) };
+        // The two states of the approved ribbon: the tab row and its rule, plus the body when open.
+        const FOLDED: f32 = RIBBON_TAB_HEIGHT + RIBBON_RULE;
+        const OPEN: f32 = FOLDED + RIBBON_ROW_HEIGHT + RIBBON_CAPTION_HEIGHT + RIBBON_RULE;
+        assert_eq!(FOLDED, 29.0, "the folded ribbon is its tab row and one hairline");
+        assert_eq!(OPEN, 72.0, "the open ribbon is 72 points tall");
     }
 }

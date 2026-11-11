@@ -1,6 +1,6 @@
 # 0067. A ribbon tool is one measured cell, and a caption never sizes it
 
-- Status: Accepted
+- Status: Superseded by 0091
 - Date: 2026-11-07
 
 ## Context

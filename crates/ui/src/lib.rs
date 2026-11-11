@@ -52,7 +52,7 @@ pub use editor::Editor;
 pub use furnicraft_text::{Counted, Lang, Message};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
-pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
+pub use toolbars::{RibbonView, RibbonViewAction};
 pub use view_flags::ViewFlags;
 
 /// The `egui` memory key the shell publishes the workspace language under.
