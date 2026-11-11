@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
-  visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
-  and both are session state keyed by node `Id` — no command, no schema, no undo entry (ADR 0065).
-  Hiding a row hides its whole subtree from the viewport: the scene builder skips a hidden node, and
-  picking skips it too, so a hidden node cannot be selected by a click while the tree can still show
-  it as hidden and restore it. Locking a row keeps it drawn and selectable but refuses a gizmo drag
-  and a destructive command, and the status bar says which node is locked; the refusal happens in the
-  shell before a dispatch, because it is a guard on a gesture rather than a document rule. Both sets
-  are pruned like the open containers, so a deleted or undone node never leaves a stale flag, and an
-  *Isolate* / *Show all* pair in the tree's context menu covers the common case of focusing on one
-  assembly. Tests: hiding a container hides its children from the frame but not from the tree;
-  picking returns nothing for a hidden node; a locked node still selects and still resists a drag and
-  a delete; a deleted node's flags are dropped and an undone deletion starts visible and unlocked;
-  the flags survive a selection change and die with the session.
-  Session notes: `Editor` owns `open: HashSet<Id>` in `crates/ui/src/lib.rs` and prunes it in
-  `retain_open`, which is the shape to copy for `hidden` and `locked`; `scene_build::evaluate` in
-  `apps/furnicraft/src/scene_build.rs` is where a skipped subtree disappears, and
-  `mesh_pick::pick_scene` plus `scene_gizmo::pick` are where picking must agree. `icons::actions`
-  already declares `VISIBLE`, `HIDDEN`, `LOCK`, `UNLOCK` as zero-byte placeholders, so the buttons
-  draw their text label until U46 fills them.
-  `files: crates/ui/src/scene_tree.rs, apps/furnicraft/src/scene_build.rs`
-
 - `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
   viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
   is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
@@ -194,6 +172,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
+  visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
+  and both are session state keyed by node `Id` — no command, no schema, no undo entry (ADR 0065).
+  Hiding a row hides its whole subtree from the viewport: the scene builder skips a hidden node, and
+  picking skips it too, so a hidden node cannot be selected by a click while the tree can still show
+  it as hidden and restore it. Locking a row keeps it drawn and selectable but refuses a gizmo drag
+  and a destructive command, and the status bar says which node is locked; the refusal happens in the
+  shell before a dispatch, because it is a guard on a gesture rather than a document rule. Both sets
+  are pruned like the open containers, so a deleted or undone node never leaves a stale flag, and an
+  *Isolate* / *Show all* pair in the tree's context menu covers the common case of focusing on one
+  assembly. Tests: hiding a container hides its children from the frame but not from the tree;
+  picking returns nothing for a hidden node; a locked node still selects and still resists a drag and
+  a delete; a deleted node's flags are dropped and an undone deletion starts visible and unlocked;
+  the flags survive a selection change and die with the session.
+  Session notes: `Editor` owns `open: HashSet<Id>` in `crates/ui/src/lib.rs` and prunes it in
+  `retain_open`, which is the shape to copy for `hidden` and `locked`; `scene_build::evaluate` in
+  `apps/furnicraft/src/scene_build.rs` is where a skipped subtree disappears, and
+  `mesh_pick::pick_scene` plus `scene_gizmo::pick` are where picking must agree. `icons::actions`
+  already declares `VISIBLE`, `HIDDEN`, `LOCK`, `UNLOCK` as zero-byte placeholders, so the buttons
+  draw their text label until U46 fills them.
+  `files: crates/ui/src/scene_tree.rs, apps/furnicraft/src/scene_build.rs` — `6b5c502`
 
 - `[x]` **X32** the cross on a tab does not close it, the File menu offers no Close and no Exit, the active tab is barely distinguishable and the new-scene button is a text label
   Done: the cross closes its tab (a click on the cross is a close, a click on the body

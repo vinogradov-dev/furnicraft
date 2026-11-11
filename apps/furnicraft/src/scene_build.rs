@@ -21,6 +21,7 @@ use furnicraft_scene::{
     Camera, ContactShadow, DEFAULT_FOV_Y, Drawable, Lighting, MAX_POINT_LIGHTS, PointLight, Polyline, Projection,
     SceneFrame,
 };
+use furnicraft_ui::ViewFlags;
 use furnicraft_units::Length;
 
 /// Colours for the sample panels, in linear RGB.
@@ -212,11 +213,12 @@ pub fn evaluate(
     cache: &mut EvaluationCache,
     kernel: &mut TruckKernel,
     session: &Session,
+    flags: &ViewFlags,
 ) -> Result<EvaluatedScene, String> {
     let project = session.project();
     let root_world = Placement::compose(Placement::IDENTITY, project.root().placement()).map_err(describe)?;
     cache.start();
-    let mut evaluation = Evaluation::new(cache, kernel, session);
+    let mut evaluation = Evaluation::new(cache, kernel, session, flags);
     let mut scene_bounds = Bounds::empty();
     for child in project.root().children() {
         let subtree = match evaluation.collect(std::slice::from_ref(child), root_world) {
@@ -241,7 +243,7 @@ pub fn evaluate(
     let Evaluation { cache, frame, .. } = evaluation;
     cache.finish();
     let mut frame = frame;
-    if let Some(lighting) = authored_lighting(project) {
+    if let Some(lighting) = authored_lighting_with(project, &[], flags) {
         frame.lighting = lighting;
     }
     Ok(EvaluatedScene { frame, bounds: scene_bounds })
@@ -254,8 +256,9 @@ pub fn evaluate(
 /// the intensity. Every point light contributes its world position and power, up to
 /// [`MAX_POINT_LIGHTS`] in tree order. A scene with no authored light keeps the built-in key light;
 /// so does a scene with point lights but no sun, because the point lights only add to the key.
+#[cfg(test)]
 pub fn authored_lighting(project: &Project) -> Option<Lighting> {
-    authored_lighting_with(project, &[])
+    authored_lighting_with(project, &[], &ViewFlags::default())
 }
 
 /// The frame lighting with previewed world placements for moved light nodes.
@@ -264,7 +267,7 @@ pub fn authored_lighting(project: &Project) -> Option<Lighting> {
 /// placements the drawables use. An entry in `previewed` wins over the document's world placement;
 /// it lets a sun direction and a point light position follow the pointer before the command that
 /// commits the drag.
-pub fn authored_lighting_with(project: &Project, previewed: &[(Id, Placement)]) -> Option<Lighting> {
+pub fn authored_lighting_with(project: &Project, previewed: &[(Id, Placement)], flags: &ViewFlags) -> Option<Lighting> {
     let mut lighting = Lighting::default();
     let mut any_authored = false;
     let mut key_set = false;
@@ -272,6 +275,10 @@ pub fn authored_lighting_with(project: &Project, previewed: &[(Id, Placement)]) 
         let Some(light) = project.light(id) else {
             continue;
         };
+        // A hidden light contributes nothing, exactly like a hidden body: the tree says it is off.
+        if flags.hides(project, id) {
+            continue;
+        }
         let Some(world) = previewed_world(project, id, previewed) else {
             continue;
         };
@@ -337,19 +344,39 @@ struct Evaluation<'a> {
     cache: &'a mut EvaluationCache,
     kernel: &'a mut TruckKernel,
     session: &'a Session,
+    /// The session's hidden set: a hidden node and its whole subtree are skipped.
+    flags: &'a ViewFlags,
     options: TessOptions,
     frame: SceneFrame,
     palette_index: usize,
 }
 
 impl<'a> Evaluation<'a> {
-    fn new(cache: &'a mut EvaluationCache, kernel: &'a mut TruckKernel, session: &'a Session) -> Self {
-        Self { cache, kernel, session, options: TessOptions::default(), frame: SceneFrame::default(), palette_index: 0 }
+    fn new(
+        cache: &'a mut EvaluationCache,
+        kernel: &'a mut TruckKernel,
+        session: &'a Session,
+        flags: &'a ViewFlags,
+    ) -> Self {
+        Self {
+            cache,
+            kernel,
+            session,
+            flags,
+            options: TessOptions::default(),
+            frame: SceneFrame::default(),
+            palette_index: 0,
+        }
     }
 
     fn collect(&mut self, children: &[Node], parent: Placement) -> Result<SubtreeBounds, String> {
         let mut bounds = SubtreeBounds::empty();
         for child in children {
+            // A hidden node takes its whole subtree with it, so the frame, its bounds, its
+            // contact shadows and picking all forget the branch in one place.
+            if self.flags.is_hidden(child.id()) {
+                continue;
+            }
             let child_bounds = match child {
                 Node::Container(container) => {
                     let world = Placement::compose(parent, container.placement()).map_err(describe)?;
@@ -701,13 +728,14 @@ mod tests {
             )
             .expect("point light");
 
-        let base = authored_lighting_with(&project, &[]).expect("authored lighting");
+        let base = authored_lighting_with(&project, &[], &ViewFlags::default()).expect("authored lighting");
         assert_eq!(base.points[0].position, DVec3::new(100.0, 0.0, 0.0));
 
         // A quarter turn about X aims the sun's emission along -Y, so the light comes from +Y.
         let turned = Placement::new(DVec3::ZERO, DQuat::from_rotation_x(-FRAC_PI_2)).expect("placement");
         let moved = Placement::new(DVec3::new(300.0, 40.0, 0.0), DQuat::IDENTITY).expect("placement");
-        let previewed = authored_lighting_with(&project, &[(sun, turned), (point, moved)]).expect("previewed lighting");
+        let previewed = authored_lighting_with(&project, &[(sun, turned), (point, moved)], &ViewFlags::default())
+            .expect("previewed lighting");
         assert!(previewed.key_direction.dot(DVec3::Y) > 1.0 - 1.0e-9, "the previewed sun lights from +Y");
         assert_eq!(previewed.points[0].position, DVec3::new(300.0, 40.0, 0.0));
         assert_eq!(previewed.points[0].power, 1000.0, "a preview does not change the power");
@@ -782,7 +810,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty());
         assert!(evaluated.frame.shadows().is_empty(), "nothing on the floor casts a shadow");
         assert_eq!(evaluated.bounds.center(), None);
@@ -831,7 +859,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         assert_eq!(evaluated.frame.polylines().len(), 1);
         assert!(evaluated.frame.shadows().is_empty(), "a flat chain is not a body and stands on nothing");
     }
@@ -841,7 +869,7 @@ mod tests {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.shadows().len(), 1, "only the floor-standing group casts one");
         let shadow = evaluated.frame.shadows().first().expect("shadow");
@@ -887,7 +915,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         assert_eq!(evaluated.frame.drawables().len(), 1, "the derived mesh is one drawable");
         let drawable = &evaluated.frame.drawables()[0];
         assert_eq!(drawable.id, object, "the drawable carries the object id, so picking and selection work");
@@ -909,7 +937,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         assert_eq!(evaluated.frame.drawables().len(), 1, "a primitive is one drawable");
         let drawable = &evaluated.frame.drawables()[0];
         assert_eq!(drawable.id, object, "the drawable carries the object id");
@@ -941,7 +969,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         assert!(evaluated.frame.drawables().is_empty(), "a path has no solid");
         assert_eq!(evaluated.frame.polylines().len(), 1);
         let line = &evaluated.frame.polylines()[0];
@@ -978,7 +1006,7 @@ mod tests {
 
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
         let line = &evaluated.frame.polylines()[0];
         assert_eq!(line.points.len(), 4, "the closing segment keeps its end point");
         assert_eq!(line.points[3], line.points[0], "the chain closes on its first point");
@@ -989,7 +1017,7 @@ mod tests {
         let session = sample_session().expect("sample session");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session).expect("evaluated scene");
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("evaluated scene");
 
         assert_eq!(evaluated.frame.drawables().len(), 6);
         let mut groups = std::collections::HashMap::new();
@@ -1029,13 +1057,13 @@ mod tests {
         let renamed = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let first = evaluate(&mut cache, &mut kernel, &session).expect("first scene");
+        let first = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("first scene");
 
         // A rename bumps the document revision but none of the derived geometry depends on it.
         let params = serde_json::json!({ "node": renamed, "name": "Shelf" });
         session.dispatch("node.rename", &params).expect("rename");
 
-        let second = evaluate(&mut cache, &mut kernel, &session).expect("second scene");
+        let second = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("second scene");
         assert!(session.project().revision() > Revision::ZERO);
         assert_eq!(first.frame.drawables().len(), second.frame.drawables().len());
         for (before, after) in first.frame.drawables().iter().zip(second.frame.drawables()) {
@@ -1051,13 +1079,13 @@ mod tests {
         let id = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let before = evaluate(&mut cache, &mut kernel, &session).expect("before move");
+        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("before move");
 
         let placement = Placement::new(DVec3::new(400.0, -500.0, 0.0), DQuat::IDENTITY).expect("placement");
         let params = serde_json::json!({ "node": id, "placement": placement });
         session.dispatch("node.placement.set", &params).expect("move");
 
-        let after = evaluate(&mut cache, &mut kernel, &session).expect("after move");
+        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("after move");
         assert!(
             Arc::ptr_eq(mesh_of(&before, id), mesh_of(&after, id)),
             "a placement is not a derivation input, so the mesh is reused"
@@ -1073,7 +1101,7 @@ mod tests {
         let untouched = panel_id(&session, "Back panel");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let before = evaluate(&mut cache, &mut kernel, &session).expect("before resize");
+        let before = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("before resize");
 
         let size = furnicraft_model::PanelNominalSize::new(
             millimetres(650).expect("length"),
@@ -1083,7 +1111,7 @@ mod tests {
         let params = serde_json::json!({ "panel": resized, "nominal_size": size });
         session.dispatch("panel.resize", &params).expect("resize");
 
-        let after = evaluate(&mut cache, &mut kernel, &session).expect("after resize");
+        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("after resize");
         assert!(!Arc::ptr_eq(mesh_of(&before, resized), mesh_of(&after, resized)), "the resized panel rebuilds");
         assert!(
             Arc::ptr_eq(mesh_of(&before, untouched), mesh_of(&after, untouched)),
@@ -1097,13 +1125,114 @@ mod tests {
         let id = panel_id(&session, "Loose shelf");
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        evaluate(&mut cache, &mut kernel, &session).expect("scene");
+        evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("scene");
         assert!(cache.cached(id).is_some());
 
         let params = serde_json::json!({ "node": id });
         session.dispatch("node.delete", &params).expect("delete");
-        let after = evaluate(&mut cache, &mut kernel, &session).expect("scene after delete");
+        let after = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("scene after delete");
         assert!(cache.cached(id).is_none(), "a deleted node releases its mesh");
         assert!(after.frame.drawables().iter().all(|drawable| drawable.id != id));
+    }
+
+    /// The frame forgets a hidden branch in one place: drawables, bounds, contact shadows and the
+    /// light rig all read the same set, and the mesh cache keeps the entries for when it is shown
+    /// again.
+    #[test]
+    fn a_hidden_container_takes_its_whole_subtree_out_of_the_frame() {
+        let session = Session::with_catalog(sample_project(), sample_catalog().expect("catalogue"));
+        let shelf = Id::new(2).expect("shelf id");
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+
+        let visible = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("the sample scene");
+        assert!(visible.frame.drawables().iter().any(|drawable| drawable.id == front));
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(drawer, true);
+        let hidden = evaluate(&mut cache, &mut kernel, &session, &flags).expect("the scene without the drawer");
+        let drawn: Vec<Id> = hidden.frame.drawables().iter().map(|drawable| drawable.id).collect();
+        assert!(!drawn.contains(&front), "a child of a hidden container is not drawn");
+        assert!(drawn.contains(&shelf), "a sibling branch stays drawn");
+        assert!(hidden.frame.shadows().iter().all(|shadow| shadow.id != drawer), "and casts no shadow");
+        assert!(
+            cache.cached(front).is_none(),
+            "a hidden branch releases its mesh like any node the pass did not touch; showing it rebuilds it"
+        );
+    }
+
+    #[test]
+    fn a_hidden_light_does_not_light_the_frame() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let group = project.add_component(root, "Lamp", Placement::IDENTITY).expect("container");
+        let sun = project.add_light(group, "Sun", Placement::IDENTITY, LightKind::Sun, [1.0; 3], 1.0).expect("sun");
+        assert!(authored_lighting(&project).is_some(), "an authored sun is the key light");
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(sun, true);
+        assert_eq!(authored_lighting_with(&project, &[], &flags), None, "a hidden sun is switched off");
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(group, true);
+        assert_eq!(
+            authored_lighting_with(&project, &[], &flags),
+            None,
+            "a light under a hidden container is switched off with it"
+        );
+    }
+
+    /// A hidden node is gone from the frame, so the ray never finds it: picking reads the same
+    /// scene the viewport draws and needs no second hidden set.
+    #[test]
+    fn a_hidden_node_cannot_be_picked() {
+        let size =
+            PanelNominalSize::new(millimetres(700).expect("length"), millimetres(500).expect("width")).expect("size");
+        let hidden_panel = Panel::new(
+            id(2).expect("id"),
+            "Hidden",
+            size,
+            None,
+            millimetres(18).expect("thickness"),
+            Placement::IDENTITY,
+        )
+        .expect("panel");
+        let aside = Placement::new(DVec3::new(3000.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
+        let shown_panel =
+            Panel::new(id(3).expect("id"), "Shown", size, None, millimetres(18).expect("thickness"), aside)
+                .expect("panel");
+        let root = Container::new(
+            id(1).expect("id"),
+            "Root",
+            Placement::IDENTITY,
+            vec![hidden_panel.into(), shown_panel.into()],
+        );
+        let project = Project::new(root).expect("project");
+        let session = Session::with_catalog(project, sample_catalog().expect("catalogue"));
+        let camera = furnicraft_scene::Camera::new(DVec3::ZERO, 1500.0).expect("camera");
+        let viewport = eframe::egui::Rect::from_min_size(eframe::egui::Pos2::ZERO, eframe::egui::vec2(800.0, 600.0));
+        let pointer = viewport.center();
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+
+        let mut visible = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("the scene");
+        visible.frame.camera = camera;
+        assert_eq!(
+            crate::mesh_pick::pick_scene(viewport, &visible.frame, pointer),
+            Some(id(2).expect("id")),
+            "the camera looks at the panel at the origin"
+        );
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(id(2).expect("id"), true);
+        let mut hidden = evaluate(&mut cache, &mut kernel, &session, &flags).expect("the scene without the panel");
+        hidden.frame.camera = camera;
+        assert_eq!(
+            crate::mesh_pick::pick_scene(viewport, &hidden.frame, pointer),
+            None,
+            "a hidden panel is not in the frame, so the ray finds nothing"
+        );
     }
 }

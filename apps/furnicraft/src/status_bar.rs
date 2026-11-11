@@ -36,6 +36,8 @@ struct StatusInfo {
     navigation: Option<NavigationMode>,
     /// The container armed to receive the next creation, if any.
     creation_parent: Option<String>,
+    /// The selected node whose lock is refusing edits, if one is selected.
+    locked: Option<String>,
 }
 
 /// What the bar asked for, after the row has drawn.
@@ -76,6 +78,12 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         // A workspace that fell back to its defaults is a fact, not a failure: it uses the quiet
         // text colour and keeps the rest of the bar usable.
         hint(ui, notice);
+        theme::divider(ui);
+    }
+    // A locked selection refuses the gizmo and the destructive commands, so the bar says which node
+    // is locked: the missing handles read as a refusal and the way out is named (ADR 0065).
+    if let Some(name) = &info.locked {
+        ui.label(format!("Locked · {name}")).on_hover_text("Unlock it in the scene tree to move or delete it");
         theme::divider(ui);
     }
     // The arm is sticky across creations, so the bar names the container the next node lands in;
@@ -256,6 +264,11 @@ impl Document {
             }),
             navigation,
             creation_parent: self.editor.creation_parent_name(self.session.project()).map(str::to_owned),
+            locked: self
+                .editor
+                .locked_selection(self.session.project())
+                .and_then(|id| self.session.project().node(id))
+                .map(|node| node.name().to_owned()),
         }
     }
 
@@ -320,6 +333,7 @@ mod tests {
             mesh: None,
             navigation: None,
             creation_parent: None,
+            locked: None,
         }
     }
 
@@ -385,6 +399,21 @@ mod tests {
             texts.iter().any(|text| text.contains("arc")),
             "the bar names the pending arc's segment kind: {texts:?}"
         );
+    }
+
+    #[test]
+    fn the_status_bar_names_the_locked_node() {
+        // The gizmo and the destructive commands refuse a locked node, so the bar says which one is
+        // locked and what unlocks it (ADR 0065).
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let info = StatusInfo { locked: Some("Drawer".to_owned()), ..idle_status() };
+        let output = ctx.run_ui(Default::default(), |ui| {
+            status_state_ui(ui, &info);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text.contains("Locked · Drawer")), "the locked node names itself: {texts:?}");
     }
 
     #[test]

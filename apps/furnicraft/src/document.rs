@@ -32,7 +32,7 @@ use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
 use furnicraft_ui::settings::{Settings, ViewportSettings};
-use furnicraft_ui::{ContourGrip, DrawDraft, Editor, GripValue, MeshElement, PaletteContext};
+use furnicraft_ui::{ContourGrip, DrawDraft, Editor, GripValue, MeshElement, PaletteContext, ViewFlags};
 use furnicraft_units::Length;
 
 use crate::contour_gizmo;
@@ -141,6 +141,9 @@ pub(crate) struct Document {
     /// now instead of the ones it had when the file opened.
     scene_bounds: Bounds,
     scene_revision: Revision,
+    /// The editor's visibility revision the frame was built from. A hidden subtree changes the
+    /// frame without touching the document revision, so the rebuild watches both (ADR 0065).
+    scene_visibility: u64,
     renderer: ViewportRenderer,
     /// The wgpu handles this tab draws with, cloned from the window's render state.
     render_state: egui_wgpu::RenderState,
@@ -189,7 +192,7 @@ impl Document {
     ) -> Result<Self, String> {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session)?;
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default())?;
         let node_count = session.project().query(&NodeQuery::any()).len();
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
@@ -209,6 +212,7 @@ impl Document {
 
         Ok(Self {
             scene_revision: session.project().revision(),
+            scene_visibility: 0,
             session,
             editor: Editor::new(),
             kernel,
@@ -315,8 +319,15 @@ impl Document {
     }
 
     /// Draws the scene tree's body.
+    ///
+    /// The tree writes the session's hidden and locked flags directly, so the frame it just changed
+    /// is rebuilt here instead of waiting a frame: `refresh` returns at once when neither the
+    /// document nor the visible set moved.
     pub(crate) fn show_scene_tree(&mut self, ui: &mut egui::Ui) {
         self.editor.show_scene_tree(ui, &mut self.session);
+        if let Err(error) = self.refresh() {
+            self.last_error = Some(error);
+        }
     }
 
     /// Draws the inspector's body.
@@ -336,6 +347,11 @@ impl Document {
         if let Err(error) = self.session.redo() {
             self.last_error = Some(error.to_string());
         }
+    }
+
+    /// The refusal a destructive palette command gets while the primary selection is locked.
+    pub(crate) fn locked_command_refusal(&self, id: &str) -> Option<String> {
+        locked_command_refusal(&self.editor, self.session.project(), id)
     }
 
     /// The save the header's button and `Ctrl+S` ask for: the current path, or the path dialog.
@@ -434,11 +450,16 @@ impl Document {
     /// display state are composed into one frame.
     fn refresh(&mut self) -> Result<(), String> {
         let revision = self.session.project().revision();
-        if revision == self.scene_revision {
+        let visibility = self.editor.visibility_revision();
+        if revision == self.scene_revision && visibility == self.scene_visibility {
             return Ok(());
         }
+        // A delete or an undo can take a flag with it; pruning before the rebuild keeps a stale
+        // hidden or locked id out of the frame the user is about to see.
+        self.editor.retain_flags(self.session.project());
+        let visibility = self.editor.visibility_revision();
         self.node_count = self.session.project().query(&NodeQuery::any()).len();
-        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session)?;
+        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags())?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
         self.layout.apply_frame_style(&mut scene);
@@ -446,6 +467,7 @@ impl Document {
         scene.camera = crate::scene_build::scene_camera(self.session.project(), self.layout.active_camera());
         self.scene = scene;
         self.scene_revision = revision;
+        self.scene_visibility = visibility;
         self.upload_scene()
     }
 
@@ -643,6 +665,11 @@ impl Document {
 
     /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
     fn apply_gizmo_commit(&mut self, commit: PlacementCommit) -> Result<(), String> {
+        // Defence in depth: the viewport refuses a locked selection before the drag starts, and the
+        // commit refuses it again, so no other path can move a locked node either.
+        if let Some(name) = locked_change(self.session.project(), &commit, &self.editor) {
+            return Err(format!("{name} is locked. Unlock it in the scene tree to move it."));
+        }
         let request = NodePlacementSetMany {
             placements: commit
                 .changes
@@ -984,17 +1011,25 @@ impl Document {
             project: self.session.project(),
             selection: self.editor.selected_nodes(),
         };
-        let update: Result<Option<PlacementCommit>, String> =
-            if contour_editing || drawing || placing || pulling || navigating || mesh_object.is_some() {
-                Ok(None)
-            } else {
-                match shell.mode {
-                    TransformMode::Move => {
-                        self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget)
-                    }
-                    TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
-                }
-            };
+        // A locked node keeps its transform: the guard is checked before the gizmo is updated, so a
+        // drag never starts and no command is ever dispatched (ADR 0065). The status bar names the
+        // node, so the missing handles read as a refusal instead of a bug.
+        let locked_selection = self.editor.locked_selection(self.session.project());
+        let update: Result<Option<PlacementCommit>, String> = if contour_editing
+            || drawing
+            || placing
+            || pulling
+            || navigating
+            || mesh_object.is_some()
+            || locked_selection.is_some()
+        {
+            Ok(None)
+        } else {
+            match shell.mode {
+                TransformMode::Move => self.translate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+                TransformMode::Rotate => self.rotate_gizmo.update(ui, &response, rect, target, pointer_over_widget),
+            }
+        };
         match update {
             Ok(Some(commit)) => {
                 if let Err(error) = self.apply_gizmo_commit(commit) {
@@ -1170,9 +1205,14 @@ impl Document {
                     }
                 }
                 ui.ctx().request_repaint();
-            } else if let Some(id) =
-                scene_gizmo::pick(self.scene.camera, rect, self.session.project(), pointer, &previewed)
-            {
+            } else if let Some(id) = scene_gizmo::pick(
+                self.scene.camera,
+                rect,
+                self.session.project(),
+                pointer,
+                &previewed,
+                self.editor.flags(),
+            ) {
                 // A camera or light icon has no mesh to ray-pick; it selects the node itself, not the
                 // container above it.
                 self.editor.select_node(Some(id));
@@ -1210,7 +1250,7 @@ impl Document {
         let lighting = if previewed.is_empty() {
             self.scene.lighting.clone()
         } else {
-            crate::scene_build::authored_lighting_with(self.session.project(), &previewed)
+            crate::scene_build::authored_lighting_with(self.session.project(), &previewed, self.editor.flags())
                 .unwrap_or_else(|| self.scene.lighting.clone())
         };
         // One pass per view into the same target: the camera comes from the view, the region from
@@ -1251,6 +1291,7 @@ impl Document {
                 self.session.project(),
                 self.editor.selected_nodes(),
                 &previewed,
+                self.editor.flags(),
             );
             if active {
                 self.paint_mesh_selection(ui, *view_rect);
@@ -1300,9 +1341,10 @@ impl Document {
             if let Some(action) = self.extrude_gizmo.paint(ui, rect, self.scene.camera, self.session.project()) {
                 self.apply_extrude_action(action);
             }
-        } else if navigating {
-            // The navigation gesture owns the viewport; an axis under the pointer would compete
-            // with the camera drag, so the transform gizmo stays hidden until the mode is disarmed.
+        } else if navigating || locked_selection.is_some() {
+            // The navigation gesture owns the viewport, and a locked selection owns nothing: an
+            // axis under the pointer would compete with the camera drag, and a locked node draws no
+            // handles because the drag it would start is refused.
         } else {
             match shell.mode {
                 TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
@@ -1678,6 +1720,43 @@ impl Document {
     }
 }
 
+/// The command ids that remove or restructure a node, and so refuse a locked one.
+///
+/// The palette builds every parameter from the selection, so these are the commands whose target is
+/// a node the user may have locked. The guard runs in the shell, before the dispatch, because a lock
+/// is a guard on a gesture and not a document rule (ADR 0065).
+const DESTRUCTIVE_COMMANDS: [&str; 4] = [
+    furnicraft_engine::node_cmds::NODE_DELETE_ID,
+    furnicraft_engine::node_cmds::NODE_UNGROUP_ID,
+    furnicraft_engine::node_cmds::NODE_COMPONENT_CONVERT_TO_GROUP_ID,
+    furnicraft_engine::node_cmds::NODE_GROUP_ID,
+];
+
+/// The name of a locked node a finished gizmo drag would move, if there is one.
+///
+/// The viewport refuses the drag before it starts; this is the second gate, checked in
+/// [`Document::apply_gizmo_commit`] so no other dispatch path can move a locked node either.
+fn locked_change<'a>(project: &'a Project, commit: &PlacementCommit, editor: &Editor) -> Option<&'a str> {
+    commit
+        .changes
+        .iter()
+        .find(|change| editor.is_locked(change.node))
+        .and_then(|change| project.node(change.node))
+        .map(furnicraft_model::Node::name)
+}
+
+/// The refusal a destructive command gets while the primary selection is locked.
+///
+/// `id` is the stable command id the palette (or a future CLI) would dispatch; anything outside the
+/// destructive set runs untouched.
+fn locked_command_refusal(editor: &Editor, project: &Project, id: &str) -> Option<String> {
+    if !DESTRUCTIVE_COMMANDS.contains(&id) {
+        return None;
+    }
+    let primary = editor.selected_node()?;
+    editor.locked_refusal(project, primary)
+}
+
 /// Whether the viewport owns its view.
 ///
 /// An authored camera stores its placement and projection in the document, so looking through one
@@ -1997,5 +2076,42 @@ mod tests {
         assert_eq!(outlines.len(), 2, "the segment through the viewer is dropped");
         assert_eq!(outlines[0].len(), 2);
         assert_eq!(outlines[1].len(), 2);
+    }
+    /// A drag that started somewhere else and then met a lock is refused at the commit, with the
+    /// node named, so no dispatch path can move a locked node.
+    #[test]
+    fn a_locked_node_refuses_a_gizmo_commit() {
+        let project = sample_project();
+        let shelf = Id::new(2).expect("shelf id");
+        let mut editor = Editor::new();
+        let placement = Placement::IDENTITY;
+        let commit = PlacementCommit { changes: vec![gizmo_math::PlacementChange { node: shelf, placement }] };
+
+        assert_eq!(locked_change(&project, &commit, &editor), None, "an unlocked node moves");
+        editor.set_locked(shelf, true);
+        assert_eq!(locked_change(&project, &commit, &editor), Some("Shelf"), "the refusal names the node");
+    }
+
+    #[test]
+    fn a_locked_primary_selection_refuses_a_destructive_palette_command() {
+        let project = sample_project();
+        let shelf = Id::new(2).expect("shelf id");
+        let mut editor = Editor::new();
+        let delete = furnicraft_engine::node_cmds::NODE_DELETE_ID;
+
+        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "nothing is selected");
+        editor.select_node(Some(shelf));
+        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "an unlocked node deletes");
+        editor.set_locked(shelf, true);
+        let refusal = locked_command_refusal(&editor, &project, delete).expect("a locked node refuses");
+        assert!(refusal.contains("Shelf") && refusal.contains("locked"), "the sentence names it: {refusal}");
+        assert_eq!(
+            locked_command_refusal(&editor, &project, furnicraft_engine::node_cmds::NODE_RENAME_ID),
+            None,
+            "a command that removes nothing runs on a locked node"
+        );
+
+        editor.set_locked(shelf, false);
+        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "unlocking lets it through");
     }
 }

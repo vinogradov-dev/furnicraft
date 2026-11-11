@@ -13,6 +13,7 @@ use egui::{Color32, Pos2, Shape, Stroke, Ui, Vec2};
 use furnicraft_geom::DVec3;
 use furnicraft_model::{Id, LightKind, NodeQuery, Placement, Project, StructuralKind};
 use furnicraft_scene::{Camera, Projection};
+use furnicraft_ui::ViewFlags;
 
 use crate::gizmo_math::{distance_to_segment, screen_point};
 
@@ -90,10 +91,15 @@ pub(crate) fn icons(
     viewport: egui::Rect,
     project: &Project,
     previewed: &[(Id, Placement)],
+    flags: &ViewFlags,
 ) -> Vec<SceneIcon> {
     let mut icons = Vec::new();
     for (kind, structural) in [(IconKind::Camera, StructuralKind::Camera), (IconKind::Light, StructuralKind::Light)] {
         for id in project.query(&NodeQuery::any().with_kind(structural)) {
+            // A hidden camera or light draws no glyph and takes no click, like a hidden body.
+            if flags.hides(project, id) {
+                continue;
+            }
             let Some(world) = previewed_world(project, id, previewed) else {
                 continue;
             };
@@ -287,9 +293,10 @@ pub(crate) fn pick(
     project: &Project,
     pointer: Pos2,
     previewed: &[(Id, Placement)],
+    flags: &ViewFlags,
 ) -> Option<Id> {
     let mut best: Option<(f32, Id)> = None;
-    for icon in icons(camera, viewport, project, previewed) {
+    for icon in icons(camera, viewport, project, previewed, flags) {
         let Some(distance) = hit_distance(&icon, pointer) else {
             continue;
         };
@@ -308,9 +315,10 @@ pub(crate) fn paint(
     project: &Project,
     selection: &[Id],
     previewed: &[(Id, Placement)],
+    flags: &ViewFlags,
 ) {
     let painter = ui.painter().with_clip_rect(viewport);
-    for icon in icons(camera, viewport, project, previewed) {
+    for icon in icons(camera, viewport, project, previewed, flags) {
         let selected = selection.contains(&icon.id);
         let color = match icon.kind {
             IconKind::Camera => CAMERA_COLOR,
@@ -371,7 +379,7 @@ mod tests {
     #[test]
     fn both_kinds_project_to_icons_and_pick_by_screen_distance() {
         let (project, camera_id, light_id) = scene_project();
-        let icons = icons(camera(), viewport(), &project, &[]);
+        let icons = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
         assert_eq!(icons.len(), 2);
         assert_eq!(icons[0].id, camera_id);
         assert_eq!(icons[0].kind, IconKind::Camera);
@@ -380,9 +388,32 @@ mod tests {
         assert!(icons[1].circle.is_some(), "a light shows a circle");
 
         // A click on the icon hits the exact node, not its parent container.
-        assert_eq!(pick(camera(), viewport(), &project, icons[0].position, &[]), Some(camera_id));
-        assert_eq!(pick(camera(), viewport(), &project, icons[1].position, &[]), Some(light_id));
-        assert_eq!(pick(camera(), viewport(), &project, Pos2::new(5.0, 5.0), &[]), None);
+        assert_eq!(
+            pick(camera(), viewport(), &project, icons[0].position, &[], &ViewFlags::default()),
+            Some(camera_id)
+        );
+        assert_eq!(pick(camera(), viewport(), &project, icons[1].position, &[], &ViewFlags::default()), Some(light_id));
+        assert_eq!(pick(camera(), viewport(), &project, Pos2::new(5.0, 5.0), &[], &ViewFlags::default()), None);
+    }
+
+    #[test]
+    fn a_hidden_camera_draws_no_glyph_and_takes_no_click() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let camera_id =
+            project.add_camera(root, "Shot", Placement::IDENTITY, CameraProjection::DEFAULT).expect("camera");
+        let shown = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
+        let icon = shown.iter().find(|icon| icon.id == camera_id).expect("the camera draws");
+        let position = icon.position;
+
+        let mut flags = ViewFlags::default();
+        flags.set_hidden(camera_id, true);
+        assert!(icons(camera(), viewport(), &project, &[], &flags).is_empty(), "a hidden camera draws nothing");
+        assert_eq!(
+            pick(camera(), viewport(), &project, position, &[], &flags),
+            None,
+            "and the glyph a hidden node left behind takes no click"
+        );
     }
 
     #[test]
@@ -399,11 +430,15 @@ mod tests {
             )
             .expect("camera");
 
-        let icons = icons(camera(), viewport(), &project, &[]);
+        let icons = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
         let icon = icons.iter().find(|icon| icon.id == id).expect("camera icon");
         let tip = icon.tip.expect("a camera has an aimed-at base");
         assert!(tip.x < icon.position.x - 5.0, "turning the camera about Y points its frustum to screen left");
-        assert_eq!(pick(camera(), viewport(), &project, tip, &[]), Some(id), "a click on the base picks the camera");
+        assert_eq!(
+            pick(camera(), viewport(), &project, tip, &[], &ViewFlags::default()),
+            Some(id),
+            "a click on the base picks the camera"
+        );
     }
 
     #[test]
@@ -413,7 +448,7 @@ mod tests {
         let placement = Placement::new(DVec3::new(100.0, 0.0, 0.0), DQuat::IDENTITY).expect("placement");
         let id = project.add_camera(root, "Camera", placement, CameraProjection::DEFAULT).expect("camera");
 
-        let icons = icons(camera(), viewport(), &project, &[]);
+        let icons = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
         let icon = icons.iter().find(|icon| icon.id == id).expect("camera icon");
         let origin = screen_point(camera(), viewport(), placement.translation()).expect("origin in front");
         assert!((icon.position - origin).length() < 1.0e-3, "the icon anchor is the node's zero");
@@ -437,7 +472,7 @@ mod tests {
     fn a_previewed_placement_moves_the_icon_before_the_command_lands() {
         let (project, _, light_id) = scene_project();
         let world = project.world_placement(light_id).expect("light world");
-        let before = icons(camera(), viewport(), &project, &[])
+        let before = icons(camera(), viewport(), &project, &[], &ViewFlags::default())
             .into_iter()
             .find(|icon| icon.id == light_id)
             .expect("light icon")
@@ -445,7 +480,7 @@ mod tests {
 
         let delta = DVec3::new(150.0, 0.0, 0.0);
         let moved = Placement::new(world.translation() + delta, world.rotation()).expect("placement");
-        let after = icons(camera(), viewport(), &project, &[(light_id, moved)])
+        let after = icons(camera(), viewport(), &project, &[(light_id, moved)], &ViewFlags::default())
             .into_iter()
             .find(|icon| icon.id == light_id)
             .expect("light icon")
@@ -466,7 +501,7 @@ mod tests {
         let point =
             project.add_light(root, "Fill", Placement::IDENTITY, LightKind::Point, [1.0; 3], 1.0).expect("point light");
 
-        let icons = icons(camera(), viewport(), &project, &[]);
+        let icons = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
         let sun_icon = icons.iter().find(|icon| icon.id == sun).expect("sun icon");
         let point_icon = icons.iter().find(|icon| icon.id == point).expect("point icon");
         let tip = sun_icon.tip.expect("a sun has a direction arrow");
@@ -481,7 +516,7 @@ mod tests {
         project
             .set_node_placement(camera_id, Placement::new(behind, DQuat::IDENTITY).expect("placement"))
             .expect("move the camera");
-        let icons = icons(camera(), viewport(), &project, &[]);
+        let icons = icons(camera(), viewport(), &project, &[], &ViewFlags::default());
         assert!(icons.iter().all(|icon| icon.id != camera_id));
     }
 }

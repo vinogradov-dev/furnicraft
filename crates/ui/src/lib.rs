@@ -42,6 +42,7 @@ mod target;
 pub mod theme;
 pub mod toolbars;
 pub mod ui_scale;
+mod view_flags;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
@@ -50,3 +51,4 @@ pub use editor::Editor;
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
+pub use view_flags::ViewFlags;
