@@ -96,6 +96,29 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **X33** a drag on the UI scale makes the window jump and loses the scale
+  Why: Dragging the UI-scale field makes the window jump between values: with the Settings
+   window open on Appearance, pressing the scale field and moving the pointer slowly to the
+   right scales the interface up, then throws it to 75 %, then up to 200 %, and the scale that
+   is written to settings.json and restored on the next launch is whatever the oscillation
+   ended on (75 % was seen). Measured: the drag is read as a point distance, and a scale change
+   re-lays out every widget, so the same physical pointer position is a different number of
+   points in the next pass — the drag adds its own rescaling as travel. Reproduced in a test
+   that runs the real input pipeline (positions in points converted with the current scale,
+   native density 1 and 2): the percentage ran 100, 101, 104, 105, 90, 87, 154, 171, 75, 200.
+  Shape: The field measures the pointer's own motion, which no screen coordinate can disturb:
+   the raw motion the platform reports when it has one (winit forwards its device motion as
+   Event::MouseMoved), and otherwise the difference between two pointer places, each in the
+   pixels of the scale it was measured at. The drag accumulates from the value the button went
+   down on, including the trip egui counts before it calls a press a drag. The trips are kept
+   so the number, and the percentage the control reports, are the ones the hand made.
+  Done: Tests: a drag in the window's own pipeline climbs without ever falling back, with and
+   without raw motion; the same physical travel on a 2x monitor moves the place-based path the
+   same amount; the field tests still pass with a growing widget. Live: settings.json holding
+   125 opens the window at 125 % with the 125 % preset selected, and a run leaves the file
+   untouched.
+  `files: crates/ui/src/scrub.rs, crates/ui/src/ui_scale.rs` — `7c01b95`
+
 - `[x]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
   field that changes while the pointer is held and moved left or right, with the cursor hidden for
   the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.

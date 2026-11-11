@@ -249,6 +249,107 @@ mod tests {
         assert_eq!(percent, 175, "and names the scale it applied, not the one the window still shows");
     }
 
+    /// The window in points, so a dense monitor holds the same layout in twice the pixels.
+    const WINDOW_POINTS: Vec2 = vec2(1280.0, 840.0);
+
+    /// One frame the way the window hands it over: the integration reports the monitor's native
+    /// density and converts every physical position to points with the scale in force, so a zoom
+    /// change moves the point coordinates under a pointer that has not moved.
+    fn physical_input(_ctx: &egui::Context, native: f32, events: Vec<Event>) -> RawInput {
+        let mut viewports = egui::ViewportIdMap::default();
+        viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo { native_pixels_per_point: Some(native), ..Default::default() },
+        );
+        RawInput {
+            viewports,
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, WINDOW_POINTS)),
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// Drags the control to the right the way the window does, `steps` times by `motion` physical
+    /// pixels, and returns the percentage it showed on every frame.
+    ///
+    /// `native` is the monitor's density, so the same hand travel is `native` times as many pixels;
+    /// `raw` says whether the platform reports the pointer's own motion (`Event::MouseMoved`) or
+    /// only its place.
+    fn window_drag(native: f32, motion: Vec2, raw: bool) -> Vec<u32> {
+        // The control sits where the Settings window puts it, well away from the corner of the
+        // window: that distance is what a position-driven drag multiplies by the scale change.
+        let row = Rect::from_min_size(pos2(700.0, 450.0), vec2(500.0, 160.0));
+        let ctx = egui::Context::default();
+        let mut percent = DEFAULT_PERCENT;
+        let mut seen = Vec::new();
+        let mut draw = |events: Vec<Event>| -> Rect {
+            let mut field = Rect::ZERO;
+            let output = ctx.run_ui(physical_input(&ctx, native, events), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(row), |ui| {
+                    field = show(ui, &mut percent).rect;
+                });
+            });
+            output.drop_without_applying_deltas();
+            seen.push(percent);
+            field
+        };
+        // Every position is converted with the scale in force at that moment, as the window
+        // backend does it, so a zoom change moves the point coordinates.
+        let place = |pointer: Pos2| pointer / ctx.pixels_per_point();
+        let field = draw(vec![]);
+        let mut pointer = field.center() * ctx.pixels_per_point();
+        draw(vec![Event::PointerMoved(place(pointer))]);
+        let button = |pointer: Pos2, pressed: bool| Event::PointerButton {
+            pos: place(pointer),
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        draw(vec![button(pointer, true)]);
+        for _ in 0..10 {
+            pointer += motion;
+            let mut events = vec![Event::PointerMoved(place(pointer))];
+            if raw {
+                events.push(Event::MouseMoved(motion));
+            }
+            draw(events);
+        }
+        // The hand stops, and the window may still be settling under the new scale.
+        for _ in 0..3 {
+            draw(vec![Event::PointerMoved(place(pointer))]);
+        }
+        seen
+    }
+
+    /// Whether the control only ever climbed.
+    fn climbed(seen: &[u32]) -> bool {
+        seen.windows(2).all(|pair| pair[1] >= pair[0])
+    }
+
+    #[test]
+    fn a_drag_in_the_window_climbs_and_stops_with_the_hand() {
+        // Two pixels a frame for ten frames, at half a percent a pixel: ten percent.
+        let seen = window_drag(1.0, vec2(2.0, 0.0), true);
+        assert_eq!(seen.last().copied(), Some(110), "{seen:?}");
+        assert!(climbed(&seen), "the scale never falls back while the hand moves right: {seen:?}");
+    }
+
+    #[test]
+    fn a_platform_that_reports_only_the_pointer_place_climbs_the_same_way() {
+        let seen = window_drag(1.0, vec2(2.0, 0.0), false);
+        assert_eq!(seen.last().copied(), Some(110), "{seen:?}");
+        assert!(climbed(&seen), "a window that rescales under the pointer cannot move the number: {seen:?}");
+    }
+
+    #[test]
+    fn a_platform_without_raw_motion_measures_the_pixels_the_screen_has() {
+        // The same physical travel on a 2x monitor; the two points of hand travel are twice the
+        // pixels, and the place-based path counts pixels.
+        let seen = window_drag(2.0, vec2(2.0, 0.0), false);
+        assert_eq!(seen.last().copied(), Some(110), "{seen:?}");
+        assert!(climbed(&seen), "{seen:?}");
+    }
+
     #[test]
     fn a_typed_scale_outside_the_offered_range_is_clamped() {
         let ctx = egui::Context::default();

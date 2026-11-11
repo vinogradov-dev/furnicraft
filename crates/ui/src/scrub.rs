@@ -1,11 +1,12 @@
 //! A numeric field that scrubs on a horizontal drag.
 //!
 //! The field changes its value while the primary button is held and the pointer moves left or right,
-//! and it reads nothing but the horizontal delta of that drag: where the pointer sits on screen, and
-//! how the widget has grown or shrunk under it, cannot change the value. That is the difference from
-//! egui's slider, which reads the pointer's place over the widget: a value that resizes its own
-//! widget then chases the pointer. The UI scale is the worst case, because changing it re-lays out
-//! every widget on screen, so the control moves under the pointer while the drag runs.
+//! and it measures that movement in the pointer's own travel, never in where it is on screen: a
+//! widget that grows or shrinks under the pointer, and a window that rescales under it, cannot move
+//! the number. That is the difference from egui's slider, which reads the pointer's place over the
+//! widget. The UI scale is the worst case, because changing it re-lays out every widget while the
+//! drag runs, so the same physical pointer position is a different number of points every pass —
+//! a place-based control reads that rescaling as travel and runs away.
 //!
 //! The pointer is hidden for the duration of the drag — the number, not the pointer, is what the
 //! user is steering. A click enters the value as text; the typed number is parsed, clamped to the
@@ -16,6 +17,38 @@ use core::ops::RangeInclusive;
 use egui::emath::Numeric;
 use egui::text::CCursorRange;
 use egui::{Button, CursorIcon, Id, Key, Response, RichText, Sense, TextEdit, Ui, Widget};
+
+/// The drag in flight: the value the button went down on, how far the pointer has travelled since,
+/// and the place the last frame measured from.
+#[derive(Clone, Copy, Debug, Default)]
+struct Drag {
+    /// The value the field held when the button went down.
+    start: f64,
+    /// The pointer's travel since then: physical pixels, or the platform's own motion unit when it
+    /// reports raw motion.
+    travelled: f64,
+    /// Where the pointer was last frame, in physical pixels. Only the platforms that report no raw
+    /// motion need it.
+    place: Option<egui::Pos2>,
+}
+
+impl Drag {
+    /// The drag as its first frame sees it.
+    ///
+    /// egui calls a press a drag only once the pointer has moved a few points, and the trip from the
+    /// button down belongs to the drag even though it arrived as movement: the first frame starts
+    /// where the press was, not at zero. Nothing has rescaled the window between the press and this
+    /// frame, so the trip is one scale's worth of points times that scale.
+    fn from_press(ui: &Ui, value: f64, events_scale: f32) -> Self {
+        let travelled = ui
+            .input(|input| input.pointer.total_drag_delta())
+            .map_or(0.0, |delta| f64::from(delta.x) * f64::from(events_scale));
+        // The place the next frame measures from is where the pointer is now: the trip from the
+        // press is already in `travelled`.
+        let place = ui.input(|input| input.pointer.interact_pos()).map(|pos| pos * events_scale);
+        Self { start: value, travelled, place }
+    }
+}
 
 /// What the user typed, kept between frames while the field holds the focus.
 #[derive(Clone, Debug, Default)]
@@ -40,7 +73,7 @@ pub struct Scrub<'a, N: Numeric> {
 }
 
 impl<'a, N: Numeric> Scrub<'a, N> {
-    /// A field over `value`, changing it by half a step per point of drag.
+    /// A field over `value`, changing it by half a step per pixel of travel.
     pub fn new(value: &'a mut N) -> Self {
         Self {
             value,
@@ -51,7 +84,8 @@ impl<'a, N: Numeric> Scrub<'a, N> {
         }
     }
 
-    /// The change per point of horizontal drag.
+    /// The change per pixel of horizontal travel, so the same hand movement means the same thing at
+    /// any zoom and on any screen.
     pub fn speed(mut self, speed: f64) -> Self {
         self.speed = speed;
         self
@@ -95,6 +129,11 @@ impl<N: Numeric> Widget for Scrub<'_, N> {
 
         let text = number_text(old, decimals);
         let size = ui.spacing().interact_size;
+        // The scale the window backend converted this pass's pointer positions with. A zoom takes
+        // effect at the start of a pass, so that is the scale the pass before this one ended at.
+        let scale_now = ui.ctx().pixels_per_point();
+        let events_scale = ui.data(|data| data.get_temp::<f32>(id.with("events_scale"))).unwrap_or(scale_now);
+        ui.data_mut(|data| data.insert_temp(id.with("events_scale"), scale_now));
 
         let mut response = if ui.memory(|memory| memory.has_focus(id)) {
             let mut typed =
@@ -124,24 +163,24 @@ impl<N: Numeric> Widget for Scrub<'_, N> {
                         .min_size(size),
                 )
                 .on_hover_cursor(CursorIcon::ResizeHorizontal);
-            if response.drag_started() {
-                // The drag is measured from the value it started on, so a widget that resizes under
-                // the pointer cannot move the number.
-                ui.data_mut(|data| data.insert_temp(id, old));
-            }
             if response.dragged() {
                 ui.set_cursor_icon(CursorIcon::None);
-                if let Some(start) = ui.data(|data| data.get_temp::<f64>(id)) {
-                    // The distance from where the button went down, not the distance moved this
-                    // frame: the field may be a different width by now, and the number follows the
-                    // drag, not the field.
-                    let travelled = response.total_drag_delta().unwrap_or_default().x;
-                    let dragged = start + f64::from(travelled) * speed;
-                    write(value, clamped(rounded(dragged, decimals), &range), old);
-                }
+                // The number follows the hand from the value the button went down on, so neither a
+                // field that grows under the pointer nor the window's own rescaling can move it.
+                let drag = if response.drag_started() {
+                    Drag::from_press(ui, old, events_scale)
+                } else {
+                    let mut drag =
+                        ui.data(|data| data.get_temp::<Drag>(id)).unwrap_or(Drag { start: old, ..Drag::default() });
+                    drag.travelled += travel(ui, &mut drag, events_scale);
+                    drag
+                };
+                ui.data_mut(|data| data.insert_temp(id, drag));
+                let dragged = drag.start + drag.travelled * speed;
+                write(value, clamped(rounded(dragged, decimals), &range), old);
             }
             if response.drag_stopped() {
-                ui.data_mut(|data| data.remove::<f64>(id));
+                ui.data_mut(|data| data.remove::<Drag>(id));
             }
             if response.clicked() {
                 ui.data_mut(|data| data.insert_temp(id, Typed { text: text.clone(), value: old }));
@@ -158,6 +197,32 @@ impl<N: Numeric> Widget for Scrub<'_, N> {
         response.widget_info(|| egui::WidgetInfo::drag_value(ui.is_enabled(), value.to_f64()));
         response
     }
+}
+
+/// How far the pointer travelled this frame.
+///
+/// A platform that reports raw motion — `winit` forwards its device motion as `Event::MouseMoved` —
+/// gives movement that has nothing to do with where the pointer is, so nothing on screen can disturb
+/// it, and it is taken as the platform reports it: the unit of that motion is the platform's, but it
+/// is proportional to the hand and free of every screen coordinate.
+///
+/// Without raw motion the only evidence is the pointer's place, which is read as the difference
+/// between two places, each in the pixels of the scale it was measured at, so a frame that rescales
+/// the window contributes nothing. `events_scale` is the scale the window backend converted this
+/// pass's positions with: `egui` applies a zoom change at the start of a pass, so the events of a
+/// pass carry the scale the previous pass ended at.
+fn travel(ui: &Ui, drag: &mut Drag, events_scale: f32) -> f64 {
+    if let Some(motion) = ui.input(|input| input.pointer.motion()) {
+        return f64::from(motion.x);
+    }
+    // Nothing but the pointer's place is left: measure it in pixels, and only as a difference.
+    let Some(position) = ui.input(|input| input.pointer.interact_pos()) else {
+        return 0.0;
+    };
+    let place = position * events_scale;
+    let step = drag.place.map_or(0.0, |last| f64::from(place.x - last.x));
+    drag.place = Some(place);
+    step
 }
 
 /// Applies the text typed before the field lost the focus, if the value is still the one it was
