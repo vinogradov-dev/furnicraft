@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X31** an along-contour drag on a sub-millimetre segment panics: dragging a corner along a
-  segment shorter than twice the clamp margin (2 µm) aborts the editor instead of clamping or
-  refusing. Expectation: the corner stops at the segment's own ends, or the edit is refused with an
-  error the user can read; a furniture project never crashes. Reproduced: a path with a 1 µm first
-  segment and `move_corner_at(PathCorner::End(id 1), point(50, 0), CornerMove::Along(id 1))` panics
-  in `f64::clamp` with `min = 1.0, max = 0.0`. Suspected cause: `Segment::clamp_to_extent` turns the
-  1 µm margin into a parameter fraction by dividing it by the segment's length, so for a segment
-  shorter than 2 µm the lower bound exceeds the upper; the document's `clamp_to_curve` computed the
-  same fraction before S12, so the move inherited the defect unchanged. A 1 µm line is a legal
-  document segment: `ContourSegment::line` refuses only a coincident pair. Tests: a drag along a
-  1 µm line and along a 1 µm arc returns `Err` instead of panicking; a drag along a normal segment
-  still stops one micrometre short of the far end.
-  `files: crates/geom/src/segment.rs, crates/model/src/contour_edit.rs`
-
-## Bugs
-
-## Next
-
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
   later choice of name is one constant and no refactor. The work is measured and scripted in
   `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
@@ -63,10 +45,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
-- `[ ]` **P11** the plan tool cannot take a bug: a session that fixes an entry in `## Bugs` has no verb that moves it into `## Now`, so it edits `plan/BACKLOG.md` by hand, which ADR 0085 forbids. Add `cargo xtask task take <ID> [--at top|end]` (default end): move an open `## Bugs` entry into `## Now` at the chosen place, keeping its text, fields and `files:` hint, in one validated write. Refuse a done task, an unknown id, a task already in `## Now`, and `--at top` while another task is in progress. Into an occupied `## Now` it changes no `STATE`; into an empty one it sets `STATE: task=` to the taken task, rewrites `## Next` and leaves `state=idle`. Tests: a bug moves with every line intact, taking it into an occupied `## Now` leaves `STATE` alone, taking it into an empty one makes it `STATE`, and a done or unknown task is refused.
-  `files: state-contract/src/cli/write.rs, state-contract/src/edit.rs, state-contract/src/cli/mod.rs`
+## Bugs
+
+## Next
 
 ## Done
+
+- `[x]` **P11** the plan tool cannot take a bug: a session that fixes an entry in `## Bugs` has no verb that moves it into `## Now`, so it edits `plan/BACKLOG.md` by hand, which ADR 0085 forbids. Add `cargo xtask task take <ID> [--at top|end]` (default end): move an open `## Bugs` entry into `## Now` at the chosen place, keeping its text, fields and `files:` hint, in one validated write. Refuse a done task, an unknown id, a task already in `## Now`, and `--at top` while another task is in progress. Into an occupied `## Now` it changes no `STATE`; into an empty one it sets `STATE: task=` to the taken task, rewrites `## Next` and leaves `state=idle`. Tests: a bug moves with every line intact, taking it into an occupied `## Now` leaves `STATE` alone, taking it into an empty one makes it `STATE`, and a done or unknown task is refused.
+  `files: state-contract/src/cli/write.rs, state-contract/src/edit.rs, state-contract/src/cli/mod.rs` — `9d63579`
+
+- `[x]` **X31** an along-contour drag on a sub-millimetre segment panics: dragging a corner along a
+  segment shorter than twice the clamp margin (2 µm) aborts the editor instead of clamping or
+  refusing. Expectation: the corner stops at the segment's own ends, or the edit is refused with an
+  error the user can read; a furniture project never crashes. Reproduced: a path with a 1 µm first
+  segment and `move_corner_at(PathCorner::End(id 1), point(50, 0), CornerMove::Along(id 1))` panics
+  in `f64::clamp` with `min = 1.0, max = 0.0`. Suspected cause: `Segment::clamp_to_extent` turns the
+  1 µm margin into a parameter fraction by dividing it by the segment's length, so for a segment
+  shorter than 2 µm the lower bound exceeds the upper; the document's `clamp_to_curve` computed the
+  same fraction before S12, so the move inherited the defect unchanged. A 1 µm line is a legal
+  document segment: `ContourSegment::line` refuses only a coincident pair. Tests: a drag along a
+  1 µm line and along a 1 µm arc returns `Err` instead of panicking; a drag along a normal segment
+  still stops one micrometre short of the far end.
+  `files: crates/geom/src/segment.rs, crates/model/src/contour_edit.rs` — `2e4bf61`
 
 - `[x]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
   arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge

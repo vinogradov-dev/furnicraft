@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X31 state=idle base=8275ae9 updated=2026-11-11
+STATE: milestone=M7 phase=A task=R1 state=idle base=9d63579 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-X31 is next: a corner dragged along a sub-millimetre segment panics in `f64::clamp` because the
-clamp margin becomes a parameter fraction larger than the upper bound; the move must refuse or clamp
-instead of aborting the editor.
+R1 is next: the pre-release rename — one home for the identity, the 13 crates to bare names, the
+four registers that must agree, then the envelope `format` string and the eight goldens;
+`plan/rename.md` holds the measured steps.
 
 ## Index
 
