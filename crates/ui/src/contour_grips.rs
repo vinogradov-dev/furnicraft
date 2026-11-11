@@ -638,6 +638,36 @@ mod tests {
     }
 
     #[test]
+    fn a_shallow_arc_corner_grip_drag_keeps_it_shallow() {
+        let micrometres = Length::from_micrometres;
+        let arc = ContourSegment::arc_through(
+            [micrometres(0), micrometres(0)],
+            [micrometres(50_000), micrometres(500)],
+            [micrometres(100_000), micrometres(0)],
+        )
+        .expect("a shallow arc");
+        let line = ContourSegment::line(arc.end().expect("arc end"), arc.start().expect("arc start"))
+            .expect("the closing line");
+        let ring = Path::new(vec![line, arc], true).expect("a shallow ring");
+        let line_id = ring.entries().first().expect("the line").id();
+        let arc_id = ring.entries().get(1).expect("the arc").id();
+        let mut draft = ContourDraft::Chain(ring);
+        draft
+            .drag_grip(
+                ContourGrip::Corner(PathCorner::End(line_id)),
+                [micrometres(1_000), micrometres(1_000)],
+                CornerMove::Free,
+            )
+            .expect("a one-millimetre corner drag");
+        let frame = draft.arc_frame(arc_id).expect("an arc frame");
+        assert!(
+            frame.sweep.millidegrees().abs() < 5_000,
+            "a shallow arc stayed shallow, sweep {}",
+            frame.sweep.millidegrees()
+        );
+    }
+
+    #[test]
     fn an_arc_radius_drag_does_not_rebuild_through_the_midpoint() {
         let arc = Path::new(
             vec![

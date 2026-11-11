@@ -535,11 +535,13 @@ impl Arc {
         Self::new(self.center, self.radius, self.start_angle, self.sweep_angle.signum() * ahead)
     }
 
-    /// The arc from `start` to `end` with `radius`, bulging to the side this arc bulges to.
+    /// The arc from `start` to `end` with `radius`, keeping this arc's sweep class.
     ///
     /// The chord fits two circles of that radius; the one on this arc's side of the chord is used,
-    /// and the direction of travel is chosen so the new arc also bows to the side this one bows to.
-    /// That is what lets a corner drag rebuild an arc without flipping a curve the user drew.
+    /// and the direction of travel is the way round whose sweep magnitude is nearest this arc's, a
+    /// tie going to this arc's sign. A shallow arc therefore stays shallow and a deliberate major
+    /// arc stays major, which is what lets a corner drag rebuild an arc without flipping a curve the
+    /// user drew.
     ///
     /// `tolerance` is a linear distance in millimetres: it accepts a chord within it of the
     /// diameter, which a radius rounded to whole micrometres needs. A non-finite point, a chord
@@ -579,17 +581,24 @@ impl Arc {
             return Err(ContourError::InvalidSweep);
         }
         let forward = Self::new(center, radius, start_angle, counter_clockwise)?;
-        let left = (self.midpoint() - start).perp_dot(direction) >= 0.0;
-        if ((forward.midpoint() - start).perp_dot(chord) >= 0.0) == left {
+        let backward = Self::new(center, radius, start_angle, counter_clockwise - TAU)?;
+        let old_sweep = self.sweep_angle.abs();
+        let forward_gap = (forward.sweep_angle.abs() - old_sweep).abs();
+        let backward_gap = (backward.sweep_angle.abs() - old_sweep).abs();
+        if forward_gap < backward_gap {
             return Ok(forward);
         }
-        Self::new(center, radius, start_angle, counter_clockwise - TAU)
+        if backward_gap < forward_gap {
+            return Ok(backward);
+        }
+        if self.sweep_angle >= 0.0 { Ok(forward) } else { Ok(backward) }
     }
 
-    /// The arc from `start` to `end` that keeps this arc's radius and bulge where it can.
+    /// The arc from `start` to `end` that keeps this arc's radius and sweep class where it can.
     ///
     /// When the chord fits two circles of this arc's radius, [`Arc::with_radius_through`] picks the
-    /// one on this arc's side, so the curve keeps its direction of travel. When the chord is longer
+    /// one on this arc's side and the direction whose sweep stays nearest this arc's, so a shallow
+    /// arc stays shallow and a major arc stays major. When the chord is longer
     /// than the diameter the radius becomes half the chord, which is the one semicircle that still
     /// reaches both ends. `tolerance` is a linear distance in millimetres, as there.
     pub fn through_ends(self, start: DVec2, end: DVec2, tolerance: f64) -> Result<Self, ContourError> {

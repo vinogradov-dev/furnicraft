@@ -656,7 +656,8 @@ impl Contour {
 ///
 /// A line takes the corner exactly. An arc keeps its radius when the other end and the corner still
 /// fit a circle of that radius, and falls back to a semicircle when the chord outgrows it; the arc
-/// keeps the side it bulged to, so a drag does not flip the curve.
+/// keeps its sweep class — a shallow arc stays shallow and a major arc stays major — so a drag does
+/// not flip the curve.
 fn free_corner(
     segment: ContourSegment,
     corner: [Length; 2],
@@ -1076,6 +1077,29 @@ mod tests {
         .expect("line and arc")
     }
 
+    /// A closed ring of a line and a 100 mm arc with a 0.5 mm sagitta (R 2500 mm, sweep 2.292°).
+    fn shallow_arc_ring() -> Path {
+        let arc = ContourSegment::arc_through(fine_point(0, 0), fine_point(50_000, 500), fine_point(100_000, 0))
+            .expect("a shallow arc");
+        let line = ContourSegment::line(arc.end().expect("arc end"), arc.start().expect("arc start"))
+            .expect("the closing line");
+        Path::new(vec![line, arc], true).expect("a shallow ring")
+    }
+
+    /// A closed ring of a line and a 270° arc of radius 50 mm.
+    fn major_arc_ring() -> Path {
+        let arc = ContourSegment::arc(
+            [millimetres(50), millimetres(0)],
+            millimetres(50),
+            Degrees::from_millidegrees(45_000),
+            Degrees::from_millidegrees(270_000),
+        )
+        .expect("a major arc");
+        let line = ContourSegment::line(arc.end().expect("arc end"), arc.start().expect("arc start"))
+            .expect("the closing line");
+        Path::new(vec![line, arc], true).expect("a major ring")
+    }
+
     #[test]
     fn an_open_chain_moves_its_first_and_its_last_corner() {
         let path = open_path(vec![point(0, 0), point(100, 0), point(100, 60)]);
@@ -1268,6 +1292,49 @@ mod tests {
         let (_, radius, _, sweep) = arc_fields(moved.segment(id(2)).expect("arc"));
         assert_eq!(radius, millimetres(40));
         assert!(sweep.abs() < 10_000, "the arc shrank towards its start, sweep {sweep}");
+    }
+
+    #[test]
+    fn a_free_arc_corner_keeps_a_shallow_arc_shallow() {
+        let ring = shallow_arc_ring();
+        let line_id = ring.entries().first().expect("the line").id();
+        let arc_id = ring.entries().get(1).expect("the arc").id();
+        let (_, _, _, before) = arc_fields(ring.segment(arc_id).expect("the arc"));
+        assert!(before.abs() < 5_000, "the ring starts with a shallow arc, sweep {before}");
+        let moved = ring
+            .move_corner_at(PathCorner::End(line_id), fine_point(1_000, 1_000), CornerMove::Free)
+            .expect("a one-millimetre corner drag");
+        let (_, _, _, after) = arc_fields(moved.segment(arc_id).expect("the arc"));
+        assert!(after.abs() < 5_000, "a shallow arc stayed shallow, sweep {after}");
+        let mut samples = Vec::new();
+        for entry in moved.entries() {
+            let curve = entry.segment().to_geom().expect("the segment's geometry");
+            for step in 0..=64 {
+                let Some(sample) = curve.point_at(step as f64 / 64.0) else {
+                    panic!("a sampled point on the ring");
+                };
+                samples.push(sample);
+            }
+        }
+        assert!(!samples.is_empty(), "the draft has points");
+        for sample in samples {
+            assert!((-1.0..102.0).contains(&sample.x), "the draft stays inside the figure: {sample:?}");
+            assert!((-2.0..3.0).contains(&sample.y), "the draft stays inside the figure: {sample:?}");
+        }
+    }
+
+    #[test]
+    fn a_free_arc_corner_keeps_a_major_arc_major() {
+        let ring = major_arc_ring();
+        let line_id = ring.entries().first().expect("the line").id();
+        let arc_id = ring.entries().get(1).expect("the arc").id();
+        let (_, _, _, before) = arc_fields(ring.segment(arc_id).expect("the arc"));
+        assert_eq!(before.abs(), 270_000, "the ring starts with a major arc");
+        let moved = ring
+            .move_corner_at(PathCorner::End(line_id), fine_point(1_000, 1_000), CornerMove::Free)
+            .expect("a one-millimetre corner drag");
+        let (_, _, _, after) = arc_fields(moved.segment(arc_id).expect("the arc"));
+        assert!(after.abs() > 180_000, "a major arc stayed major, sweep {after}");
     }
 
     #[test]
