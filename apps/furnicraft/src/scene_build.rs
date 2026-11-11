@@ -33,9 +33,6 @@ const EDGE_BAND_COLOR: [f32; 4] = [0.18, 0.20, 0.24, 1.0];
 /// The default surface colour of a geometry object; v1 has no per-object material.
 const OBJECT_COLOR: [f32; 4] = [0.58, 0.60, 0.64, 1.0];
 
-/// The colour of a drawn path, in gamma space like the grid lines.
-const PATH_COLOR: [f32; 4] = [0.95, 0.72, 0.20, 1.0];
-
 /// Sample catalogue ids. They are stable only for this demonstration document.
 const SAMPLE_OAK_MATERIAL: u64 = 1;
 const SAMPLE_WHITE_MATERIAL: u64 = 2;
@@ -439,12 +436,13 @@ impl<'a> Evaluation<'a> {
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
         let mut bounds = SubtreeBounds::empty();
         // A path has no solid: it is drawn as an unlit chain of line segments, and its points are
-        // sampled from the same analytic segments a later extrusion uses.
+        // sampled from the same analytic segments a later extrusion uses. The chain leaves its
+        // colour to the frame, so a theme switch repaints it without a rebuild.
         if let Some(points) = evaluated.polyline() {
             for point in points.iter() {
                 bounds.all.include_point(transform.transform_point3(*point));
             }
-            self.frame.push_polyline(Polyline::new(object.id(), Arc::clone(points), transform, PATH_COLOR));
+            self.frame.push_polyline(Polyline::in_ink(object.id(), Arc::clone(points), transform));
             return Ok(bounds);
         }
         if let Some(mesh) = evaluated.body() {

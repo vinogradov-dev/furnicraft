@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
+- `[~]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
   frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
   background, the grid and the non-material lines to the active variant at once, leaving the
