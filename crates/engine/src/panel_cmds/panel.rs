@@ -15,6 +15,7 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{Catalog, Contour, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError};
+use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -44,6 +45,27 @@ pub struct PanelCreate {
 }
 
 impl PanelCreate {
+    /// Default nominal length of a newly created panel, in millimetres.
+    pub const DEFAULT_LENGTH_MM: i64 = 600;
+    /// Default nominal width of a newly created panel, in millimetres.
+    pub const DEFAULT_WIDTH_MM: i64 = 400;
+
+    /// The nominal size a new panel starts with: 600 × 400 mm.
+    ///
+    /// The default belongs to the command, not to a caller (C7): the ribbon and the palette both
+    /// build their `panel.create` parameters from this one function.
+    ///
+    /// Returns [`CommandError::InvalidParams`] when a default side is not a usable length or the
+    /// pair is outside the panel's limit, which cannot happen for these constants and is still
+    /// reported rather than assumed.
+    pub fn default_nominal_size() -> Result<PanelNominalSize, CommandError> {
+        let length = Length::from_millimetres(Self::DEFAULT_LENGTH_MM)
+            .ok_or_else(|| invalid_default("the default panel length is out of range"))?;
+        let width = Length::from_millimetres(Self::DEFAULT_WIDTH_MM)
+            .ok_or_else(|| invalid_default("the default panel width is out of range"))?;
+        PanelNominalSize::new(length, width).map_err(|error| invalid_default(&error.to_string()))
+    }
+
     fn parse(params: &Value) -> Result<Self, CommandError> {
         serde_json::from_value(params.clone())
             .map_err(|error| CommandError::InvalidParams { command: CREATE_ID, message: error.to_string() })
@@ -58,6 +80,11 @@ impl PanelCreate {
         }
         Ok(())
     }
+}
+
+/// A default that the command's own constants failed to satisfy.
+fn invalid_default(message: &str) -> CommandError {
+    CommandError::InvalidParams { command: CREATE_ID, message: message.to_owned() }
 }
 
 /// The `panel.create` command.
