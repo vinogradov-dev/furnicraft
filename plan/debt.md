@@ -7,7 +7,8 @@ Tags: `[view-state]` session versus document, `[render]` lighting and drawing, `
 editing, `[object]` constructive objects, `[panel]` panels and banding, `[scene]` tree and files,
 `[gizmo]` manipulation, `[types]` properties and furniture types, `[engine]` commands and history,
 `[perf]` frame and picking cost, `[assistant]`, `[ui]` panels, toolbars and icon artwork, `[design]`
-module size, layer arrows and duplicated knowledge, `[vendor]`.
+module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and its format,
+`[vendor]`.
 
 - `[view-state]` Selection and open containers still live in `ui::Editor` and the view camera in the
   shell, although ADR 0029 places them in the session. Cameras and lights are document nodes with
@@ -174,3 +175,7 @@ module size, layer arrows and duplicated knowledge, `[vendor]`.
   how they got there, so a consistent hand edit lands and `cargo xtask ci` stays green. `--repair`,
   `file` and the missing verbs closed every reason to type the plan by hand; the rule that a session
   does not stays a promise in `AGENTS.md` §6.1 (P10).
+- `[plan]` `cargo xtask task set <ID> --field <label>` accepts a label the entry does not have
+  (`now`, say) and writes it as a new line; `label_of` knows only the five entry labels, so no
+  later `set` can remove it and the line has to be deleted by hand. The verb should refuse a
+  label outside `ENTRY_LABELS`, or delete an unknown one on an empty body.

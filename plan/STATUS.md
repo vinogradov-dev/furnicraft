@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S17 state=idle base=2c183d4 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S18 state=idle base=1f361e1 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -16,13 +16,13 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
   0083), and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
 - S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
-  render, then `Editor` and the shell; `main.rs` and `ui/lib.rs` before U45): S8 gave the shared test
-  fixtures one definition in `model::testing` (ADR 0084); S9 split off `geom/segment.rs`, `geom/contour.rs`
-  keeping the ring that joins, areas, offsets and samples it; S10 `geom/rect.rs` (the orthogonal boolean
-  and its tracer); S11 `geom/ring.rs` and `geom/boolean.rs` (ADR 0043 amended); S12 the segment maths back
-  to `geom/segment.rs` (X31); S13 the figure frames into `contour_frames.rs`; S14 `engine/panel_cmds` into
-  `panel`, `machining` and `banding`; S15 `scene`'s camera and ray, S16 `render`'s pipelines and buffers;
-  F4 waits in `plan/questions.md`.
+  render, then `Editor` and the shell; `main.rs` and `ui/lib.rs` before U45): S8 gave the shared
+  test fixtures one definition in `model::testing` (ADR 0084); S9 split off `geom/segment.rs` and
+  `geom/contour.rs`; S10 `geom/rect.rs` (the orthogonal boolean and its tracer); S11 `geom/ring.rs`
+  and `geom/boolean.rs` (ADR 0043 amended); S12 the segment maths back to `geom/segment.rs` (X31);
+  S13 the figure frames into `contour_frames.rs`; S14 `engine/panel_cmds` into `panel`, `machining`
+  and `banding`; S15 `scene`'s camera and ray, S16 `render`'s pipelines and buffers, S17 the vertex
+  builders; F4 waits in `plan/questions.md`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S17 is next: the vertex builders leave `render/lib.rs` the same way — `edge_geometry`,
-`shadow_geometry`, `world_vertices`, `grid_vertices` and their neighbours move to
-`crates/render/src/geometry.rs`; S18–S22 follow.
+S18 is next: the three document rules `ui/lib.rs`'s `Editor` holds — the frame composition, the
+600 x 400 panel default and the picking and creation-target rules — move down to `model` and
+`engine`; S19–S22 follow.
 
 ## Index
 
