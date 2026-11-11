@@ -15,6 +15,132 @@ messages! {
 
 
 
+
+
+    // ── Scene tree ──────────────────────────────────────────────────────────
+    TreeBadgeComponent = ["component", "компонент"],
+    TreeBadgeCamera = ["camera", "камера"],
+    TreeBadgeLight = ["light", "свет"],
+    TreeBadgeMesh = ["mesh", "сетка"],
+    TreeBadgeContour = ["contour", "контур"],
+    TreeBadgePath = ["path", "путь"],
+    TreeBadgeCube = ["cube", "куб"],
+    TreeBadgeCylinder = ["cylinder", "цилиндр"],
+    TreeBadgeSphere = ["sphere", "сфера"],
+    TreeGroupSelection = ["Group selection", "Сгруппировать выделение"],
+    TreeAddChild = ["Add child", "Добавить дочерний"],
+    TreeAddChildHint = ["Create the next node inside this container", "Следующий созданный узел попадёт в этот контейнер"],
+    TreeShow = ["Show", "Показать"],
+    TreeHide = ["Hide", "Скрыть"],
+    TreeUnlock = ["Unlock", "Снять блокировку"],
+    TreeLock = ["Lock", "Заблокировать"],
+    TreeIsolate = ["Isolate", "Изолировать"],
+    TreeIsolateHint = ["Hide every other branch of the scene", "Скрыть все остальные ветви сцены"],
+    TreeShowAll = ["Show all", "Показать всё"],
+    TreeShowAllHint = ["Show every hidden node again", "Снова показать все скрытые узлы"],
+
+    // ── Container card ──────────────────────────────────────────────────────
+    ContainerRoleComponent = ["Component", "Компонент"],
+    ContainerRoleGroup = ["Group", "Группа"],
+    ContainerComponentDescription = [
+        "A furniture or industrial component. It keeps its own identity and must be converted to a group before Ungroup will flatten it.",
+        "Мебельный или промышленный компонент. Он сохраняет свою идентичность, и перед разгруппировкой его нужно преобразовать в группу."
+    ],
+    ContainerGroupDescription = [
+        "An organisational container with no furniture type. Ungroup flattens it into its parent without moving any child in world space.",
+        "Организационный контейнер без мебельного типа. Разгруппировка переносит его содержимое в родителя, не сдвигая дочерние узлы в мировом пространстве."
+    ],
+    SelectNodeInTree = ["Select a node in the scene tree.", "Выберите узел в дереве сцены."],
+    SectionName = ["Name", "Имя"],
+    NameMustNotBeEmpty = ["{} name must not be empty.", "Имя «{}» не должно быть пустым."],
+    SectionContainer = ["Container", "Контейнер"],
+    RootDescription = [
+        "Root; it defines the world frame and is never a furniture component.",
+        "Корень; задаёт мировую систему координат и не является мебельным компонентом."
+    ],
+    ChildrenCount = ["Children  {}", "Дочерние узлы: {}"],
+    SectionCreateInside = ["Create inside", "Создать внутри"],
+    AddChildHint = ["The next created node lands in this container", "Следующий созданный узел попадёт в этот контейнер"],
+
+    // ── Placement and pivot cards ───────────────────────────────────────────
+    Placement = ["Placement", "Размещение"],
+    TranslationLocalTo = ["Translation (local to {})", "Перенос (относительно {})"],
+    TranslationLocalToParent = ["Translation (local to the parent)", "Перенос (относительно родителя)"],
+    TranslationOutOfRange = [
+        "The stored translation is outside the editable millimetre range.",
+        "Сохранённый перенос выходит за редактируемый диапазон миллиметров."
+    ],
+    SectionTransform = ["Transform", "Преобразование"],
+    SectionTranslation = ["Translation", "Перенос"],
+    WorldPosition = ["World position  {}", "Мировая позиция: {}"],
+    WorldPositionOutOfRange = ["World position  outside the editable range", "Мировая позиция: вне редактируемого диапазона"],
+    RotationWithOrder = ["Rotation ({})", "Поворот ({})"],
+    Apply = ["Apply", "Применить"],
+    NodeNotInScene = ["node {} is not in the scene", "узел {} отсутствует в сцене"],
+    FieldWithError = ["{}: {}", "{}: {}"],
+    RotateAxis = ["Rotate {}", "Поворот {}"],
+    LengthErrorEmpty = ["enter a length in millimetres", "введите длину в миллиметрах"],
+    LengthErrorInvalid = ["not a valid millimetre value", "недопустимое значение в миллиметрах"],
+    LengthErrorTooPrecise = [
+        "use at most three decimal places in millimetres",
+        "не больше трёх знаков после запятой в миллиметрах"
+    ],
+    LengthErrorOutOfRange = ["length is outside the supported range", "длина выходит за поддерживаемый диапазон"],
+    DegreesErrorEmpty = ["enter an angle in degrees", "введите угол в градусах"],
+    DegreesErrorInvalid = ["not a valid degree value", "недопустимое значение в градусах"],
+    DegreesErrorTooPrecise = [
+        "use at most three decimal places in degrees",
+        "не больше трёх знаков после запятой в градусах"
+    ],
+    DegreesErrorOutOfRange = ["angle is outside the supported range", "угол выходит за поддерживаемый диапазон"],
+    Pivot = ["Pivot", "Пивот"],
+    PivotDerived = ["Derived from the panel's geometry", "Выводится из геометрии панели"],
+    SectionLocalPivot = ["Local pivot", "Локальный пивот"],
+    ZeroMillimetres = ["0 mm", "0 мм"],
+    PivotBaseCorner = ["Base corner of the panel.", "Базовый угол панели."],
+    PivotWorld = ["Pivot (world)  {}", "Пивот (мир): {}"],
+    PivotWorldOutOfRange = ["Pivot (world)  outside the editable range", "Пивот (мир): вне редактируемого диапазона"],
+    PivotInNodeFrame = ["In the node's own frame", "В собственной системе узла"],
+    PivotNotEditable = ["The stored pivot is not editable.", "Сохранённый пивот нельзя редактировать."],
+    Center = ["Center", "Центр"],
+
+    // ── Home ────────────────────────────────────────────────────────────────
+    HomeClose = ["Close  (Esc)", "Закрыть  (Esc)"],
+    HomeStartScene = ["Start a scene", "Начните сцену"],
+    HomeNewScene = ["New scene", "Новая сцена"],
+    HomeOpenScene = ["Open scene…", "Открыть сцену…"],
+    HomeRecentFiles = ["Recent files", "Недавние файлы"],
+    HomeNoScene = ["No scene opened yet.", "Пока нет открытых сцен."],
+    HomeEmptyTemplate = ["Empty template", "Пустой шаблон"],
+    HomeEmptyTemplateHint = [
+        "A fresh scene with the default catalogue and nothing else.",
+        "Новая сцена со стандартным каталогом и больше ничем."
+    ],
+    HomeUseTemplate = ["Use template", "Взять шаблон"],
+    HomeUnnamed = ["(unnamed)", "(без имени)"],
+
+    // ── Command palette ─────────────────────────────────────────────────────
+    PaletteHeading = ["Commands", "Команды"],
+    PaletteSearch = ["Search commands…", "Поиск команд…"],
+    PaletteNoMatch = ["No command matches that search.", "Ни одна команда не подходит под запрос."],
+    PaletteCountOne = ["{} command", "{} команда"],
+    PaletteCountFew = ["{} commands", "{} команды"],
+    PaletteCountMany = ["{} commands", "{} команд"],
+    PaletteUnknownCommand = ["Unknown command `{}`.", "Неизвестная команда `{}`."],
+    PaletteNotAllowed = ["The current selection does not allow this.", "Текущее выделение не позволяет это."],
+    PaletteNeedsSelection = ["Needs a selection.", "Нужно выделение."],
+    PaletteNeedsNewName = [
+        "Needs a new name; rename the node in the inspector.",
+        "Нужно новое имя; переименуйте узел в инспекторе."
+    ],
+    PaletteNeedsTwoNodes = ["Needs two or more selected nodes.", "Нужно два или больше выделенных узла."],
+    PaletteNeedsCamera = ["Needs a selected camera.", "Нужна выделенная камера."],
+    PaletteAddPanelMaterial = [
+        "Add a panel material to the catalogue first.",
+        "Сначала добавьте материал панели в каталог."
+    ],
+    GeneratedGroup = ["Group", "Группа"],
+
     // ── Drawing tools ───────────────────────────────────────────────────────
     ToolLine = ["Line", "Линия"],
     ToolPolyline = ["Polyline", "Полилиния"],

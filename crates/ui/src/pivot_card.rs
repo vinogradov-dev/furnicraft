@@ -13,6 +13,7 @@ use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PIVOT_CENTER_ID, NODE_PIVOT_SET_ID};
 use furnicraft_engine::{NodePivotCenter, NodePivotSet, Session};
 use furnicraft_model::{Id, Pivot, Project};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
@@ -57,18 +58,19 @@ impl PivotCard {
             return;
         };
 
-        ui.label(RichText::new("Pivot").strong());
+        let lang = crate::language(ui.ctx());
+        ui.label(RichText::new(Message::Pivot.text(lang)).strong());
         if pivot_is_derived(session.project(), node) {
             self.draft = None;
             self.error = None;
-            ui.label("Derived from the panel's geometry");
-            section(ui, "pivot.local", "Local pivot", true, |ui| {
-                ui.label("0 mm");
-                ui.label("Base corner of the panel.");
+            ui.label(Message::PivotDerived.text(lang));
+            section(ui, "pivot.local", Message::SectionLocalPivot.text(lang), true, |ui| {
+                ui.label(Message::ZeroMillimetres.text(lang));
+                ui.label(Message::PivotBaseCorner.text(lang));
             });
             match coords::world_position(session.project(), node) {
-                Some(world) => ui.label(format!("Pivot (world)  {world}")),
-                None => ui.label("Pivot (world)  outside the editable range"),
+                Some(world) => ui.label(Message::PivotWorld.with(lang, [world])),
+                None => ui.label(Message::PivotWorldOutOfRange.text(lang)),
             };
             return;
         }
@@ -78,17 +80,17 @@ impl PivotCard {
             self.draft = Some(Draft::new(node, current));
         }
 
-        ui.label("In the node's own frame");
+        ui.label(Message::PivotInNodeFrame.text(lang));
 
         let Some(draft) = self.draft.as_mut() else {
-            ui.colored_label(Color32::LIGHT_RED, "The stored pivot is not editable.");
+            ui.colored_label(Color32::LIGHT_RED, Message::PivotNotEditable.text(lang));
             return;
         };
 
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;
         let mut center = false;
-        section(ui, "pivot.local", "Local pivot", true, |ui| {
+        section(ui, "pivot.local", Message::SectionLocalPivot.text(lang), true, |ui| {
             for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -98,24 +100,24 @@ impl PivotCard {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
+                if ui.button(Message::Apply.text(lang)).clicked() {
                     commit = true;
                 }
-                if ui.button("Center").clicked() {
+                if ui.button(Message::Center.text(lang)).clicked() {
                     center = true;
                 }
             });
         });
         match coords::world_pivot(session.project(), node) {
-            Some(world) => ui.label(format!("Pivot (world)  {world}")),
-            None => ui.label("Pivot (world)  outside the editable range"),
+            Some(world) => ui.label(Message::PivotWorld.with(lang, [world])),
+            None => ui.label(Message::PivotWorldOutOfRange.text(lang)),
         };
         if let Some(error) = &self.error {
             ui.colored_label(Color32::LIGHT_RED, error);
         }
 
         if center {
-            match apply_center(session, node) {
+            match apply_center(session, node, lang) {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
@@ -130,7 +132,7 @@ impl PivotCard {
             return;
         }
         let fields = Fields { x: draft.x.clone(), y: draft.y.clone(), z: draft.z.clone() };
-        match apply_pivot(session, node, &fields) {
+        match apply_pivot(session, node, &fields, lang) {
             Ok(()) => {
                 self.error = None;
                 self.draft = None;
@@ -150,9 +152,13 @@ struct Fields {
 }
 
 /// Parses the three fields and moves the pivot, leaving the document untouched when nothing changed.
-fn apply_pivot(session: &mut Session, node: Id, fields: &Fields) -> Result<(), String> {
-    let current = session.project().pivot(node).ok_or_else(|| format!("node {node} is not in the scene"))?;
-    let pivot = Pivot::new(parse_length("X", &fields.x)?, parse_length("Y", &fields.y)?, parse_length("Z", &fields.z)?);
+fn apply_pivot(session: &mut Session, node: Id, fields: &Fields, lang: Lang) -> Result<(), String> {
+    let current = session.project().pivot(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
+    let pivot = Pivot::new(
+        parse_length("X", &fields.x, lang)?,
+        parse_length("Y", &fields.y, lang)?,
+        parse_length("Z", &fields.z, lang)?,
+    );
     if pivot == current {
         return Ok(());
     }
@@ -161,8 +167,8 @@ fn apply_pivot(session: &mut Session, node: Id, fields: &Fields) -> Result<(), S
 }
 
 /// Centres the pivot on the node's local bounds as one command.
-fn apply_center(session: &mut Session, node: Id) -> Result<(), String> {
-    let current = session.project().pivot(node).ok_or_else(|| format!("node {node} is not in the scene"))?;
+fn apply_center(session: &mut Session, node: Id, lang: Lang) -> Result<(), String> {
+    let current = session.project().pivot(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
     let center = session.project().bounds_center_local(node).unwrap_or_default();
     let pivot = Pivot::from_local(center).unwrap_or_default();
     if pivot == current {
@@ -179,8 +185,9 @@ fn pivot_is_derived(project: &Project, node: Id) -> bool {
     project.panel(node).is_some()
 }
 
-fn parse_length(label: &str, text: &str) -> Result<Length, String> {
-    Length::parse_millimetres(text).map_err(|error| format!("{label}: {error}"))
+fn parse_length(label: &str, text: &str, lang: Lang) -> Result<Length, String> {
+    Length::parse_millimetres(text)
+        .map_err(|error| Message::FieldWithError.with(lang, [label, crate::length_error(error).text(lang)]))
 }
 
 #[cfg(test)]
@@ -190,6 +197,7 @@ mod tests {
     use furnicraft_engine::Session;
     use furnicraft_model::Pivot;
     use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_text::Lang;
 
     use super::*;
 
@@ -202,7 +210,7 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let drawer = Id::new(3).expect("drawer id");
 
-        apply_pivot(&mut session, drawer, &fields("1.5", "-2.5", "3")).expect("apply pivot");
+        apply_pivot(&mut session, drawer, &fields("1.5", "-2.5", "3"), Lang::En).expect("apply pivot");
         assert_eq!(
             session.project().pivot(drawer),
             Some(Pivot::new(
@@ -220,7 +228,7 @@ mod tests {
     fn an_unchanged_pivot_does_not_touch_history() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
-        apply_pivot(&mut session, panel, &fields("0", "0", "0")).expect("apply the stored pivot");
+        apply_pivot(&mut session, panel, &fields("0", "0", "0"), Lang::En).expect("apply the stored pivot");
         assert!(!session.can_undo());
     }
 
@@ -232,7 +240,7 @@ mod tests {
             .dispatch(NODE_PIVOT_SET_ID, &json(&NodePivotSet { node: drawer, pivot: Pivot::ZERO }).expect("params"))
             .expect("clear pivot");
 
-        apply_center(&mut session, drawer).expect("center pivot");
+        apply_center(&mut session, drawer, Lang::En).expect("center pivot");
         assert_eq!(
             session.project().pivot(drawer),
             Some(Pivot::new(
@@ -250,9 +258,9 @@ mod tests {
     fn centring_at_the_stored_pivot_does_not_touch_history() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let drawer = Id::new(3).expect("drawer id");
-        apply_center(&mut session, drawer).expect("center pivot");
+        apply_center(&mut session, drawer, Lang::En).expect("center pivot");
         let revision = session.project().revision();
-        apply_center(&mut session, drawer).expect("center the centred pivot");
+        apply_center(&mut session, drawer, Lang::En).expect("center the centred pivot");
         assert_eq!(session.project().revision(), revision, "a second centring changes nothing");
     }
 
@@ -261,12 +269,12 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        let error = apply_pivot(&mut session, panel, &fields("wide", "0", "0")).expect_err("invalid X");
+        let error = apply_pivot(&mut session, panel, &fields("wide", "0", "0"), Lang::En).expect_err("invalid X");
         assert!(error.starts_with("X: "), "error was {error}");
         assert!(!session.can_undo());
 
         let missing = Id::new(999).expect("id");
-        let error = apply_pivot(&mut session, missing, &fields("0", "0", "0")).expect_err("missing node");
+        let error = apply_pivot(&mut session, missing, &fields("0", "0", "0"), Lang::En).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
     }
 

@@ -75,3 +75,26 @@ pub fn language(ctx: &egui::Context) -> Lang {
 pub fn text(ctx: &egui::Context, message: Message) -> &'static str {
     message.text(language(ctx))
 }
+
+/// The interface's words for a refused length, so a raw `thiserror` sentence never reaches the
+/// screen. The error itself stays English for logs and tests.
+pub fn length_error(error: furnicraft_units::LengthParseError) -> Message {
+    use furnicraft_units::LengthParseError as Error;
+    match error {
+        Error::Empty => Message::LengthErrorEmpty,
+        Error::Invalid => Message::LengthErrorInvalid,
+        Error::TooPrecise => Message::LengthErrorTooPrecise,
+        Error::OutOfRange => Message::LengthErrorOutOfRange,
+    }
+}
+
+/// The interface's words for a refused angle, for the same reason as [`length_error`].
+pub fn degrees_error(error: furnicraft_units::DegreesParseError) -> Message {
+    use furnicraft_units::DegreesParseError as Error;
+    match error {
+        Error::Empty => Message::DegreesErrorEmpty,
+        Error::Invalid => Message::DegreesErrorInvalid,
+        Error::TooPrecise => Message::DegreesErrorTooPrecise,
+        Error::OutOfRange => Message::DegreesErrorOutOfRange,
+    }
+}
