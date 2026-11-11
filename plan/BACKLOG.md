@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
-  Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
-   «Круг» once and keep its input methods; the owner approved the F1 list (not the shelf, not
-   repeat-last). The variant tables and the list anatomy are in `plan/notes/U67.md`, the
-   metrics in `plan/notes/U71.md`.
-  Shape: Add `variants` to `ToolSpec`; draw a caret when it is non-empty. Hold `open_tool:
-   Option<ToolId>` in `Toolbars` — view state, not the document. Draw the list as an
-   `egui::Popup`/`Area` at `Order::Foreground`, anchored to the cell and flipped to
-   right-aligned at the window edge: 298 px, 30 px rows, header with the tool name and
-   shortcut, optional section captions, rows with icon, label, shortcut and pin, no footer.
-   Keyboard up/down/Enter, Esc closes; outside click and a tab change close. The pin writes
-   `settings.ribbon.pinned_variants` (global `BTreeMap<ToolId, VariantId>`, default first); an
-   unknown id falls back to the first. A plain click runs the pinned variant; the shortcut runs
-   it without opening.
-  Done: Tests: opening the list writes no document revision; Esc, an outside click and a tab
-   change close it; Enter runs the highlighted variant; a plain click runs the pinned variant;
-   an unknown pinned id falls back to the first; the list never leaves the window rect (both
-   edge cases); the master shortcut runs the pinned variant with the list closed; the list has
-   no footer. The existing draw tools are migrated to variants (line/polyline stay separate
-   tools) and the old per-variant ribbon cells are gone.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/settings.rs, crates/ui/src/icons.rs`
-
 - `[ ]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
   Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons
    are ambiguous and there is no way to clear the chrome. M2 is the most invasive part of the
@@ -140,6 +118,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
+  Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
+   «Круг» once and keep its input methods; the owner approved the F1 list (not the shelf, not
+   repeat-last). The variant tables and the list anatomy are in `plan/notes/U67.md`, the
+   metrics in `plan/notes/U71.md`.
+  Shape: Add `variants` to `ToolSpec`; draw a caret when it is non-empty. Hold `open_tool:
+   Option<ToolId>` in `Toolbars` — view state, not the document. Draw the list as an
+   `egui::Popup`/`Area` at `Order::Foreground`, anchored to the cell and flipped to
+   right-aligned at the window edge: 298 px, 30 px rows, header with the tool name and
+   shortcut, optional section captions, rows with icon, label, shortcut and pin, no footer.
+   Keyboard up/down/Enter, Esc closes; outside click and a tab change close. The pin writes
+   `settings.ribbon.pinned_variants` (global `BTreeMap<ToolId, VariantId>`, default first); an
+   unknown id falls back to the first. A plain click runs the pinned variant; the shortcut runs
+   it without opening.
+  Done: Tests: opening the list writes no document revision; Esc, an outside click and a tab
+   change close it; Enter runs the highlighted variant; a plain click runs the pinned variant;
+   an unknown pinned id falls back to the first; the list never leaves the window rect (both
+   edge cases); the master shortcut runs the pinned variant with the list closed; the list has
+   no footer. The existing draw tools are migrated to variants (line/polyline stay separate
+   tools) and the old per-variant ribbon cells are gone.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/settings.rs, crates/ui/src/icons.rs` — `b16dfb7`
 
 - `[x]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
   Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in

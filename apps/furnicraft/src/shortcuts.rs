@@ -72,6 +72,8 @@ pub(crate) fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
 /// The table is [`furnicraft_ui::toolbars::shortcut`], the same one the button hints print, so the
 /// key and the tooltip cannot drift apart. Returns whether a key was taken. A running draft is
 /// replaced, because of ADR 0076: the old draft wrote nothing and the new tool owns the next click.
+/// A key that names a tool's own method runs the method the workspace pinned for it, without opening
+/// the variant list (U67).
 pub(crate) fn take_drawing_shortcut(ctx: &egui::Context, editor: &mut Editor, sides: u32) -> bool {
     for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
         let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
@@ -79,7 +81,7 @@ pub(crate) fn take_drawing_shortcut(ctx: &egui::Context, editor: &mut Editor, si
         };
         let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
         if ctx.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
-            editor.start_drawing_with(tool, sides);
+            editor.start_shortcut(tool, sides);
             return true;
         }
     }

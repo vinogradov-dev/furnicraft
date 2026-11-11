@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U67 state=idle base=2e71b9c updated=2026-11-12
+STATE: milestone=M7 phase=A task=U66 state=idle base=b16dfb7 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U67 is next: the variants U68 filed in the map become a dropdown under the tool — circle by centre
-and radius, two points, three points, tangent. A click always opens the list, it closes on Esc, an
-outside click and a tab change, and the pinned variant is a global setting.
+U66 is next: dock the side panels as opaque M2 chrome over the scene — 92 % opacity, one setting for
+ribbon, panels and clusters, collapse-all and hide-all, neutral chevrons, an animated inset.
 
 ## Index
 

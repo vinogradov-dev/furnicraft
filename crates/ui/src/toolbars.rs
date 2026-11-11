@@ -6,21 +6,31 @@
 //! drawn when it owns a live tool or a field, and a planned tool (no command yet) is skipped, so the
 //! ribbon never shows a greyed "coming soon" row and a tab with nothing to run is not drawn at all.
 //!
-//! Whether a tool can run *here* is code, not data: [`ready`] decides it against the
+//! Whether a tool can run *here* is code, not data: [`ready::ready`] decides it against the
 //! [`RibbonContext`] — a catalogue material, a closed path, a running draft, a viewport that owns its
 //! projection — and returns the hint that says what is missing, so a disabled cell still explains
-//! itself. Whether the body is open, which tab is active and what the numeric fields remember is view
-//! state in the editor and never reaches the document; the open state is also the workspace setting
-//! the shell remembers (`Settings::ribbon`).
+//! itself. Whether the body is open, which tab is active, what the numeric fields remember, which
+//! method each tool is pinned to and which list is open is view state in [`state::Toolbars`]: never
+//! document data; the fold and the pin are also workspace settings the shell remembers.
+//!
+//! This module is the drawing: [`show`] and the row, cell and list wiring. The map is [`spec`], the
+//! state is [`state`], the readiness table is [`ready`] and the popup under a cell is [`list`].
 //!
 //! A cell is one glyph in a [`RIBBON_CELL_WIDTH`] by [`RIBBON_ROW_HEIGHT`] cell, so a row is one pitch
 //! and no tool sizes itself from its name (ADR 0067, revised by ADR 0091). The group's caption sits in
 //! the darker band under the row, which is what makes the whole body 72 points tall and the folded
 //! ribbon its 29-point tab row.
 //!
-//! Every button is the icon-only [`icons::ribbon_cell`]: the ribbon names a tool through its hint and,
-//! from U67, through the list under the cell; the panel headers and the floating viewport cluster keep
-//! the icon-only [`icons::tool_button`], whose row could not carry a second line.
+//! Every button is the icon-only [`icons::ribbon_cell`]: the ribbon names a tool through its hint and
+//! through the list under the cell a click opens ([`list`], U67); the panel headers and the floating
+//! viewport cluster keep the icon-only [`icons::tool_button`], whose row could not carry a second
+//! line.
+//!
+//! A tool with more than one input method draws a caret and opens its variant list on a click; the
+//! method the workspace pinned is what its key runs, and both the open list and the pin are view
+//! state — the pin is a workspace setting, the open list is forgotten on restart.
+
+use std::collections::BTreeMap;
 
 use egui::{TextEdit, Ui};
 use furnicraft_engine::PrimitiveKind;
@@ -28,12 +38,20 @@ use furnicraft_model::Id;
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
-use self::spec::{CellSpec, FieldKind, FieldSpec, GroupSpec, TabSpec, ToolKind, ToolSpec};
-use crate::draw::{DEFAULT_POLYGON_SIDES, DrawTool};
-use crate::icons::{self, Icon, tool_hint};
+use self::spec::{CellSpec, FieldSpec, GroupSpec, TabSpec, ToolKind, ToolSpec};
+use crate::draw::DrawTool;
+use crate::icons;
 use crate::theme::{RIBBON_CAPTION_HEIGHT, RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT, RIBBON_RULE, RIBBON_TAB_HEIGHT};
 
+pub mod list;
+pub mod ready;
 pub mod spec;
+pub mod state;
+
+pub use self::ready::draft_can_close;
+pub use self::state::{FieldRefusal, Toolbars};
+
+use self::ready::{projection_icon, ready};
 
 /// Edge length of a new cube, in millimetres; also the value the field starts with.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
@@ -198,197 +216,6 @@ pub const fn strip_label(tool: DrawTool) -> Message {
     }
 }
 
-/// Whether the ribbon's body is open, which tab is active, and the numeric fields it keeps.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Toolbars {
-    open: bool,
-    tab: &'static TabSpec,
-    primitive_size: String,
-    extrude_height: String,
-    polygon_sides: String,
-}
-
-impl Default for Toolbars {
-    fn default() -> Self {
-        Self {
-            open: true,
-            tab: spec::fallback_tab().unwrap_or(&spec::TABS[0]),
-            primitive_size: DEFAULT_PRIMITIVE_SIZE_MM.to_string(),
-            extrude_height: DEFAULT_EXTRUDE_HEIGHT_MM.to_string(),
-            polygon_sides: DEFAULT_POLYGON_SIDES.to_string(),
-        }
-    }
-}
-
-impl Toolbars {
-    /// The body open on the first tab that draws a row, the state a fresh editor starts in.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The tab whose groups the ribbon draws.
-    pub const fn tab(&self) -> &'static TabSpec {
-        self.tab
-    }
-
-    /// Opens a tab's body, making it the active tab; returns the tab that is now active.
-    pub fn set_tab(&mut self, tab: &'static TabSpec) -> &'static TabSpec {
-        self.tab = tab;
-        tab
-    }
-
-    /// Whether the body under the tab row is drawn.
-    pub const fn is_open(&self) -> bool {
-        self.open
-    }
-
-    /// Opens or closes the body and returns its new state.
-    pub fn set_open(&mut self, open: bool) -> bool {
-        self.open = open;
-        self.open
-    }
-
-    /// Flips the body and returns its new state.
-    pub fn toggle(&mut self) -> bool {
-        self.set_open(!self.open)
-    }
-
-    /// Keeps the active tab on a tab that draws a body.
-    ///
-    /// Only [`Self::set_tab`] can put the ribbon on a planned-only tab, so this is one guard rather
-    /// than a per-frame search: a state that names a tab with nothing live falls back to the first
-    /// tab that has something, and a ribbon whose every tab is planned draws no body.
-    fn retain_tab(&mut self) {
-        if !self.tab.is_drawn()
-            && let Some(tab) = spec::fallback_tab()
-        {
-            self.tab = tab;
-        }
-    }
-}
-
-impl Toolbars {
-    /// The text of one field, so its group can edit it in place.
-    pub fn field_text_mut(&mut self, kind: FieldKind) -> &mut String {
-        match kind {
-            FieldKind::PrimitiveSize => &mut self.primitive_size,
-            FieldKind::ExtrudeHeight => &mut self.extrude_height,
-            FieldKind::PolygonSides => &mut self.polygon_sides,
-        }
-    }
-
-    /// The typed full extent of a new primitive: the cube's edge, or a curved shape's diameter.
-    pub fn primitive_size_text(&self) -> &str {
-        &self.primitive_size
-    }
-
-    /// Replaces the typed size.
-    pub fn set_primitive_size_text(&mut self, text: impl Into<String>) {
-        self.primitive_size = text.into();
-    }
-
-    /// The typed size as a document length, or a readable reason it is not one.
-    pub fn primitive_size(&self) -> Result<Length, FieldRefusal> {
-        let length = Length::parse_millimetres(self.primitive_size.trim())
-            .map_err(|error| FieldRefusal::SizeNotLength(error.to_string()))?;
-        if length.micrometres() <= 0 {
-            return Err(FieldRefusal::SizeNotPositive);
-        }
-        Ok(length)
-    }
-
-    /// The typed extrusion height.
-    pub fn extrude_height_text(&self) -> &str {
-        &self.extrude_height
-    }
-
-    /// The typed extrusion height as a positive document length.
-    ///
-    /// The upper bound is the document's contour limit, the same one `object.extrude.create`
-    /// applies, so a field the group accepts is a field the command takes.
-    pub fn extrude_height(&self) -> Result<Length, FieldRefusal> {
-        let height = Length::parse_millimetres(self.extrude_height.trim())
-            .map_err(|error| FieldRefusal::HeightNotLength(error.to_string()))?;
-        if !height.is_positive() {
-            return Err(FieldRefusal::HeightNotPositive);
-        }
-        let limit = furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres();
-        if height.micrometres() > limit {
-            return Err(FieldRefusal::HeightTooLong { max_mm: limit / 1_000 });
-        }
-        Ok(height)
-    }
-
-    /// Replaces the typed extrusion height.
-    pub fn set_extrude_height_text(&mut self, text: impl Into<String>) {
-        self.extrude_height = text.into();
-    }
-
-    /// The typed regular polygon side count.
-    pub fn polygon_sides_text(&self) -> &str {
-        &self.polygon_sides
-    }
-
-    /// The typed side count, clamped to the range the model accepts.
-    ///
-    /// A field the user is halfway through typing is never a reason to disable the tool: the value
-    /// falls back to [`DEFAULT_POLYGON_SIDES`] so a cleared field still draws a hexagon.
-    pub fn polygon_sides(&self) -> u32 {
-        clamp_polygon_sides(self.polygon_sides.trim().parse().unwrap_or(DEFAULT_POLYGON_SIDES))
-    }
-
-    /// Replaces the typed side count.
-    pub fn set_polygon_sides_text(&mut self, text: impl Into<String>) {
-        self.polygon_sides = text.into();
-    }
-}
-
-/// Clamps a side count to the range `Path::regular_polygon` accepts.
-const fn clamp_polygon_sides(sides: u32) -> u32 {
-    if sides < furnicraft_model::MIN_POLYGON_SIDES {
-        furnicraft_model::MIN_POLYGON_SIDES
-    } else if sides > furnicraft_model::MAX_POLYGON_SIDES {
-        furnicraft_model::MAX_POLYGON_SIDES
-    } else {
-        sides
-    }
-}
-
-/// Why a ribbon field cannot be used, in the words of its own tool.
-///
-/// The refusal is the hint of every tool the field configures, so a bad size disables a primitive and
-/// says which number is wrong instead of leaving the button silently off. The sentence is chosen when
-/// the ribbon draws, so one field reads in the workspace's language.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum FieldRefusal {
-    /// The typed size is not a length; the parser's reason is carried for the sentence.
-    SizeNotLength(String),
-    /// The typed size is zero or negative.
-    SizeNotPositive,
-    /// The typed extrusion height is not a length.
-    HeightNotLength(String),
-    /// The typed extrusion height is zero or negative.
-    HeightNotPositive,
-    /// The typed extrusion height is past the document's limit.
-    HeightTooLong {
-        /// The largest height the command takes, in millimetres.
-        max_mm: i64,
-    },
-}
-
-impl FieldRefusal {
-    /// The sentence the hint draws.
-    pub fn text(&self, lang: Lang) -> String {
-        match self {
-            Self::SizeNotLength(reason) => Message::PrimitiveSizeNotLength.with(lang, [reason]),
-            Self::SizeNotPositive => Message::PrimitiveSizePositive.text(lang).to_owned(),
-            Self::HeightNotLength(reason) => Message::ExtrudeHeightNotLength.with(lang, [reason]),
-            Self::HeightNotPositive => Message::ExtrudeHeightPositive.text(lang).to_owned(),
-            Self::HeightTooLong { max_mm } => Message::ExtrudeHeightMax.with(lang, [max_mm]),
-        }
-    }
-}
-
 /// The view state the ribbon reads from the shell: how the camera and the work plane are set.
 ///
 /// The ribbon is a UI surface in `furnicraft-ui`, but the projection, the grid snap and the framing
@@ -475,6 +302,7 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: 
         // because the shell reserves exactly [`height`] over the design space (ADR 0080).
         ui.spacing_mut().item_spacing.y = 0.0;
         state.retain_tab();
+        state.retain_list();
         tab_row(ui, state, lang);
         rule(ui);
         if state.is_open() {
@@ -655,6 +483,10 @@ fn caption_band(ui: &mut Ui, row_width: f32, caption: &str) {
 }
 
 /// One tool cell: its glyph, and the action a click asks the editor to run.
+///
+/// A tool with more than one input method runs nothing on a click: it opens its list and draws a
+/// caret in the corner that says so. The cell's glyph and hint still name the tool, not the method,
+/// because the map says «Круг» once and the list holds the ways to build one (U67).
 fn show_tool(
     ui: &mut Ui,
     tool: &'static ToolSpec,
@@ -673,11 +505,110 @@ fn show_tool(
     // the hint names the switch.
     let icon = if kind == ToolKind::Projection { projection_icon(context.perspective) } else { icon };
     let ready = ready(kind, tool, state, context, lang);
-    if icons::ribbon_cell(ui, RIBBON_CELL_WIDTH, icon, &ready.hint, ready.enabled, ready.armed).clicked()
+    let response = icons::ribbon_cell(ui, RIBBON_CELL_WIDTH, icon, &ready.hint, ready.enabled, ready.armed);
+    if tool.has_list() {
+        caret(ui, response.rect);
+        if response.clicked() {
+            state.toggle_list(tool);
+        }
+    } else if response.clicked()
         && let Some(action) = ready.action
     {
         actions.push(action);
     }
+    if state.list_open_for(tool) {
+        let rows = method_rows(tool, state, context, lang);
+        let pinned = state.pinned_index(tool);
+        let choice = list::show(ui, &mut state.list, tool, &rows, &response, pinned, lang);
+        apply_choice(state, tool, &rows, choice, actions);
+    }
+}
+
+/// The carets of a cell that opens a list: a small wedge in its lower right corner.
+///
+/// It is the cell's own anatomy, like the accent underline of the open tab, not one of the icon
+/// assets: it marks the corner of a control rather than naming an action of its own.
+fn caret(ui: &Ui, rect: egui::Rect) {
+    let center = egui::pos2(rect.right() - 6.0, rect.bottom() - 5.0);
+    let points = vec![
+        egui::pos2(center.x - 2.5, center.y - 1.25),
+        egui::pos2(center.x + 2.5, center.y - 1.25),
+        egui::pos2(center.x, center.y + 1.25),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(points, crate::theme::text_dim(ui), egui::Stroke::NONE));
+}
+
+/// The rows of one tool's list: every method the map declares, in order, planned ones included.
+///
+/// A planned method stays in the list as a disabled row, unlike a planned tool, which the ribbon
+/// skips: the map has room to say «a circle can also be drawn tangent to two lines» before the
+/// command exists, and the row says so without pretending to run (U67).
+fn method_rows(tool: &'static ToolSpec, state: &Toolbars, context: RibbonContext, lang: Lang) -> Vec<list::Row> {
+    tool.methods()
+        .map(|method| {
+            let ready = method.run.map(|kind| ready(kind, tool, state, context, lang));
+            let hint = ready.as_ref().map_or_else(|| method.label.text(lang).to_owned(), |ready| ready.hint.clone());
+            list::Row {
+                method,
+                hint,
+                enabled: ready.as_ref().is_some_and(|ready| ready.enabled),
+                action: ready.and_then(|ready| ready.action),
+            }
+        })
+        .collect()
+}
+
+/// Applies what one open list asked for: run a method, pin it, or nothing.
+fn apply_choice(
+    state: &mut Toolbars,
+    tool: &'static ToolSpec,
+    rows: &[list::Row],
+    choice: Option<list::ListChoice>,
+    actions: &mut Vec<ToolAction>,
+) {
+    match choice {
+        Some(list::ListChoice::Run(index)) => {
+            if let Some(action) = rows.get(index).and_then(|row| row.action) {
+                actions.push(action);
+            }
+            state.close_list();
+        }
+        Some(list::ListChoice::Pin(index)) => {
+            if let Some(row) = rows.get(index) {
+                state.pin(tool, row.method);
+            }
+        }
+        None => {}
+    }
+}
+
+/// The drawing tool a key press runs.
+///
+/// A key that names a tool's own method runs the method the workspace pinned for that tool, without
+/// opening the list; a key that names one of the other methods (`Shift+C` for a circle through three
+/// points) still runs exactly that method. The map is the only source: a tool whose pinned id is
+/// unknown in this build falls back to its first method.
+pub fn shortcut_method(tool: DrawTool, pinned: &BTreeMap<String, String>) -> DrawTool {
+    let Some(spec) = tool_of_default(tool) else { return tool };
+    let index = spec.pinned_index(pinned);
+    match spec.methods().nth(index).and_then(|method| method.run) {
+        Some(ToolKind::Draw(pinned_tool)) => pinned_tool,
+        _ => tool,
+    }
+}
+
+/// The tool whose own method is `tool`, the one its key is the shortcut of.
+fn tool_of_default(tool: DrawTool) -> Option<&'static ToolSpec> {
+    for tab in spec::tabs() {
+        for group in tab.live_groups() {
+            for tool_spec in group.tools() {
+                if tool_spec.default_method().run == Some(ToolKind::Draw(tool)) {
+                    return Some(tool_spec);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// One numeric field: two cells wide, named by its hint, with the unit in the field itself.
@@ -691,158 +622,13 @@ fn show_field(ui: &mut Ui, field: &'static FieldSpec, state: &mut Toolbars) {
 }
 
 /// What one ribbon cell draws and what a click on it runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Ready {
-    /// The tool can run here.
-    enabled: bool,
-    /// The button draws pressed: the tool owns the next click, or the toggle is on.
-    armed: bool,
-    /// The tooltip and the accessible name, which is also the sentence of a refusal.
-    hint: String,
-    /// The action a click asks for, unless the tool cannot run.
-    action: Option<ToolAction>,
-}
-
-/// Decides one tool against the picture the ribbon was handed.
-///
-/// This is the one place where a row's [`ToolKind`] meets the session: everything the map says about
-/// *where* a tool sits is data, and everything about *whether* it can run is here, next to the words
-/// that say why not.
-fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: RibbonContext, lang: Lang) -> Ready {
-    let RibbonContext { has_panel_material, selected, selected_path, active, owns_view, grid, draft, .. } = context;
-    match kind {
-        ToolKind::Draw(draw) => Ready {
-            enabled: true,
-            armed: is_armed(active, kind),
-            hint: tool_hint(strip_label(draw).text(lang), shortcut_label(draw)),
-            action: Some(ToolAction::Draw { tool: draw, sides: state.polygon_sides() }),
-        },
-        ToolKind::CloseDraft => {
-            // Close needs a running draft that can close, cancel needs any running draft; both are
-            // drawn so the pair never vanishes between clicks and the hint says why one is off.
-            let (drawing, points, closed) = draft.unwrap_or((DrawTool::Line, 0, false));
-            let close = draft_can_close(drawing, points, closed);
-            let hint = if close { Message::DraftCloseHint.text(lang) } else { Message::DraftCloseNeedsTwo.text(lang) };
-            Ready {
-                enabled: close,
-                armed: false,
-                hint: hint.to_owned(),
-                action: close.then_some(ToolAction::CloseDrawing),
-            }
-        }
-        ToolKind::CancelDraft => {
-            let running = draft.is_some();
-            let hint = tool_hint(
-                if running { Message::DraftCancelHint.text(lang) } else { Message::DraftNotRunning.text(lang) },
-                Some("Esc"),
-            );
-            Ready { enabled: running, armed: false, hint, action: running.then_some(ToolAction::CancelDrawing) }
-        }
-        ToolKind::Primitive(primitive) => {
-            let size = state.primitive_size();
-            let armed = is_armed(active, ToolKind::Primitive(primitive));
-            // The hint carries the field's refusal, so a bad size disables the tool and says why
-            // instead of leaving the button silently off.
-            let hint = match &size {
-                Ok(_) => Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)]),
-                Err(refusal) => refusal.text(lang),
-            };
-            let action = size.ok().map(|size| ToolAction::CreatePrimitive { kind: primitive, size });
-            Ready { enabled: action.is_some(), armed, hint, action }
-        }
-        ToolKind::Extrude => {
-            let height = state.extrude_height();
-            // Only a closed path encloses a ring, so the button is off for anything else and the
-            // hint names what is missing: a selection, a path, a closed chain, or a usable height.
-            let hint = match &height {
-                Ok(_) => extrude_hint(selected, selected_path).text(lang).to_owned(),
-                Err(refusal) => refusal.text(lang),
-            };
-            let action = match (selected, height) {
-                (Some(object), Ok(height)) => Some(ToolAction::ExtrudePath { object, height }),
-                _ => None,
-            };
-            let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && action.is_some();
-            Ready { enabled, armed: false, hint, action }
-        }
-        ToolKind::Panel => Ready {
-            enabled: has_panel_material,
-            armed: false,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: Some(ToolAction::CreatePanel),
-        },
-        ToolKind::Assembly => Ready {
-            enabled: true,
-            armed: false,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: Some(ToolAction::CreateAssembly),
-        },
-        ToolKind::Camera => Ready {
-            enabled: true,
-            armed: false,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: Some(ToolAction::CreateCamera),
-        },
-        ToolKind::Light => Ready {
-            enabled: true,
-            armed: false,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: Some(ToolAction::CreateLight),
-        },
-        ToolKind::FrameAll => Ready {
-            enabled: true,
-            armed: false,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: Some(ToolAction::FrameAll),
-        },
-        ToolKind::Projection => Ready {
-            enabled: owns_view,
-            armed: false,
-            hint: tool_hint(Message::SwitchProjection.text(lang), tool.shortcut),
-            action: owns_view.then_some(ToolAction::ToggleProjection),
-        },
-        ToolKind::GridSnap => Ready {
-            enabled: owns_view,
-            armed: grid,
-            hint: tool_hint(tool.label.text(lang), tool.shortcut),
-            action: owns_view.then_some(ToolAction::ToggleGrid),
-        },
-    }
-}
-
-/// Whether a running draft can be closed into a ring: only a tool that closes, and only once the
-/// chain has the two segments a ring needs, and only while it is still open.
-///
-/// Two segments are the whole requirement: a straight close adds the third, and a pending arc *is*
-/// the closing segment (ADR 0077). This is the rule `DrawDraft::can_close` applies, so the button
-/// and the first-node highlight never disagree with the command that runs.
-pub const fn draft_can_close(tool: DrawTool, points: usize, closed: bool) -> bool {
-    tool.closes() && points >= 2 && !closed
-}
-
-/// The icon of the projection toggle: the mode the view is in.
-fn projection_icon(perspective: bool) -> Icon {
-    if perspective { icons::view::PERSPECTIVE } else { icons::view::ORTHOGRAPHIC }
-}
-
-/// The hint of the extrude button: what the tool does, or why it is off.
-///
-/// `selected_path` is `None` when the selection is not a path object, so a path that is merely
-/// open gets its own message instead of being called "not a path".
-fn extrude_hint(selected: Option<Id>, selected_path: Option<bool>) -> Message {
-    match (selected, selected_path) {
-        (None, _) => Message::ExtrudeSelectPath,
-        (Some(_), Some(true)) => Message::ExtrudeSelectedPath,
-        (Some(_), Some(false)) => Message::ExtrudePathOpen,
-        (Some(_), None) => Message::ExtrudeNotPath,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use crate::draw::DEFAULT_POLYGON_SIDES;
+    use crate::toolbars::ready::extrude_hint;
     use crate::toolbars::spec::{self, CellSpec, TabSpec};
 
     /// A context where every live tool can run and the viewport owns its view.
@@ -894,6 +680,33 @@ mod tests {
         let labels = accessible_labels(&output);
         output.drop_without_applying_deltas();
         (texts, labels, actions)
+    }
+
+    /// Runs the ribbon for `frames` frames on one context, so the popup the ribbon opens can finish
+    /// its sizing pass and draw its contents.
+    fn draw_frames(
+        state: &mut Toolbars,
+        context: RibbonContext,
+        frames: usize,
+    ) -> (Vec<String>, Vec<String>, Vec<ToolAction>) {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::set_language(&ctx, Lang::En);
+        let mut actions = Vec::new();
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..frames {
+            let output = ctx.run_ui(Default::default(), |ui| {
+                show(ui, state, context, &mut actions);
+            });
+            out = (drawn_text(&output.shapes), accessible_labels(&output), actions.clone());
+            output.drop_without_applying_deltas();
+        }
+        out
+    }
+
+    /// The tool `id` of the map.
+    fn tool(id: &str) -> &'static ToolSpec {
+        spec::tool(id).expect("the map declares this tool")
     }
 
     /// The hints of the tools a tab draws, with its own tab buttons filtered out.
@@ -1307,6 +1120,261 @@ mod tests {
             let tools = group.tools().count();
             let fields = group.cells.iter().filter(|cell| matches!(cell, CellSpec::Field(_)) && cell.is_live()).count();
             assert_eq!(group.columns(), tools + fields * FieldSpec::COLUMNS, "{} miscounts its row", group.id);
+        }
+    }
+
+    #[test]
+    fn a_tool_with_more_than_one_method_has_a_list_and_one_method_has_none() {
+        let line = tool("sketch.create.line");
+        let polyline = tool("sketch.create.polyline");
+        let circle = tool("sketch.create.circle");
+        assert!(line.has_list(), "a line names a method besides two points");
+        assert!(!polyline.has_list(), "polyline has one way to be drawn");
+        assert!(!tool("sketch.create.polyline").variants.is_empty() || !polyline.has_list());
+        assert!(circle.has_list());
+
+        let mut state = Toolbars::new();
+        assert!(state.open_list(circle));
+        assert!(!state.open_list(polyline), "a one-method tool opens nothing");
+        assert!(state.list_open_for(circle), "the refused open left the open list alone");
+        state.close_list();
+        assert!(state.list().is_none());
+    }
+
+    #[test]
+    fn the_pinned_method_falls_back_to_the_first_and_drives_the_shortcut() {
+        let circle = tool("sketch.create.circle");
+        let mut pinned = BTreeMap::new();
+        assert_eq!(circle.pinned_index(&pinned), 0, "an unpinned tool runs its own method");
+        assert_eq!(shortcut_method(DrawTool::Circle, &pinned), DrawTool::Circle);
+
+        pinned.insert(circle.id.to_owned(), "sketch.create.circle.three-points".to_owned());
+        assert_eq!(circle.pinned_index(&pinned), 2);
+        assert_eq!(
+            shortcut_method(DrawTool::Circle, &pinned),
+            DrawTool::CircleThreePoints,
+            "the tool's key runs the pinned method with the list closed"
+        );
+
+        pinned.insert(circle.id.to_owned(), "sketch.create.circle.retired".to_owned());
+        assert_eq!(circle.pinned_index(&pinned), 0, "an unknown id falls back to the first method");
+        assert_eq!(shortcut_method(DrawTool::Circle, &pinned), DrawTool::Circle);
+        assert_eq!(
+            shortcut_method(DrawTool::Polyline, &pinned),
+            DrawTool::Polyline,
+            "a tool with one method is never redirected"
+        );
+    }
+
+    #[test]
+    fn the_rows_are_the_map_in_order_and_a_planned_method_stays_disabled() {
+        let circle = tool("sketch.create.circle");
+        let rows = method_rows(circle, &Toolbars::new(), full_context(), Lang::En);
+        let ids = rows.iter().map(|row| row.method.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "sketch.create.circle",
+                "sketch.create.circle.two-points",
+                "sketch.create.circle.three-points",
+                "sketch.create.circle.tangent",
+            ],
+            "the list is the map, in order, without a duplicate row"
+        );
+        assert_eq!(rows.iter().map(|row| row.enabled).collect::<Vec<_>>(), [true, false, true, false]);
+        assert_eq!(
+            rows[0].method.label,
+            Message::ToolCircleCentreRadius,
+            "the first row names the method, not the tool"
+        );
+        assert_eq!(rows[0].method.section, Some(Message::SectionBuild), "the tool's row joins the first section");
+        assert_eq!(rows[2].method.section, Some(Message::SectionBuild));
+        assert_eq!(rows[3].method.section, Some(Message::SectionTangents));
+        assert!(rows[1].action.is_none(), "a planned method runs nothing");
+    }
+
+    #[test]
+    fn a_row_choice_runs_its_action_and_a_pin_keeps_the_list_open() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        assert!(state.open_list(circle));
+        let rows = method_rows(circle, &state, full_context(), Lang::En);
+        let mut actions = Vec::new();
+
+        apply_choice(&mut state, circle, &rows, Some(list::ListChoice::Pin(2)), &mut actions);
+        assert!(actions.is_empty(), "a pin runs nothing");
+        assert_eq!(
+            state.pinned_variants().get(circle.id).map(String::as_str),
+            Some("sketch.create.circle.three-points")
+        );
+        assert!(state.list_open_for(circle), "pinning keeps the list open under the new accent");
+
+        apply_choice(&mut state, circle, &rows, Some(list::ListChoice::Run(2)), &mut actions);
+        assert_eq!(actions, vec![ToolAction::Draw { tool: DrawTool::CircleThreePoints, sides: DEFAULT_POLYGON_SIDES }]);
+        assert!(!state.list_open_for(circle), "running a row closes the list");
+    }
+
+    #[test]
+    fn a_tab_change_and_a_folded_body_close_the_list() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        assert!(state.open_list(circle));
+        apply_tab_gesture(&mut state, tab("model"), false);
+        assert!(state.list().is_none(), "a tab change closes the list");
+
+        state.set_tab(tab("sketch"));
+        assert!(state.open_list(circle));
+        state.set_open(false);
+        assert!(state.list().is_none(), "a folded body has no cell to anchor the list to");
+    }
+
+    #[test]
+    fn a_list_that_outlived_its_tab_is_dropped_before_it_draws() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("model"));
+        // A state put out of step by hand, the way a lost tab would leave it.
+        state.list = Some(list::VariantList::new(circle));
+        let (texts, _, _) = draw(&mut state, full_context());
+        assert!(state.list().is_none(), "the ribbon drops a list it cannot anchor");
+        assert!(!texts.iter().any(|text| text == "TANGENTS"), "no list is drawn: {texts:?}");
+    }
+
+    #[test]
+    fn the_open_list_draws_its_header_its_rows_and_no_footer() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        assert!(state.open_list(circle));
+        let (texts, labels, actions) = draw_frames(&mut state, full_context(), 3);
+        assert!(texts.iter().any(|text| text == "Circle"), "the header names the tool: {texts:?}");
+        assert!(texts.iter().any(|text| text == "C"), "the header carries the shortcut");
+        assert!(texts.iter().any(|text| text == "Centre and radius"), "the tool's own method is a row: {texts:?}");
+        assert!(texts.iter().any(|text| text == "Circle through 3 points"), "a live method is a row: {texts:?}");
+        assert!(texts.iter().any(|text| text == "BUILD"), "the section caption is drawn: {texts:?}");
+        assert!(
+            !texts.iter().any(|text| text.contains("Enter") || text.contains("Esc")),
+            "the list has no footer: {texts:?}"
+        );
+        assert!(labels.iter().any(|label| label.contains("Circle")), "the rows are announced: {labels:?}");
+        assert!(actions.is_empty(), "opening and drawing the list runs nothing");
+    }
+
+    #[test]
+    fn every_open_list_stays_inside_the_window_at_both_horizontal_edges() {
+        // The list is anchored to its cell and flips to the other side of the anchor at an edge;
+        // this is the approved anatomy's promise, and a window narrower than the list is out of
+        // scope because the shell enforces a larger minimum.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for anchor_x in [8.0, 752.0] {
+            let ctx = egui::Context::default();
+            crate::set_language(&ctx, Lang::En);
+            let mut slot = Some(list::VariantList::new(tool("sketch.create.circle")));
+            let mut anchor = None;
+            for _ in 0..2 {
+                anchor = list_frame(&ctx, screen, anchor_x, &mut slot, Vec::new());
+            }
+            let anchor = anchor.expect("the cell drew");
+            let circle = tool("sketch.create.circle");
+            let rect = egui::Popup::from_response(&anchor)
+                .id(egui::Id::unique(("ribbon.variants", circle.id)))
+                .get_popup_rect()
+                .expect("the list drew once and reports its rect");
+            assert!(screen.contains_rect(rect), "the list at x = {anchor_x} leaves the window: {rect:?} in {screen:?}");
+        }
+    }
+
+    #[test]
+    fn escape_closes_the_open_list() {
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        let mut slot = Some(list::VariantList::new(circle));
+        for _ in 0..2 {
+            list_frame(&ctx, screen, 8.0, &mut slot, Vec::new());
+        }
+        assert!(slot.is_some(), "the list is open");
+        list_frame(&ctx, screen, 8.0, &mut slot, vec![key_event(egui::Key::Escape)]);
+        assert!(slot.is_none(), "Escape closes the list");
+    }
+
+    #[test]
+    fn a_click_outside_the_list_closes_it() {
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        let mut slot = Some(list::VariantList::new(circle));
+        for _ in 0..3 {
+            list_frame(&ctx, screen, 8.0, &mut slot, Vec::new());
+        }
+        assert!(slot.is_some(), "the list is open");
+        let outside = egui::pos2(600.0, 500.0);
+        list_frame(&ctx, screen, 8.0, &mut slot, vec![pointer_button(outside, true)]);
+        assert!(slot.is_some(), "the press alone is not a click");
+        list_frame(&ctx, screen, 8.0, &mut slot, vec![pointer_button(outside, false)]);
+        assert!(slot.is_none(), "a click outside the list closes it");
+    }
+
+    #[test]
+    fn a_click_inside_the_list_keeps_it_open() {
+        // The pin is inside the list: only a click elsewhere closes it, so a pin does not dismiss
+        // the list the user is still choosing from.
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        let mut slot = Some(list::VariantList::new(circle));
+        for _ in 0..3 {
+            list_frame(&ctx, screen, 8.0, &mut slot, Vec::new());
+        }
+        let inside = egui::pos2(150.0, 110.0);
+        list_frame(&ctx, screen, 8.0, &mut slot, vec![pointer_button(inside, true)]);
+        list_frame(&ctx, screen, 8.0, &mut slot, vec![pointer_button(inside, false)]);
+        assert!(slot.is_some(), "a click inside the list leaves it open");
+    }
+
+    /// One frame of a window with a single open list under a cell at `anchor_x`.
+    fn list_frame(
+        ctx: &egui::Context,
+        screen: egui::Rect,
+        anchor_x: f32,
+        slot: &mut Option<list::VariantList>,
+        events: Vec<egui::Event>,
+    ) -> Option<egui::Response> {
+        let circle = tool("sketch.create.circle");
+        let mut anchor = None;
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let output = ctx.run_ui(input, |ui| {
+            egui::Area::new(egui::Id::unique("ribbon.list.test")).fixed_pos(egui::pos2(anchor_x, 32.0)).show(
+                ui.ctx(),
+                |ui| {
+                    let (_, response) =
+                        ui.allocate_exact_size(egui::vec2(RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT), egui::Sense::click());
+                    let rows = method_rows(circle, &Toolbars::new(), full_context(), Lang::En);
+                    list::show(ui, slot, circle, &rows, &response, 0, Lang::En);
+                    anchor = Some(response);
+                },
+            );
+        });
+        output.drop_without_applying_deltas();
+        anchor
+    }
+
+    /// One key press, as the platform hands it to `egui`.
+    fn key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// One mouse-button change at `pos`.
+    fn pointer_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
         }
     }
 
