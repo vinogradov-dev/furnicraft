@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
-  field that changes while the pointer is held and moved left or right, with the cursor hidden for
-  the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.
-  The same *hide the pointer, read the delta* rule applies to every numeric field that scrubs on a
-  horizontal drag, so a value that resizes its own widget — the scale is the worst case — no longer
-  chases the cursor. A typed value is clamped to the offered range and applied through
-  `ctx.set_zoom_factor`; a preset applies exactly and draws as selected. Tests: a drag reads the
-  delta and never the absolute pointer position; the value does not jump when the widget changes
-  size under it; a preset sets its exact percent; a typed value outside the range clamps.
-  Session notes: `ui_scale::show` is the only scale control; `Response::drag_delta` or
-  `ui.input(|i| i.pointer.delta())` is the input to read, and `CursorIcon::None` hides the pointer.
-  Find every scrubbing numeric field through `egui::DragValue` in `crates/ui/src`.
-  `files: crates/ui/src/ui_scale.rs, crates/ui/src/settings.rs, crates/ui/src`
-
-## Bugs
-
 - `[ ]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
   frame reads as a dark hole in a light window. Expectation: a theme change repaints the scene
@@ -51,6 +35,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   changes. Tests: a light frame carries the light background and grid; switching variant changes the
   uploaded scene without touching the document revision.
   `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/main.rs`
+
+## Bugs
 
 - `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
   arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
@@ -109,6 +95,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
+  field that changes while the pointer is held and moved left or right, with the cursor hidden for
+  the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.
+  The same *hide the pointer, read the delta* rule applies to every numeric field that scrubs on a
+  horizontal drag, so a value that resizes its own widget — the scale is the worst case — no longer
+  chases the cursor. A typed value is clamped to the offered range and applied through
+  `ctx.set_zoom_factor`; a preset applies exactly and draws as selected. Tests: a drag reads the
+  delta and never the absolute pointer position; the value does not jump when the widget changes
+  size under it; a preset sets its exact percent; a typed value outside the range clamps.
+  Session notes: `ui_scale::show` is the only scale control; `Response::drag_delta` or
+  `ui.input(|i| i.pointer.delta())` is the input to read, and `CursorIcon::None` hides the pointer.
+  Find every scrubbing numeric field through `egui::DragValue` in `crates/ui/src`.
+  `files: crates/ui/src/ui_scale.rs, crates/ui/src/settings.rs, crates/ui/src` — `929b780`
 
 - `[x]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
   *Scene* and *Inspector* disappears — the tree and the card already say what they hold, and the
