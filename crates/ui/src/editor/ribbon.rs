@@ -176,4 +176,35 @@ impl Editor {
     pub fn set_ribbon_tab(&mut self, tab: &'static toolbars::spec::TabSpec) -> &'static toolbars::spec::TabSpec {
         self.toolbars.set_tab(tab)
     }
+
+    /// Whether a ribbon variant list is open, so the shell can leave Escape and Enter to it.
+    ///
+    /// The ribbon draws after the shell reads the keys, so the shell asks the previous frame's
+    /// state: a list that was open when the key was pressed owns that key (U67).
+    pub fn variant_list_open(&self) -> bool {
+        self.toolbars.list().is_some()
+    }
+
+    /// The methods the workspace pinned, by tool id.
+    ///
+    /// A pin is a workspace setting, not scene data: the editor holds the copy the shell handed it
+    /// when the tab opened, and the shell writes it back when it changes (U67).
+    pub fn pinned_variants(&self) -> &std::collections::BTreeMap<String, String> {
+        self.toolbars.pinned_variants()
+    }
+
+    /// Replaces the pinned methods, from the settings file or from the shell's own sync.
+    pub fn set_pinned_variants(&mut self, pinned: std::collections::BTreeMap<String, String>) {
+        self.toolbars.set_pinned_variants(pinned);
+    }
+
+    /// Starts the drawing tool a key names, honouring the method pinned for that tool.
+    ///
+    /// The key table names drawing tools, and a tool with a list has one key: pressing it runs the
+    /// pinned method without opening the list, so the ribbon stays quiet while the keyboard works
+    /// (U67).
+    pub fn start_shortcut(&mut self, tool: crate::draw::DrawTool, sides: u32) {
+        let tool = toolbars::shortcut_method(tool, self.toolbars.pinned_variants());
+        self.start_drawing_with(tool, sides);
+    }
 }

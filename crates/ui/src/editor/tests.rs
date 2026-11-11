@@ -1511,3 +1511,51 @@ fn the_flags_survive_a_selection_change_and_die_with_the_editor() {
     assert!(!fresh.is_locked(panel));
     assert!(project.contains_node(panel));
 }
+
+#[test]
+fn opening_a_variant_list_pins_nothing_and_writes_no_revision() {
+    let (project, _) = cube_project();
+    let mut session = Session::new(project);
+    let mut editor = Editor::new();
+    let revision = session.project().revision();
+    let circle = spec::tool("sketch.create.circle").expect("the map declares the circle");
+    let ctx = egui::Context::default();
+    let output = ctx.run_ui(Default::default(), |ui| {
+        assert!(editor.toolbars_mut().open_list(circle));
+        let _ = editor.show_ribbon(ui, &mut session, RibbonView::default());
+    });
+    output.drop_without_applying_deltas();
+    assert!(editor.toolbars_mut().list().is_some(), "the list is open");
+    assert_eq!(session.project().revision(), revision, "opening the list is view state, not an edit");
+    assert!(editor.pinned_variants().is_empty(), "opening the list pins nothing");
+}
+
+#[test]
+fn a_pinned_method_is_view_state_the_document_never_sees() {
+    let (project, _) = cube_project();
+    let session = Session::new(project);
+    let mut editor = Editor::new();
+    let revision = session.project().revision();
+    let circle = spec::tool("sketch.create.circle").expect("the map declares the circle");
+    let three_points = circle.methods().nth(2).expect("the circle's third method");
+    editor.toolbars_mut().pin(circle, three_points);
+    assert_eq!(
+        editor.pinned_variants().get(circle.id).map(String::as_str),
+        Some("sketch.create.circle.three-points"),
+        "the pin is remembered by tool id and method id"
+    );
+    assert_eq!(session.project().revision(), revision, "a pin is a workspace setting, not an edit");
+}
+
+#[test]
+fn the_master_key_starts_the_pinned_method_with_the_list_closed() {
+    let mut editor = Editor::new();
+    let circle = spec::tool("sketch.create.circle").expect("the map declares the circle");
+    editor.set_pinned_variants(std::collections::BTreeMap::from([(
+        circle.id.to_owned(),
+        "sketch.create.circle.three-points".to_owned(),
+    )]));
+    editor.start_shortcut(DrawTool::Circle, 6);
+    assert_eq!(editor.drawing().map(DrawDraft::tool), Some(DrawTool::CircleThreePoints));
+    assert!(editor.toolbars_mut().list().is_none(), "a shortcut never opens the list");
+}

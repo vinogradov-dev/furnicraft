@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
+- `[~]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
   Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
    «Круг» once and keep its input methods; the owner approved the F1 list (not the shelf, not
    repeat-last). The variant tables and the list anatomy are in `plan/notes/U67.md`, the

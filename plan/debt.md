@@ -145,10 +145,7 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   does not perform (S21 Home, S22 the chrome) and the impl is re-measured after U45.
 - `[design]` `ui/panel_card.rs` (989) and `ui/object_card.rs` (989) sit under B4's 1000-line ceiling
   and their impls under 800 (`PanelCard` 432, `ObjectCard` 469), so the audit filed no split although
-  F6 named them. `ui/toolbars.rs` was 1029 production lines before U68 and is 840 after it, with the
-  map moved to `ui/toolbars/spec.rs` (770): the module is under 1000, the impl is 40 over 800, and its
-  longest function (`ready`, the one match over `ToolKind`) is 101, under the 150-line ceiling. A split
-  by area — the state, the drawing, the ready table — is the next move if it grows again.
+  F6 named them.
 - `[design]` Twenty modules carry 25 or more public items (B6). Each is one value family or one command
   family whose header states what holds it together (`geom` segments, `model/contour.rs`,
   `model/primitive.rs`, `engine/node_cmds.rs`, `model/panel/machining.rs`, `ui/theme.rs`); the audit

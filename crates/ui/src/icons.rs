@@ -405,6 +405,7 @@ icons!(Actions, "actions", View, actions {
     ERROR => "error",
     INFO => "info",
     HELP => "help",
+    PIN => "pin",
 });
 
 icons!(Window, "window", View, window {
@@ -1020,7 +1021,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 97);
+        assert_eq!(seen.len(), 98);
     }
 
     #[test]

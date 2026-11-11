@@ -10,6 +10,7 @@
 //! bar. A value outside its range is clamped, so a hand-edited file cannot push the UI scale past
 //! what the control offers.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use egui::{Align, Context, Id, Layout, Modal, Ui};
@@ -254,19 +255,24 @@ impl Default for ViewportSettings {
 
 /// The ribbon's own state, remembered between runs.
 ///
-/// Only the fold is persisted: which tab is open and what the numeric fields hold are session view
-/// state, and U67's pinned variant will join this section when the list lands. A file written before
-/// the section existed opens the body, which is the state the workspace has always started in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The fold and the pinned method of each tool are the two ribbon values that outlive a run; which
+/// tab is open, what the numeric fields hold and which variant list is open are session view state.
+/// A file written before either field existed opens the body with the first method of every tool,
+/// which is the state the workspace has always started in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RibbonSettings {
     /// Whether the ribbon's tool body is drawn under its tab row.
     pub open: bool,
+    /// The method a click and the tool's key run, by tool id: `sketch.create.circle` →
+    /// `sketch.create.circle.three-points` (U67). An id this build does not know falls back to the
+    /// tool's first method.
+    pub pinned_variants: BTreeMap<String, String>,
 }
 
 impl Default for RibbonSettings {
     fn default() -> Self {
-        Self { open: true }
+        Self { open: true, pinned_variants: BTreeMap::new() }
     }
 }
 
@@ -282,7 +288,7 @@ pub struct Settings {
     pub viewport: ViewportSettings,
     /// Recently opened scenes, newest first.
     pub recent: Vec<PathBuf>,
-    /// The fold of the ribbon.
+    /// The fold of the ribbon and the pinned method of each tool.
     pub ribbon: RibbonSettings,
 }
 
@@ -776,7 +782,13 @@ mod tests {
                 roll_step_degrees: 5,
             },
             recent: vec![PathBuf::from("/tmp/cabinet.fcs"), PathBuf::from("/tmp/shelf.fcs")],
-            ribbon: RibbonSettings { open: false },
+            ribbon: RibbonSettings {
+                open: false,
+                pinned_variants: BTreeMap::from([(
+                    "sketch.create.circle".to_owned(),
+                    "sketch.create.circle.three-points".to_owned(),
+                )]),
+            },
         }
     }
 
@@ -847,6 +859,27 @@ mod tests {
         assert!(Settings::from_json(json).expect("load").ribbon.open);
         let json = r#"{"version":1,"ribbon":{"opacity":0.51}}"#;
         assert!(Settings::from_json(json).expect("load").ribbon.open);
+    }
+
+    #[test]
+    fn the_pinned_methods_round_trip_through_the_workspace_file() {
+        let mut settings = Settings::default();
+        assert!(settings.ribbon.pinned_variants.is_empty(), "a fresh workspace pins nothing");
+        settings
+            .ribbon
+            .pinned_variants
+            .insert("sketch.create.circle".to_owned(), "sketch.create.circle.three-points".to_owned());
+        let json = settings.to_json().expect("serialise");
+        let read = Settings::from_json(&json).expect("parse");
+        assert_eq!(read, settings, "the workspace file keeps the pin");
+        assert_eq!(
+            read.ribbon.pinned_variants.get("sketch.create.circle").map(String::as_str),
+            Some("sketch.create.circle.three-points")
+        );
+
+        // A file written before U67 has no pin object: every tool runs its first method.
+        let json = r#"{"version":1,"ribbon":{"open":true}}"#;
+        assert!(Settings::from_json(json).expect("load").ribbon.pinned_variants.is_empty());
     }
 
     #[test]

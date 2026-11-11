@@ -206,9 +206,10 @@ impl Document {
         scene.camera = crate::scene_build::scene_camera(session.project(), layout.active_camera());
 
         let mut editor = Editor::new();
-        // The fold is the one ribbon state the workspace remembers; a new tab opens it the way the
-        // user left the last one.
+        // The fold and the pinned method of each tool are the ribbon state the workspace remembers; a
+        // new tab opens the ribbon the way the user left the last one.
         editor.set_ribbon_open(settings.ribbon.open);
+        editor.set_pinned_variants(settings.ribbon.pinned_variants.clone());
         let mut renderer = ViewportRenderer::new(&render_state.device, 1280, 800);
         let texture_id = {
             let mut egui_renderer = render_state.renderer.write();
@@ -319,6 +320,16 @@ impl Document {
     /// settings and hands it to every open tab; the document only carries it to its editor.
     pub(crate) fn set_ribbon_open(&mut self, open: bool) -> bool {
         self.editor.set_ribbon_open(open)
+    }
+
+    /// The method each tool is pinned to, which is window chrome rather than scene data.
+    pub(crate) fn pinned_variants(&self) -> &std::collections::BTreeMap<String, String> {
+        self.editor.pinned_variants()
+    }
+
+    /// Replaces the pinned methods of this scene's ribbon from the workspace settings.
+    pub(crate) fn set_pinned_variants(&mut self, pinned: std::collections::BTreeMap<String, String>) {
+        self.editor.set_pinned_variants(pinned);
     }
 
     /// The selection and creation target the palette's parameter builders read.
@@ -1646,8 +1657,12 @@ impl Document {
     /// navigation mode and the display popover live on the [`Shell`], so the two that concern them
     /// are read and written there.
     pub(crate) fn handle_keys(&mut self, ui: &egui::Ui, modals: bool, shell: &mut Shell) {
-        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
-        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
+        // An open variant list owns Escape and Enter: the popup closes itself and runs its
+        // highlighted method when the ribbon draws later in this frame, and one key must not also
+        // drop a draft or commit it (U67).
+        let list = self.editor.variant_list_open();
+        let escape = !list && ui.input(|input| input.key_pressed(egui::Key::Escape));
+        let enter = !list && ui.input(|input| input.key_pressed(egui::Key::Enter));
         if self.editor.contour_edit().is_some() {
             // The working copy is dropped by Escape and applied by Enter; typing in a field keeps
             // both keys for the field, and a corner drag keeps them for the drag.

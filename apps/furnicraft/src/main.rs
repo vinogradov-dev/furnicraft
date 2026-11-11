@@ -426,6 +426,7 @@ impl FurniCraftApp {
     fn ribbon(&mut self, ui: &mut egui::Ui, design: egui::Rect) {
         self.tabs.active_mut().show_ribbon(ui, design, &mut self.shell, &self.settings);
         self.sync_ribbon_fold();
+        self.sync_pinned_variants();
     }
 
     /// Remembers the ribbon's fold as a workspace setting and hands it to every open scene.
@@ -441,6 +442,24 @@ impl FurniCraftApp {
         self.settings.ribbon.open = open;
         for (_, document) in self.tabs.iter_mut() {
             document.set_ribbon_open(open);
+        }
+        self.persist_settings();
+    }
+
+    /// Remembers the method the user pinned as a workspace setting and hands it to every open scene.
+    ///
+    /// The pin is global chrome, like the fold: one click in one tab changes the method every tab
+    /// runs, and the next launch starts the same way. The write happens on the one frame the map
+    /// changes, not per frame (U67).
+    fn sync_pinned_variants(&mut self) {
+        let active = self.tabs.active().pinned_variants();
+        if *active == self.settings.ribbon.pinned_variants {
+            return;
+        }
+        let pinned = active.clone();
+        self.settings.ribbon.pinned_variants = pinned.clone();
+        for (_, document) in self.tabs.iter_mut() {
+            document.set_pinned_variants(pinned.clone());
         }
         self.persist_settings();
     }

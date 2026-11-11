@@ -81,4 +81,10 @@ impl Editor {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// The ribbon's view state, for a test that asserts opening its variant list writes nothing.
+    #[cfg(test)]
+    pub(crate) fn toolbars_mut(&mut self) -> &mut toolbars::Toolbars {
+        &mut self.toolbars
+    }
 }

@@ -2,7 +2,8 @@
 //!
 //! The map is data (`plan/notes/U68.md` holds the approved one). A tab is a noun that names the
 //! domain — *Sketch, Model, Furniture, Scene, View* — a group is one operation class under it, a tool
-//! is one command and a variant is one input method of that command (U67 draws the list). Every level
+//! is one command and a variant is one input method of that command; [`super::list`] draws them as
+//! the list a cell opens, and each row is one [`Method`]. Every level
 //! carries a namespaced id: `sketch`, `sketch.create`, `sketch.create.line`,
 //! `sketch.create.circle.three-points`, so a saved layout, a settings value or an agent never depends
 //! on a position in the table.
@@ -71,6 +72,35 @@ pub struct VariantSpec {
     pub icon: Option<Icon>,
     /// What picking the method runs, or `None` while its command does not exist.
     pub run: Option<ToolKind>,
+    /// The caption of the section this method belongs to, drawn above the first row that carries it.
+    pub section: Option<Message>,
+}
+
+/// One row of a tool's method list, the tool's own method first.
+///
+/// The list is derived, not stored twice: the tool contributes its own row and each
+/// [`VariantSpec`] contributes one more, so the map stays the single description of a tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Method {
+    /// The namespaced id: the tool's own id for its first method, a variant id for the rest.
+    pub id: &'static str,
+    /// The name the list draws.
+    pub label: Message,
+    /// The artwork, or `None` while the method is planned or has none of its own.
+    pub icon: Option<Icon>,
+    /// The shortcut label, when a key names this method.
+    pub shortcut: Option<&'static str>,
+    /// What picking the method runs, or `None` while it is planned.
+    pub run: Option<ToolKind>,
+    /// The caption of the section it belongs to, if the list captions its rows.
+    pub section: Option<Message>,
+}
+
+impl Method {
+    /// Whether the method can run today.
+    pub const fn is_live(&self) -> bool {
+        self.run.is_some()
+    }
 }
 
 /// One tool: one cell of a group's row.
@@ -86,6 +116,9 @@ pub struct ToolSpec {
     pub shortcut: Option<&'static str>,
     /// The method a click runs today, or `None` while the tool is planned.
     pub run: Option<ToolKind>,
+    /// The name of the tool's own method, when its list names methods rather than repeating the
+    /// tool: a circle's first row is «Centre and radius», an arc's is «Through 2 points».
+    pub method: Option<Message>,
     /// The tool's other input methods, drawn as a list from U67 on.
     pub variants: &'static [VariantSpec],
 }
@@ -99,6 +132,64 @@ impl ToolSpec {
     /// The method a click on the cell runs today.
     pub fn primary(&self) -> Option<ToolKind> {
         self.run.or_else(|| self.variants.iter().find_map(|variant| variant.run))
+    }
+
+    /// The tool's own method, the first row of its list.
+    ///
+    /// Its section is the first section the list declares: the row a tool is named after belongs to
+    /// the same caption as the first method it adds (a circle's *centre and radius* is a build), and
+    /// a later row may open a new one (*tangents*).
+    pub fn default_method(&'static self) -> Method {
+        Method {
+            id: self.id,
+            label: self.method.unwrap_or(self.label),
+            icon: self.icon,
+            shortcut: self.shortcut,
+            run: self.run,
+            section: self.variants.iter().find_map(|variant| variant.section),
+        }
+    }
+
+    /// Every input method in list order: the tool's own first, then its variants.
+    pub fn methods(&'static self) -> impl Iterator<Item = Method> {
+        std::iter::once(self.default_method()).chain(self.variants.iter().map(|variant| Method {
+            id: variant.id,
+            label: variant.label,
+            icon: variant.icon,
+            shortcut: variant.run.and_then(shortcut_of),
+            run: variant.run,
+            section: variant.section,
+        }))
+    }
+
+    /// The methods that can run today, in list order.
+    pub fn live_methods(&'static self) -> impl Iterator<Item = Method> {
+        self.methods().filter(Method::is_live)
+    }
+
+    /// Whether a click on the cell opens a list instead of running the tool.
+    ///
+    /// One method is no choice: a tool that only knows one way to be built runs on the click and
+    /// draws no caret.
+    pub fn has_list(&'static self) -> bool {
+        self.methods().count() > 1
+    }
+
+    /// The index of the method the workspace pinned, or the first method.
+    ///
+    /// A pinned id this build does not know — a setting written by a newer one, or a method that
+    /// moved — falls back to the first method instead of leaving the tool unusable.
+    pub fn pinned_index(&'static self, pinned: &std::collections::BTreeMap<String, String>) -> usize {
+        let Some(pinned) = pinned.get(self.id) else { return 0 };
+        self.methods().position(|method| method.id == pinned.as_str()).unwrap_or(0)
+    }
+}
+
+/// The shortcut label of a method that runs a drawing tool, when a key names it.
+pub fn shortcut_of(kind: ToolKind) -> Option<&'static str> {
+    match kind {
+        ToolKind::Draw(tool) => super::shortcut_label(tool),
+        _ => None,
     }
 }
 
@@ -245,6 +336,22 @@ pub fn fallback_tab() -> Option<&'static TabSpec> {
     TABS.iter().find(|tab| tab.is_drawn())
 }
 
+/// The tool with `id`, or `None` when the map does not declare it.
+pub fn tool(id: &str) -> Option<&'static ToolSpec> {
+    for tab in tabs() {
+        for group in tab.groups {
+            for cell in group.cells {
+                if let CellSpec::Tool(tool) = cell
+                    && tool.id == id
+                {
+                    return Some(tool);
+                }
+            }
+        }
+    }
+    None
+}
+
 // ── The map ─────────────────────────────────────────────────────────────────
 
 const SKETCH: [GroupSpec; 6] = [
@@ -258,11 +365,13 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::LINE),
                 shortcut: shortcut_label(DrawTool::Line),
                 run: Some(ToolKind::Draw(DrawTool::Line)),
+                method: Some(Message::ToolLineTwoPoints),
                 variants: &[VariantSpec {
                     id: "sketch.create.line.angle",
                     label: Message::ToolLineAngle,
                     icon: None,
                     run: None,
+                    section: None,
                 }],
             }),
             CellSpec::Tool(ToolSpec {
@@ -271,6 +380,7 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::POLYLINE),
                 shortcut: shortcut_label(DrawTool::Polyline),
                 run: Some(ToolKind::Draw(DrawTool::Polyline)),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -279,18 +389,21 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::RECTANGLE),
                 shortcut: shortcut_label(DrawTool::Rectangle),
                 run: Some(ToolKind::Draw(DrawTool::Rectangle)),
+                method: Some(Message::ToolRectangleFromCorner),
                 variants: &[
                     VariantSpec {
                         id: "sketch.create.rectangle.centre",
                         label: Message::ToolRectangleFromCentre,
                         icon: Some(icons::contour::RECTANGLE_CENTRE),
                         run: Some(ToolKind::Draw(DrawTool::RectangleFromCenter)),
+                        section: None,
                     },
                     VariantSpec {
                         id: "sketch.create.rectangle.centre-directed",
                         label: Message::ToolRectangleFromCentreDirected,
                         icon: Some(icons::contour::RECTANGLE_CENTRE_DIRECTED),
                         run: Some(ToolKind::Draw(DrawTool::RectangleFromCenterDirected)),
+                        section: None,
                     },
                 ],
             }),
@@ -300,24 +413,28 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::CIRCLE),
                 shortcut: shortcut_label(DrawTool::Circle),
                 run: Some(ToolKind::Draw(DrawTool::Circle)),
+                method: Some(Message::ToolCircleCentreRadius),
                 variants: &[
                     VariantSpec {
                         id: "sketch.create.circle.two-points",
                         label: Message::ToolCircleTwoPoints,
                         icon: None,
                         run: None,
+                        section: Some(Message::SectionBuild),
                     },
                     VariantSpec {
                         id: "sketch.create.circle.three-points",
                         label: Message::ToolCircleThreePoints,
                         icon: Some(icons::contour::CIRCLE_THREE_POINTS),
                         run: Some(ToolKind::Draw(DrawTool::CircleThreePoints)),
+                        section: Some(Message::SectionBuild),
                     },
                     VariantSpec {
                         id: "sketch.create.circle.tangent",
                         label: Message::ToolCircleTangent,
                         icon: None,
                         run: None,
+                        section: Some(Message::SectionTangents),
                     },
                 ],
             }),
@@ -327,18 +444,21 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::ARC),
                 shortcut: shortcut_label(DrawTool::Arc),
                 run: Some(ToolKind::Draw(DrawTool::Arc)),
+                method: Some(Message::ToolArcTwoPoints),
                 variants: &[
                     VariantSpec {
                         id: "sketch.create.arc.centre",
                         label: Message::ToolArcFromCentre,
                         icon: Some(icons::contour::ARC_CENTRE),
                         run: Some(ToolKind::Draw(DrawTool::ArcFromCenter)),
+                        section: Some(Message::SectionBuild),
                     },
                     VariantSpec {
                         id: "sketch.create.arc.three-points",
                         label: Message::ToolArcThreePoints,
                         icon: None,
                         run: None,
+                        section: Some(Message::SectionBuild),
                     },
                 ],
             }),
@@ -348,11 +468,13 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::POLYGON),
                 shortcut: shortcut_label(DrawTool::RegularPolygon),
                 run: Some(ToolKind::Draw(DrawTool::RegularPolygon)),
+                method: Some(Message::ToolPolygonSides),
                 variants: &[VariantSpec {
                     id: "sketch.create.polygon.edge",
                     label: Message::ToolPolygonEdge,
                     icon: None,
                     run: None,
+                    section: None,
                 }],
             }),
             CellSpec::Field(FieldSpec {
@@ -375,18 +497,21 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: None,
                 shortcut: None,
                 run: None,
+                method: None,
                 variants: &[
                     VariantSpec {
                         id: "sketch.modify.offset.distance",
                         label: Message::ToolOffsetDistance,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                     VariantSpec {
                         id: "sketch.modify.offset.through",
                         label: Message::ToolOffsetThrough,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                 ],
             }),
@@ -396,18 +521,21 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: None,
                 shortcut: None,
                 run: None,
+                method: None,
                 variants: &[
                     VariantSpec {
                         id: "sketch.modify.fillet.radius",
                         label: Message::ToolFilletRadius,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                     VariantSpec {
                         id: "sketch.modify.fillet.two-lines",
                         label: Message::ToolFilletTwoLines,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                 ],
             }),
@@ -417,18 +545,21 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: None,
                 shortcut: None,
                 run: None,
+                method: None,
                 variants: &[
                     VariantSpec {
                         id: "sketch.modify.chamfer.distance",
                         label: Message::ToolChamferDistance,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                     VariantSpec {
                         id: "sketch.modify.chamfer.two-lines",
                         label: Message::ToolChamferTwoLines,
                         icon: None,
                         run: None,
+                        section: None,
                     },
                 ],
             }),
@@ -457,11 +588,13 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: None,
                 shortcut: None,
                 run: None,
+                method: None,
                 variants: &[VariantSpec {
                     id: "sketch.dimensions.radius.diameter",
                     label: Message::ToolDiameter,
                     icon: None,
                     run: None,
+                    section: None,
                 }],
             }),
         ],
@@ -485,6 +618,7 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::CLOSE),
                 shortcut: None,
                 run: Some(ToolKind::CloseDraft),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -493,6 +627,7 @@ const SKETCH: [GroupSpec; 6] = [
                 icon: Some(icons::contour::CANCEL),
                 shortcut: None,
                 run: Some(ToolKind::CancelDraft),
+                method: None,
                 variants: &[],
             }),
         ],
@@ -510,6 +645,7 @@ const MODEL: [GroupSpec; 5] = [
                 icon: Some(icons::primitives::CUBE),
                 shortcut: None,
                 run: Some(ToolKind::Primitive(PrimitiveKind::Cube)),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -518,6 +654,7 @@ const MODEL: [GroupSpec; 5] = [
                 icon: Some(icons::primitives::CYLINDER),
                 shortcut: None,
                 run: Some(ToolKind::Primitive(PrimitiveKind::Cylinder)),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -526,6 +663,7 @@ const MODEL: [GroupSpec; 5] = [
                 icon: Some(icons::primitives::SPHERE),
                 shortcut: None,
                 run: Some(ToolKind::Primitive(PrimitiveKind::Sphere)),
+                method: None,
                 variants: &[],
             }),
             planned("model.primitives.cone", Message::ToolCone),
@@ -548,6 +686,7 @@ const MODEL: [GroupSpec; 5] = [
                 icon: Some(icons::bodies::EXTRUDE),
                 shortcut: None,
                 run: Some(ToolKind::Extrude),
+                method: None,
                 variants: &[],
             }),
             planned("model.create.revolve", Message::ToolRevolve),
@@ -604,6 +743,7 @@ const FURNITURE: [GroupSpec; 5] = [
                 icon: Some(icons::scene::PANEL),
                 shortcut: None,
                 run: Some(ToolKind::Panel),
+                method: None,
                 variants: &[],
             }),
             planned("furniture.panels.contour", Message::ToolContourPanel),
@@ -662,6 +802,7 @@ const SCENE: [GroupSpec; 3] = [
                 icon: Some(icons::scene::CAMERA),
                 shortcut: None,
                 run: Some(ToolKind::Camera),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -670,6 +811,7 @@ const SCENE: [GroupSpec; 3] = [
                 icon: Some(icons::scene::LIGHT),
                 shortcut: None,
                 run: Some(ToolKind::Light),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -678,6 +820,7 @@ const SCENE: [GroupSpec; 3] = [
                 icon: Some(icons::scene::ASSEMBLY),
                 shortcut: None,
                 run: Some(ToolKind::Assembly),
+                method: None,
                 variants: &[],
             }),
             planned("scene.objects.group", Message::ToolGroupNode),
@@ -712,6 +855,7 @@ const VIEW: [GroupSpec; 4] = [
                 icon: Some(icons::view::ORTHOGRAPHIC),
                 shortcut: Some("O"),
                 run: Some(ToolKind::Projection),
+                method: None,
                 variants: &[],
             }),
             CellSpec::Tool(ToolSpec {
@@ -720,6 +864,7 @@ const VIEW: [GroupSpec; 4] = [
                 icon: Some(icons::view::FRAME_ALL),
                 shortcut: Some("F"),
                 run: Some(ToolKind::FrameAll),
+                method: None,
                 variants: &[],
             }),
         ],
@@ -735,6 +880,7 @@ const VIEW: [GroupSpec; 4] = [
                 icon: Some(icons::view::GRID_SNAP),
                 shortcut: Some("G"),
                 run: Some(ToolKind::GridSnap),
+                method: None,
                 variants: &[],
             }),
             planned("view.display.contours", Message::ToolContours),
@@ -765,7 +911,7 @@ const VIEW: [GroupSpec; 4] = [
 
 /// A tool whose command does not exist yet: it holds its place and its name in the map.
 const fn planned(id: &'static str, label: Message) -> CellSpec {
-    CellSpec::Tool(ToolSpec { id, label, icon: None, shortcut: None, run: None, variants: &[] })
+    CellSpec::Tool(ToolSpec { id, label, icon: None, shortcut: None, run: None, method: None, variants: &[] })
 }
 
 #[cfg(test)]
