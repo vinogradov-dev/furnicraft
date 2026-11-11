@@ -1049,8 +1049,18 @@ mod tests {
 
     /// Runs the ribbon with `context` and returns its text shapes and accessible labels.
     fn draw(state: &mut Toolbars, context: RibbonContext) -> (Vec<String>, Vec<String>, Vec<ToolAction>) {
+        draw_in(state, context, Lang::En)
+    }
+
+    /// Runs the ribbon in one language, so a switch can be compared without a document.
+    fn draw_in(
+        state: &mut Toolbars,
+        context: RibbonContext,
+        lang: Lang,
+    ) -> (Vec<String>, Vec<String>, Vec<ToolAction>) {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
+        crate::set_language(&ctx, lang);
         let mut actions = Vec::new();
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, state, context, &mut actions);
@@ -1656,5 +1666,61 @@ mod tests {
             walk(&clipped.shape, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn every_russian_caption_fits_the_cell_floor() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let inner = crate::theme::RIBBON_BUTTON_MIN_WIDTH - 2.0 * crate::theme::RIBBON_BUTTON_PADDING;
+        let mut captions: Vec<Message> = vec![
+            Message::ToolPanel,
+            Message::ToolAssembly,
+            Message::ToolCamera,
+            Message::ToolLight,
+            Message::ToolExtrude,
+            Message::ToolCube,
+            Message::ToolCylinder,
+            Message::ToolSphere,
+            Message::ToolFrameAll,
+            Message::ToolGridSnap,
+            Message::ToolOrthographic,
+            Message::ToolPerspective,
+            Message::Close,
+            Message::Cancel,
+        ];
+        captions.extend(CONTOUR_TOOLS.iter().map(|tool| tool.label()));
+        let output = ctx.run_ui(Default::default(), |ui| {
+            for caption in &captions {
+                {
+                    let lang = Lang::Ru;
+                    let text = caption.text(lang);
+                    let galley = ui.fonts_mut(|fonts| {
+                        fonts.layout_no_wrap(
+                            text.to_owned(),
+                            egui::FontId::proportional(crate::icons::RIBBON_CAPTION_POINT_SIZE),
+                            egui::Color32::PLACEHOLDER,
+                        )
+                    });
+                    assert!(
+                        galley.size().x <= inner,
+                        "`{text}` measures {} pt, the cell's inner width is {inner} pt",
+                        galley.size().x
+                    );
+                }
+            }
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn switching_the_language_redraws_the_ribbon() {
+        let mut state = Toolbars::new();
+        let (english, _, _) = draw_in(&mut state, full_context(), Lang::En);
+        let (russian, _, _) = draw_in(&mut state, full_context(), Lang::Ru);
+        assert!(!english.iter().any(|text| text == "Прямоугольник"));
+        assert!(russian.iter().any(|text| text == "Прямоугольник"), "the Russian caption is drawn: {russian:?}");
+        assert!(russian.iter().any(|text| text == "РИСОВАНИЕ"), "the Russian group caption is drawn: {russian:?}");
+        assert_ne!(english, russian, "the same ribbon draws different words");
     }
 }

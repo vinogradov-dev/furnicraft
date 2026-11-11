@@ -10,6 +10,7 @@
 //! gesture, which belongs to the tool's own module.
 
 use eframe::egui;
+use furnicraft_text::Message;
 use furnicraft_ui::{DrawTool, MeshElement, theme};
 use furnicraft_units::Length;
 
@@ -71,6 +72,7 @@ fn hint(ui: &mut egui::Ui, text: &str) {
 
 /// The armed tool, the gesture it expects and the counts it would affect.
 fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction>, Option<TransformMode>) {
+    let lang = furnicraft_ui::language(ui.ctx());
     if let Some(error) = &info.error {
         ui.colored_label(theme::danger(ui), error);
         theme::divider(ui);
@@ -83,31 +85,36 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
     // A locked selection refuses the gizmo and the destructive commands, so the bar says which node
     // is locked: the missing handles read as a refusal and the way out is named (ADR 0065).
     if let Some(name) = &info.locked {
-        ui.label(format!("Locked · {name}")).on_hover_text("Unlock it in the scene tree to move or delete it");
+        ui.label(Message::LockedStatus.with(lang, [name])).on_hover_text(Message::UnlockHint.text(lang));
         theme::divider(ui);
     }
     // The arm is sticky across creations, so the bar names the container the next node lands in;
     // without the chip a pressed tool would create in a container armed much earlier (ADR 0056).
     if let Some(name) = &info.creation_parent {
-        ui.label(format!("Adding to: {name}"));
-        if ui.button("✕").on_hover_text("Create at the scene root again").clicked() {
+        ui.label(Message::AddingTo.with(lang, [name]));
+        if ui.button("✕").on_hover_text(Message::CreateAtRoot.text(lang)).clicked() {
             return (Some(StatusAction::ClearCreationParent), None);
         }
         theme::divider(ui);
     }
     if let Some((segments, dirty, along)) = info.contour {
-        ui.label(format!("Contour edit · {segments} segments{}", if dirty { " · modified" } else { "" }));
-        let motion = ui.selectable_label(along, if along { "Along contour" } else { "Free move" }).clicked();
-        let apply = ui.button("Apply").clicked();
-        let cancel = ui.button("Cancel").clicked();
-        hint(
-            ui,
-            if along {
-                "Drag corners along their segment  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
-            } else {
-                "Drag corners freely  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel"
-            },
-        );
+        let mut summary = Message::counted(
+            segments,
+            Message::ContourEditStatusOne,
+            Message::ContourEditStatusFew,
+            Message::ContourEditStatusMany,
+        )
+        .text(lang);
+        if dirty {
+            summary.push_str(Message::ContourModifiedSuffix.text(lang));
+        }
+        ui.label(summary);
+        let motion = ui
+            .selectable_label(along, if along { Message::AlongContour } else { Message::FreeMove }.text(lang))
+            .clicked();
+        let apply = ui.button(Message::Apply.text(lang)).clicked();
+        let cancel = ui.button(Message::Cancel.text(lang)).clicked();
+        hint(ui, if along { Message::ContourAlongHint } else { Message::ContourFreeHint }.text(lang));
         let action = if motion {
             Some(StatusAction::ToggleContourAlong)
         } else if apply {
@@ -120,24 +127,30 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         return (action, None);
     }
     if let Some((tool, points, closed, arc_mode)) = info.drawing {
-        ui.label(format!(
-            "Draw · {}{}{}",
-            tool.label(),
-            if points == 0 { String::new() } else { format!(" · {points} points") },
-            if tool.closes() { if arc_mode { " · arc" } else { " · line" } } else { "" }
-        ));
-        let grid = ui.selectable_label(info.grid, "Grid 10 mm  (G)").clicked();
+        let points_suffix = if points == 0 {
+            String::new()
+        } else {
+            Message::counted(points, Message::PointsSuffixOne, Message::PointsSuffixFew, Message::PointsSuffixMany)
+                .text(lang)
+        };
+        let kind_suffix = if tool.closes() {
+            if arc_mode { Message::DrawArcSuffix.text(lang) } else { Message::DrawLineSuffix.text(lang) }
+        } else {
+            ""
+        };
+        ui.label(Message::DrawStatus.with(lang, [tool.label().text(lang), &points_suffix, kind_suffix]));
+        let grid = ui.selectable_label(info.grid, Message::GridTenMillimetres.text(lang)).clicked();
         // The ribbon's *Close* and this one read the same rule, so a closure one offers is never
         // greyed out by the other (ADR 0077).
         let close = ui
-            .add_enabled(furnicraft_ui::toolbars::draft_can_close(tool, points, closed), egui::Button::new("Close"))
+            .add_enabled(
+                furnicraft_ui::toolbars::draft_can_close(tool, points, closed),
+                egui::Button::new(Message::Close.text(lang)),
+            )
             .clicked();
-        let finish = ui.add_enabled(points >= 2, egui::Button::new("Finish  (Enter)")).clicked();
-        let cancel = ui.button("Cancel  (Esc)").clicked();
-        hint(
-            ui,
-            "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Enter/RMB finish  ·  Esc cancel",
-        );
+        let finish = ui.add_enabled(points >= 2, egui::Button::new(Message::FinishEnter.text(lang))).clicked();
+        let cancel = ui.button(Message::CancelEsc.text(lang)).clicked();
+        hint(ui, Message::DrawHint.text(lang));
         if let Some(reason) = &info.preview_error {
             hint(ui, reason);
         }
@@ -155,10 +168,10 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         return (action, None);
     }
     if let Some(height) = info.extrude {
-        ui.label(format!("Extrude · {height}"));
-        let finish = ui.button("Finish  (Enter)").clicked();
-        let drop = ui.button("Drop  (Esc)").clicked();
-        hint(ui, "Drag the arrow or type a height  ·  Enter finish  ·  Esc drop the pull");
+        ui.label(Message::ExtrudeStatus.with(lang, [height]));
+        let finish = ui.button(Message::FinishEnter.text(lang)).clicked();
+        let drop = ui.button(Message::DropEsc.text(lang)).clicked();
+        hint(ui, Message::ExtrudeHint.text(lang));
         let action = if finish {
             Some(StatusAction::FinishExtrude)
         } else if drop {
@@ -170,33 +183,45 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
     }
     if let Some((kind, size)) = info.primitive {
         let name = match kind {
-            furnicraft_engine::PrimitiveKind::Cube => "Cube",
-            furnicraft_engine::PrimitiveKind::Cylinder => "Cylinder",
-            furnicraft_engine::PrimitiveKind::Sphere => "Sphere",
+            furnicraft_engine::PrimitiveKind::Cube => Message::ToolCube,
+            furnicraft_engine::PrimitiveKind::Cylinder => Message::ToolCylinder,
+            furnicraft_engine::PrimitiveKind::Sphere => Message::ToolSphere,
         };
-        ui.label(format!("Primitive · {name} {size}"));
-        let cancel = ui.button("Cancel  (Esc)").clicked();
-        hint(ui, "LMB place on the work plane  ·  Esc cancel");
+        ui.label(Message::PrimitiveStatus.with(lang, [name.text(lang), &size.to_string()]));
+        let cancel = ui.button(Message::CancelEsc.text(lang)).clicked();
+        hint(ui, Message::PrimitivePlaceHint.text(lang));
         return (cancel.then_some(StatusAction::CancelPrimitive), None);
     }
     if let Some(mode) = info.navigation {
-        ui.label(format!("Navigation · {}", mode.name()));
-        let done = ui.button("Done  (Esc)").clicked();
-        hint(ui, mode.gesture());
+        ui.label(Message::NavigationStatus.with(lang, [mode.name().text(lang)]));
+        let done = ui.button(Message::DoneEsc.text(lang)).clicked();
+        hint(ui, mode.gesture().text(lang));
         return (done.then_some(StatusAction::EndNavigation), None);
     }
-    ui.label(egui::RichText::new("Gizmo").color(theme::text_dim(ui)));
+    ui.label(egui::RichText::new(Message::Gizmo.text(lang)).color(theme::text_dim(ui)));
     let mut mode = info.mode;
-    let moved = ui.selectable_value(&mut mode, TransformMode::Move, "Move").clicked()
-        | ui.selectable_value(&mut mode, TransformMode::Rotate, "Rotate").clicked();
+    let moved = ui.selectable_value(&mut mode, TransformMode::Move, Message::Move.text(lang)).clicked()
+        | ui.selectable_value(&mut mode, TransformMode::Rotate, Message::Rotate.text(lang)).clicked();
     theme::divider(ui);
     if let Some((element, count)) = info.mesh {
-        ui.label(format!("Mesh edit · {count} {} selected", element.noun()));
-        ui.label(
-            egui::RichText::new("LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit").color(theme::text_dim(ui)),
-        );
+        let counted = match element {
+            MeshElement::Vertex => Message::counted(
+                count,
+                Message::MeshEditStatusOne,
+                Message::MeshEditStatusFew,
+                Message::MeshEditStatusMany,
+            ),
+            MeshElement::Face => Message::counted(
+                count,
+                Message::MeshFaceStatusOne,
+                Message::MeshFaceStatusFew,
+                Message::MeshFaceStatusMany,
+            ),
+        };
+        ui.label(counted.text(lang));
+        ui.label(egui::RichText::new(Message::MeshEditHint.text(lang)).color(theme::text_dim(ui)));
     } else {
-        hint(ui, "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB zoom");
+        hint(ui, Message::ViewportHint.text(lang));
     }
     (None, moved.then_some(mode))
 }

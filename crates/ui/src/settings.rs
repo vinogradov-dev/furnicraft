@@ -648,7 +648,8 @@ mod tests {
         let root = Container::new(Id::new(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
         let project = Project::new(root).expect("project");
         let document = serde_json::to_string(&project).expect("serialise");
-        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent"] {
+        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent", "language"]
+        {
             assert!(!document.contains(key), "`{key}` is workspace state and must stay out of the .fcs");
         }
     }
@@ -663,5 +664,23 @@ mod tests {
                 tool.label().text(Lang::En)
             );
         }
+    }
+
+    #[test]
+    fn a_scene_saved_in_russian_loads_in_english_with_its_names_unchanged() {
+        let root = Container::new(Id::new(1).expect("id"), "Шкаф", Placement::IDENTITY, Vec::new());
+        let project = Project::new(root).expect("project");
+        let json = serde_json::to_string(&project).expect("serialise");
+        let restored: Project = serde_json::from_str(&json).expect("load");
+        assert_eq!(restored.root().name(), "Шкаф", "the language never renames a node");
+        assert_eq!(Language::from_lang(Lang::En), Language::English);
+    }
+
+    #[test]
+    fn a_settings_file_without_a_language_opens_in_english() {
+        let json = r#"{"version":1,"appearance":{"ui_scale":100}}"#;
+        let settings = Settings::from_json(json).expect("parse");
+        assert_eq!(settings.appearance.language, Language::English);
+        assert_eq!(settings.appearance.language.lang(), Lang::En);
     }
 }

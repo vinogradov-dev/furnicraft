@@ -280,8 +280,8 @@ impl Document {
     }
 
     /// The name the tab row draws for this scene.
-    pub(crate) fn file_name(&self) -> String {
-        self.file.file_name()
+    pub(crate) fn file_name(&self, lang: furnicraft_text::Lang) -> String {
+        self.file.file_name(lang)
     }
 
     /// Whether the document differs from what was last saved.
@@ -2100,19 +2100,37 @@ mod tests {
         let mut editor = Editor::new();
         let delete = furnicraft_engine::node_cmds::NODE_DELETE_ID;
 
-        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "nothing is selected");
+        assert_eq!(
+            locked_command_refusal(&editor, &project, delete, furnicraft_text::Lang::En),
+            None,
+            "nothing is selected"
+        );
         editor.select_node(Some(shelf));
-        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "an unlocked node deletes");
+        assert_eq!(
+            locked_command_refusal(&editor, &project, delete, furnicraft_text::Lang::En),
+            None,
+            "an unlocked node deletes"
+        );
         editor.set_locked(shelf, true);
-        let refusal = locked_command_refusal(&editor, &project, delete).expect("a locked node refuses");
+        let refusal = locked_command_refusal(&editor, &project, delete, furnicraft_text::Lang::En)
+            .expect("a locked node refuses");
         assert!(refusal.contains("Shelf") && refusal.contains("locked"), "the sentence names it: {refusal}");
         assert_eq!(
-            locked_command_refusal(&editor, &project, furnicraft_engine::node_cmds::NODE_RENAME_ID),
+            locked_command_refusal(
+                &editor,
+                &project,
+                furnicraft_engine::node_cmds::NODE_RENAME_ID,
+                furnicraft_text::Lang::En
+            ),
             None,
             "a command that removes nothing runs on a locked node"
         );
 
         editor.set_locked(shelf, false);
-        assert_eq!(locked_command_refusal(&editor, &project, delete), None, "unlocking lets it through");
+        assert_eq!(
+            locked_command_refusal(&editor, &project, delete, furnicraft_text::Lang::En),
+            None,
+            "unlocking lets it through"
+        );
     }
 }

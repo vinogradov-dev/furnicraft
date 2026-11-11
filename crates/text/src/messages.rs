@@ -20,6 +20,170 @@ messages! {
 
 
 
+
+    // ── Header and file menu ────────────────────────────────────────────────
+    HeaderHome = ["Home", "Главная"],
+    HeaderSave = ["Save  (Ctrl+S)", "Сохранить  (Ctrl+S)"],
+    HeaderUndo = ["Undo  (Ctrl+Z)", "Отменить  (Ctrl+Z)"],
+    HeaderNothingToUndo = ["Nothing to undo", "Нечего отменять"],
+    HeaderRedo = ["Redo  (Ctrl+Y)", "Повторить  (Ctrl+Y)"],
+    HeaderNothingToRedo = ["Nothing to redo", "Нечего повторять"],
+    HeaderNewScene = ["New scene  (Ctrl+N)", "Новая сцена  (Ctrl+N)"],
+    HeaderUnsaved = ["Unsaved changes", "Есть несохранённые изменения"],
+    HeaderCloseTab = ["Close the tab", "Закрыть вкладку"],
+    File = ["File", "Файл"],
+    MenuNew = ["New", "Новый"],
+    MenuOpen = ["Open…", "Открыть…"],
+    MenuSave = ["Save", "Сохранить"],
+    MenuSaveAs = ["Save As…", "Сохранить как…"],
+    MenuCloseTab = ["Close tab", "Закрыть вкладку"],
+    MenuExit = ["Exit", "Выход"],
+    Untitled = ["Untitled", "Без имени"],
+    CloseTitle = ["Close “{}”?", "Закрыть «{}»?"],
+    CloseBody = [
+        "This scene has unsaved changes. Closing the tab discards them.",
+        "В сцене есть несохранённые изменения. Закрытие вкладки отбросит их."
+    ],
+    DiscardAndClose = ["Discard and close", "Отбросить и закрыть"],
+    QuitOneBody = [
+        "One open scene has unsaved changes. Quitting discards them.",
+        "В одной открытой сцене есть несохранённые изменения. Выход отбросит их."
+    ],
+    QuitManyOne = ["{} open scene has unsaved changes. Quitting discards them.", "{} открытая сцена содержит несохранённые изменения. Выход отбросит их."],
+    QuitManyFew = ["{} open scenes have unsaved changes. Quitting discards them.", "{} открытые сцены содержат несохранённые изменения. Выход отбросит их."],
+    QuitManyMany = ["{} open scenes have unsaved changes. Quitting discards them.", "{} открытых сцен содержат несохранённые изменения. Выход отбросит их."],
+    QuitTitle = ["Quit {}?", "Выйти из {}?"],
+    DiscardAndQuit = ["Discard and quit", "Отбросить и выйти"],
+    OpenSceneTitle = ["Open scene", "Открыть сцену"],
+    OpenButton = ["Open", "Открыть"],
+    SaveSceneAsTitle = ["Save scene as", "Сохранить сцену как"],
+    SaveButton = ["Save", "Сохранить"],
+    OpenNewTabHint = [
+        "The scene opens in a new tab; the open scenes are left as they are.",
+        "Сцена откроется в новой вкладке; открытые сцены останутся как есть."
+    ],
+    PathLabel = ["Path", "Путь"],
+    NearbyScenes = ["Nearby scenes", "Сцены рядом"],
+    EnterFilePath = ["Enter a file path.", "Введите путь к файлу."],
+
+    // ── Status bar ──────────────────────────────────────────────────────────
+    LockedStatus = ["Locked · {}", "Заблокировано · {}"],
+    UnlockHint = [
+        "Unlock it in the scene tree to move or delete it",
+        "Снимите блокировку в дереве сцены, чтобы переместить или удалить"
+    ],
+    AddingTo = ["Adding to: {}", "Добавление в: {}"],
+    CreateAtRoot = ["Create at the scene root again", "Снова создавать в корне сцены"],
+    ContourEditStatusOne = ["Contour edit · {} segment", "Редактирование контура · {} сегмент"],
+    ContourEditStatusFew = ["Contour edit · {} segments", "Редактирование контура · {} сегмента"],
+    ContourEditStatusMany = ["Contour edit · {} segments", "Редактирование контура · {} сегментов"],
+    ContourModifiedSuffix = [" · modified", " · изменён"],
+    AlongContour = ["Along contour", "Вдоль контура"],
+    FreeMove = ["Free move", "Свободное перемещение"],
+    ContourAlongHint = [
+        "Drag corners along their segment  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel",
+        "Перетаскивайте углы вдоль их сегмента  ·  двойной щелчок по стороне делит её  ·  Enter применить  ·  Esc отмена"
+    ],
+    ContourFreeHint = [
+        "Drag corners freely  ·  double-click a side to split  ·  Enter apply  ·  Esc cancel",
+        "Перетаскивайте углы свободно  ·  двойной щелчок по стороне делит её  ·  Enter применить  ·  Esc отмена"
+    ],
+    DrawStatus = ["Draw · {}{}{}", "Рисование · {}{}{}"],
+    PointsSuffixOne = [" · {} point", " · {} точка"],
+    PointsSuffixFew = [" · {} points", " · {} точки"],
+    PointsSuffixMany = [" · {} points", " · {} точек"],
+    DrawArcSuffix = [" · arc", " · дуга"],
+    DrawLineSuffix = [" · line", " · линия"],
+    GridTenMillimetres = ["Grid 10 mm  (G)", "Сетка 10 мм  (G)"],
+    FinishEnter = ["Finish  (Enter)", "Завершить  (Enter)"],
+    CancelEsc = ["Cancel  (Esc)", "Отмена  (Esc)"],
+    DrawHint = [
+        "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Enter/RMB finish  ·  Esc cancel",
+        "ЛКМ добавить точку  ·  Tab линия/дуга  ·  Shift фиксация оси  ·  Alt игнорирует привязки  ·  Enter/ПКМ завершить  ·  Esc отмена"
+    ],
+    ExtrudeStatus = ["Extrude · {}", "Выдавливание · {}"],
+    DropEsc = ["Drop  (Esc)", "Отменить  (Esc)"],
+    ExtrudeHint = [
+        "Drag the arrow or type a height  ·  Enter finish  ·  Esc drop the pull",
+        "Перетащите стрелку или введите высоту  ·  Enter завершить  ·  Esc отменить"
+    ],
+    PrimitiveStatus = ["Primitive · {} {}", "Примитив · {} {}"],
+    PrimitivePlaceHint = ["LMB place on the work plane  ·  Esc cancel", "ЛКМ разместить на рабочей плоскости  ·  Esc отмена"],
+    NavigationStatus = ["Navigation · {}", "Навигация · {}"],
+    GestureOrbit = ["Drag in the viewport to orbit  ·  Esc done", "Перетаскивайте в области просмотра для облёта  ·  Esc готово"],
+    GesturePan = ["Drag in the viewport to pan  ·  Esc done", "Перетаскивайте в области просмотра для панорамы  ·  Esc готово"],
+    GestureZoom = ["Drag vertically to zoom  ·  Esc done", "Перетаскивайте вертикально для масштаба  ·  Esc готово"],
+    NavOrbitLabel = ["Orbit  ·  drag in the viewport", "Облёт  ·  перетаскивание в области просмотра"],
+    NavPanLabel = ["Pan  ·  drag in the viewport", "Панорама  ·  перетаскивание в области просмотра"],
+    NavZoomLabel = ["Zoom  ·  drag vertically", "Масштаб  ·  перетаскивание по вертикали"],
+    DoneEsc = ["Done  (Esc)", "Готово  (Esc)"],
+    Gizmo = ["Gizmo", "Гизмо"],
+    RollToDegree = ["Roll to {}°", "Крен до {}°"],
+    HomeHint = ["Home  ·  back to the axonometric view", "Домой  ·  вернуться к аксонометрии"],
+    ProjectionOrthoShort = ["Ortho", "Орто"],
+    ProjectionPerspShort = ["Persp", "Персп"],
+    OrientationReadout = ["Pitch {} · Yaw {} · Roll {} · {}", "Тангаж {} · Рыскание {} · Крен {} · {}"],
+    Move = ["Move", "Перемещение"],
+    Rotate = ["Rotate", "Вращение"],
+    MeshEditStatusOne = ["Mesh edit · {} vertex selected", "Редактирование сетки · выбрана {} вершина"],
+    MeshEditStatusFew = ["Mesh edit · {} vertices selected", "Редактирование сетки · выбрано {} вершины"],
+    MeshEditStatusMany = ["Mesh edit · {} vertices selected", "Редактирование сетки · выбрано {} вершин"],
+    MeshFaceStatusOne = ["Mesh edit · {} face selected", "Редактирование сетки · выбрана {} грань"],
+    MeshFaceStatusFew = ["Mesh edit · {} faces selected", "Редактирование сетки · выбрано {} грани"],
+    MeshFaceStatusMany = ["Mesh edit · {} faces selected", "Редактирование сетки · выбрано {} граней"],
+    MeshEditHint = [
+        "LMB select  ·  Shift/Ctrl add  ·  Esc done  ·  MMB orbit",
+        "ЛКМ выбрать  ·  Shift/Ctrl добавить  ·  Esc готово  ·  СКМ облёт"
+    ],
+    ViewportHint = [
+        "LMB select  ·  double-click enter  ·  Esc leave  ·  MMB orbit  ·  Shift+MMB pan  ·  Ctrl+MMB zoom",
+        "ЛКМ выбрать  ·  двойной щелчок войти  ·  Esc выйти  ·  СКМ облёт  ·  Shift+СКМ панорама  ·  Ctrl+СКМ масштаб"
+    ],
+
+    // ── Side panels and viewport cluster ────────────────────────────────────
+    PanelScene = ["Scene", "Сцена"],
+    PanelInspector = ["Inspector", "Инспектор"],
+    FoldPanel = ["Fold panel", "Свернуть панель"],
+    OpenPanel = ["Open the {} panel", "Открыть панель «{}»"],
+    Layout = ["Layout", "Раскладка"],
+    LayoutOneView = ["One view", "Один вид"],
+    LayoutTwoVertical = ["Two vertical", "Два по вертикали"],
+    LayoutTwoHorizontal = ["Two horizontal", "Два по горизонтали"],
+    LayoutFourViews = ["Four views", "Четыре вида"],
+    ViewsOfMax = ["{} of {} views · drag a border to resize", "{} из {} видов · перетащите границу, чтобы изменить размер"],
+    Restore = ["Restore", "Восстановить"],
+    Expand = ["Expand", "Развернуть"],
+    DisplaySettings = ["Display settings", "Настройки отображения"],
+    ViewPreset = ["View preset", "Предустановка вида"],
+    DisplayHeading = ["Display", "Отображение"],
+    ShowProjectionAngles = ["Show projection and angles", "Показывать проекцию и углы"],
+    ProjectionAnglesOn = [
+        "The orientation readout is drawn under the cube",
+        "Отсчёт ориентации рисуется под кубом"
+    ],
+    ProjectionAnglesOff = [
+        "Draw the pitch, yaw, roll and the projection under the cube",
+        "Рисовать тангаж, рыскание, крен и проекцию под кубом"
+    ],
+    AuthoredCameraOwns = ["An authored camera owns the projection", "Проекцию задаёт авторская камера"],
+    ContactShadows = ["Contact shadows", "Контактные тени"],
+    ContactShadowsHint = [
+        "A soft shadow under every object that rests on the floor.",
+        "Мягкая тень под каждым объектом, стоящим на полу."
+    ],
+    GridStrength = ["Grid", "Сетка"],
+    EdgesStrength = ["Edges", "Рёбра"],
+    ShadowStrength = ["Shadow", "Тень"],
+    WorkPlane = ["Work plane · {}", "Рабочая плоскость · {}"],
+    PerspectiveViewHint = [
+        "Perspective view; switch to orthographic  (O)",
+        "Перспективный вид; переключить на ортогональный  (O)"
+    ],
+    OrthographicViewHint = [
+        "Orthographic view; switch to perspective  (O)",
+        "Ортогональный вид; переключить на перспективный  (O)"
+    ],
+
     // ── Machining ───────────────────────────────────────────────────────────
     NoMachining = ["No machining.", "Обработок нет."],
     MachiningCutout = ["Cutout", "Вырез"],
@@ -453,10 +617,10 @@ messages! {
     ToolArc = ["Arc", "Дуга"],
     ToolArcFromCentre = ["Arc from centre", "Дуга от центра"],
     ToolRectangle = ["Rectangle", "Прямоугольник"],
-    ToolRectangleFromCentre = ["Rectangle from centre", "Прямоугольник от центра"],
-    ToolRectangleFromCentreDirected = ["Directed rectangle", "Направленный прямоугольник"],
+    ToolRectangleFromCentre = ["Rectangle from centre", "Прямоуг.центр"],
+    ToolRectangleFromCentreDirected = ["Directed rectangle", "Прямоуг.ось"],
     ToolCircle = ["Circle", "Окружность"],
-    ToolCircleThreePoints = ["Circle through 3 points", "Окружность через 3 точки"],
+    ToolCircleThreePoints = ["Circle through 3 points", "Окружн.3 точки"],
     ToolRegularPolygon = ["Polygon", "Многоугольник"],
     DrawingName = ["{} drawing", "{} — эскиз"],
     PolylineStripLabel = [
@@ -484,7 +648,7 @@ messages! {
     ToolCamera = ["Camera", "Камера"],
     ToolLight = ["Light", "Свет"],
     ToolFrameAll = ["Frame all", "Показать всё"],
-    ToolGridSnap = ["Grid snap", "Привязка к сетке"],
+    ToolGridSnap = ["Grid snap", "Привязка"],
     SwitchProjection = ["Switch the projection", "Переключить проекцию"],
     ToolOrthographic = ["Orthographic", "Ортогональная"],
     ToolPerspective = ["Perspective", "Перспективная"],

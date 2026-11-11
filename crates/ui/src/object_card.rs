@@ -1516,4 +1516,51 @@ mod tests {
         let replacement = figure_replacement(Some(&draft), true, false, Lang::En).expect("an apply is a replacement");
         assert_eq!(replacement.expect("parse"), path, "an unchanged figure is the same path");
     }
+
+    fn drawn_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        use egui::epaint::Shape;
+        fn walk(shape: &Shape, out: &mut Vec<String>) {
+            match shape {
+                Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    fn card_texts(lang: Lang) -> (Vec<String>, u64, bool) {
+        let (mut session, id) = constructive_session();
+        let revision = session.project().revision().get();
+        let undo = session.can_undo();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::set_language(&ctx, lang);
+        let mut card = ObjectCard::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            card.show(ui, &mut session, id, None, false, true);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        (texts, revision, undo)
+    }
+
+    #[test]
+    fn switching_the_language_redraws_a_card_without_touching_history() {
+        let (english, english_revision, english_undo) = card_texts(Lang::En);
+        let (russian, russian_revision, russian_undo) = card_texts(Lang::Ru);
+        assert!(english.iter().any(|text| text == "Geometry"), "{english:?}");
+        assert!(russian.iter().any(|text| text == "Геометрия"), "{russian:?}");
+        assert_ne!(english, russian, "the same card draws different words");
+        assert_eq!(english_revision, russian_revision, "a language switch moves no revision");
+        assert_eq!(english_undo, russian_undo, "a language switch leaves the undo stack alone");
+    }
 }
