@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
-  *Scene* and *Inspector* disappears — the tree and the card already say what they hold, and the
-  number cost a document scan on every rebuild — and the fold chevron moves to the edge facing the
-  viewport, so the left panel folds from its right and the right panel from its left. The collapsed
-  strip keeps its icon and turned title, and the click, edge-double-click and outward-drag restore
-  rules from U40 stay. Tests: neither header draws a count; a left panel's chevron sits at its right
-  edge and a right panel's at its left; folding and restoring keeps the expanded width.
-  Session notes: `panel_header` and `count_chip` in `apps/furnicraft/src/main.rs` draw the current
-  row; `node_count` is cached only for that chip. `PanelSide` already names which edge a panel sits
-  on, so the chevron side follows from it.
-  now: committing the finished header and running the gate
-  `files: apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
-
 - `[ ]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
   field that changes while the pointer is held and moved left or right, with the cursor hidden for
   the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.
@@ -122,6 +109,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
+  *Scene* and *Inspector* disappears — the tree and the card already say what they hold, and the
+  number cost a document scan on every rebuild — and the fold chevron moves to the edge facing the
+  viewport, so the left panel folds from its right and the right panel from its left. The collapsed
+  strip keeps its icon and turned title, and the click, edge-double-click and outward-drag restore
+  rules from U40 stay. Tests: neither header draws a count; a left panel's chevron sits at its right
+  edge and a right panel's at its left; folding and restoring keeps the expanded width.
+  Session notes: `panel_header` and `count_chip` in `apps/furnicraft/src/main.rs` draw the current
+  row; `node_count` is cached only for that chip. `PanelSide` already names which edge a panel sits
+  on, so the chevron side follows from it.
+  now: committing the finished header and running the gate
+  `files: apps/furnicraft/src/main.rs, crates/ui/src/theme.rs` — `873515c`
 
 - `[x]` **U49** the interface speaks English and Russian: one typed message table behind a language
   switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
