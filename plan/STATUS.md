@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U52 state=idle base=873515c updated=2026-11-11
+STATE: milestone=M7 phase=A task=X8 state=idle base=929b780 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -15,15 +15,13 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
   0083), S6 proves it once in `frame_contract.rs`, and cameras and lights are scene objects (0036).
-- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
-  render, then `Editor` and the shell; `main.rs` and `ui/lib.rs` before U45): S8–S13 split `geom` and
-  gave the shared test fixtures one definition (ADR 0084), S14 `engine/panel_cmds` into `panel`,
-  `machining` and `banding`, S15–S17 `scene`'s camera and ray and `render`'s pipelines, buffers and
-  vertex builders, then S18–S19 the document rules and the whole `Editor` out of `ui/lib.rs`, 50
-  lines, S20 the drawing draft out of `contour_edit.rs` and S22 the shell's chrome out of `main.rs`
-  (2608 -> 2037). U45 took the scene itself out of the shell: `Document` per tab, `main.rs` 2037 ->
-  455 (ADR 0081). S21 was delivered before it was filed (`plan/notes/S21.md`); F4 waits in
-  `plan/questions.md`.
+- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (`main.rs` and `ui/lib.rs`
+  before U45): S8–S13 split `geom` and gave the tests one fixture definition (ADR 0084), S14
+  `engine/panel_cmds` into `panel`, `machining` and `banding`, S15–S17 `scene`'s camera and ray and
+  `render`'s pipelines and buffers, then S18–S19 the document rules and the whole `Editor` out of
+  `ui/lib.rs`, 50 lines, S20 the drawing draft out of `contour_edit.rs` and S22 the shell's chrome
+  out of `main.rs` (2608 -> 2037). U45 took the scene itself out of the shell: `Document` per tab,
+  `main.rs` 2037 -> 455 (ADR 0081); S21 predates its filing; F4 waits in `plan/questions.md`.
 - U45 opens several scenes at once: one tab per open file in the header, with its dirty marker and
   its cross. *New* and *Open* open a tab (a path already open activates that tab), *Save*, *Undo* and
   *Redo* act on the active tab only, a close with unsaved changes asks and the last close leaves an
@@ -45,7 +43,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   cameras and active view per layout (0079), U61/U62/U51 framing, expand and the floating ribbon
   (0080). U43/U63 gave each view its display style (0070), X10 made the edges mean the form, U44 a
   shadow under every floor-standing object (0071), X11 a ring closed by an arc (0072), X12 a tool
-  switch replaces the draft and X23 makes every *Close* commit.
+  switch replaces the draft and X23 makes every *Close* commit. U52 made the UI scale a
+  scrubbing field with six presets, and every numeric field of the UI reads the drag's horizontal
+  delta with the pointer hidden and clamps what is typed.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
   (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8), and the gate follows every
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U52 is next: the UI scale becomes a scrubbable number with presets, and every numeric field that
-scrubs on a horizontal drag hides the pointer and reads the delta, so a value that resizes its own
-widget no longer chases the cursor.
+X8 is next: the scene stays dark in the light theme, so a theme change has to repaint the frame
+background, the floor grid and the non-material lines and leave the furniture's own material colours
+alone.
 
 ## Index
 

@@ -36,6 +36,7 @@ mod pivot_card;
 mod placement_card;
 mod properties_card;
 mod scene_tree;
+mod scrub;
 mod section;
 pub mod settings;
 mod target;
