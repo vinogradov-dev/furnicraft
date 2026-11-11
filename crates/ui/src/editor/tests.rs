@@ -373,7 +373,9 @@ fn a_committed_drawing_is_one_path_object_and_one_undo_entry() {
         .expect("opposite corner");
 
     let revision = session.project().revision();
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the rectangle");
+    let drawn = editor
+        .commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+        .expect("commit the rectangle");
     assert_eq!(drawn.tool, DrawTool::Rectangle);
     assert!(editor.drawing().is_none(), "the tool ends with the commit");
     assert_eq!(editor.selected_nodes(), [drawn.object], "the new node is selected");
@@ -415,7 +417,8 @@ fn a_drawing_in_a_turned_container_is_stored_in_the_parents_frame() {
 
     let world = Placement::IDENTITY.with_translation(mm(200), mm(100), mm(900)).expect("the work plane");
     let before = session.project().revision();
-    let drawn = editor.commit_drawing(&mut session, world).expect("commit into the container");
+    let drawn =
+        editor.commit_drawing(&mut session, world, furnicraft_text::Lang::En).expect("commit into the container");
     assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
     assert_eq!(session.project().parent_of(drawn.object), Some(parent), "the node lands in the armed container");
 
@@ -473,7 +476,7 @@ fn closing_through_a_pending_arc_commits_a_closed_path() {
     assert!(editor.drawing().is_some_and(DrawDraft::can_close), "Close is offered and will work");
     let revision = session.project().revision();
     let drawn = editor
-        .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+        .close_and_commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
         .expect("close through the pending arc and commit");
     assert!(editor.drawing().is_none(), "the close ends the tool");
     assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
@@ -534,7 +537,9 @@ fn a_refused_close_leaves_the_ring_open_and_the_document_untouched() {
     editor.drawing_point([mm(600), mm(400)]).expect("right run");
     let revision = session.project().revision();
 
-    editor.close_and_commit_drawing(&mut session, Placement::IDENTITY).expect_err("the document refuses the commit");
+    editor
+        .close_and_commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+        .expect_err("the document refuses the commit");
     assert_eq!(session.project().revision(), revision, "a refused close writes nothing");
     assert!(!session.can_undo(), "and leaves no undo entry behind");
     let draft = editor.drawing().expect("the draft survives a refusal");
@@ -560,15 +565,22 @@ fn every_new_tool_commits_its_path_and_opens_the_edit() {
         for point in points {
             editor.drawing_point([mm(point.0), mm(point.1)]).expect("a tool point");
         }
-        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("the figure commits");
+        let drawn = editor
+            .commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+            .expect("the figure commits");
         assert_eq!(drawn.tool, tool);
         let path = session.project().object_path(drawn.object).expect("a path object");
-        assert_eq!(path.is_closed(), tool.is_closed(), "{} keeps its closure", tool.label());
+        assert_eq!(
+            path.is_closed(),
+            tool.is_closed(),
+            "{} keeps its closure",
+            tool.label().text(furnicraft_text::Lang::En)
+        );
         assert_eq!(
             editor.contour_edit().map(ContourEdit::target),
             Some(ContourTarget::Path(drawn.object)),
             "{} opens its edit mode",
-            tool.label()
+            tool.label().text(furnicraft_text::Lang::En)
         );
         editor.end_contour_edit();
     }
@@ -588,7 +600,8 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     editor.start_drawing(DrawTool::Line);
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
     editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(root), "a drawing lands at the root");
 
     editor.select_node(Some(inner));
@@ -636,7 +649,8 @@ fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
     editor.start_drawing(DrawTool::Line);
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
     editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(assembly), "the path lands in the arm");
 
     let target = editor.creation_target(session.project());
@@ -698,7 +712,10 @@ fn a_refused_drawing_keeps_the_draft_and_the_selection() {
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("one corner");
 
     let revision = session.project().revision();
-    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err(), "one point is no path");
+    assert!(
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).is_err(),
+        "one point is no path"
+    );
     assert!(editor.drawing().is_some(), "the draft stays");
     assert_eq!(session.project().revision(), revision);
     assert!(!session.can_undo());
@@ -709,7 +726,7 @@ fn committing_without_a_draft_reports_it() {
     let (project, _panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
-    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err());
+    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).is_err());
 }
 
 #[test]
@@ -723,7 +740,8 @@ fn an_open_polyline_commits_as_drawn() {
     editor
         .drawing_point([Length::from_millimetres(400).expect("x"), Length::from_millimetres(300).expect("y")])
         .expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the chain");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the chain");
     let path = session.project().object_path(drawn.object).expect("a path object");
     assert!(!path.is_closed());
     assert_eq!(path.entries().len(), 2);
@@ -1027,7 +1045,13 @@ fn the_drawing_shortcuts_name_their_tool() {
     let mut editor = Editor::new();
     for (key, shift, tool) in cases {
         let shortcut = crate::toolbars::Shortcut { key, shift };
-        assert_eq!(crate::toolbars::shortcut(tool), Some(shortcut), "{} starts {}", key.name(), tool.label());
+        assert_eq!(
+            crate::toolbars::shortcut(tool),
+            Some(shortcut),
+            "{} starts {}",
+            key.name(),
+            tool.label().text(furnicraft_text::Lang::En)
+        );
         editor.start_drawing(tool);
         assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
         editor.cancel_drawing();

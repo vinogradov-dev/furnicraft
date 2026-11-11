@@ -31,6 +31,7 @@ use furnicraft_model::{Catalog, CornerMove, Id, NodeQuery, Placement, Project, R
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneFrame};
+use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{ContourGrip, DrawDraft, Editor, GripValue, MeshElement, PaletteContext, ViewFlags};
 use furnicraft_units::Length;
@@ -546,9 +547,9 @@ impl Document {
     ///
     /// The plane is the one the draft started on, so a commit does not depend on where the camera
     /// has orbited since. A refused path leaves the draft live and reports why.
-    pub(crate) fn commit_drawing(&mut self) -> Result<(), String> {
+    pub(crate) fn commit_drawing(&mut self, lang: Lang) -> Result<(), String> {
         let placement = self.drawing_placement()?;
-        self.editor.commit_drawing(&mut self.session, placement)?;
+        self.editor.commit_drawing(&mut self.session, placement, lang)?;
         self.end_drawing()
     }
 
@@ -558,9 +559,9 @@ impl Document {
     /// bar's *Close* all end here, so no surface can close a ring and forget to commit it (ADR 0052).
     /// The ring is closed before the commit and reopened if the document refuses it, so a refusal
     /// leaves the shape the user drew editable instead of a finished draft that cannot be changed.
-    pub(crate) fn close_draft(&mut self) -> Result<(), String> {
+    pub(crate) fn close_draft(&mut self, lang: Lang) -> Result<(), String> {
         let placement = self.drawing_placement()?;
-        self.editor.close_and_commit_drawing(&mut self.session, placement)?;
+        self.editor.close_and_commit_drawing(&mut self.session, placement, lang)?;
         self.end_drawing()
     }
 
@@ -939,7 +940,7 @@ impl Document {
                 DrawAction::Point => {
                     ui.ctx().request_repaint();
                     if self.editor.drawing().is_some_and(DrawDraft::is_finished) {
-                        if let Err(error) = self.commit_drawing() {
+                        if let Err(error) = self.commit_drawing(furnicraft_ui::language(ui.ctx())) {
                             self.last_error = Some(error);
                         }
                         true
@@ -949,7 +950,7 @@ impl Document {
                 }
                 DrawAction::Close => {
                     ui.ctx().request_repaint();
-                    if let Err(error) = self.close_draft() {
+                    if let Err(error) = self.close_draft(furnicraft_ui::language(ui.ctx())) {
                         self.last_error = Some(error);
                     }
                     true
@@ -961,7 +962,7 @@ impl Document {
             if !ended
                 && !pointer_over_widget
                 && response.clicked_by(egui::PointerButton::Secondary)
-                && let Err(error) = self.commit_drawing()
+                && let Err(error) = self.commit_drawing(furnicraft_ui::language(ui.ctx()))
             {
                 self.last_error = Some(error);
             }
@@ -1602,7 +1603,7 @@ impl Document {
             // The ribbon reports a *Close* instead of running it: the shell owns the work plane,
             // the gizmo state and the scene rebuild, and every close takes the same path (ADR 0052).
             if outcome.close_draft
-                && let Err(error) = self.close_draft()
+                && let Err(error) = self.close_draft(furnicraft_ui::language(ui.ctx()))
             {
                 self.last_error = Some(error);
             }
@@ -1644,7 +1645,7 @@ impl Document {
                 match drawing_key(escape, enter) {
                     Some(DraftKey::Cancel) => self.cancel_drawing(),
                     Some(DraftKey::Commit) => {
-                        if let Err(error) = self.commit_drawing() {
+                        if let Err(error) = self.commit_drawing(furnicraft_ui::language(ui.ctx())) {
                             self.last_error = Some(error);
                         }
                     }

@@ -5,29 +5,32 @@
 //! surfaces cannot offer different words for one choice.
 
 use crate::icons;
+use furnicraft_text::{Lang, Message};
 
 pub use furnicraft_scene::ShadingStyle;
 
 /// The short face of a style, used while the toolbar icon is still a placeholder.
-pub const fn shading_caption(style: ShadingStyle) -> &'static str {
+pub const fn shading_caption(style: ShadingStyle, lang: Lang) -> &'static str {
     match style {
-        ShadingStyle::ShadedWithEdges => "Edges",
-        ShadingStyle::Shaded => "Shaded",
-        ShadingStyle::Wireframe => "Wire",
-        ShadingStyle::ShadedWithHiddenEdges => "Hidden",
-        ShadingStyle::Translucent => "Ghost",
+        ShadingStyle::ShadedWithEdges => Message::ShadingEdgesCaption,
+        ShadingStyle::Shaded => Message::ShadingShadedCaption,
+        ShadingStyle::Wireframe => Message::ShadingWireCaption,
+        ShadingStyle::ShadedWithHiddenEdges => Message::ShadingHiddenCaption,
+        ShadingStyle::Translucent => Message::ShadingGhostCaption,
     }
+    .text(lang)
 }
 
 /// The full name, used as the tooltip and the accessible name.
-pub const fn shading_label(style: ShadingStyle) -> &'static str {
+pub const fn shading_label(style: ShadingStyle, lang: Lang) -> &'static str {
     match style {
-        ShadingStyle::ShadedWithEdges => "Shaded with edges",
-        ShadingStyle::Shaded => "Shaded",
-        ShadingStyle::Wireframe => "Wireframe",
-        ShadingStyle::ShadedWithHiddenEdges => "Shaded with hidden edges",
-        ShadingStyle::Translucent => "Translucent",
+        ShadingStyle::ShadedWithEdges => Message::ShadingShadedWithEdges,
+        ShadingStyle::Shaded => Message::ShadingShaded,
+        ShadingStyle::Wireframe => Message::ShadingWireframe,
+        ShadingStyle::ShadedWithHiddenEdges => Message::ShadingHiddenEdges,
+        ShadingStyle::Translucent => Message::ShadingTranslucent,
     }
+    .text(lang)
 }
 
 /// The icon asset that names the style once it is drawn.
@@ -73,15 +76,16 @@ impl OpeningView {
     pub const ALL: [Self; 6] = [Self::Axonometric, Self::Front, Self::Left, Self::Top, Self::Right, Self::Bottom];
 
     /// The user-visible name.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self, lang: Lang) -> &'static str {
         match self {
-            Self::Axonometric => "Axonometric",
-            Self::Front => "Front",
-            Self::Left => "Left",
-            Self::Top => "Top",
-            Self::Right => "Right",
-            Self::Bottom => "Bottom",
+            Self::Axonometric => Message::Axonometric,
+            Self::Front => Message::Front,
+            Self::Left => Message::Left,
+            Self::Top => Message::Top,
+            Self::Right => Message::Right,
+            Self::Bottom => Message::Bottom,
         }
+        .text(lang)
     }
 
     /// The offset from the orbit target to the eye, in world millimetres.
@@ -118,9 +122,9 @@ mod tests {
         assert_eq!(OpeningView::ALL.len(), 6, "the six views the owner names");
         let mut labels = Vec::new();
         for view in OpeningView::ALL {
-            assert!(!view.label().is_empty(), "{view:?} has a name");
-            assert!(!labels.contains(&view.label()), "{view:?} owns its name");
-            labels.push(view.label());
+            assert!(!view.label(Lang::En).is_empty(), "{view:?} has a name");
+            assert!(!labels.contains(&view.label(Lang::En)), "{view:?} owns its name");
+            labels.push(view.label(Lang::En));
             let [x, y, z] = view.direction();
             let length = (x * x + y * y + z * z).sqrt();
             // The axonometric direction is the three-quarter default, given to three decimals;

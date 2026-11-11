@@ -227,7 +227,7 @@ impl FurniCraftApp {
         match out.state {
             // The window's two: the rest belong to the scene the bar reports on.
             Some(StatusAction::EndNavigation) => self.shell.cluster.navigation = None,
-            Some(action) => self.tabs.active_mut().apply_status(action),
+            Some(action) => self.tabs.active_mut().apply_status(action, furnicraft_ui::language(ui.ctx())),
             None => {}
         }
     }
@@ -276,7 +276,7 @@ impl Document {
     ///
     /// The armed navigation gesture is the window's, so the shell clears that one itself; every arm
     /// here acts on the scene this tab holds.
-    fn apply_status(&mut self, action: StatusAction) {
+    fn apply_status(&mut self, action: StatusAction, lang: furnicraft_text::Lang) {
         match action {
             StatusAction::ApplyContour => {
                 if let Err(error) = self.apply_contour_edit() {
@@ -287,12 +287,12 @@ impl Document {
             StatusAction::ToggleContourAlong => self.contour_gizmo.toggle_along(),
             StatusAction::ToggleGrid => self.draw_gizmo.toggle_grid(),
             StatusAction::CloseDraft => {
-                if let Err(error) = self.close_draft() {
+                if let Err(error) = self.close_draft(lang) {
                     self.last_error = Some(error);
                 }
             }
             StatusAction::FinishDraft => {
-                if let Err(error) = self.commit_drawing() {
+                if let Err(error) = self.commit_drawing(lang) {
                     self.last_error = Some(error);
                 }
             }

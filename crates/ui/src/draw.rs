@@ -27,6 +27,7 @@ use furnicraft_model::{
     ContourSegment, ContourSegmentError, Id, MAX_CONTOUR_COORDINATE, MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES,
     MIN_POLYGON_SIDES, Path, PathError, Placement,
 };
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 use thiserror::Error;
 
@@ -92,18 +93,18 @@ impl DrawTool {
     }
 
     /// A short user-visible name.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         match self {
-            Self::Line => "Line",
-            Self::Polyline => "Polyline",
-            Self::Arc => "Arc",
-            Self::ArcFromCenter => "Arc from centre",
-            Self::Rectangle => "Rectangle",
-            Self::RectangleFromCenter => "Rectangle from centre",
-            Self::RectangleFromCenterDirected => "Directed rectangle",
-            Self::Circle => "Circle",
-            Self::CircleThreePoints => "Circle through 3 points",
-            Self::RegularPolygon => "Polygon",
+            Self::Line => Message::ToolLine,
+            Self::Polyline => Message::ToolPolyline,
+            Self::Arc => Message::ToolArc,
+            Self::ArcFromCenter => Message::ToolArcFromCentre,
+            Self::Rectangle => Message::ToolRectangle,
+            Self::RectangleFromCenter => Message::ToolRectangleFromCentre,
+            Self::RectangleFromCenterDirected => Message::ToolRectangleFromCentreDirected,
+            Self::Circle => Message::ToolCircle,
+            Self::CircleThreePoints => Message::ToolCircleThreePoints,
+            Self::RegularPolygon => Message::ToolRegularPolygon,
         }
     }
 }
@@ -712,9 +713,9 @@ impl DrawDraft {
     /// commits its finished path, a polyline commits what it has whether it was closed or not. On
     /// success the caller drops the draft; a rejected path leaves it intact so the user can undo or
     /// cancel.
-    pub fn commit(&self, session: &mut Session, parent: Id, placement: Placement) -> Result<Id, String> {
+    pub fn commit(&self, session: &mut Session, parent: Id, placement: Placement, lang: Lang) -> Result<Id, String> {
         let path = self.to_path().map_err(|error| error.to_string())?;
-        let name = format!("{} drawing", self.tool.label());
+        let name = Message::DrawingName.with(lang, [self.tool.label().text(lang)]);
         let params = json(&ObjectPathCreate { parent, name, path, placement })?;
         let outcome = dispatch(session, OBJECT_PATH_CREATE_ID, &params)?;
         outcome.created_id().ok_or_else(|| "the path command created no node".to_owned())

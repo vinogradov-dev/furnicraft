@@ -521,6 +521,7 @@ impl FurniCraftApp {
         if self.settings.appearance != before.appearance {
             theme::install_with(ctx, self.settings.appearance.theme.preference(), self.settings.appearance.accent);
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
+            furnicraft_ui::set_language(ctx, self.settings.appearance.language.lang());
         }
         if self.settings.viewport != before.viewport {
             let Self { tabs, shell, settings, .. } = self;
@@ -555,6 +556,9 @@ impl FurniCraftApp {
 
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The language is workspace settings, published once per frame so every surface draws the
+        // same words without threading a `Lang` through every signature (U49).
+        furnicraft_ui::set_language(ui.ctx(), self.settings.appearance.language.lang());
         {
             let Self { tabs, shell, settings, .. } = self;
             if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster) {

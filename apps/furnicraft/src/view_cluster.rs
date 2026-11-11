@@ -213,7 +213,7 @@ pub(crate) fn show(
                         action = Some(ClusterAction::Home);
                     }
                     theme::divider(ui);
-                    if let Some(style) = style_buttons(ui, view.style) {
+                    if let Some(style) = style_buttons(ui, view.style, furnicraft_ui::language(ui.ctx())) {
                         action = Some(ClusterAction::SetStyle(style));
                     }
                     theme::divider(ui);
@@ -282,12 +282,19 @@ const fn navigation_caption(mode: NavigationMode) -> &'static str {
 }
 
 /// The five display styles; the view's own style draws pressed and a click asks for a change.
-fn style_buttons(ui: &mut egui::Ui, current: ShadingStyle) -> Option<ShadingStyle> {
+fn style_buttons(ui: &mut egui::Ui, current: ShadingStyle, lang: furnicraft_text::Lang) -> Option<ShadingStyle> {
     let mut asked = None;
     for style in ShadingStyle::ALL {
         let on = current == style;
-        if icons::tool_button_labelled(ui, shading_icon(style), shading_caption(style), shading_label(style), true, on)
-            .clicked()
+        if icons::tool_button_labelled(
+            ui,
+            shading_icon(style),
+            shading_caption(style, lang),
+            shading_label(style, lang),
+            true,
+            on,
+        )
+        .clicked()
         {
             asked = Some(style);
         }
@@ -331,7 +338,7 @@ fn layout_popover(
                 ui.separator();
                 ui.label(egui::RichText::new("View preset").strong());
                 for preset in OpeningView::ALL {
-                    if preset_row(ui, preset, view.preset == Some(preset)) {
+                    if preset_row(ui, preset, view.preset == Some(preset), furnicraft_ui::language(ui.ctx())) {
                         action = Some(ClusterAction::SetPreset(preset));
                     }
                 }
@@ -365,7 +372,7 @@ pub(crate) fn preset_icon(view: OpeningView) -> icons::Icon {
 ///
 /// A popover row is not a text button: the preset list is the one place where a named view is a
 /// glyph the user learns, so the row draws the icon and keeps the name beside it as the label.
-fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool) -> bool {
+fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool, lang: furnicraft_text::Lang) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, on);
@@ -382,11 +389,11 @@ fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool) -> bool {
         ui.painter().text(
             egui::pos2(rect.left() + 28.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            view.label(),
+            view.label(lang),
             egui::FontId::proportional(13.0),
             visuals.fg_stroke.color,
         );
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, view.label()));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, view.label(lang)));
     }
     response.clicked()
 }

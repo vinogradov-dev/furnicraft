@@ -19,6 +19,7 @@ use furnicraft_engine::{
     SceneActiveCameraSet, Session,
 };
 use furnicraft_model::{CameraProjection, Id as NodeId, LightKind, Placement};
+use furnicraft_text::Lang;
 use serde_json::Value;
 
 use crate::command::{dispatch, json};
@@ -70,8 +71,8 @@ impl Entry {
     }
 
     /// The user-facing command label.
-    pub fn label(&self) -> &'static str {
-        self.spec.label()
+    pub fn label(&self, lang: Lang) -> &'static str {
+        self.spec.label().text(lang)
     }
 
     /// The parameters a dispatch would use, or why the palette cannot build them.
@@ -109,6 +110,7 @@ pub enum PaletteKey {
 #[derive(Debug, Default)]
 pub struct Palette {
     open: bool,
+    lang: Lang,
     query: String,
     highlight: usize,
     history: Vec<String>,
@@ -187,7 +189,7 @@ impl Palette {
         let query = self.query.trim().to_ascii_lowercase();
         let mut ranked = Vec::new();
         for spec in CommandRegistry::new().specs() {
-            let Some(rank) = rank(*spec, &query, &self.history) else {
+            let Some(rank) = rank(*spec, &query, &self.history, self.lang) else {
                 continue;
             };
             ranked.push((rank, self.entry(session, context, *spec)));
@@ -281,6 +283,7 @@ impl Palette {
         if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowDown)) {
             self.handle(PaletteKey::Down, session, context);
         }
+        self.lang = crate::language(ctx);
         let mut chosen = None;
         if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter)) {
             chosen = self.handle(PaletteKey::Enter, session, context);
@@ -381,12 +384,12 @@ impl Palette {
 }
 
 /// The match rank of one command, or `None` when the query excludes it.
-fn rank(spec: CommandSpec, query: &str, history: &[String]) -> Option<u32> {
+fn rank(spec: CommandSpec, query: &str, history: &[String], lang: Lang) -> Option<u32> {
     if query.is_empty() {
         let recent = history.iter().position(|id| id == spec.id()).map_or(100, |index| index as u32);
         return Some(recent);
     }
-    let label = spec.label().to_ascii_lowercase();
+    let label = spec.label().text(lang).to_ascii_lowercase();
     let id = spec.id().to_ascii_lowercase();
     if label.starts_with(query) {
         Some(0)
@@ -496,7 +499,7 @@ fn entry_job(ui: &Ui, entry: &Entry) -> egui::WidgetText {
     job.wrap.max_width = (ui.available_width() - 16.0).max(1.0);
     job.wrap.max_rows = 1;
     job.append(
-        entry.label(),
+        entry.label(crate::language(ui.ctx())),
         0.0,
         egui::TextFormat { font_id: body.clone(), color: theme::text(ui), ..Default::default() },
     );

@@ -131,6 +131,14 @@ mod messages;
 
 pub use messages::Message;
 
+impl fmt::Display for Message {
+    /// The English sentence: logs, tests and a `thiserror` message stay in one language even when
+    /// the interface is Russian. A surface that draws the message calls [`Message::text`] instead.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.text(Lang::En))
+    }
+}
+
 impl Message {
     /// The sentence in `lang`.
     pub const fn text(self, lang: Lang) -> &'static str {

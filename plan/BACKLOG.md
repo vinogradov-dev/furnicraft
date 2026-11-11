@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U49** the interface speaks English and Russian: one typed message table behind a language
+- `[~]` **U49** the interface speaks English and Russian: one typed message table behind a language
   switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
   in the layer map and `PROJECT.md` in the same change) holds `Lang::{En, Ru}` and one `Message`
   variant per string; `Message::text(self, lang) -> &'static str` reads a `&[&str; Lang::COUNT]`

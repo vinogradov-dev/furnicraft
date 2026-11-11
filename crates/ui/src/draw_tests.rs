@@ -7,6 +7,7 @@
 use furnicraft_testkit::millimetres;
 
 use super::*;
+use furnicraft_text::Lang;
 
 #[test]
 fn a_drawing_draft_builds_an_open_path_from_its_clicks() {
@@ -564,11 +565,11 @@ fn every_tool_states_its_point_count_and_name() {
         (DrawTool::RegularPolygon, Some(2), false, false, "Polygon"),
     ];
     for (tool, need, closes, open_ended, label) in cases {
-        assert_eq!(tool.points(), need, "{}", tool.label());
-        assert_eq!(tool.closes(), closes, "{}", tool.label());
-        assert_eq!(tool.points().is_none(), open_ended, "{}", tool.label());
-        assert_eq!(tool.label(), label);
-        assert!(!DrawDraft::new(tool).is_complete(), "a fresh {} draft is empty", tool.label());
+        assert_eq!(tool.points(), need, "{}", tool.label().text(Lang::En));
+        assert_eq!(tool.closes(), closes, "{}", tool.label().text(Lang::En));
+        assert_eq!(tool.points().is_none(), open_ended, "{}", tool.label().text(Lang::En));
+        assert_eq!(tool.label().text(Lang::En), label);
+        assert!(!DrawDraft::new(tool).is_complete(), "a fresh {} draft is empty", tool.label().text(Lang::En));
     }
 }
 

@@ -14,6 +14,7 @@
 use egui::{TextEdit, Ui};
 use furnicraft_engine::PrimitiveKind;
 use furnicraft_model::Id;
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use crate::draw::{DEFAULT_POLYGON_SIDES, DrawTool};
@@ -190,9 +191,9 @@ pub const fn shortcut_label(tool: DrawTool) -> Option<&'static str> {
 ///
 /// The label is the button's tooltip and the text a placeholder asset falls back to; it is not the
 /// name of the object the tool creates, which stays [`DrawTool::label`].
-pub const fn strip_label(tool: DrawTool) -> &'static str {
+pub const fn strip_label(tool: DrawTool) -> Message {
     match tool {
-        DrawTool::Polyline => "Polyline · Tab line/arc · Alt ignores snaps",
+        DrawTool::Polyline => Message::PolylineStripLabel,
         _ => tool.label(),
     }
 }
@@ -254,14 +255,14 @@ impl RibbonTab {
     }
 
     /// The tab's name, drawn on its own button.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         match self {
-            Self::Furniture => "Furniture",
-            Self::Hardware => "Hardware",
-            Self::Model => "Model",
-            Self::Sketch => "Sketch",
-            Self::Scene => "Scene",
-            Self::View => "View",
+            Self::Furniture => Message::RibbonFurniture,
+            Self::Hardware => Message::RibbonHardware,
+            Self::Model => Message::RibbonModel,
+            Self::Sketch => Message::RibbonSketch,
+            Self::Scene => Message::RibbonScene,
+            Self::View => Message::RibbonView,
         }
     }
 
@@ -321,16 +322,16 @@ impl ToolGroup {
         [Self::Draw, Self::Shapes, Self::Draft, Self::Primitives, Self::Bodies, Self::Scene, Self::View, Self::Display];
 
     /// The caption drawn under the group's row, in capitals.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         match self {
-            Self::Draw => "Draw",
-            Self::Shapes => "Shapes",
-            Self::Draft => "Draft",
-            Self::Primitives => "Primitives",
-            Self::Bodies => "Bodies",
-            Self::Scene => "Scene",
-            Self::View => "View",
-            Self::Display => "Display",
+            Self::Draw => Message::GroupDraw,
+            Self::Shapes => Message::GroupShapes,
+            Self::Draft => Message::GroupDraft,
+            Self::Primitives => Message::GroupPrimitives,
+            Self::Bodies => Message::GroupBodies,
+            Self::Scene => Message::GroupScene,
+            Self::View => Message::GroupView,
+            Self::Display => Message::GroupDisplay,
         }
     }
 
@@ -587,13 +588,14 @@ fn tab_is_drawn(tab: RibbonTab) -> bool {
 /// viewport that owns its projection is drawn only when it can act; the hint says what is missing
 /// when a tool is merely unavailable for the selection.
 pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
+    let lang = crate::language(ui.ctx());
     ui.scope(|ui| {
         ui.set_width(ui.available_width());
         ui.add_space(crate::theme::STEP);
         retain_tab(state);
-        tab_row(ui, state);
+        tab_row(ui, state, lang);
         if state.is_open() {
-            ribbon_body(ui, state, context, actions);
+            ribbon_body(ui, state, context, actions, lang);
         }
         ui.add_space(crate::theme::STEP);
     });
@@ -645,7 +647,7 @@ fn retain_tab(state: &mut Toolbars) {
 }
 
 /// The one row of tabs, each drawn in the ribbon's own rhythm.
-fn tab_row(ui: &mut Ui, state: &mut Toolbars) {
+fn tab_row(ui: &mut Ui, state: &mut Toolbars, lang: Lang) {
     let height = crate::theme::RIBBON_TAB_HEIGHT;
     ui.horizontal(|ui| {
         ui.set_height(height);
@@ -656,7 +658,7 @@ fn tab_row(ui: &mut Ui, state: &mut Toolbars) {
                 continue;
             }
             let selected = tab == active && open;
-            let response = tab_button(ui, tab, selected, height);
+            let response = tab_button(ui, tab, selected, height, lang);
             // A double-click also reports a click in the same frame, so it is tested first: the two
             // gestures would otherwise cancel each other out and the body would never close.
             if response.double_clicked() {
@@ -691,9 +693,10 @@ fn apply_tab_gesture(state: &mut Toolbars, tab: RibbonTab, double: bool) {
 /// and one saturated line on the row already says which group row belongs to which tab. Every tab
 /// has the same inner padding and a minimum width, so a four-letter name does not read as a stamp
 /// next to a long one.
-fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32) -> egui::Response {
+fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32, lang: Lang) -> egui::Response {
     let font = egui::FontId::proportional(12.0);
-    let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap(tab.label().to_owned(), font, egui::Color32::PLACEHOLDER));
+    let galley =
+        ui.fonts_mut(|fonts| fonts.layout_no_wrap(tab.label().text(lang).to_owned(), font, egui::Color32::PLACEHOLDER));
     let width = (galley.size().x + 6.0 * crate::theme::STEP).max(crate::theme::RIBBON_TAB_MIN_WIDTH);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     if ui.is_rect_visible(rect) {
@@ -714,13 +717,13 @@ fn tab_button(ui: &mut Ui, tab: RibbonTab, selected: bool, height: f32) -> egui:
         let color = if selected { crate::theme::text(ui) } else { crate::theme::text_dim(ui) };
         let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
         ui.painter().galley(pos, galley, color);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tab.label()));
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tab.label().text(lang)));
     }
     response
 }
 
 /// The body under the tab row: the active tab's groups in one row, separated by vertical dividers.
-fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>) {
+fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: &mut Vec<ToolAction>, lang: Lang) {
     let groups = state.tab().groups();
     if groups.is_empty() {
         return;
@@ -745,7 +748,7 @@ fn ribbon_body(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, action
                         if index > 0 {
                             crate::theme::divider_of_height(ui, body_height);
                         }
-                        show_group(ui, cell, *group, state, context, actions);
+                        show_group(ui, cell, *group, state, context, actions, lang);
                     }
                 });
             });
@@ -764,6 +767,7 @@ fn show_group(
     state: &mut Toolbars,
     context: RibbonContext,
     actions: &mut Vec<ToolAction>,
+    lang: Lang,
 ) {
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -773,9 +777,9 @@ fn show_group(
             // on top of that padding is what made the row read as loose plates.
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.set_height(crate::theme::RIBBON_ROW_HEIGHT);
-            show_group_row(ui, cell, group, state, context, actions);
+            show_group_row(ui, cell, group, state, context, actions, lang);
         });
-        let caption = group.label().to_uppercase();
+        let caption = group.label().text(lang).to_uppercase();
         let galley = ui.fonts_mut(|fonts| {
             fonts.layout_no_wrap(caption, egui::FontId::proportional(10.5), egui::Color32::PLACEHOLDER)
         });
@@ -795,6 +799,7 @@ fn show_group_row(
     state: &mut Toolbars,
     context: RibbonContext,
     actions: &mut Vec<ToolAction>,
+    lang: Lang,
 ) {
     let RibbonContext { has_panel_material, selected, selected_path, active, perspective, owns_view, grid, draft } =
         context;
@@ -803,8 +808,8 @@ fn show_group_row(
             for tool in DRAW_TOOLS {
                 let action = ToolAction::Draw { tool, sides: state.polygon_sides() };
                 let on = is_armed(active, action);
-                let caption = tool.label();
-                let hint = tool_hint(strip_label(tool), shortcut_label(tool));
+                let caption = tool.label().text(lang);
+                let hint = tool_hint(strip_label(tool).text(lang), shortcut_label(tool));
                 if icons::ribbon_button(ui, cell, tool_icon(tool), caption, &hint, true, on).clicked() {
                     actions.push(action);
                 }
@@ -816,12 +821,12 @@ fn show_group_row(
             let sides = state.polygon_sides();
             for tool in SHAPE_TOOLS {
                 if tool == DrawTool::RegularPolygon {
-                    labelled_field(ui, "Sides", "3–128", state.polygon_sides_mut());
+                    labelled_field(ui, Message::FieldSides.text(lang), "3–128", state.polygon_sides_mut());
                 }
                 let action = ToolAction::Draw { tool, sides };
                 let on = is_armed(active, action);
-                let caption = tool.label();
-                let hint = tool_hint(strip_label(tool), shortcut_label(tool));
+                let caption = tool.label().text(lang);
+                let hint = tool_hint(strip_label(tool).text(lang), shortcut_label(tool));
                 if icons::ribbon_button(ui, cell, tool_icon(tool), caption, &hint, true, on).clicked() {
                     actions.push(action);
                 }
@@ -832,41 +837,60 @@ fn show_group_row(
             // drawn so the pair never vanishes between clicks and the hint says why one is off.
             let (tool, points, closed) = draft.unwrap_or((DrawTool::Line, 0, false));
             let close = draft_can_close(tool, points, closed);
-            let close_hint = if close {
-                "Close the draft into a ring".to_owned()
-            } else {
-                "A draft needs two segments to close".to_owned()
-            };
-            if icons::ribbon_button(ui, cell, icons::contour::CLOSE, "Close", &close_hint, close, false).clicked()
+            let close_hint =
+                if close { Message::DraftCloseHint.text(lang) } else { Message::DraftCloseNeedsTwo.text(lang) };
+            if icons::ribbon_button(
+                ui,
+                cell,
+                icons::contour::CLOSE,
+                Message::Close.text(lang),
+                close_hint,
+                close,
+                false,
+            )
+            .clicked()
                 && close
             {
                 actions.push(ToolAction::CloseDrawing);
             }
             let cancel = draft.is_some();
-            let cancel_hint = tool_hint(if cancel { "Cancel the draft" } else { "No draft is running" }, Some("Esc"));
-            if icons::ribbon_button(ui, cell, icons::contour::CANCEL, "Cancel", &cancel_hint, cancel, false).clicked()
+            let cancel_hint = tool_hint(
+                if cancel { Message::DraftCancelHint.text(lang) } else { Message::DraftNotRunning.text(lang) },
+                Some("Esc"),
+            );
+            if icons::ribbon_button(
+                ui,
+                cell,
+                icons::contour::CANCEL,
+                Message::Cancel.text(lang),
+                &cancel_hint,
+                cancel,
+                false,
+            )
+            .clicked()
                 && cancel
             {
                 actions.push(ToolAction::CancelDrawing);
             }
         }
         ToolGroup::Primitives => {
-            labelled_field(ui, "Size", "mm", state.primitive_size_mut());
+            labelled_field(ui, Message::FieldSize.text(lang), "mm", state.primitive_size_mut());
             let size = state.primitive_size();
             let enabled = size.is_ok();
             let armed_size = size.as_ref().ok().copied();
             let refusal = size.as_ref().err().cloned();
             for (kind, icon, label) in [
-                (PrimitiveKind::Cube, icons::primitives::CUBE, "Cube"),
-                (PrimitiveKind::Cylinder, icons::primitives::CYLINDER, "Cylinder"),
-                (PrimitiveKind::Sphere, icons::primitives::SPHERE, "Sphere"),
+                (PrimitiveKind::Cube, icons::primitives::CUBE, Message::ToolCube),
+                (PrimitiveKind::Cylinder, icons::primitives::CYLINDER, Message::ToolCylinder),
+                (PrimitiveKind::Sphere, icons::primitives::SPHERE, Message::ToolSphere),
             ] {
+                let label = label.text(lang);
                 let on = armed_size.is_some_and(|size| is_armed(active, ToolAction::CreatePrimitive { kind, size }));
                 // The hint carries the field's refusal, so a bad size disables the tool and says
                 // why instead of leaving the button silently off.
                 let hint = match &refusal {
                     Some(reason) => reason.clone(),
-                    None => format!("{label}: click the work plane"),
+                    None => Message::PrimitiveClickPlane.with(lang, [label]),
                 };
                 if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, on).clicked()
                     && let Ok(size) = size
@@ -876,16 +900,25 @@ fn show_group_row(
             }
         }
         ToolGroup::Bodies => {
-            labelled_field(ui, "Height", "mm", state.extrude_height_mut());
+            labelled_field(ui, Message::FieldHeight.text(lang), "mm", state.extrude_height_mut());
             let height = state.extrude_height();
             // Only a closed path encloses a ring, so the button is off for anything else and the
             // hint names what is missing: a selection, a path, a closed chain, or a usable height.
             let hint = match &height {
-                Ok(_) => extrude_hint(selected, selected_path).to_owned(),
+                Ok(_) => extrude_hint(selected, selected_path).text(lang).to_owned(),
                 Err(reason) => reason.clone(),
             };
             let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && height.is_ok();
-            if icons::ribbon_button(ui, cell, icons::bodies::EXTRUDE, "Extrude", &hint, enabled, false).clicked()
+            if icons::ribbon_button(
+                ui,
+                cell,
+                icons::bodies::EXTRUDE,
+                Message::ToolExtrude.text(lang),
+                &hint,
+                enabled,
+                false,
+            )
+            .clicked()
                 && let (Some(object), Ok(height)) = (selected, height)
             {
                 actions.push(ToolAction::ExtrudePath { object, height });
@@ -893,11 +926,12 @@ fn show_group_row(
         }
         ToolGroup::Scene => {
             for (icon, label, shortcut, enabled, action) in [
-                (icons::scene::PANEL, "Panel", Some("N"), has_panel_material, ToolAction::CreatePanel),
-                (icons::scene::ASSEMBLY, "Assembly", None, true, ToolAction::CreateAssembly),
-                (icons::scene::CAMERA, "Camera", None, true, ToolAction::CreateCamera),
-                (icons::scene::LIGHT, "Light", None, true, ToolAction::CreateLight),
+                (icons::scene::PANEL, Message::ToolPanel, Some("N"), has_panel_material, ToolAction::CreatePanel),
+                (icons::scene::ASSEMBLY, Message::ToolAssembly, None, true, ToolAction::CreateAssembly),
+                (icons::scene::CAMERA, Message::ToolCamera, None, true, ToolAction::CreateCamera),
+                (icons::scene::LIGHT, Message::ToolLight, None, true, ToolAction::CreateLight),
             ] {
+                let label = label.text(lang);
                 let hint = tool_hint(label, shortcut);
                 if icons::ribbon_button(ui, cell, icon, label, &hint, enabled, false).clicked() {
                     actions.push(action);
@@ -909,8 +943,8 @@ fn show_group_row(
                 ui,
                 cell,
                 icons::view::FRAME_ALL,
-                "Frame all",
-                &tool_hint("Frame all", Some("F")),
+                Message::ToolFrameAll.text(lang),
+                &tool_hint(Message::ToolFrameAll.text(lang), Some("F")),
                 true,
                 false,
             )
@@ -919,14 +953,24 @@ fn show_group_row(
                 actions.push(ToolAction::FrameAll);
             }
             let (icon, caption) = projection_button(perspective);
-            let hint = tool_hint("Switch the projection", Some("O"));
-            if icons::ribbon_button(ui, cell, icon, caption, &hint, owns_view, false).clicked() && owns_view {
+            let hint = tool_hint(Message::SwitchProjection.text(lang), Some("O"));
+            if icons::ribbon_button(ui, cell, icon, caption.text(lang), &hint, owns_view, false).clicked() && owns_view
+            {
                 actions.push(ToolAction::ToggleProjection);
             }
         }
         ToolGroup::Display => {
-            let hint = tool_hint("Grid snap", Some("G"));
-            if icons::ribbon_button(ui, cell, icons::view::GRID_SNAP, "Grid snap", &hint, owns_view, grid).clicked()
+            let hint = tool_hint(Message::ToolGridSnap.text(lang), Some("G"));
+            if icons::ribbon_button(
+                ui,
+                cell,
+                icons::view::GRID_SNAP,
+                Message::ToolGridSnap.text(lang),
+                &hint,
+                owns_view,
+                grid,
+            )
+            .clicked()
                 && owns_view
             {
                 actions.push(ToolAction::ToggleGrid);
@@ -949,8 +993,12 @@ pub const fn draft_can_close(tool: DrawTool, points: usize, closed: bool) -> boo
 ///
 /// The icon draws the mode the view is *in* and the caption names the switch it would take, so the
 /// ribbon never claims a state the camera has not reached.
-fn projection_button(perspective: bool) -> (Icon, &'static str) {
-    if perspective { (icons::view::PERSPECTIVE, "Orthographic") } else { (icons::view::ORTHOGRAPHIC, "Perspective") }
+fn projection_button(perspective: bool) -> (Icon, Message) {
+    if perspective {
+        (icons::view::PERSPECTIVE, Message::ToolOrthographic)
+    } else {
+        (icons::view::ORTHOGRAPHIC, Message::ToolPerspective)
+    }
 }
 
 /// A labelled numeric field inside a group: the small name over the field, with its unit as a hint.
@@ -970,12 +1018,12 @@ fn labelled_field(ui: &mut Ui, label: &str, hint: &str, text: &mut String) {
 ///
 /// `selected_path` is `None` when the selection is not a path object, so a path that is merely
 /// open gets its own message instead of being called "not a path".
-fn extrude_hint(selected: Option<Id>, selected_path: Option<bool>) -> &'static str {
+fn extrude_hint(selected: Option<Id>, selected_path: Option<bool>) -> Message {
     match (selected, selected_path) {
-        (None, _) => "Select a closed path first",
-        (Some(_), Some(true)) => "Extrude the selected path",
-        (Some(_), Some(false)) => "The selected path is open; close it first",
-        (Some(_), None) => "The selected object is not a path",
+        (None, _) => Message::ExtrudeSelectPath,
+        (Some(_), Some(true)) => Message::ExtrudeSelectedPath,
+        (Some(_), Some(false)) => Message::ExtrudePathOpen,
+        (Some(_), None) => Message::ExtrudeNotPath,
     }
 }
 
@@ -1038,7 +1086,7 @@ mod tests {
         ];
         assert_eq!(RibbonTab::ALL.len(), cases.len());
         for (tab, label, id) in cases {
-            assert_eq!(tab.label(), label);
+            assert_eq!(tab.label().text(Lang::En), label);
             assert_eq!(tab.id(), id);
         }
     }
@@ -1060,7 +1108,7 @@ mod tests {
             let (_, labels, _) = draw(&mut state, context);
             for label in labels {
                 // A tab names itself on the row, so its accessible name is not a tool.
-                if RibbonTab::ALL.iter().any(|tab| tab.label() == label) {
+                if RibbonTab::ALL.iter().any(|tab| tab.label().text(Lang::En) == label) {
                     continue;
                 }
                 assert!(seen.iter().all(|tool| tool != &label), "{label} is reachable from two tabs");
@@ -1069,14 +1117,14 @@ mod tests {
         }
         for tab in RibbonTab::ALL {
             for group in tab.groups() {
-                assert!(!group.label().is_empty(), "{tab:?} has a nameless group");
+                assert!(!group.label().text(Lang::En).is_empty(), "{tab:?} has a nameless group");
             }
         }
         // Every tool of the design, under the caption it draws, on the one tab that owns it. The
         // `Close` and `Cancel` of a draft are the one pair whose drawing depends on a live draft.
         let mut expected: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
         for tool in CONTOUR_TOOLS {
-            expected.insert(strip_label(tool), "Sketch");
+            expected.insert(strip_label(tool).text(Lang::En), "Sketch");
         }
         expected.insert("Close the draft into a ring", "Sketch");
         expected.insert("Cancel the draft", "Sketch");
@@ -1179,7 +1227,7 @@ mod tests {
         assert!(!texts.iter().any(|text| text == "Furniture"), "a tab with no tool is not drawn: {texts:?}");
         assert!(!texts.iter().any(|text| text == "Hardware"), "the empty hardware tab is hidden: {texts:?}");
         for tab in [RibbonTab::Model, RibbonTab::Sketch, RibbonTab::Scene, RibbonTab::View] {
-            assert!(texts.iter().any(|text| text == tab.label()), "{tab:?} holds a tool and is drawn");
+            assert!(texts.iter().any(|text| text == tab.label().text(Lang::En)), "{tab:?} holds a tool and is drawn");
         }
     }
 
@@ -1336,11 +1384,11 @@ mod tests {
     #[test]
     fn the_extrude_hint_names_what_is_missing() {
         let node = Id::new(7).expect("id");
-        assert_eq!(extrude_hint(None, None), "Select a closed path first");
-        assert_eq!(extrude_hint(None, Some(true)), "Select a closed path first");
-        assert_eq!(extrude_hint(Some(node), None), "The selected object is not a path");
-        assert_eq!(extrude_hint(Some(node), Some(false)), "The selected path is open; close it first");
-        assert_eq!(extrude_hint(Some(node), Some(true)), "Extrude the selected path");
+        assert_eq!(extrude_hint(None, None).text(Lang::En), "Select a closed path first");
+        assert_eq!(extrude_hint(None, Some(true)).text(Lang::En), "Select a closed path first");
+        assert_eq!(extrude_hint(Some(node), None).text(Lang::En), "The selected object is not a path");
+        assert_eq!(extrude_hint(Some(node), Some(false)).text(Lang::En), "The selected path is open; close it first");
+        assert_eq!(extrude_hint(Some(node), Some(true)).text(Lang::En), "Extrude the selected path");
     }
 
     /// The Scene tab, where the Panel, Assembly, Camera and Light buttons live.
