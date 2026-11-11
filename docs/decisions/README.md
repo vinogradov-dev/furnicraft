@@ -71,7 +71,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0064](0064-the-header-is-chrome-that-returns-an-action.md) | The header is chrome that returns an action | Accepted |
 | [0065](0065-visibility-and-lock-are-session-state.md) | Visibility and lock are session state | Accepted |
 | [0066](0066-the-ribbon-owns-the-tabs-and-a-tool-is-a-labelled-button.md) | The ribbon owns the tabs, and a tool is a labelled button | Accepted |
-| [0067](0067-a-ribbon-tool-is-one-measured-cell.md) | A ribbon tool is one measured cell, and a caption never sizes it | Accepted |
+| [0067](0067-a-ribbon-tool-is-one-measured-cell.md) | A ribbon tool is one measured cell, and a caption never sizes it | Accepted; cell metrics and caption rule superseded by 0091 |
 | [0068](0068-the-workspace-lives-outside-the-document.md) | The workspace lives outside the document | Accepted |
 | [0069](0069-the-light-variant-is-a-second-palette.md) | The light variant is a second palette | Accepted |
 | [0070](0070-display-styles-are-frame-data.md) | Display styles are frame data | Accepted |
@@ -95,6 +95,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0088](0088-origin-and-pivot-are-different-points.md) | Origin and pivot are different points | Accepted; refines 0026 and 0082, settles 0083 |
 | [0089](0089-three-palettes-are-data-and-derive-their-states.md) | Three palettes are data: one ramp per variant, derived states, one accent override | Accepted |
 | [0090](0090-icons-are-coloured-by-semantic-family.md) | An icon is coloured by its semantic family, and the theme maps the literal | Accepted; supersedes the one-ink clause of 0047 and 0055 |
+| [0091](0091-the-ribbon-is-one-const-map.md) | The ribbon is one const map, and one tool is one glyph in a 34 x 30 cell | Accepted; supersedes the cell metrics and the caption rule of 0067 |
 
 ## Format
 

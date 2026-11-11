@@ -109,6 +109,13 @@ impl<T> Tabs<T> {
             .chain(self.rest.iter().map(|tab| (tab.id, &tab.document)))
     }
 
+    /// Every open tab in drawing order, mutably, so the window can hand a chrome change to all of
+    /// them without a second code path per tab.
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (TabId, &mut T)> {
+        std::iter::once((self.first.id, &mut self.first.document))
+            .chain(self.rest.iter_mut().map(|tab| (tab.id, &mut tab.document)))
+    }
+
     /// The id of the first tab whose document `matches`, for re-opening a scene that is already
     /// open: the owner's rule is to activate that tab, never to make a second copy of one file.
     pub(crate) fn find(&self, matches: impl Fn(&T) -> bool) -> Option<TabId> {

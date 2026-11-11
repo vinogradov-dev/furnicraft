@@ -9,7 +9,7 @@ use crate::contour_grips::ContourGrip;
 use crate::draw::{DrawDraftError, DrawTool};
 use crate::mesh_edit::MeshElement;
 use crate::scene_tree::TreeAction;
-use crate::toolbars::{RibbonTab, ToolAction};
+use crate::toolbars::{ToolAction, spec};
 use furnicraft_engine::{PanelCreate, PrimitiveKind, Session};
 use furnicraft_model::Contour;
 use furnicraft_model::{
@@ -1320,7 +1320,7 @@ fn the_ribbon_marks_the_tool_that_owns_the_next_click() {
     editor.cancel_drawing();
     let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
     editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm");
-    editor.set_ribbon_tab(RibbonTab::Model);
+    editor.set_ribbon_tab(spec::tab("model").expect("the map declares the model tab"));
     let primitive = ctx.run_ui(Default::default(), |ui| {
         editor.show_ribbon(ui, &mut session, view).expect("ribbon");
     });
@@ -1333,8 +1333,9 @@ fn the_ribbon_returns_the_view_action_it_was_asked_for() {
     // The ribbon draws the view buttons but never moves the camera: the action comes back and
     // the shell performs it with the same method the status bar calls.
     let mut editor = Editor::new();
-    editor.set_ribbon_tab(RibbonTab::View);
-    assert_eq!(editor.ribbon_tab(), RibbonTab::View);
+    let view = spec::tab("view").expect("the map declares the view tab");
+    editor.set_ribbon_tab(view);
+    assert_eq!(editor.ribbon_tab(), view);
     assert!(editor.ribbon_open());
     assert!(!editor.set_ribbon_open(false), "the body closes");
     assert!(!editor.ribbon_open());

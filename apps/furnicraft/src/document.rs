@@ -205,6 +205,10 @@ impl Document {
         display.apply(&mut scene);
         scene.camera = crate::scene_build::scene_camera(session.project(), layout.active_camera());
 
+        let mut editor = Editor::new();
+        // The fold is the one ribbon state the workspace remembers; a new tab opens it the way the
+        // user left the last one.
+        editor.set_ribbon_open(settings.ribbon.open);
         let mut renderer = ViewportRenderer::new(&render_state.device, 1280, 800);
         let texture_id = {
             let mut egui_renderer = render_state.renderer.write();
@@ -216,7 +220,7 @@ impl Document {
             scene_revision: session.project().revision(),
             scene_visibility: 0,
             session,
-            editor: Editor::new(),
+            editor,
             kernel,
             cache,
             scene,
@@ -307,6 +311,14 @@ impl Document {
     /// Whether the ribbon of this scene is unfolded.
     pub(crate) fn ribbon_open(&self) -> bool {
         self.editor.ribbon_open()
+    }
+
+    /// Folds or unfolds the ribbon of this scene, returning its new state.
+    ///
+    /// The fold is window chrome rather than scene data, so the shell writes it to the workspace
+    /// settings and hands it to every open tab; the document only carries it to its editor.
+    pub(crate) fn set_ribbon_open(&mut self, open: bool) -> bool {
+        self.editor.set_ribbon_open(open)
     }
 
     /// The selection and creation target the palette's parameter builders read.
@@ -1574,10 +1586,11 @@ impl Document {
             grid: self.draw_gizmo.grid(),
         };
         let mut outcome = None;
-        // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
-        // one that the side panels use behind their content. The Appearance slider scales that fill's
-        // alpha, letting the scene it covers show through without changing any other surface.
-        let fill = theme::at_opacity(theme::surface(ui), settings.appearance.panel_opacity);
+        // The ribbon is its own chrome surface — one step above the window's surface and distinct
+        // from the panel fill the side panels use behind their content. The Appearance slider scales
+        // that fill's alpha, letting the scene it covers show through without changing any other
+        // surface.
+        let fill = theme::at_opacity(theme::ribbon(ui), settings.appearance.panel_opacity);
         // The band the strip occupies is also the band it owns the pointer over, so the tools behind
         // it never see a hover or a click there. The measured rectangle wins once egui has sized the
         // area, which is what keeps the blocked band and the drawn one the same.

@@ -93,7 +93,6 @@ impl Editor {
                     self.extrude_path(session, object, height, lang)?;
                     outcome.extruded = Some((object, height));
                 }
-                ToolAction::ClearCreationParent => self.clear_creation_parent(),
                 ToolAction::CloseDrawing => outcome.close_draft = true,
                 ToolAction::CancelDrawing => self.cancel_drawing(),
                 ToolAction::FrameAll => outcome.view = Some(toolbars::RibbonViewAction::FrameAll),
@@ -169,12 +168,12 @@ impl Editor {
     }
 
     /// The tab whose groups the ribbon draws.
-    pub fn ribbon_tab(&self) -> toolbars::RibbonTab {
+    pub fn ribbon_tab(&self) -> &'static toolbars::spec::TabSpec {
         self.toolbars.tab()
     }
 
     /// Opens one ribbon tab.
-    pub fn set_ribbon_tab(&mut self, tab: toolbars::RibbonTab) -> toolbars::RibbonTab {
+    pub fn set_ribbon_tab(&mut self, tab: &'static toolbars::spec::TabSpec) -> &'static toolbars::spec::TabSpec {
         self.toolbars.set_tab(tab)
     }
 }

@@ -252,6 +252,24 @@ impl Default for ViewportSettings {
     }
 }
 
+/// The ribbon's own state, remembered between runs.
+///
+/// Only the fold is persisted: which tab is open and what the numeric fields hold are session view
+/// state, and U67's pinned variant will join this section when the list lands. A file written before
+/// the section existed opens the body, which is the state the workspace has always started in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RibbonSettings {
+    /// Whether the ribbon's tool body is drawn under its tab row.
+    pub open: bool,
+}
+
+impl Default for RibbonSettings {
+    fn default() -> Self {
+        Self { open: true }
+    }
+}
+
 /// Everything the workspace remembers between runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -264,6 +282,8 @@ pub struct Settings {
     pub viewport: ViewportSettings,
     /// Recently opened scenes, newest first.
     pub recent: Vec<PathBuf>,
+    /// The fold of the ribbon.
+    pub ribbon: RibbonSettings,
 }
 
 impl Default for Settings {
@@ -273,6 +293,7 @@ impl Default for Settings {
             appearance: Appearance::default(),
             viewport: ViewportSettings::default(),
             recent: Vec::new(),
+            ribbon: RibbonSettings::default(),
         }
     }
 }
@@ -755,6 +776,7 @@ mod tests {
                 roll_step_degrees: 5,
             },
             recent: vec![PathBuf::from("/tmp/cabinet.fcs"), PathBuf::from("/tmp/shelf.fcs")],
+            ribbon: RibbonSettings { open: false },
         }
     }
 
@@ -807,6 +829,24 @@ mod tests {
         assert_eq!(Settings::from_json(json).expect("parse").appearance.panel_opacity, MAX_PANEL_OPACITY);
         let json = r#"{"version":1,"appearance":{"panel_opacity":0}}"#;
         assert_eq!(Settings::from_json(json).expect("parse").appearance.panel_opacity, MIN_PANEL_OPACITY);
+    }
+
+    #[test]
+    fn the_ribbon_fold_round_trips_through_the_workspace_file() {
+        let mut settings = Settings::default();
+        assert!(settings.ribbon.open, "a fresh workspace draws the ribbon body");
+        settings.ribbon.open = false;
+        let json = settings.to_json().expect("serialise");
+        let read = Settings::from_json(&json).expect("parse");
+        assert_eq!(read, settings, "the workspace file keeps the fold");
+        assert!(!read.ribbon.open);
+
+        // A file written before the section existed opens the body, which is what every build before
+        // U68 did, and a file that still carries U71's `ribbon` object is read as one too.
+        let json = r#"{"version":1,"appearance":{"theme":"dark"}}"#;
+        assert!(Settings::from_json(json).expect("load").ribbon.open);
+        let json = r#"{"version":1,"ribbon":{"opacity":0.51}}"#;
+        assert!(Settings::from_json(json).expect("load").ribbon.open);
     }
 
     #[test]
