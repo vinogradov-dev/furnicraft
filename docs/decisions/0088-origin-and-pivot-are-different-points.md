@@ -61,7 +61,10 @@ default) and `CenterOfBounds` (a group's children union).
 
 - **Path, Contour, Constructive, Mesh, Primitive.** The creation anchor is
   `CreationOrigin` for a path or contour; a primitive's origin is its own centre; a mesh is written
-  by its caller. The pivot starts at zero and `set_pivot`/`center_pivot` may author it.
+  by its caller. The pivot starts at zero and `set_pivot`/`center_pivot` may author it. A later
+  `rebase_origin` shifts a path, contour, constructive or baked mesh; a primitive refuses it,
+  because its parameters define a shape centred on its own origin and there is no free vertex
+  offset to rewrite.
 - **Panel.** The origin is the base corner of the outline. `pivot_local` is always zero, so the
   gizmo turns the panel about the same point the dimensions are measured from. `set_pivot` and
   `center_pivot` are refused with `PanelPivotIsDerived`. An outline edit re-anchors at the new

@@ -43,9 +43,10 @@ impl Project {
     /// The content is moved so the strategy's anchor becomes the node's local zero, the placement
     /// takes that anchor's parent-frame position, and every local vertex is written around the new
     /// zero. The world geometry does not move. An authored pivot is carried with the content, so
-    /// `pivot_world` stays fixed: `pivot_local_new = pivot_local_old - anchor`. A panel, a primitive
-    /// and a camera or light have no free vertex frame to re-base and are refused; a panel's
-    /// outline edit is the panel's own re-anchoring operation.
+    /// `pivot_world` stays fixed: `pivot_local_new = pivot_local_old - anchor`. A path, contour,
+    /// constructive or baked mesh re-bases; a panel, a primitive and a camera or light have no free
+    /// vertex frame to re-base and are refused. A panel's outline edit is its own re-anchoring
+    /// operation.
     pub fn rebase_origin(&mut self, id: Id, strategy: FrameAnchor) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
@@ -415,7 +416,15 @@ fn rebase_node_origin(node: Node, strategy: FrameAnchor) -> Result<Node, Project
                     object.set_pivot(pivot);
                     Ok(Node::Object(object))
                 }
-                Geometry::Primitive(_) | Geometry::Mesh(_) => Err(ProjectError::OriginRebase { id }),
+                Geometry::Mesh(mesh) => {
+                    let rebased = rebase_origin_at(mesh.clone(), object.placement(), strategy).map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    *object.geometry_mut() = Geometry::Mesh(rebased.content);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Primitive(_) => Err(ProjectError::OriginRebase { id }),
             }
         }
         Node::Container(mut container) => {

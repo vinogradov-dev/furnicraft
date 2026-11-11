@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::placement::lengths_from_millimetres;
 use crate::tree::panel_bounds;
-use crate::{Contour, ContourError, Node, Path, PathError, Placement, PlacementError, RectCorner};
+use crate::{Contour, ContourError, Mesh, Node, Path, PathError, Placement, PlacementError, RectCorner};
 
 /// The content point a newly created node puts at its local zero.
 ///
@@ -183,6 +183,41 @@ impl Anchored for Contour {
             return Err(FrameError::OffPlane { micrometres: z.micrometres() });
         }
         Ok(self.translated([x, y])?)
+    }
+}
+
+impl Anchored for Mesh {
+    fn anchor(&self, strategy: FrameAnchor) -> Result<[Length; 3], FrameError> {
+        let (min, max) = self.bounds_micrometres();
+        let to_mm = |point: [i64; 3]| {
+            DVec3::new(
+                Length::from_micrometres(point[0]).millimetres_f64(),
+                Length::from_micrometres(point[1]).millimetres_f64(),
+                Length::from_micrometres(point[2]).millimetres_f64(),
+            )
+        };
+        match strategy {
+            FrameAnchor::CreationOrigin => Ok([Length::ZERO; 3]),
+            FrameAnchor::BBoxBaseCorner(corner) => {
+                lengths_from_millimetres(box_corner(corner, to_mm(min), to_mm(max))).ok_or(FrameError::OutOfRange)
+            }
+            FrameAnchor::CenterOfBounds => {
+                lengths_from_millimetres((to_mm(min) + to_mm(max)) * 0.5).ok_or(FrameError::OutOfRange)
+            }
+        }
+    }
+
+    fn shifted(&self, offset: [Length; 3]) -> Result<Self, FrameError> {
+        let [x, y, z] = offset;
+        let mut positions = Vec::with_capacity(self.positions().len());
+        for position in self.positions() {
+            positions.push([
+                position[0].checked_add(x).ok_or(FrameError::OutOfRange)?,
+                position[1].checked_add(y).ok_or(FrameError::OutOfRange)?,
+                position[2].checked_add(z).ok_or(FrameError::OutOfRange)?,
+            ]);
+        }
+        Mesh::new(positions, self.faces().to_vec()).map_err(|_| FrameError::OutOfRange)
     }
 }
 

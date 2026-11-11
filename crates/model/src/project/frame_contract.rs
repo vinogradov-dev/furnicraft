@@ -546,6 +546,40 @@ fn rebasing_an_origin_keeps_every_world_vertex_and_the_pivot_world() {
 }
 
 #[test]
+fn rebasing_a_baked_mesh_keeps_its_world_vertices_and_pivot() {
+    let frame = parent_frame();
+    let mut project = sample_project();
+    let root = project.root().id();
+    let id = project.add_object(root, "Block", frame, Geometry::Mesh(box_mesh())).expect("add a mesh");
+    let pivot = PivotLocal::new(millimetres(5), millimetres(-7), millimetres(3));
+    project.set_node_pivot(id, pivot).expect("author the pivot");
+    let mesh_world = |project: &Project| {
+        let mesh = project.object(id).expect("object").geometry().as_mesh().expect("mesh");
+        let world = project.world_placement(id).expect("world placement");
+        mesh.positions()
+            .iter()
+            .map(|point| {
+                world.transform_point(DVec3::new(
+                    point[0].millimetres_f64(),
+                    point[1].millimetres_f64(),
+                    point[2].millimetres_f64(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = mesh_world(&project);
+    let before_pivot = project.pivot_world(id).expect("world pivot");
+
+    project.rebase_origin(id, FrameAnchor::BBoxBaseCorner(RectCorner::TopRight)).expect("rebase the mesh origin");
+
+    let after = mesh_world(&project);
+    for (before, after) in before.iter().zip(&after) {
+        assert_close(*before, *after, "a re-based mesh keeps every world vertex");
+    }
+    assert_close(project.pivot_world(id).expect("world pivot"), before_pivot, "a re-based mesh keeps pivot_world");
+}
+
+#[test]
 fn set_pivot_and_center_pivot_move_only_the_pivot() {
     let frame = parent_frame();
     let mut project = sample_project();
