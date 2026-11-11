@@ -129,6 +129,13 @@ pub const MAX_PANEL_OPACITY: u32 = 100;
 /// The opacity a fresh workspace opens with, in percent.
 pub const DEFAULT_PANEL_OPACITY: u32 = 92;
 
+/// The raster width below which [`IconColor::Auto`] falls back to one ink, in pixels.
+///
+/// A pixel count, not a point size: at 16 px a two-tone fill reads as a muddy blob and the outline
+/// loses its weight, while at 20 px the three tones separate. A UI scale below 1 therefore falls
+/// back on its own (`plan/notes/U70.md`).
+pub const ICON_COLOR_MIN_PX: u32 = 20;
+
 /// How the icon pipeline colours a glyph.
 ///
 /// The setting is read by the icon pass (U70): a semantic family gives an icon its hue, and the
@@ -148,6 +155,15 @@ pub enum IconColor {
 impl IconColor {
     /// Every mode in the order the window lists them.
     pub const ALL: [Self; 3] = [Self::Auto, Self::Always, Self::Never];
+
+    /// Whether a raster of `px` pixels carries the role inks rather than one tint.
+    pub const fn uses_roles(self, px: u32) -> bool {
+        match self {
+            Self::Auto => px >= ICON_COLOR_MIN_PX,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
 
     /// The user-visible name.
     pub const fn label(self) -> Message {
@@ -853,6 +869,17 @@ mod tests {
         assert_eq!(settings.appearance.icon_color, IconColor::Auto);
         assert_eq!(settings.appearance.language, Language::Russian);
         assert_eq!(settings.appearance.ui_scale, 125);
+    }
+
+    #[test]
+    fn the_icon_colour_mode_falls_back_below_twenty_pixels() {
+        // The threshold is a pixel count, so a UI scale under 100 % falls back without a point-size
+        // check somewhere else (U70).
+        assert!(IconColor::Auto.uses_roles(ICON_COLOR_MIN_PX));
+        assert!(!IconColor::Auto.uses_roles(ICON_COLOR_MIN_PX - 1));
+        assert!(IconColor::Always.uses_roles(1), "always means always");
+        assert!(!IconColor::Never.uses_roles(512), "never means never");
+        assert_eq!(IconColor::default(), IconColor::Auto);
     }
 
     #[test]

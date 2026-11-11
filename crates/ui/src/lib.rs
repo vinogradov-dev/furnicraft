@@ -72,6 +72,23 @@ pub fn language(ctx: &egui::Context) -> Lang {
     ctx.data(|data| data.get_temp(egui::Id::unique(LANGUAGE_KEY))).unwrap_or_default()
 }
 
+/// The `egui` memory key the shell publishes the workspace icon-colour mode under.
+const ICON_COLOR_KEY: &str = "furnicraft.icon_color";
+
+/// Publishes how the icon pipeline colours a glyph.
+///
+/// The mode is workspace settings, not document data, so the shell writes it once per frame and the
+/// rasteriser reads it, exactly like the language: a new icon surface never threads a mode through
+/// its signature. Before the shell publishes one, [`settings::IconColor::Auto`] applies.
+pub fn set_icon_color(ctx: &egui::Context, mode: settings::IconColor) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(ICON_COLOR_KEY), mode));
+}
+
+/// How the icon pipeline colours a glyph.
+pub fn icon_color(ctx: &egui::Context) -> settings::IconColor {
+    ctx.data(|data| data.get_temp(egui::Id::unique(ICON_COLOR_KEY))).unwrap_or_default()
+}
+
 /// The sentence for `message` in the language of this context.
 pub fn text(ctx: &egui::Context, message: Message) -> &'static str {
     message.text(language(ctx))

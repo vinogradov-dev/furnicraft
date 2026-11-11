@@ -42,6 +42,12 @@ Every icon belongs to exactly one family, and the family decides its grammar:
 A geometry command that happens to sit in a toolbar stays a geometry icon. A service action that
 appears next to tools stays a service icon. Do not blend the grammars.
 
+Grammar and role ink are two different facts. The grammar above says how the drawing is composed; the
+role ink (§5.1) says what the icon means: a `geometry` icon carries the ink of its operation —
+`draw` for a sketched entity, `model` for a solid, `scene` for a panel or a light — while a `view`
+icon carries `view` and a `service` icon carries `view`, `modify` or `danger` per §19. The six role
+families and their literals are in `README.md`.
+
 ---
 
 ## 2. Main Icon Formula
@@ -117,11 +123,14 @@ real gap — never by a hue that exists only in the author's head. See §5.
 
 ## 5. Emphasis Without Colour
 
-### 5.1. One ink
+### 5.1. One ink per family
 
-Every icon is drawn in one ink colour, and that ink is white (`#fff`). The file carries no colour of
-its own; the button rasterises the master and multiplies it by the theme's icon colour, so the same
-master serves every theme.
+Every icon is drawn in the ink of its semantic family — `draw`, `modify`, `model`, `scene`, `view`
+`danger` — and that family comes from what the icon means, not from the surface that shows it. The
+file carries the family's literal from the one table in `assets/README.md`; the UI replaces that
+literal with the active theme's ink before it rasterises, so the same master serves dark and light.
+A shape that genuinely means two things may use a second (or third) literal from the same table,
+never a colour of its own.
 
 The emphasis ladder, strongest first:
 
@@ -131,20 +140,23 @@ solid shape  >  result fill (0.45–0.60) + heavy line  >  heavy line (2.2–2.6
 ```
 
 A result can also be separated from its source by a real gap, by size, or by being the only filled
-form. Two elements that differ only in colour do not differ at all.
+form. Two elements that differ only in colour do not differ at all: the family ink says what an icon
+is for, and the form inside it still carries the operation.
 
 ### 5.2. What colour belongs to
 
-- The **interface theme** owns colour: background, text, selection, the active tool accent.
-- The **icon** owns form. Orange, red, green and purple are not icon roles; they are theme choices
-  applied later, if a theme ever needs them.
+- The **interface theme** owns the neutrals: background, text, selection, the active tool accent.
+- The **semantic family** owns the icon's hue: a line is drawn in the `draw` ink, a panel in the
+  `scene` ink, a delete action in the `danger` ink. The author never picks a hue per icon.
+- The **theme variant** owns the value: the same family is a lighter ink on dark and a folded one on
+  paper, chosen so every role clears 3:1 against the panel and the ribbon.
 - If a status colour is applied by the theme, the shape must already carry the meaning alone. Colour
-  is always redundant, never the only signal.
+  is always redundant, never the only signal, and the set still reads with no colour at all.
 
 Bad:
 
 ```text
-two identical contours, one simply drawn in the accent colour
+two identical contours, one simply recoloured outside the family table
 ```
 
 Good:
@@ -156,22 +168,23 @@ source contour is thinner; result is heavier; a real gap and an arrow show the c
 ### 5.3. The accent rule
 
 The action result gets the single strongest treatment in the icon. Everything else steps back.
-"One operation, one emphasis" (§13.2) is the practical form of this rule.
+"One operation, one emphasis" (§13.2) is the practical form of this rule. The action accent is UI
+chrome and is never an icon ink: a chosen tool is a background and a border, not a recoloured glyph.
 
 ### 5.4. Tone is alpha, not colour
 
-Mass comes from one of exactly two fills, both white ink at reduced opacity:
+Mass comes from one of exactly two fills, both the family ink at reduced opacity:
 
 | Role | Fill | Outline |
 |---|---|---|
 | passive face | `fill-opacity` `0.12–0.18` | full-strength main line, `1.6–1.8` |
 | result or changed geometry | `fill-opacity` `0.45–0.60` | heavy line, `2.2–2.6` |
 
-The tone is alpha on the same white ink, so one master still serves every theme and the icon still
-reads with no colour at all. A fill never replaces an outline and never carries meaning alone: the
-shape must say the same thing at zero fill. There is no third tone, no decorative wash, no shadow,
-and no per-theme fill. A solid `fill="#fff"` is the top of the ladder and belongs to a mark — a dot,
-an arrowhead, a service glyph — not to a face.
+The tone is alpha on the role ink, so one master still serves every theme and the icon still reads
+with no colour at all. A fill never replaces an outline and never carries meaning alone: the shape
+must say the same thing at zero fill. There is no third tone, no decorative wash, no shadow, and no
+per-theme fill. A solid fill is the top of the ladder and belongs to a mark — a dot, an arrowhead, a
+service glyph — not to a face.
 
 A flat 2D figure may take the passive tone inside its outline. That is still a flat sign: it gets no
 modelled side face, no thickness and no isometric hint (§8.1).
@@ -182,13 +195,16 @@ modelled side face, no thickness and no isometric hint (§8.1).
 
 Main rule:
 
-> **One SVG master per theme — the theme tints it. Do not create dark and light versions.**
+> **One SVG master — the theme maps its role inks. Do not create dark and light versions.**
 
 Consequences:
 
-- no `#hex` colours, `class`, `style`, CSS variables or `{{tokens}}` inside the file;
-- no separate file for hover, pressed, disabled or toggled: those are theme states;
-- no separate file per size: the loader rasterises the master at the size it draws;
+- the only literals inside the file are role inks from the table in `assets/README.md`; no other
+  `#hex`, `class`, `style`, CSS variable or `{{token}}` is allowed;
+- no separate file for hover, pressed, disabled or toggled: those are theme states (a hover takes one
+  emphasis step and a disabled icon is an alpha multiply, §7.5);
+- no separate file per size: the loader rasterises the master at the size it draws, and below a
+  20 px raster it falls back to one ink from the same master (§7.5);
 - the file is self-contained: no references to sibling files, fonts or the network.
 
 The loader and the naming contract are in `README.md`.
@@ -245,6 +261,22 @@ The band is what makes a set read as one family: below 20 % an icon is a sketch,
 blob. The optical size of the inked silhouette should sit near the footprint, roughly `15..18` units
 across, so sibling icons line up. The UI test in `crates/ui/src/icons.rs` measures both numbers from
 the raster and fails outside them.
+
+### 7.5. Role ink and the raster size
+
+A role hue needs mass to read: at 16 px a two-tone fill turns into a muddy blob and the outline loses
+its weight, while at 20 px the three tones separate. The threshold is a **pixel count**, not a point
+size, so a 0.75 UI scale falls back on its own:
+
+| Raster | Ink |
+|---|---|
+| 20 px or more | the family ink of the active theme variant |
+| below 20 px | one ink: the theme's icon colour multiplied by the master's alpha |
+
+The workspace can also ask for one ink at every size (*Settings → Appearance → Icon colour → Never*)
+or for the family ink at every size (*Always*). The fallback is the same drawing, so a file never
+needs to know which path drew it. A hover or a press moves the family ink one step away from the
+surface; a disabled icon keeps its ink at the style's disabled alpha. There is no per-state file.
 
 ---
 
@@ -573,7 +605,8 @@ If the user sees the guide first and not the result, the hierarchy is wrong.
 
 ### 13.1. Form is more important than colour
 
-An icon must be understandable in one ink. That is the normal case, not a fallback.
+An icon must be understandable in one ink. That is the normal case, not a fallback: the role ink is
+decoration over a drawing that already works.
 
 If two elements are told apart only by colour, the icon is wrong.
 
@@ -674,11 +707,14 @@ Forbidden:
 
 Drawing rules:
 
-- `stroke="#fff"`, one ink; a stroke-only shape keeps `fill="none"`;
-- a face takes `fill="#fff"` with `fill-opacity` `0.12–0.18` (passive) or `0.45–0.60` (result or
-  changed geometry) and keeps its full-strength `stroke="#fff"` outline;
-- a solid silhouette, a dot or an arrowhead may use `fill="#fff"` with no stroke — that is the top of
-  the emphasis ladder, not a face;
+- `stroke` is the icon's family ink from the table in `README.md`; a stroke-only shape keeps
+  `fill="none"`;
+- a face takes the same ink with `fill-opacity` `0.12–0.18` (passive) or `0.45–0.60` (result or
+  changed geometry) and keeps its full-strength outline;
+- a solid silhouette, a dot or an arrowhead may fill with the family ink and take no stroke — that is
+  the top of the emphasis ladder, not a face;
+- one to three inks, all from the table, and the family's ink is always one of them; never a colour
+  outside it;
 - round caps and round joins;
 - no `scale` transform to fake another size: the loader rasterises at the size it draws;
 - at most two decimal places;
@@ -736,7 +772,7 @@ An icon is ready only if:
 - the action is understandable without text;
 - the result matters more than the source;
 - auxiliary elements do not compete with the result;
-- the icon uses one ink and survives having no colour at all;
+- the icon uses one role ink and survives having no colour at all;
 - it reads at 16 px on the panel background and does not turn into mush;
 - no decorative lines;
 - no random colours;
@@ -773,7 +809,7 @@ If an icon is simple but a professional understands the command immediately, it 
 
 Final style formulation:
 
-> **Graphite technical interface, one ink, emphasis carried by weight and real gaps. Neutral furniture
+> **Graphite technical interface, one role ink per meaning, emphasis carried by weight and real gaps. Neutral furniture
 > volumes, thin guides, clear control points, the strongest treatment only on the result. Flat for
 > sketches and documents, volumetric for parts and form operations; service chrome is flat, heavy and
 > shaped. Each icon explains the action through geometry, not through decorativeness.**
@@ -847,9 +883,11 @@ second surface needs them; then they get one glyph, not a decorated variant.
 
 ### 19.4. Emphasis and colour
 
-Service icons are ink only. The theme may apply a status colour, but the shape must carry the
-meaning alone. The action accent belongs to the interface theme, never to chrome: a save icon is not
-orange because saving is useful.
+Service icons carry the role ink of what they do: `danger` for a destructive command only, `modify`
+for an edit such as undo, copy or visibility, and `view` for the rest of the chrome. The ink is a
+redundant tone; the shape must carry the meaning alone and must read at 16 px with no colour at all.
+The action accent belongs to the interface theme, never to chrome: a save icon is not orange because
+saving is useful.
 
 ### 19.5. Size
 
@@ -871,4 +909,5 @@ different actions with different glyphs; never rename a geometry action to free 
 - reads at 16 px without colour;
 - one glyph used by every surface that shows the action;
 - destructive actions keep a label or a confirmation;
-- status and action are told apart by enclosure, not by hue.
+- status and action are told apart by enclosure, not by hue;
+- the ink is the one its family names in `README.md`, and no other.

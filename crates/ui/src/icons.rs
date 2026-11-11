@@ -3,10 +3,17 @@
 //! `assets/icons/**` is embedded at compile time, one module per theme. A zero-byte file is a
 //! documented placeholder, so an icon button whose artwork has not been drawn yet falls back to its
 //! text label and the surface stays usable. A drawn icon is rasterised by the `egui_extras` SVG
-//! loader at `pt × pixels_per_point`, tinted with the widget's foreground colour and uploaded as a
-//! `TextureHandle`, so one white master serves every theme (`assets/README.md`, ADR 0055). Its ink
-//! stays inside the fixed `3..21` footprint and covers 20–45 % of it; the tests below read both off
-//! the raster (`assets/icons/STYLE_GUIDE.md` §7.4).
+//! loader at `pt × pixels_per_point` and uploaded as a `TextureHandle`, so one master serves every
+//! theme (`assets/README.md`, ADR 0055, ADR 0090).
+//!
+//! A master carries the literal role inks of a six-entry table (`plan/notes/U70.md`): `draw`,
+//! `modify`, `model`, `scene`, `view`, `danger`. Before the upload the rasteriser maps each literal
+//! to the active variant's ink through a [`RoleRamp`], so the file says what an element means and the
+//! theme decides how bright it is — dark and light need no second asset. Below a 20 px raster, or
+//! when the workspace asks for one ink, the alpha silhouette is multiplied by the widget's colour
+//! instead: the same master, today's tint path, no colour at all in the drawing. The ink stays
+//! inside the fixed `3..21` footprint and covers 20–45 % of it; the tests below read both off the
+//! raster (`assets/icons/STYLE_GUIDE.md` §7.4).
 
 use egui::{
     Button, Color32, CornerRadius, FontFamily, FontId, Response, Role, Sense, Stroke, StrokeKind, TextureHandle,
@@ -24,6 +31,130 @@ pub const RIBBON_ICON_POINT_SIZE: f32 = 22.0;
 
 /// Point size of a ribbon button's caption, before the UI scale turns it into pixels.
 pub const RIBBON_CAPTION_POINT_SIZE: f32 = 10.5;
+
+/// The semantic family of an icon: the role its ink carries and the meaning it speaks for.
+///
+/// A family is not a theme directory — `contour/arc` is [`Family::Draw`] while `actions/delete` is
+/// [`Family::Danger`] — because the surface an icon appears on and the thing it does are two
+/// different facts. Every master writes its family's [`Family::master_hex`]; [`RoleRamp`] turns
+/// that literal into the ink of the active variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Family {
+    /// Create or modify sketch geometry: lines, arcs, circles, contours.
+    Draw,
+    /// Transform and edit commands: undo, copy, paste, rename, visibility.
+    Modify,
+    /// Solids, bodies and booleans.
+    Model,
+    /// Panels, hardware, cameras and lights.
+    Scene,
+    /// Navigation, projection and display, and the neutral chrome that names no edit.
+    View,
+    /// Destructive commands only.
+    Danger,
+}
+
+impl Family {
+    /// Every family, in the order of the role table.
+    pub const ALL: [Self; 6] = [Self::Draw, Self::Modify, Self::Model, Self::Scene, Self::View, Self::Danger];
+
+    /// The literal a master carries for this family: the dark-variant ink of the role table.
+    ///
+    /// The dark column is the master's own value, so a dark theme maps every literal onto itself.
+    pub const fn master_hex(self) -> &'static str {
+        match self {
+            Self::Draw => "#58C8DC",
+            Self::Modify => "#A98BF0",
+            Self::Model => "#6E9EF7",
+            Self::Scene => "#55C7A4",
+            Self::View => "#B8C2CE",
+            Self::Danger => "#E06A6A",
+        }
+    }
+}
+
+/// The six role inks of one theme variant.
+///
+/// The ramps are the role table of `plan/notes/U70.md`; a preset changes the neutrals and the
+/// accent, never the meaning of an icon, so both variants are preset-independent. The dark ramp is
+/// the master table itself, and the light ramp folds each hue until it reads on paper — every ink
+/// clears 3:1 against the panel and the ribbon of all three presets (asserted below).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoleRamp {
+    /// The ink of [`Family::Draw`].
+    pub draw: Color32,
+    /// The ink of [`Family::Modify`].
+    pub modify: Color32,
+    /// The ink of [`Family::Model`].
+    pub model: Color32,
+    /// The ink of [`Family::Scene`].
+    pub scene: Color32,
+    /// The ink of [`Family::View`].
+    pub view: Color32,
+    /// The ink of [`Family::Danger`].
+    pub danger: Color32,
+}
+
+impl RoleRamp {
+    /// The dark variant's inks, the values every master writes.
+    pub const DARK: Self = Self {
+        draw: Color32::from_rgb(0x58, 0xC8, 0xDC),
+        modify: Color32::from_rgb(0xA9, 0x8B, 0xF0),
+        model: Color32::from_rgb(0x6E, 0x9E, 0xF7),
+        scene: Color32::from_rgb(0x55, 0xC7, 0xA4),
+        view: Color32::from_rgb(0xB8, 0xC2, 0xCE),
+        danger: Color32::from_rgb(0xE0, 0x6A, 0x6A),
+    };
+
+    /// The light variant's inks, folded until they read on the paper variants.
+    pub const LIGHT: Self = Self {
+        draw: Color32::from_rgb(0x1C, 0x7C, 0x92),
+        modify: Color32::from_rgb(0x6B, 0x4B, 0xB0),
+        model: Color32::from_rgb(0x2E, 0x5C, 0xB8),
+        scene: Color32::from_rgb(0x23, 0x7A, 0x5E),
+        view: Color32::from_rgb(0x5A, 0x66, 0x74),
+        danger: Color32::from_rgb(0xB3, 0x3A, 0x3A),
+    };
+
+    /// The ramp of the variant `dark` selects.
+    pub const fn for_variant(dark: bool) -> Self {
+        if dark { Self::DARK } else { Self::LIGHT }
+    }
+
+    /// The ink of `family`.
+    pub const fn ink(self, family: Family) -> Color32 {
+        match family {
+            Family::Draw => self.draw,
+            Family::Modify => self.modify,
+            Family::Model => self.model,
+            Family::Scene => self.scene,
+            Family::View => self.view,
+            Family::Danger => self.danger,
+        }
+    }
+}
+
+/// How the widget state biases an icon's ink.
+///
+/// The role path owns the hue, so a state cannot hand it a second colour: a hover or a press takes
+/// one emphasis step away from the surface, a disabled icon keeps its hue at `disabled_alpha`, and a
+/// chosen toggle draws the theme's foreground because the accent fill behind it is chrome, not an
+/// icon role (`plan/notes/U70.md`). The one-ink path ignores the tone: its caller already passes the
+/// widget state's own colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) enum IconTone {
+    /// The resting face.
+    #[default]
+    Rest,
+    /// Under the pointer: one step of the role ink away from the surface.
+    Hover,
+    /// Pressed: the same one step; the cell's own fill says which state it is.
+    Press,
+    /// Unavailable: the role ink at `disabled_alpha`.
+    Disabled,
+    /// Chosen: the theme's foreground over the accent fill, never a role ink.
+    Selected,
+}
 
 /// The most rows a ribbon caption may take before it elides.
 ///
@@ -83,23 +214,29 @@ impl Theme {
     }
 }
 
-/// One embedded icon: its theme, its file stem and its bytes.
+/// One embedded icon: its theme, its family, its file stem and its bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Icon {
     theme: Theme,
+    family: Family,
     name: &'static str,
     uri: &'static str,
     asset: &'static [u8],
 }
 
 impl Icon {
-    const fn new(theme: Theme, name: &'static str, uri: &'static str, asset: &'static [u8]) -> Self {
-        Self { theme, name, uri, asset }
+    const fn new(theme: Theme, family: Family, name: &'static str, uri: &'static str, asset: &'static [u8]) -> Self {
+        Self { theme, family, name, uri, asset }
     }
 
     /// The theme directory that owns this icon.
     pub const fn theme(self) -> Theme {
         self.theme
+    }
+
+    /// The semantic family whose ink this icon carries.
+    pub const fn family(self) -> Family {
+        self.family
     }
 
     /// The file stem, which is the icon id inside its theme.
@@ -124,16 +261,20 @@ impl Icon {
 }
 
 /// Declares one theme module: every icon file as a constant, plus `ALL` for audits.
+///
+/// `$default` is the family of the theme; an icon names its own family after the file when the
+/// surface it lives on and the meaning it carries disagree (`actions/delete` is danger).
 macro_rules! icons {
-    ($theme:ident, $theme_name:literal, $module:ident { $($constant:ident => $file:literal),* $(,)? }) => {
+    ($theme:ident, $theme_name:literal, $default:ident, $module:ident { $($constant:ident => $file:literal $(: $family:ident)?),* $(,)? }) => {
         #[doc = concat!("The `", $theme_name, "` theme.")]
         pub mod $module {
-            use super::{Icon, Theme};
+            use super::{Family, Icon, Theme};
 
             $(
                 #[doc = concat!("The `", $theme_name, "/", $file, "` icon.")]
                 pub const $constant: Icon = Icon::new(
                     Theme::$theme,
+                    family_of!($default $(, $family)?),
                     $file,
                     concat!("bytes://icons/", $theme_name, "/", $file, ".svg"),
                     include_bytes!(concat!(
@@ -152,7 +293,17 @@ macro_rules! icons {
     };
 }
 
-icons!(Contour, "contour", contour {
+/// The family a theme starts with, or the one an icon names for itself.
+macro_rules! family_of {
+    ($default:ident) => {
+        Family::$default
+    };
+    ($default:ident, $family:ident) => {
+        Family::$family
+    };
+}
+
+icons!(Contour, "contour", Draw, contour {
     LINE => "line",
     POLYLINE => "polyline",
     ARC => "arc",
@@ -167,27 +318,27 @@ icons!(Contour, "contour", contour {
     CANCEL => "cancel",
 });
 
-icons!(Primitives, "primitives", primitives {
+icons!(Primitives, "primitives", Model, primitives {
     CUBE => "cube",
     CYLINDER => "cylinder",
     SPHERE => "sphere",
     CONE => "cone",
 });
 
-icons!(Bodies, "bodies", bodies {
+icons!(Bodies, "bodies", Model, bodies {
     EXTRUDE => "extrude",
     REVOLVE => "revolve",
     SWEEP => "sweep",
 });
 
-icons!(Scene, "scene", scene {
+icons!(Scene, "scene", Scene, scene {
     PANEL => "panel",
     ASSEMBLY => "assembly",
     CAMERA => "camera",
     LIGHT => "light",
 });
 
-icons!(View, "view", view {
+icons!(View, "view", View, view {
     ORTHOGRAPHIC => "orthographic",
     PERSPECTIVE => "perspective",
     FRAME_ALL => "frame-all",
@@ -213,19 +364,19 @@ icons!(View, "view", view {
     BOTTOM => "bottom",
 });
 
-icons!(Actions, "actions", actions {
+icons!(Actions, "actions", View, actions {
     CONFIRM => "confirm",
     DISMISS => "dismiss",
     CANCEL => "cancel",
-    UNDO => "undo",
-    REDO => "redo",
-    DELETE => "delete",
-    ADD => "add",
-    REMOVE => "remove",
-    DUPLICATE => "duplicate",
-    RENAME => "rename",
-    COPY => "copy",
-    PASTE => "paste",
+    UNDO => "undo": Modify,
+    REDO => "redo": Modify,
+    DELETE => "delete": Danger,
+    ADD => "add": Modify,
+    REMOVE => "remove": Danger,
+    DUPLICATE => "duplicate": Modify,
+    RENAME => "rename": Modify,
+    COPY => "copy": Modify,
+    PASTE => "paste": Modify,
     FILE_NEW => "file-new",
     FILE_OPEN => "file-open",
     FILE_SAVE => "file-save",
@@ -235,10 +386,10 @@ icons!(Actions, "actions", actions {
     SETTINGS => "settings",
     SEARCH => "search",
     COMMAND => "command",
-    VISIBLE => "visible",
-    HIDDEN => "hidden",
-    LOCK => "lock",
-    UNLOCK => "unlock",
+    VISIBLE => "visible": Modify,
+    HIDDEN => "hidden": Modify,
+    LOCK => "lock": Modify,
+    UNLOCK => "unlock": Modify,
     EXPAND => "expand",
     COLLAPSE => "collapse",
     WARNING => "warning",
@@ -247,7 +398,7 @@ icons!(Actions, "actions", actions {
     HELP => "help",
 });
 
-icons!(Window, "window", window {
+icons!(Window, "window", View, window {
     MINIMIZE => "minimize",
     MAXIMIZE => "maximize",
     RESTORE => "restore",
@@ -442,7 +593,8 @@ fn paint_flat_icon(
     let ink = if enabled { crate::theme::text(ui) } else { crate::theme::text_dim(ui) };
     if icon.is_drawn() {
         let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
-        paint_icon(ui, icon, icon_rect, point_size, ink);
+        let tone = widget_tone(ui, response, enabled, false);
+        paint_icon_toned(ui, icon, icon_rect, point_size, ink, tone);
     } else {
         ui.painter().text(
             rect.center(),
@@ -491,7 +643,7 @@ pub fn ribbon_button(
         .add_enabled_ui(enabled, |ui| {
             let (rect, response) = ui.allocate_exact_size(size, Sense::click());
             if ui.is_rect_visible(rect) {
-                let (fill, stroke, color) = ribbon_face(ui, &response, on);
+                let (fill, stroke, color, tone) = ribbon_face(ui, &response, on, enabled);
                 ui.painter().rect(rect, CornerRadius::same(crate::theme::RADIUS), fill, stroke, StrokeKind::Inside);
                 // The glyph and its caption are one block, centred in the cell, so a cell never looks
                 // top-heavy and a one-line caption and a two-line one share their optical centre.
@@ -506,7 +658,7 @@ pub fn ribbon_button(
                         pos2(rect.center().x - RIBBON_ICON_POINT_SIZE / 2.0, top),
                         Vec2::splat(RIBBON_ICON_POINT_SIZE),
                     );
-                    paint_icon(ui, icon, icon_rect, RIBBON_ICON_POINT_SIZE, color);
+                    paint_icon_toned(ui, icon, icon_rect, RIBBON_ICON_POINT_SIZE, color, tone);
                     let caption_pos = pos2(
                         rect.center().x - galley.size().x / 2.0,
                         icon_rect.bottom() + crate::theme::RIBBON_CAPTION_GAP,
@@ -562,38 +714,62 @@ fn paint_cell(ui: &Ui, rect: egui::Rect, visuals: &egui::style::WidgetVisuals) {
 /// The reference keeps its tool row calm — the panel's own fill, with a plinth only under the pointer
 /// or under the armed tool — so a row of eight tools reads as one surface instead of a keyboard. The
 /// cell's size is fixed either way, so a tool that is not hovered does not move its neighbours.
-fn ribbon_face(ui: &Ui, response: &Response, on: bool) -> (Color32, Stroke, Color32) {
+fn ribbon_face(ui: &Ui, response: &Response, on: bool, enabled: bool) -> (Color32, Stroke, Color32, IconTone) {
+    if !enabled {
+        return (Color32::TRANSPARENT, Stroke::NONE, crate::theme::text_dim(ui), IconTone::Disabled);
+    }
     if on {
         let visuals = ui.visuals().selection;
-        return (visuals.bg_fill, visuals.stroke, Color32::WHITE);
+        return (visuals.bg_fill, visuals.stroke, Color32::WHITE, IconTone::Selected);
     }
     if response.is_pointer_button_down_on() {
-        return (crate::theme::control_active(ui), Stroke::NONE, crate::theme::text(ui));
+        return (crate::theme::control_active(ui), Stroke::NONE, crate::theme::text(ui), IconTone::Press);
     }
     if response.hovered() {
-        return (crate::theme::control_hover(ui), Stroke::NONE, crate::theme::text(ui));
+        return (crate::theme::control_hover(ui), Stroke::NONE, crate::theme::text(ui), IconTone::Hover);
     }
-    (Color32::TRANSPARENT, Stroke::NONE, crate::theme::text(ui))
+    (Color32::TRANSPARENT, Stroke::NONE, crate::theme::text(ui), IconTone::Rest)
 }
 
 /// Paints `icon` inside `rect` at `point_size`, tinted with `color`, without a button frame.
 ///
 /// A folded side panel draws its icon in the middle of a 26 pt strip where a button would not fit;
 /// the raster path is the same one the buttons use, so the asset, the cache and the theme colour are
-/// shared. A placeholder asset draws nothing.
+/// shared. A placeholder asset draws nothing. `color` is the one-ink fallback's tint; a raster wide
+/// enough for a role ink takes its hue from the icon's family instead.
 pub fn draw_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
     if icon.is_drawn() {
         paint_icon(ui, icon, rect, point_size, color);
     }
 }
 
-/// Paints `icon` inside `rect` at `point_size`, tinted with `color`.
+/// Paints `icon` inside `rect` at `point_size` at rest: its role ink, or `color` in one-ink mode.
 pub(crate) fn paint_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
+    paint_icon_toned(ui, icon, rect, point_size, color, IconTone::Rest);
+}
+
+/// Paints `icon` inside `rect` at `point_size` in the ink `tone` asks for.
+///
+/// A raster of at least [`settings::ICON_COLOR_MIN_PX`] pixels in [`settings::IconColor::Auto`] — or
+/// any raster in `Always` — carries the icon's role ink; below that, in `Never`, and on a chosen
+/// toggle the master's alpha is multiplied by `color` instead. The disabled state is one alpha
+/// multiply of the role texture, never a second table.
+pub(crate) fn paint_icon_toned(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32, tone: IconTone) {
     let px = pixel_size(point_size, ui.pixels_per_point());
-    if let Some(texture) = icon_texture(ui.ctx(), icon, px, color) {
+    let dark = ui.visuals().dark_mode;
+    let mode = crate::icon_color(ui.ctx());
+    let roles = mode.uses_roles(px) && tone != IconTone::Selected;
+    if let Some(texture) = icon_texture(ui.ctx(), icon, px, color, dark, roles, tone) {
         let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+        let tint = if roles && tone == IconTone::Disabled { disabled_tint(ui) } else { Color32::WHITE };
+        ui.painter().image(texture.id(), rect, uv, tint);
     }
+}
+
+/// A white vertex colour at the style's disabled alpha, which multiplies the texture by it.
+fn disabled_tint(ui: &Ui) -> Color32 {
+    let alpha = ui.style().visuals.disabled_alpha().clamp(0.0, 1.0);
+    Color32::from_white_alpha((alpha * 255.0).round() as u8)
 }
 
 /// One square button that paints a rasterised icon, its frame following the widget state.
@@ -625,12 +801,31 @@ fn icon_widget_sized(
             let visuals = ui.style().interact_selectable(&response, selected);
             paint_cell(ui, rect, &visuals);
             let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(point_size));
-            paint_icon(ui, icon, icon_rect, point_size, visuals.fg_stroke.color);
+            let tone = widget_tone(ui, &response, enabled, selected);
+            paint_icon_toned(ui, icon, icon_rect, point_size, visuals.fg_stroke.color, tone);
         }
         response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), label));
         response
     })
     .inner
+}
+
+/// The tone a widget's own state asks for, in the order the states outrank each other.
+///
+/// A chosen toggle wins over a hover, because the accent fill already says it is on; a disabled
+/// button wins over everything a pointer could do to it.
+fn widget_tone(ui: &Ui, response: &Response, enabled: bool, selected: bool) -> IconTone {
+    if selected {
+        IconTone::Selected
+    } else if !enabled || !ui.is_enabled() {
+        IconTone::Disabled
+    } else if response.is_pointer_button_down_on() {
+        IconTone::Press
+    } else if response.hovered() {
+        IconTone::Hover
+    } else {
+        IconTone::Rest
+    }
 }
 
 /// The raster side of one icon at this UI scale, in pixels; never zero and bounded.
@@ -644,22 +839,83 @@ fn pixel_size(point_size: f32, pixels_per_point: f32) -> u32 {
 
 /// The cached texture of `icon` at `px` pixels and `color`, rasterising it on the first request.
 ///
-/// The colour is baked into the uploaded pixels rather than applied as a paint tint, so the theme
-/// colour is what the texture contains and a hover or press only changes the cache key.
-fn icon_texture(ctx: &egui::Context, icon: Icon, px: u32, color: Color32) -> Option<TextureHandle> {
-    let id = egui::Id::unique(("furnicraft.icon", icon.uri(), px, color.to_array()));
+/// Two paths share one cache: a role raster, keyed by the variant and whether the ink is lightened,
+/// whose pixels are the [`RoleRamp`] inks the master's literals name; and the one-ink raster, keyed
+/// by the tint, whose pixels are the master's alpha multiplied by the widget's colour. A theme or
+/// mode change therefore re-rasterises once per `(uri, px)` and a widget state only picks another
+/// texture: a disabled icon reuses the resting role raster and the paint multiplies its alpha.
+fn icon_texture(
+    ctx: &egui::Context,
+    icon: Icon,
+    px: u32,
+    color: Color32,
+    dark: bool,
+    roles: bool,
+    tone: IconTone,
+) -> Option<TextureHandle> {
+    let lightened = matches!(tone, IconTone::Hover | IconTone::Press);
+    let id = if roles {
+        egui::Id::unique(("furnicraft.icon.role", icon.uri(), px, dark, lightened))
+    } else {
+        egui::Id::unique(("furnicraft.icon.ink", icon.uri(), px, color.to_array()))
+    };
     if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
         return Some(texture);
     }
-    let image = egui_extras::image::load_svg_bytes_with_size(
-        icon.asset(),
+    let image = if roles {
+        let svg = role_svg(icon, dark, lightened)?;
+        raster(svg.as_bytes(), px)?
+    } else {
+        tint(raster(icon.asset(), px)?, color)
+    };
+    let texture = ctx.load_texture(icon.uri(), image, TextureOptions::LINEAR);
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
+/// Rasterises an SVG master at `px` pixels square.
+fn raster(asset: &[u8], px: u32) -> Option<egui::ColorImage> {
+    egui_extras::image::load_svg_bytes_with_size(
+        asset,
         egui::load::SizeHint::Size { width: px, height: px, maintain_aspect_ratio: false },
         &Default::default(),
     )
-    .ok()?;
-    let texture = ctx.load_texture(icon.uri(), tint(image, color), TextureOptions::LINEAR);
-    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
-    Some(texture)
+    .ok()
+}
+
+/// The master with every role literal replaced by the ink of the active variant.
+///
+/// `lightened` is the one emphasis step a hover or a press asks for; every other state keeps the
+/// resting ink and is applied at paint time. The substitution changes no attribute but the colour,
+/// so the alpha silhouette is the drawing itself: dark and light differ in hue, never in shape. A
+/// file that is not UTF-8 cannot carry a literal and falls back to the one-ink path by returning
+/// `None`.
+fn role_svg(icon: Icon, dark: bool, lightened: bool) -> Option<String> {
+    let svg = std::str::from_utf8(icon.asset()).ok()?;
+    let ramp = RoleRamp::for_variant(dark);
+    let mut out = svg.to_owned();
+    for family in Family::ALL {
+        let ink = ramp.ink(family);
+        let toned = if lightened { crate::theme::mix(ink, hover_target(dark), HOVER_STEP) } else { ink };
+        out = out.replace(family.master_hex(), &hex(toned));
+    }
+    Some(out)
+}
+
+/// The share of the way to the emphasis target a hover or a press moves a role ink, in percent.
+const HOVER_STEP: u32 = 10;
+
+/// The colour a hover or a press moves a role ink towards: white on a dark variant, black on paper.
+///
+/// The step goes away from the surface, so the glyph gains contrast in both variants instead of
+/// fading into the light one; it is one tone ladder, not a second ink.
+const fn hover_target(dark: bool) -> Color32 {
+    if dark { Color32::WHITE } else { Color32::BLACK }
+}
+
+/// The `#RRGGBB` literal of an opaque ink, the form a master carries.
+fn hex(color: Color32) -> String {
+    format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b())
 }
 
 /// Multiplies a white master by `color`, the same product the painter would apply to the vertex.
@@ -690,8 +946,8 @@ mod tests {
 
     use super::*;
 
-    /// A minimal valid white-ink drawing, used where the real files are still placeholders.
-    const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="#fff"/></svg>"##;
+    /// A minimal valid role-ink drawing, used where the real files are still placeholders.
+    const SAMPLE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="#B8C2CE"/></svg>"##;
 
     /// The 24-unit design grid.
     const GRID: f32 = 24.0;
@@ -759,12 +1015,12 @@ mod tests {
 
     /// An icon whose asset is empty, like every placeholder in the tree today.
     fn placeholder() -> Icon {
-        Icon::new(Theme::Actions, "confirm", "bytes://icons/actions/confirm.svg", &[])
+        Icon::new(Theme::Actions, Family::View, "confirm", "bytes://icons/actions/confirm.svg", &[])
     }
 
     /// An icon with a real drawing, for the rasteriser tests.
     fn drawn() -> Icon {
-        Icon::new(Theme::Actions, "confirm", "bytes://icons/actions/confirm.svg", SAMPLE_SVG)
+        Icon::new(Theme::Actions, Family::View, "confirm", "bytes://icons/actions/confirm.svg", SAMPLE_SVG)
     }
 
     /// Collects the text of every text shape, including nested ones.
@@ -811,7 +1067,6 @@ mod tests {
                 let name = format!("{}/{}", icon.theme().as_str(), icon.name());
                 assert!(svg.starts_with("<svg"), "{name} does not start with an SVG root");
                 assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name} is not drawn on the 24 grid");
-                assert!(svg.contains("#fff"), "{name} carries no white ink");
                 for forbidden in [
                     "<text",
                     "<image",
@@ -844,6 +1099,71 @@ mod tests {
                     &Default::default(),
                 );
                 assert!(raster.is_ok(), "{name} does not rasterise: {:?}", raster.err());
+            }
+        }
+    }
+
+    #[test]
+    fn every_drawn_asset_carries_its_family_ink_and_nothing_else() {
+        // The role table is closed: a master may use one, two or three of its six literals, never a
+        // colour of its own, and its family's literal is always one of them (U70).
+        let allowed: HashSet<&str> = Family::ALL.iter().map(|family| family.master_hex()).collect();
+        for theme in Theme::ALL {
+            for icon in theme.icons() {
+                if !icon.is_drawn() {
+                    continue;
+                }
+                let svg = std::str::from_utf8(icon.asset()).expect("an icon asset is UTF-8");
+                let name = format!("{}/{}", icon.theme().as_str(), icon.name());
+                let mut inks = HashSet::new();
+                let mut at = 0;
+                while let Some(found) = svg[at..].find('#') {
+                    let start = at + found;
+                    let rest = &svg[start..];
+                    let literal = rest.get(..7).expect("a colour literal has six digits");
+                    assert!(
+                        literal[1..].bytes().all(|byte| byte.is_ascii_hexdigit()),
+                        "{name} carries `{literal}`, which is not a six-digit hex colour"
+                    );
+                    inks.insert(literal.to_owned());
+                    at = start + 7;
+                }
+                assert!(inks.len() <= 3, "{name} carries {} role inks, the table allows three", inks.len());
+                for ink in &inks {
+                    assert!(allowed.contains(ink.as_str()), "{name} carries `{ink}`, outside the role table");
+                }
+                assert!(
+                    inks.contains(icon.family().master_hex()),
+                    "{name} is tagged {:?} but does not carry its ink {}",
+                    icon.family(),
+                    icon.family().master_hex()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_dark_ramp_is_the_master_table() {
+        for family in Family::ALL {
+            assert_eq!(hex(RoleRamp::DARK.ink(family)), family.master_hex(), "{family:?} disagrees with the table");
+        }
+    }
+
+    #[test]
+    fn every_role_ink_clears_three_to_one_on_panel_and_ribbon() {
+        // `plan/notes/U70.md`: the hue is decoration only where the glyph still reads. The draw ink
+        // is the weakest on a light panel and is the one a change to the table breaks first.
+        for preset in crate::theme::ThemePreset::ALL {
+            for dark in [true, false] {
+                let palette = preset.palette(dark);
+                let ramp = RoleRamp::for_variant(dark);
+                for family in Family::ALL {
+                    let ink = ramp.ink(family);
+                    for (surface, fill) in [("panel", palette.panel), ("ribbon", palette.surface)] {
+                        let ratio = crate::theme::contrast_ratio(ink, fill);
+                        assert!(ratio >= 3.0, "{family:?} on {preset:?} {surface} is {ratio:.2}:1, below 3:1");
+                    }
+                }
             }
         }
     }
@@ -1072,31 +1392,151 @@ mod tests {
         images.iter().filter(|image| image.size == [px, px]).collect()
     }
 
+    /// Runs one icon button under one preset and variant and returns the uploaded colours.
+    fn uploaded_with(
+        preset: crate::theme::ThemePreset,
+        dark: bool,
+        pixels_per_point: f32,
+        draw: impl FnMut(&mut Ui),
+    ) -> Vec<egui::ColorImage> {
+        let ctx = egui::Context::default();
+        let preference = if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light };
+        crate::theme::install_with(&ctx, preference, preset, None);
+        ctx.set_pixels_per_point(pixels_per_point);
+        let output = ctx.run_ui(Default::default(), draw);
+        let images = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .map(|delta| match &delta.image {
+                ImageData::Color(image) => image.as_ref().clone(),
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        images
+    }
+
     #[test]
-    fn the_theme_colour_reaches_the_icon_pixels() {
+    fn the_role_ink_reaches_the_icon_pixels_for_every_preset() {
         let px = TOOL_ICON_POINT_SIZE as usize;
-        let dark = uploaded_icons(egui::Visuals::dark(), 1.0, |ui| {
+        for preset in crate::theme::ThemePreset::ALL {
+            for dark in [true, false] {
+                let images = uploaded_with(preset, dark, 1.0, |ui| {
+                    tool_button(ui, drawn(), "Confirm", None, true, false);
+                });
+                let rasters = icon_rasters(&images, px);
+                assert_eq!(rasters.len(), 1, "{preset:?} {dark}: one icon uploads one texture");
+                let ink = RoleRamp::for_variant(dark).ink(drawn().family());
+                assert!(
+                    rasters[0].pixels.contains(&ink),
+                    "{preset:?} {dark}: the raster is not the family ink {ink:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_theme_change_keeps_the_silhouette() {
+        let px = TOOL_ICON_POINT_SIZE as usize;
+        let dark = uploaded_with(crate::theme::ThemePreset::InkAzure, true, 1.0, |ui| {
             tool_button(ui, drawn(), "Confirm", None, true, false);
         });
-        let light = uploaded_icons(egui::Visuals::light(), 1.0, |ui| {
+        let light = uploaded_with(crate::theme::ThemePreset::InkAzure, false, 1.0, |ui| {
             tool_button(ui, drawn(), "Confirm", None, true, false);
         });
         let dark = icon_rasters(&dark, px);
         let light = icon_rasters(&light, px);
-
-        assert_eq!(dark.len(), 1, "one icon uploads one texture");
-        assert_eq!(light.len(), 1, "one icon uploads one texture");
-        let (dark_color, light_color) = (
-            egui::Visuals::dark().widgets.inactive.fg_stroke.color,
-            egui::Visuals::light().widgets.inactive.fg_stroke.color,
-        );
-        assert_ne!(dark_color, light_color, "the two themes disagree on the ink");
-        assert!(dark[0].pixels.contains(&dark_color), "the dark raster is not the theme colour");
-        assert!(light[0].pixels.contains(&light_color), "the light raster is not the theme colour");
-
+        assert_eq!(dark.len(), 1);
+        assert_eq!(light.len(), 1);
         let dark_alpha: Vec<u8> = dark[0].pixels.iter().map(|pixel| pixel.a()).collect();
         let light_alpha: Vec<u8> = light[0].pixels.iter().map(|pixel| pixel.a()).collect();
         assert_eq!(dark_alpha, light_alpha, "a theme change must not change the silhouette");
+    }
+
+    /// One frame of a 16 pt icon button under one preset and mode, with the theme's resting ink.
+    fn mono_frame(
+        preset: crate::theme::ThemePreset,
+        dark: bool,
+        mode: crate::settings::IconColor,
+    ) -> (Vec<egui::ColorImage>, Color32) {
+        let ctx = egui::Context::default();
+        let preference = if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light };
+        crate::theme::install_with(&ctx, preference, preset, None);
+        ctx.set_pixels_per_point(1.0);
+        crate::set_icon_color(&ctx, mode);
+        let ink = preset.palette(dark).text;
+        let output = ctx.run_ui(Default::default(), |ui| {
+            icon_button(ui, drawn(), "Confirm");
+        });
+        let images = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .map(|delta| match &delta.image {
+                ImageData::Color(image) => image.as_ref().clone(),
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        (images, ink)
+    }
+
+    #[test]
+    fn the_monochrome_fallback_equals_the_tint_path_at_sixteen_pixels() {
+        // U70: below the 20 px threshold, and in `Never` at any size, the raster is exactly the
+        // master's alpha multiplied by the widget's colour — the path U27 shipped.
+        let px = ICON_POINT_SIZE as usize;
+        for (mode, preset) in [
+            (crate::settings::IconColor::Auto, crate::theme::ThemePreset::GraphiteCopper),
+            (crate::settings::IconColor::Never, crate::theme::ThemePreset::SlateMint),
+        ] {
+            let (images, ink) = mono_frame(preset, true, mode);
+            let rasters = icon_rasters(&images, px);
+            assert_eq!(rasters.len(), 1, "{mode:?} at {px} px uploads one texture");
+            let expected = tint(
+                raster(SAMPLE_SVG, ICON_POINT_SIZE as u32).expect("the sample rasterises"),
+                preset.palette(true).text,
+            );
+            assert_eq!(ink, preset.palette(true).text);
+            assert_eq!(rasters[0].pixels, expected.pixels, "{mode:?} is not the tint path");
+        }
+    }
+
+    #[test]
+    fn a_mode_switch_rasterises_once() {
+        let ctx = egui::Context::default();
+        crate::theme::install_with(&ctx, egui::ThemePreference::Dark, crate::theme::ThemePreset::GraphiteCopper, None);
+        ctx.set_pixels_per_point(1.0);
+        let frame = |ctx: &egui::Context| {
+            let output = ctx.run_ui(Default::default(), |ui| {
+                tool_button(ui, drawn(), "Confirm", None, true, false);
+            });
+            let images: Vec<egui::ColorImage> = output
+                .textures_delta
+                .set
+                .values()
+                .flatten()
+                .map(|delta| match &delta.image {
+                    ImageData::Color(image) => image.as_ref().clone(),
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            images
+        };
+        let first = frame(&ctx);
+        assert_eq!(icon_rasters(&first, TOOL_ICON_POINT_SIZE as usize).len(), 1, "the role raster uploads once");
+        let second = frame(&ctx);
+        assert!(icon_rasters(&second, TOOL_ICON_POINT_SIZE as usize).is_empty(), "a second frame reuses the cache");
+        crate::set_icon_color(&ctx, crate::settings::IconColor::Never);
+        let third = frame(&ctx);
+        assert_eq!(
+            icon_rasters(&third, TOOL_ICON_POINT_SIZE as usize).len(),
+            1,
+            "a mode switch uploads the one-ink raster once"
+        );
+        let fourth = frame(&ctx);
+        assert!(icon_rasters(&fourth, TOOL_ICON_POINT_SIZE as usize).is_empty(), "the new mode is cached too");
     }
 
     #[test]

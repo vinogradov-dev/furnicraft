@@ -51,16 +51,41 @@ at the pixel size it draws, so a second size would only drift from the first.
   18 × 18 footprint, measured from the rasterised alpha (`STYLE_GUIDE.md` §7.4). The rasteriser
   follows the UI scale (16 pt inline, 20 pt in a toolbar, times `pixels_per_point`), so a shape
   thinner than 1.5 units disappears at a low scale.
-- stroke geometry: `stroke="#fff"`, `stroke-width` between `1.5` and `2.6`, `stroke-linecap="round"`,
-  `stroke-linejoin="round"`. The weights by role are in `STYLE_GUIDE.md` §7.3. A stroke-only shape
-  keeps `fill="none"`.
-- tone: a face takes `fill="#fff"` with `fill-opacity` `0.12–0.18` (passive) or `0.45–0.60` (result or
-  changed geometry) and keeps its full-strength outline. The tone is alpha on the same white ink, so
-  no theme needs a second file. `fill-opacity` is the only opacity attribute: `opacity` would dim the
-  outline too. A dot, an arrowhead or a solid silhouette may use `fill="#fff"` with no stroke.
-- one ink colour only, and it is white. The UI rasterises the master, multiplies it by the widget's
-  foreground colour and uploads the result, so colour never carries meaning and a theme change needs
-  no asset change. No other `#hex`, `class`, CSS variable or theme token inside the file.
+- stroke geometry: `stroke` is a role ink from the table below (`stroke-width` between `1.5` and
+  `2.6`), `stroke-linecap="round"`, `stroke-linejoin="round"`. The weights by role are in
+  `STYLE_GUIDE.md` §7.3. A stroke-only shape keeps `fill="none"`.
+- tone: a face takes the same role ink with `fill-opacity` `0.12–0.18` (passive) or `0.45–0.60`
+  (result or changed geometry) and keeps its full-strength outline. The tone is alpha on the role
+  ink, so no theme needs a second file. `fill-opacity` is the only opacity attribute: `opacity`
+  would dim the outline too. A dot, an arrowhead or a solid silhouette may use the role ink with
+  `fill-opacity="1"` or no stroke.
+- role ink only: one to three literals from the table below, never a colour of your own, and the
+  icon's family ink is always one of them. The file says what an element means; the UI replaces each
+  literal with the active theme's ink before it rasterises, so one master serves dark and light and
+  a theme change needs no asset change. The table is closed: `crates/ui/src/icons.rs` asserts it and
+  the tests reject a file that carries anything else.
+- one-ink fallback: below a 20 px raster (or when the workspace asks for one ink) the UI rasterises
+  the same master and multiplies its alpha by the theme's icon colour, so a file with role inks
+  still reads as a monochrome glyph. Nothing in the file has to know which path drew it.
+
+## Role inks
+
+A family is what an icon means, not which toolbar shows it: `contour/arc` is `draw`,
+`actions/delete` is `danger`. The literal a master writes is the dark ink; the UI maps it to the
+light ink on paper.
+
+| Family | Master (dark) | Light ink | Used by |
+|---|---|---|---|
+| `draw` | `#58C8DC` | `#1C7C92` | Create or modify sketch geometry |
+| `modify` | `#A98BF0` | `#6B4BB0` | Transform and edit commands: undo, copy, rename, visibility |
+| `model` | `#6E9EF7` | `#2E5CB8` | Solids, bodies and booleans |
+| `scene` | `#55C7A4` | `#237A5E` | Panels, hardware, cameras and lights |
+| `view` | `#B8C2CE` | `#5A6674` | Navigation, projection, display and the neutral chrome |
+| `danger` | `#E06A6A` | `#B33A3A` | Destructive commands only |
+
+The action accent is UI chrome and is never a role ink: an active tool is a background and a
+border, not a recoloured glyph. The measures behind the table — the threshold, the contrast floor
+and the rejected alternatives — are in `AUDIT.md` and `plan/notes/U70.md`.
 - geometry only: `path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `g` and their
   `transform`, with the paint attributes `fill`, `fill-opacity`, `stroke`, `stroke-width`,
   `stroke-linecap`, `stroke-linejoin`, and nothing else. No `<text>` (a glyph that must be a character

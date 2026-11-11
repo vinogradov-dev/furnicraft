@@ -37,6 +37,16 @@ an icon.
 
 A command in a toolbar stays a geometry icon; a save action next to tools stays a service icon.
 
+Grammar says how the drawing is composed; the **role ink** says what it means and is a second
+choice. The six role families are `draw`, `modify`, `model`, `scene`, `view` and `danger`, and their
+literal hexes are in `assets/README.md`:
+
+- a sketched entity (`contour/*`) is `draw`; a solid, body or boolean is `model`; a panel, camera,
+  light or hardware is `scene`;
+- undo, copy, paste, rename, visibility and other edit commands are `modify`;
+- navigation, projection, display and neutral chrome such as file or help are `view`;
+- `danger` is for destructive commands only (`actions/delete`), never a warning or an error status.
+
 ## 2. Place it
 
 - Geometry and view icons live in the theme named after the toolbar or surface:
@@ -74,13 +84,16 @@ If an element cannot be labelled with its role (guide §3), remove it.
 - Footprint and mass: the ink stays inside the fixed 18 × 18 footprint and covers 20–45 % of it,
   measured as alpha-weighted ink (sum of alpha / 255). Below 20 % reads as a sketch, above 45 % as a
   blob. `crates/ui/src/icons.rs` asserts both from the raster.
-- One ink, and it is white: `stroke="#fff"`, round caps and joins, `stroke-width` `1.5–2.6`. A
-  stroke-only shape keeps `fill="none"`.
-- Tone is alpha: a passive face is `fill="#fff"` with `fill-opacity="0.12–0.18"` under a
-  full-strength `1.6–1.8` outline; the result or changed geometry is `0.45–0.60` under a `2.2–2.6`
-  outline. A dot, an arrowhead or a solid silhouette may be solid `#fff` with no stroke. Never a
-  third tone, never a fill without an outline, never `opacity`.
-- The UI multiplies the master by the theme colour; no colour, no class, no CSS variable, no theme
+- One ink for the drawing, and it is the family's literal from the table in `assets/README.md`
+  (`stroke="#58C8DC"` for a draw icon, `#B8C2CE` for a view one). Round caps and joins,
+  `stroke-width` `1.5–2.6`. A stroke-only shape keeps `fill="none"`. A shape that genuinely means
+  two things may use a second or third literal from the same table — never a colour of its own.
+- Tone is alpha on the family ink: a passive face is the ink with `fill-opacity="0.12–0.18"` under
+  a full-strength `1.6–1.8` outline; the result or changed geometry is `0.45–0.60` under a `2.2–2.6`
+  outline. A dot, an arrowhead or a solid silhouette may fill with the ink and take no stroke. Never
+  a third tone, never a fill without an outline, never `opacity`.
+- The UI maps each literal to the active theme's ink and falls back to one ink below a 20 px raster;
+  it never needs a second file. No colour outside the table, no class, no CSS variable, no theme
   token in the file.
 - Weight by role: guide 1.5, main contour 1.6–1.8, result 2.2–2.6, view/service 2.0–2.4 or solid.
   Nothing below 1.5 units, because the icon may be drawn at 16 px.
@@ -104,6 +117,7 @@ If an element cannot be labelled with its role (guide §3), remove it.
 ## 6. Verify
 
 - the action is clear without text, at 16 px, in one ink;
+- the ink is the family's literal from the table and the file carries no other colour;
 - the result is the strongest element; auxiliary geometry does not compete;
 - no decorative lines, no random detail, no white patch;
 - the metaphor matches the operation, not a neighbouring command;

@@ -12,12 +12,20 @@ below are measurements of that project's public SVG sources, not extracted imple
 ## 1. The pipeline as it is
 
 - `assets/icons/<theme>/<name>.svg` is embedded by `crates/ui/src/icons.rs` (`icons!` macro,
-  `include_bytes!`), one module per theme, `ALL` per theme for audits.
+  `include_bytes!`), one module per theme, `ALL` per theme for audits. Every icon also carries its
+  semantic family (`draw`, `modify`, `model`, `scene`, `view`, `danger`).
 - `icon_button` / `tool_button` rasterise the master with `egui_extras::image::load_svg_bytes_with_size`
-  at `pt × pixels_per_point`, tint the pixels, upload a `TextureHandle` cached per `(uri, px, colour)`
-  in the context's temporary data, and paint it with `Painter::image`. `ui_scale.rs` therefore
-  re-rasterises on a zoom change instead of stretching.
-- Sizes are points: 20 pt for a toolbar tool, 16 pt for inline and menu use.
+  at `pt × pixels_per_point` and upload a `TextureHandle` cached per `(uri, px, variant, tone)` in
+  the context's temporary data. `ui_scale.rs` therefore re-rasterises on a zoom change instead of
+  stretching.
+- A master writes role literals (`#58C8DC`, `#A98BF0`, `#6E9EF7`, `#55C7A4`, `#B8C2CE`, `#E06A6A`).
+  Before the upload the rasteriser replaces each literal with the active variant's ink: on dark the
+  literal is already the ink, on light it is folded to the paper column. One file therefore serves
+  both variants and a preset change never touches an asset.
+- Below a 20 px raster, or when the workspace sets *Icon colour → Never*, the same master is
+  rasterised and its alpha multiplied by the widget's foreground colour: the one-ink path U27
+  shipped, kept as the fallback rather than replaced.
+- Sizes are points: 20 pt for a toolbar tool, 16 pt for inline and menu use, 22 pt in the ribbon.
 - A zero-byte file is a documented placeholder: the button draws its text label instead.
 
 The pipeline this replaced was measured, because both of its assumptions were wrong:
@@ -127,10 +135,9 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
 
 ## 5. Deferred, not approved
 
-- **Step 2 — one semantic accent.** A single theme accent for the "result" fill/stroke and for
-  toggled-on view buttons. Needs literal substitution before rasterisation or a small role palette
-  like the neighbour's, plus a cache key `(icon, theme, px)`. Amends ADR 0055/0047 from "one ink" to
-  "one ink plus one redundant accent". Open question in `plan/questions.md`.
+- **Step 2 — one semantic accent.** Done in U70, with the owner's approval and a wider shape than the
+  step proposed: the icons take a hue by semantic family rather than one accent, and the substitution
+  happens in the rasteriser before the upload (see §8).
 - **Step 3 — tooling.** A Rust `cargo xtask icons` subcommand: lint the contract (24 grid, allowed
   elements, weights by role, footprint, no zero-byte file in a shipped theme) and `--sheet <dir>` to
   write a 16/20/48 px contact sheet in both themes through the same rasteriser
@@ -139,7 +146,7 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
   README's "a shared drawing is two files" rule is the open question.
 - **Step 4 — coverage.** Done in U46: every declared theme is drawn except `primitives/cone`, which
   waits for the cone primitive itself (`plan/debt.md`). U46 added `actions/command` for the palette,
-  so the declared set is 75 files and one zero-byte placeholder remains.
+  so the declared set is 81 files and one zero-byte placeholder remains.
 
 ## 6. Deliberately not copied
 
@@ -157,3 +164,45 @@ The audit used `rsvg-convert` and a throwaway Pillow script; neither belongs in 
 (`STYLE_GUIDE.md` §15: automation is a Rust `xtask` subcommand, never a second toolchain). Step 3
 replaces them with `cargo xtask icons --sheet`. Until then, any conversion tool that reports the
 alpha bounding box is enough to re-derive §2.
+
+## 8. The role inks (U70)
+
+Date: 2026-11-12. The owner approved colouring the set by semantic family, and U70 shipped it.
+
+### The table
+
+| family | dark ink | light ink | used by |
+|---|---|---|---|
+| `draw` | `#58C8DC` | `#1C7C92` | create or modify sketch geometry |
+| `modify` | `#A98BF0` | `#6B4BB0` | transform and edit commands |
+| `model` | `#6E9EF7` | `#2E5CB8` | solids, bodies, booleans |
+| `scene` | `#55C7A4` | `#237A5E` | panels, hardware, cameras, lights |
+| `view` | `#B8C2CE` | `#5A6674` | navigation, projection, display, neutral chrome |
+| `danger` | `#E06A6A` | `#B33A3A` | destructive commands only |
+
+A master writes the dark column and nothing else; the rasteriser replaces the six literals with the
+active variant's inks (`RoleRamp::DARK` / `RoleRamp::LIGHT` in `crates/ui/src/icons.rs`) before
+`load_svg_bytes_with_size`. The alpha silhouette is untouched by the mapping, so a variant change
+leaves the shape byte-identical and a photo of both variants overlays exactly.
+
+### Measured
+
+- Contrast of every role ink against `panel` and the ribbon `surface`, all three presets and both
+  variants: **4.30 : 1 … 9.57 : 1**. The weakest is the light `draw` ink on the P1 ribbon (4.30 : 1);
+  the test floor is 3 : 1.
+- The dark column is the identity mapping, so no master had to be redrawn: all 80 drawn files were
+  re-inked from `#fff` to their family's literal and their geometry, tone and footprint did not move
+  (the §2 measurements are unchanged).
+- Below 20 px the alpha-multiply fallback is byte-identical to the U27 tint path; a test at 16 px
+  compares the uploaded pixel vector with `tint(raster, theme_text)` and passes exactly.
+- Cache: `(uri, px, variant, tone)` for a role raster and `(uri, px, tint)` for a one-ink raster. A
+  second frame re-rasterises nothing, a mode switch uploads one new texture per icon and size.
+
+### Deliberately left out
+
+- Per-preset icon ramps: the presets change neutrals and the accent, not meaning (U71's note), so one
+  table per variant is enough and a preset switch re-rasterises nothing.
+- A role ink as the selected-tool foreground: the accent fill is chrome, so a chosen toggle draws the
+  theme's foreground over it and the accent still never appears in a master.
+- Second files per theme or per state: the substitution happens at raster time, and hover, press and
+  disabled are tone steps of the same texture family, not artwork.

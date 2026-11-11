@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
+- `[~]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
   Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
    normative, so a coloured set is impossible without superseding them. The set must not grow a
    second file per theme: the master carries role inks and the rasteriser maps them to the
