@@ -1,4 +1,4 @@
-//! Read-only questions about a project: nodes, panels, places, pivots, properties and queries.
+//! Read-only questions about a project: nodes, panels, origins, pivots, properties and queries.
 //!
 //! A query never mutates the document and never allocates more than the answer needs. The same
 //! lookups feed the UI, reports and commands, so every caller agrees on what a node is.
@@ -200,12 +200,12 @@ impl Project {
         Some(self.world_placement(id)?.translation())
     }
 
-    /// The stored manipulation pivot of a node, in its own frame.
+    /// The stored pivot of a node, as an exact offset from its origin.
     ///
-    /// A panel keeps its local zero, the minimum corner of its nominal rectangle, until the user
-    /// moves the pivot; a container is born at its own origin and a group re-anchors its children
-    /// there (so a group's translation is the centre of their union). The root is not selectable and
-    /// always has a zero pivot. Returns `None` for an unknown id.
+    /// A panel always returns zero: its pivot is derived from its base corner (ADR 0083). A
+    /// container or an object may author a non-zero offset; a group's translation is the centre of
+    /// its children's union and its offset starts at zero. The root is not selectable and always
+    /// returns zero. Returns `None` for an unknown id.
     pub fn pivot_local(&self, id: Id) -> Option<PivotLocal> {
         if id == self.root.id() {
             return Some(self.root.pivot_local());
@@ -219,7 +219,7 @@ impl Project {
         }
     }
 
-    /// The manipulation pivot in the node's own frame, as millimetres for gizmos.
+    /// The stored pivot as millimetres from the origin, for gizmos and tests.
     pub fn pivot_local_mm(&self, id: Id) -> Option<DVec3> {
         Some(self.pivot_local(id)?.to_local())
     }

@@ -279,7 +279,7 @@ impl Panel {
         self.placement
     }
 
-    /// The manipulation pivot in the panel-local frame.
+    /// The panel's pivot offset, always zero: it is derived from the base-corner origin (ADR 0083).
     pub const fn pivot_local(&self) -> PivotLocal {
         self.pivot_local
     }

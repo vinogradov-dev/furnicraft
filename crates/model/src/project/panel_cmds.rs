@@ -55,9 +55,10 @@ impl Project {
     /// Replaces a contour panel's outline and bumps the revision once.
     ///
     /// The new ring is anchored at the panel-local zero corner (ADR 0009). When the edit moves the
-    /// minimum corner, the panel placement, pivot and machining shift by the same offset so the
-    /// world-space shape and every feature stay where the user drew them. A rectangle panel never
-    /// converts; [`Project::validate_panel_outline`] rejects it before anything changes.
+    /// minimum corner, the panel placement (the origin) and machining shift by the same offset so
+    /// the world-space shape and every feature stay where the user drew them; the pivot is derived
+    /// and stays zero (ADR 0083, ADR 0088). A rectangle panel never converts;
+    /// [`Project::validate_panel_outline`] rejects it before anything changes.
     pub fn set_panel_outline(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
         self.validate_panel_outline(id, &contour)?;
         let (min, _) = contour.bounds_micrometres();
@@ -87,9 +88,10 @@ impl Project {
     /// Replaces a rectangle panel's outline with the ring it draws, in one revision and one undo.
     ///
     /// The ring is anchored at the panel-local zero corner like any contour panel (ADR 0009), so an
-    /// outward bow that extended the outline moves the frame; the placement, pivot and machining
-    /// follow by the same offset so the world-space shape stays fixed. The corner and bow
-    /// parameters are gone, but undo restores the rectangle with its features.
+    /// outward bow that extended the outline moves the frame; the placement (the origin) and
+    /// machining follow by the same offset so the world-space shape stays fixed, and the derived
+    /// pivot stays zero (ADR 0083, ADR 0088). The corner and bow parameters are gone, but undo
+    /// restores the rectangle with its features.
     pub fn convert_panel_to_contour(&mut self, id: Id) -> Result<Revision, ProjectError> {
         let candidate = self.converted_panel(id)?;
         let next_revision = self.next_revision()?;

@@ -101,7 +101,7 @@ fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), 
     walk(root.children_mut(), depth.saturating_add(1))
 }
 
-/// Materializes the default pivot on containers saved before schema 6.
+/// Materializes the legacy default pivot offset on containers saved before schema 6.
 ///
 /// Panels keep their zero default from [`PanelWire`]. The walk is bounded by the same depth limit
 /// as the document tree.

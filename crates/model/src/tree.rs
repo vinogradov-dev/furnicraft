@@ -176,8 +176,8 @@ pub(crate) fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> 
     bounds
 }
 
-/// The pivot a container saved before schema 6 was stored with: the centre of the local panel
-/// bounds, or the origin.
+/// The pivot offset a container saved before schema 6 was stored with: the centre of the local
+/// panel bounds, or the origin.
 ///
 /// Only the schema-5 migration writes this value now; a container created today is born at zero
 /// and a group puts its content at zero through [`crate::rebase_origin_at`]. No later pass
