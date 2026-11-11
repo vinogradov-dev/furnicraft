@@ -11,6 +11,7 @@ Related documents:
 - [Scene document](document.md) — the node tree the object lives in.
 
 Related decisions: [0026](../decisions/0026-the-manipulation-pivot-is-stored-node-data.md),
+[0088](../decisions/0088-origin-and-pivot-are-different-points.md),
 [0029](../decisions/0029-view-state-belongs-to-the-session.md),
 [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0037](../decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md),
@@ -41,7 +42,7 @@ primitive is described in section 5.
 
 ## 2. The object node
 
-- A geometry object is a node with a name, a parent, a placement, a stored pivot and typed
+- A geometry object is a node with a name, a parent, a placement, a stored `pivot_local` and typed
   properties, exactly like a container.
 - It is a **leaf** in v1: it has no children. Several parts are grouped by wrapping them in a
   container, which already exists.
@@ -80,7 +81,7 @@ primitive is described in section 5.
   its own height.
 - The constructor requires a closed path that passes `Path::to_contour`; an open chain is refused
   before the document changes. Extruding a path object converts that node into the body in place and
-  keeps its id, name, placement, pivot and properties, so the drawing is not left behind as a
+  keeps its id, name, placement, pivot_local and properties, so the drawing is not left behind as a
   separate object ([0074](../decisions/0074-an-extrusion-owns-the-path-it-grew-from.md)).
 - A contour is a ring of directed **segments**, at least three. A segment is a straight line between
   two points or a circular arc with a centre, a positive radius, a start angle and a non-zero sweep
@@ -132,10 +133,10 @@ primitive is described in section 5.
   sphere — and builds the default tessellation: 32 sides and 16 bands. A cylinder's height equals the
   extent, so one number is one shape.
 - The counts and the bounds are analytic (`vertex_count`, `face_count`, `bounds_micrometres`), so the
-  scene tree, the pivot and the camera frame never evaluate a mesh. The bound of a sphere is the
+  scene tree, the `pivot_local` offset and the camera frame never evaluate a mesh. The bound of a sphere is the
   sphere, not its tessellated polygon.
 - `object.primitive.replace` stores a new validated parameter set in one revision and one undo entry,
-  keeping the id, name, placement, pivot and properties. The card shows the fields the shape has,
+  keeping the id, name, placement, pivot_local and properties. The card shows the fields the shape has,
   in millimetres and whole numbers.
 - Collapsing a primitive bakes the derived mesh and drops the parameters, exactly as a constructive
   object drops its feature list. A baked mesh and a path cannot be collapsed.
@@ -270,7 +271,7 @@ in one viewport mode. Its state is view state, not document data
 
 - `object.collapse` replaces a derived payload — `Constructive` or `Primitive` — with the evaluated
   `Mesh` in one command and one undo entry.
-- The id, name, placement, pivot and properties are unchanged; the feature list or the parameters
+- The id, name, placement, pivot_local and properties are unchanged; the feature list or the parameters
   are deleted.
 - Afterwards the object is a mesh object: mesh commands apply, and the contour is gone. Undo is the
   only way back, which is why the UI asks for confirmation.

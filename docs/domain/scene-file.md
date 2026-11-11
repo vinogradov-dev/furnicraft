@@ -64,7 +64,7 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 ## 3. What the file stores
 
 - the node tree: containers, panels, geometry objects, camera objects and light objects;
-- each node's placement, stored pivot and typed properties, including its furniture type;
+- each node's placement (its origin), stored `pivot_local` offset and typed properties, including its furniture type;
 - panels: nominal size, material reference with `last_known_thickness`, banding with its fallbacks,
   machining;
 - geometry objects: a baked mesh, the parameters of a primitive or the ordered features of a
@@ -96,7 +96,7 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 2. Reject a missing or different `format`, and a `format_version` newer than this build, with a
    readable error.
 3. Migrate the document from its `schema` to the current one (section 7).
-4. Validate the document: ids, placements, pivots, finite values, mesh and feature limits.
+4. Validate the document: ids, placements, `pivot_local` offsets, finite values, mesh and feature limits.
 5. Resolve materials and banding against the catalogue; a missing material is a diagnostic, never a
    load failure ([document.md](document.md) §4–5).
 6. Build the session: the document, its camera and light nodes, the built-in defaults for anything

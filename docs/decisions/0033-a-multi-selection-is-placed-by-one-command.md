@@ -1,6 +1,6 @@
 # 0033. A multi-selection is placed by one command
 
-- Status: Accepted
+- Status: Accepted; pivot vocabulary settled by 0088
 - Date: 2026-10-27
 
 ## Context
@@ -60,3 +60,8 @@ move when a container and one of its children are both selected, and which pivot
 - [0029](0029-view-state-belongs-to-the-session.md) keeps the selection out of the document.
 - `crates/model/src/lib.rs`, `crates/engine/src/node_cmds.rs`,
   `apps/furnicraft/src/gizmo_math.rs`.
+
+## Pivot note (2026-11-11)
+
+The anchor's stored pivot is `pivot_local`, an offset from its origin (ADR 0088); a shared turn
+keeps the world pivot fixed while each node stores its own local placement.

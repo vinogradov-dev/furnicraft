@@ -64,3 +64,8 @@ A local-axis mode is a useful future tool, but it should be a mode, not the only
   preview-and-commit shape; [0026](0026-the-manipulation-pivot-is-stored-node-data.md) defines the
   pivot.
 - `apps/furnicraft/src/rotate_gizmo.rs`, `apps/furnicraft/src/gizmo_math.rs`.
+
+## Pivot note (2026-11-11)
+
+The rings are centred on `pivot_world`, computed from `pivot_local` and the node's origin
+(ADR 0088). A re-anchor carries the pivot so this point does not move.

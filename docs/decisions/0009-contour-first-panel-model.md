@@ -1,7 +1,7 @@
 # 0009. Contour-first panel geometry
 
 - Status: Accepted; core-local machining superseded by 0011; banding-path unit superseded by 0014;
-  frame anchored at the outline's base corner, clarified by 0083
+  frame anchored at the outline's base corner, clarified by 0083 and 0088
 - Date: 2026-10-23
 
 ## Context
@@ -113,3 +113,8 @@ crate or dependency.
 - The current v1 restrictions on cutouts outside the core and overlapping cutouts are temporary;
   stage 3 replaces them with the union and connectivity rules above.
 - Existing rectangle files load unchanged: no corner features, no bows, four sharp corners.
+
+## Frame note (2026-11-11)
+
+The panel's base corner is its **origin**, implicit in `Placement::translation` (ADR 0088). Its
+`pivot_local` is always zero and is derived from that origin, so the frame has one point, not two.
