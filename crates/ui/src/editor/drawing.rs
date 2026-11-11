@@ -1,6 +1,6 @@
 //! The drawing mode: the draft a draw tool is building on the work plane.
 //!
-//! The draft is view state until its one commit: `crate::contour_edit::DrawDraft` collects the
+//! The draft is view state until its one commit: `crate::draw::DrawDraft` collects the
 //! clicks, and `commit_drawing` turns the finished chain into one `object.path.create`. The shell
 //! measures the work plane, so a commit receives the *world* frame and converts it to the parent's
 //! frame here. A commit hands the new node to the contour edit mode.
@@ -15,7 +15,8 @@ use furnicraft_model::Placement;
 use furnicraft_units::Length;
 
 use super::Editor;
-use crate::contour_edit::{ContourTarget, DEFAULT_POLYGON_SIDES, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
+use crate::contour_edit::ContourTarget;
+use crate::draw::{DEFAULT_POLYGON_SIDES, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 
 impl Editor {
     /// The live drawing draft, when a drawing tool is building a chain.

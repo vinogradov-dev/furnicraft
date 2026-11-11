@@ -4,8 +4,9 @@ use super::*;
 
 use crate::toolbars::RibbonView;
 
-use crate::contour_edit::{ContourTarget, DrawDraftError, DrawTool};
+use crate::contour_edit::ContourTarget;
 use crate::contour_grips::ContourGrip;
+use crate::draw::{DrawDraftError, DrawTool};
 use crate::mesh_edit::MeshElement;
 use crate::scene_tree::TreeAction;
 use crate::toolbars::{RibbonTab, ToolAction};

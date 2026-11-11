@@ -22,6 +22,7 @@ mod contour_edit;
 mod contour_grips;
 mod coords;
 pub mod display;
+mod draw;
 mod editor;
 pub mod home;
 pub mod icons;
@@ -42,8 +43,9 @@ pub mod theme;
 pub mod toolbars;
 pub mod ui_scale;
 
-pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
+pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
+pub use draw::{DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use editor::Editor;
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
