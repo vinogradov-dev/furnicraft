@@ -104,7 +104,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
 /// [`run`] with the git facts supplied by `git`, so a test needs no repository.
 pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let Some(verb) = args.first().map(String::as_str) else {
-        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|drop> …".to_owned());
+        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|drop> …".to_owned());
     };
     let rest = &args[1..];
     match verb {
@@ -116,6 +116,7 @@ pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), Strin
         "close" => close(root, rest, git),
         "reopen" => reopen(root, rest, git),
         "drop" => drop(root, rest, git),
+        "take" => take(root, rest, git),
         other => Err(format!("unknown verb `{other}`")),
     }
 }
@@ -335,6 +336,64 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} closed into `## Done` at `{hash}`; `{next_id}` is next", next_id = next.id);
+    }
+    Ok(())
+}
+
+/// `task take <ID> [--at top|end] [--next <text>]`: moves an open entry into `## Now`.
+///
+/// The order of work is the order of `## Now`, and `## Bugs` and `## Next` are not part of it, so a
+/// session that wants to work on an entry filed there has to move the line first. Doing that by hand
+/// is forbidden (ADR 0085), and no verb could do it, so the work order could only advance while
+/// `## Now` already held the next task. Taking into an occupied `## Now` leaves `STATE:` alone; into
+/// an empty one it makes the taken task current and says so in `## Next`, because the gate requires
+/// the paragraph to name the task `STATE:` does.
+fn take(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
+    let options = Options::parse(args, &["at", "next"])?;
+    let id = options.words.first().ok_or("task take needs a task id")?.clone();
+    let at = match options.value("at") {
+        None | Some("end") => edit::At::End,
+        Some("top") => edit::At::Top,
+        Some(other) => return Err(format!("`--at` takes `top` or `end`, not `{other}`")),
+    };
+    // Parsed straight from the file rather than through the gate: an empty `## Now` leaves the plan
+    // with no valid current task, and taking an entry into it is the write that repairs that. The
+    // gate still runs on the result, so `--repair` is needed while a violation stands.
+    let backlog_text = read(root, "plan/BACKLOG.md")?;
+    let tasks = crate::parse_backlog(&backlog_text);
+    let task = find(&tasks, &id)?;
+    if task.status == TaskStatus::Done {
+        return Err(format!("task {id} is done; `cargo xtask task reopen {id}` puts it back in the order"));
+    }
+    if task.section == "Now" {
+        return Err(format!("task {id} is already in `## Now`"));
+    }
+    // The head of the order is the slot `STATE:` names, so nothing may take it from a task in
+    // progress; the end of `## Now` is behind that task and disturbs nothing.
+    if matches!(at, edit::At::Top)
+        && let Some(other) = tasks.iter().find(|task| task.status == TaskStatus::Doing)
+    {
+        return Err(format!(
+            "task {} is still in progress; `task take {id}` joins the end of `## Now` without taking its place",
+            other.id
+        ));
+    }
+    let occupied = first_open(&tasks).is_some();
+    let backlog = edit::move_entry(&backlog_text, &id, "Now", at)?;
+    let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
+    if !occupied {
+        let status = read(root, "plan/STATUS.md")?;
+        let status =
+            edit::set_state(&status, &[("task".to_owned(), id.clone()), ("state".to_owned(), "idle".to_owned())])?;
+        let status = match options.value("next") {
+            Some(next) => edit::set_section(&status, "Next", next)?,
+            None => edit::set_section(&status, "Next", &format!("{id} is next: {}", task.lead))?,
+        };
+        changes = changes.with("plan/STATUS.md", status);
+    }
+    apply(root, changes, &options, git)?;
+    if !options.dry_run {
+        println!("task {id} taken into `## Now`");
     }
     Ok(())
 }
@@ -962,6 +1021,84 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         assert!(backlog.contains("- `[ ]` **P6** the writer\n"), "{backlog}");
         assert!(!backlog.contains("abc1234"), "the commit is gone: {backlog}");
         assert!(text(&root, "plan/STATUS.md").contains("task=P6 state=idle"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A backlog with a bug, a next-order entry and the current task.
+    const FILED_BACKLOG: &str = "## Now\n\n\
+- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n\
+## Bugs\n\n\
+- `[ ]` **X2** a defect\n  Why: it breaks on 1 µm\n  `files: src/b.rs`\n\n\
+## Next\n\n\
+- `[ ]` **R1** the rename\n  Why: the name is in three places\n  `files: src/a.rs`\n\n\
+## Done\n";
+
+    #[test]
+    fn taking_a_bug_moves_the_entry_whole() {
+        let root = project("take-bug", STATUS, FILED_BACKLOG, None);
+        run(&root, &["take", "X2"]).expect("the bug joins the end of Now");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(
+            backlog.contains("- `[ ]` **X2** a defect\n  Why: it breaks on 1 µm\n  `files: src/b.rs`"),
+            "the entry keeps its text, fields and hint: {backlog}"
+        );
+        let now = backlog.find("## Now").expect("Now is there");
+        let bugs = backlog.find("## Bugs").expect("Bugs is there");
+        let order = &backlog[now..bugs];
+        let (current, taken) = (order.find("**P6**").expect("P6 stays"), order.find("**X2**").expect("X2 arrived"));
+        assert!(current < taken, "the taken entry sits behind the current one: {order}");
+        assert!(!backlog[bugs..].contains("**X2**"), "and left `## Bugs`: {backlog}");
+        assert!(
+            text(&root, "plan/STATUS.md").contains("task=P6 state=idle"),
+            "an occupied `## Now` keeps its `STATE:`"
+        );
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taking_into_an_empty_now_makes_the_task_current() {
+        // The state a plan is left in when `## Now` runs out: no valid current task until an entry
+        // is taken into the empty order, which is the write that repairs it.
+        let status = format!("{}\n## Next\n\nP6 is next: the writer.\n", STATUS.replace("task=P6", "task=R1"));
+        let backlog = FILED_BACKLOG.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n", "");
+        let root = project("take-empty", &status, &backlog, None);
+        assert!(crate::check_with(&root, &FakeGit).is_err(), "the plan starts with no valid current task");
+        run(&root, &["take", "R1"]).expect("the take fills the empty order and repairs the plan");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=R1 state=idle"), "{status}");
+        assert!(status.contains("R1 is next: the rename"), "the paragraph is rewritten: {status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taking_a_done_or_unknown_task_is_refused() {
+        let backlog =
+            FILED_BACKLOG.replace("## Done\n", "## Done\n\n- `[x]` **X1** older\n  `files: src/a.rs` — `abc1234`\n");
+        let root = project("take-refused", STATUS, &backlog, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["take", "X1"]).expect_err("a done task is not taken");
+        assert!(error.contains("is done"), "{error}");
+        let error = run(&root, &["take", "X9"]).expect_err("an unknown id is refused");
+        assert!(error.contains("no task `X9`"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taking_at_the_top_while_a_task_runs_is_refused() {
+        let running = STATUS.replace("state=idle", "state=doing");
+        let backlog = FILED_BACKLOG.replace("- `[ ]` **P6**", "- `[~]` **P6**");
+        let root = project("take-top", &running, &backlog, Some(NOTE));
+        let before = snapshot(&root);
+        let error = run(&root, &["take", "X2", "--at", "top"]).expect_err("the top belongs to the running task");
+        assert!(error.contains("still in progress"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+
+        run(&root, &["take", "X2"]).expect("the end of `## Now` does not disturb the running task");
+        assert!(text(&root, "plan/STATUS.md").contains("task=P6 state=doing"));
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
         let _ = std::fs::remove_dir_all(&root);
     }
 

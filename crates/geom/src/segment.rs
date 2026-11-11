@@ -150,18 +150,26 @@ impl Line {
     ///
     /// A corner sliding along a contour must not reach the opposite node, so the projection
     /// parameter is clamped to `margin / length .. 1 - margin / length`. `margin` is a linear
-    /// distance in millimetres; the segment must be longer than twice it, otherwise the clamped
-    /// range is empty.
+    /// distance in millimetres; the line must be longer than twice it, otherwise the range is empty
+    /// and the call returns [`ContourError::TooShortForMargin`] rather than clamping to swapped
+    /// bounds.
     pub(crate) fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
         if !point.is_finite() {
             return Err(ContourError::InvalidInput("the clamped point must be finite"));
+        }
+        if !margin.is_finite() || margin < 0.0 {
+            return Err(ContourError::InvalidInput("the clamp margin must be a finite distance"));
         }
         let direction = self.end - self.start;
         let length_squared = direction.length_squared();
         if !length_squared.is_finite() || length_squared <= 0.0 {
             return Err(ContourError::ZeroLength);
         }
-        let fraction = margin / (self.end - self.start).length().max(f64::MIN_POSITIVE);
+        let length = length_squared.sqrt();
+        if length <= 2.0 * margin {
+            return Err(ContourError::TooShortForMargin);
+        }
+        let fraction = margin / length;
         let parameter = ((point - self.start).dot(direction) / length_squared).clamp(fraction, 1.0 - fraction);
         Ok(self.start + direction * parameter)
     }
@@ -615,11 +623,22 @@ impl Arc {
     /// The point is taken at its own angle around the centre, and the travel along the sweep is
     /// clamped to `margin / arc_length` at both ends, so a corner sliding along the arc cannot
     /// reach the opposite node. `margin` is a linear distance in millimetres; the arc must be
-    /// longer than twice it, otherwise the clamped range is empty. A point in the centre, where
-    /// every point of the circle is equally near, is returned unchanged.
+    /// longer than twice it, otherwise the range is empty and the call returns
+    /// [`ContourError::TooShortForMargin`] rather than clamping to swapped bounds. A point in the
+    /// centre, where every point of the circle is equally near, is returned unchanged.
     pub(crate) fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
         if !point.is_finite() {
             return Err(ContourError::InvalidInput("the clamped point must be finite"));
+        }
+        if !margin.is_finite() || margin < 0.0 {
+            return Err(ContourError::InvalidInput("the clamp margin must be a finite distance"));
+        }
+        let arc_length = self.sweep_angle.abs() * self.radius;
+        if !arc_length.is_finite() {
+            return Err(ContourError::InvalidInput("the arc length must be finite"));
+        }
+        if arc_length <= 2.0 * margin {
+            return Err(ContourError::TooShortForMargin);
         }
         let offset = point - self.center;
         if offset.length() <= f64::EPSILON {
@@ -631,7 +650,6 @@ impl Arc {
         } else {
             -((-angle + self.start_angle).rem_euclid(TAU))
         };
-        let arc_length = (self.sweep_angle.abs() * self.radius).max(f64::MIN_POSITIVE);
         let fraction = margin / arc_length;
         let slack = fraction * self.sweep_angle.abs();
         let low = 0.0_f64.min(self.sweep_angle);
@@ -765,7 +783,8 @@ impl Segment {
     ///
     /// A corner sliding along a contour must not pass the opposite node, so the point is projected
     /// onto the segment rather than its supporting line and pulled back by `margin` at both ends.
-    /// `margin` is a linear distance in millimetres; the segment must be longer than twice it.
+    /// `margin` is a linear distance in millimetres; the segment must be longer than twice it,
+    /// otherwise the call returns [`ContourError::TooShortForMargin`].
     pub fn clamp_to_extent(self, point: DVec2, margin: f64) -> Result<DVec2, ContourError> {
         if !margin.is_finite() || margin < 0.0 {
             return Err(ContourError::InvalidInput("the clamp margin must be a finite distance"));
@@ -881,4 +900,50 @@ fn positive_angle(angle: f64) -> f64 {
         value += TAU;
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(start: DVec2, end: DVec2) -> Segment {
+        Segment::Line(Line::new(start, end).expect("a line"))
+    }
+
+    fn quarter_arc(radius: f64) -> Segment {
+        Segment::Arc(Arc::new(DVec2::ZERO, radius, 0.0, FRAC_PI_2).expect("a quarter arc"))
+    }
+
+    #[test]
+    fn a_clamp_on_a_short_line_is_refused() {
+        // One micrometre of length leaves no room for the 1 µm margin at each end.
+        let result = line(DVec2::ZERO, DVec2::new(0.001, 0.0)).clamp_to_extent(DVec2::new(0.001, 0.0), 0.001);
+        assert_eq!(result, Err(ContourError::TooShortForMargin));
+    }
+
+    #[test]
+    fn a_clamp_on_a_short_arc_is_refused() {
+        // A quarter arc of radius 1 µm is about 1.57 µm long, shorter than two margins.
+        let result = quarter_arc(0.001).clamp_to_extent(DVec2::new(0.0, 0.001), 0.001);
+        assert_eq!(result, Err(ContourError::TooShortForMargin));
+    }
+
+    #[test]
+    fn a_clamp_stops_a_margin_short_of_the_far_end() {
+        let clamped = line(DVec2::ZERO, DVec2::new(100.0, 0.0))
+            .clamp_to_extent(DVec2::new(250.0, 40.0), 0.001)
+            .expect("a clamp on a long line");
+        assert!((clamped.x - 99.999).abs() < 1.0e-9, "the clamp stops 1 µm short: {clamped:?}");
+        assert!(clamped.y.abs() < 1.0e-9, "the clamp stays on the line: {clamped:?}");
+    }
+
+    #[test]
+    fn a_clamp_holds_the_margin_at_both_ends_of_an_arc() {
+        let clamped = quarter_arc(10.0).clamp_to_extent(DVec2::new(0.0, 20.0), 0.001).expect("a clamp on a long arc");
+        // The quarter arc runs from angle 0 to π/2; the far end is π/2 · 10 mm ≈ 15.7 mm of travel.
+        let angle = clamped.y.atan2(clamped.x);
+        let travel = angle * 10.0;
+        assert!(travel <= 10.0 * FRAC_PI_2 - 0.001 + 1.0e-9, "the clamp stops 1 µm short: {travel}");
+        assert!(travel >= 10.0 * FRAC_PI_2 - 0.001 - 1.0e-9, "the clamp reaches the margin: {travel}");
+    }
 }

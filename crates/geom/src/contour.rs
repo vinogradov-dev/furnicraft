@@ -51,6 +51,8 @@ pub enum ContourError {
     InvalidSweep,
     /// A split point does not lie strictly inside the segment it would split.
     SplitOutside,
+    /// A segment is not longer than twice the margin kept clear of each end.
+    TooShortForMargin,
     /// A contour has no segments.
     Empty,
     /// A contour has more than [`MAX_SEGMENTS`] segments.
@@ -85,6 +87,9 @@ impl fmt::Display for ContourError {
             Self::InvalidRadius => formatter.write_str("an arc radius must be positive and finite"),
             Self::InvalidSweep => formatter.write_str("an arc sweep must be non-zero and at most a full turn"),
             Self::SplitOutside => formatter.write_str("a split point must lie strictly inside the segment"),
+            Self::TooShortForMargin => {
+                formatter.write_str("the segment is not longer than twice the margin kept clear of its ends")
+            }
             Self::Empty => formatter.write_str("a contour needs at least one segment"),
             Self::TooManySegments => formatter.write_str("a contour has too many segments"),
             Self::Disconnected { index } => {

@@ -127,7 +127,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "task",
-        usage: "task [<id>|list|add|start|set|step|note|close|reopen|drop] [options]",
+        usage: "task [<id>|list|add|start|set|step|note|close|reopen|take|drop] [options]",
         summary: "print one task in full, list tasks, or change the plan",
         run: run_task,
     },
@@ -343,7 +343,9 @@ fn run_status(global: &Global, config: &Config) -> Result<(), String> {
 fn run_task(global: &Global, config: &Config, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("list") => read::list(&global.root, &args[1..]),
-        Some("add" | "start" | "set" | "step" | "note" | "close" | "reopen" | "drop") => write::run(&global.root, args),
+        Some("add" | "start" | "set" | "step" | "note" | "close" | "reopen" | "take" | "drop") => {
+            write::run(&global.root, args)
+        }
         _ => read::report(&global.root, config, global, args),
     }
 }

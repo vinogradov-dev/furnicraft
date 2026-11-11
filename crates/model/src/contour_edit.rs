@@ -75,6 +75,12 @@ pub enum ContourEditError {
     /// Two adjoining arcs cannot reach one shared corner.
     #[error("a corner between two arcs cannot reach the requested point")]
     ArcJointMismatch,
+    /// A segment is too short to hold a sliding corner clear of both of its ends.
+    #[error("contour segment {segment} is too short to slide a corner along")]
+    SegmentTooShort {
+        /// The segment the corner was sliding along.
+        segment: ContourSegmentId,
+    },
     /// A segment is not a valid curve.
     #[error(transparent)]
     Segment(#[from] ContourSegmentError),
@@ -216,7 +222,7 @@ impl Path {
     /// the opposite node when moving along the contour.
     fn clamp_to_segment(&self, segment: ContourSegmentId, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
         let curve = self.segment(segment).ok_or(ContourEditError::UnknownSegment { segment })?;
-        clamp_to_extent(curve, point)
+        clamp_to_extent(segment, curve, point)
     }
 
     /// The point of `segment`'s own line or circle nearest to `point`.
@@ -501,7 +507,7 @@ impl Contour {
                 let nearest = curve.to_geom()?.nearest_on_support(requested).ok_or(ContourEditError::InvalidValue)?;
                 let nearest = crate::contour::point_to_document(nearest)?;
                 // Clamp on the motion segment so the corner cannot pass the opposite node.
-                let clamped = clamp_to_extent(curve, nearest)?;
+                let clamped = clamp_to_extent(target, curve, nearest)?;
                 self.move_corner(segment, clamped)
             }
             CornerMove::Free => self.move_corner_free(segment, point),
@@ -719,12 +725,19 @@ pub(crate) fn with_corner(
 ///
 /// A corner sliding along the contour must not pass the opposite node: the point is projected onto
 /// the segment and pulled back by the margin, so the draft stays a legal segment. The collapse to
-/// zero is recorded separately and happens on Apply.
-fn clamp_to_extent(curve: ContourSegment, point: [Length; 2]) -> Result<[Length; 2], ContourEditError> {
-    let clamped = curve
-        .to_geom()?
-        .clamp_to_extent(point_to_geometry(point)?, CLAMP_MARGIN_MM)
-        .map_err(|_| ContourEditError::InvalidValue)?;
+/// zero is recorded separately and happens on Apply. A segment shorter than twice the margin has no
+/// range to slide in; the edit is refused with [`ContourEditError::SegmentTooShort`] instead of
+/// clamping to swapped bounds.
+fn clamp_to_extent(
+    segment: ContourSegmentId,
+    curve: ContourSegment,
+    point: [Length; 2],
+) -> Result<[Length; 2], ContourEditError> {
+    let clamped =
+        curve.to_geom()?.clamp_to_extent(point_to_geometry(point)?, CLAMP_MARGIN_MM).map_err(|error| match error {
+            GeomError::TooShortForMargin => ContourEditError::SegmentTooShort { segment },
+            _ => ContourEditError::InvalidValue,
+        })?;
     Ok(crate::contour::point_to_document(clamped)?)
 }
 
@@ -1740,6 +1753,31 @@ mod tests {
     }
 
     #[test]
+    fn an_along_contour_drag_on_a_one_micrometre_line_is_refused() {
+        // A 1 µm first segment is a legal document segment, but it has no room to slide: the two
+        // clamp margins (2 µm) do not fit, so the drag must return an error instead of panicking.
+        let path = open_path(vec![point(0, 0), fine_point(1, 0), point(100, 0)]);
+        let result = path.move_corner_at(PathCorner::End(id(1)), point(50, 0), CornerMove::Along(id(1)));
+        assert_eq!(result, Err(ContourEditError::SegmentTooShort { segment: id(1) }));
+    }
+
+    #[test]
+    fn an_along_contour_drag_on_a_one_micrometre_arc_is_refused() {
+        // A quarter arc of radius 1 µm is about 1.57 µm long, shorter than twice the clamp margin.
+        let arc = ContourSegment::arc(
+            [micrometres(0), micrometres(0)],
+            micrometres(1),
+            Degrees::from_millidegrees(0),
+            Degrees::from_millidegrees(90_000),
+        )
+        .expect("a one-micrometre quarter arc");
+        let line = ContourSegment::line(point(0, 0), fine_point(1, 0)).expect("one-micrometre line");
+        let path = Path::new(vec![line, arc], false).expect("line and arc");
+        let result = path.move_corner_at(PathCorner::End(id(2)), point(0, 100), CornerMove::Along(id(2)));
+        assert_eq!(result, Err(ContourEditError::SegmentTooShort { segment: id(2) }));
+    }
+
+    #[test]
     fn a_ring_along_contour_drag_cannot_pass_the_opposite_node() {
         // A ring: the corner at the start of the right side slides along the bottom side.
         let ring = rectangle();
@@ -1748,6 +1786,15 @@ mod tests {
         let end = moved.segment(id(1)).expect("bottom").end().expect("end");
         assert!(end[0].micrometres() >= 0, "the corner did not pass the far start: {end:?}");
         assert!(end[0].micrometres() <= 1_000, "the corner reached the far start: {end:?}");
+    }
+
+    #[test]
+    fn a_ring_along_contour_drag_on_a_one_micrometre_side_is_refused() {
+        // A rectangular ring whose right side is 1 µm wide: sliding a corner along it must refuse.
+        let ring = Contour::from_polygon(vec![point(0, 0), point(100, 0), fine_point(100_001, 0), point(0, 60)]);
+        let ring = ring.expect("a thin quadrilateral");
+        let result = ring.move_corner_with(id(2), point(50, 0), CornerMove::Along(id(2)));
+        assert_eq!(result, Err(ContourEditError::SegmentTooShort { segment: id(2) }));
     }
 
     #[test]
