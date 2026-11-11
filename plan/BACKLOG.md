@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
-  B1, B3, B4, B5, B8.
-  Why: 1085 production lines with `impl Editor` at 966, 18 fields and 60 public methods: four
-   pointer modes, ribbon state and eight cards in one impl (F2, B4, B5).
-  Shape: the `Editor` type and its state move to `crates/ui/src/editor/mod.rs`; the methods
-   split by what they own — `selection.rs` (select, enter and exit a level, `retain_open`),
-   `mesh.rs` (the mesh edit mode), `contour.rs` (the contour edit mode and its grips),
-   `drawing.rs` (the draft and its commit), `creation.rs` (armed container, primitives, panels,
-   assemblies, cameras, lights) and `cards.rs` (`show_scene_tree`, `show_card`, `run_action`);
-   `lib.rs` 1085 -> ~150 and holds `mod` and `pub use` only (B3).
-  Done: suite unchanged apart from paths and `use` lines (T1); the crate header still states the layer
-  and that the UI dispatches and never writes the document; every new header names its mode and
-  `//! Changes when:`; no module over 600 lines.
-  Commits: one move; T2's sibling test files are optional and never in the same commit.
-  `files: crates/ui/src/lib.rs, crates/ui/src`
-
 - `[ ]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
   Why: 1112 production lines in one file cover two operations: editing an existing contour
    (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one
@@ -275,6 +259,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
+  B1, B3, B4, B5, B8.
+  Why: 1085 production lines with `impl Editor` at 966, 18 fields and 60 public methods: four
+   pointer modes, ribbon state and eight cards in one impl (F2, B4, B5).
+  Shape: the `Editor` type and its state move to `crates/ui/src/editor/mod.rs`; the methods
+   split by what they own — `selection.rs` (select, enter and exit a level, `retain_open`),
+   `mesh.rs` (the mesh edit mode), `contour.rs` (the contour edit mode and its grips),
+   `drawing.rs` (the draft and its commit), `creation.rs` (armed container, primitives, panels,
+   assemblies, cameras, lights) and `cards.rs` (`show_scene_tree`, `show_card`, `run_action`);
+   `lib.rs` 1085 -> ~150 and holds `mod` and `pub use` only (B3).
+  Done: suite unchanged apart from paths and `use` lines (T1); the crate header still states the layer
+  and that the UI dispatches and never writes the document; every new header names its mode and
+  `//! Changes when:`; no module over 600 lines.
+  Commits: one move; T2's sibling test files are optional and never in the same commit.
+  `files: crates/ui/src/lib.rs, crates/ui/src` — `bc3b179`
 
 - `[x]` **S18** `ui/lib.rs`'s `Editor` gives up the document rules it holds — rules: C7, D1, B1, H2.
   Why: three document rules live inside the UI's edit session (F2): `placement_in_parent` repeats the
