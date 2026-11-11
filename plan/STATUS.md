@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U46 state=idle base=6b5c502 updated=2026-11-11
+STATE: milestone=M7 phase=A task=U49 state=idle base=21a2d6a updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -37,7 +37,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061), X20 gives a pole view a
   canonical up (0057) and U59 names the six views; X1, X2 and X7 are fixed too — a ring past the cap
   follows the shape (0062), a ribbon tool is one measured cell (0067). U27 caches icons per `(uri,
-  px, colour)`; 38 of the 74 declared icons are still placeholders in `plan/debt.md` (0055).
+  px, colour)`; U46 drew every declared icon but `primitives/cone` (0055).
 - U38–U42 and the X-fixes landed the visual pass: `theme.rs` owns two palettes and the type scale
   (ADRs 0063, 0069), `header.rs` returns a `HeaderAction` (0064), U39 the ribbon (0066), U40 the
   folded side panels and the bottom-centre cluster, U41 *Settings*, `settings.json` and *Home* (0068),
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U46 is next: the icon set catches up with the surfaces the interface grew — the header, the ribbon
-groups, the viewport bar and the split layout — and the four tree toggles U48 draws as captions get
-their eye, eye-off, padlock and padlock-open files, so no chrome surface is left as a text fallback.
+U49 is next: one typed message table behind a language switch — `crates/text` holds `Lang::{En, Ru}`
+and one `Message` per string, every surface draws through it, and command labels become messages.
 
 ## Index
 

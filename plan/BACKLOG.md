@@ -25,21 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
-  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
-  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
-  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
-  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
-  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
-  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
-  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
-  are needed by U48.
-  A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
-  Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
-  `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,
-  footprint and coverage tests; `Theme::ALL` and the uri count (`56`) move together with a new icon.
-  `files: assets/icons, crates/ui/src/icons.rs`
-
 - `[ ]` **U49** the interface speaks English and Russian: one typed message table behind a language
   switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
   in the layer map and `PROJECT.md` in the same change) holds `Lang::{En, Ru}` and one `Message`
@@ -172,6 +157,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
+  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
+  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
+  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
+  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
+  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
+  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
+  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
+  are needed by U48.
+  A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
+  Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
+  `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,
+  footprint and coverage tests; `Theme::ALL` and the uri count (`56`) move together with a new icon.
+  `files: assets/icons, crates/ui/src/icons.rs` — `21a2d6a`
 
 - `[x]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
   visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
