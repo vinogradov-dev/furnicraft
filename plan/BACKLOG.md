@@ -63,6 +63,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **P11** the plan tool cannot take a bug: a session that fixes an entry in `## Bugs` has no verb that moves it into `## Now`, so it edits `plan/BACKLOG.md` by hand, which ADR 0085 forbids. Add `cargo xtask task take <ID> [--at top|end]` (default end): move an open `## Bugs` entry into `## Now` at the chosen place, keeping its text, fields and `files:` hint, in one validated write. Refuse a done task, an unknown id, a task already in `## Now`, and `--at top` while another task is in progress. Into an occupied `## Now` it changes no `STATE`; into an empty one it sets `STATE: task=` to the taken task, rewrites `## Next` and leaves `state=idle`. Tests: a bug moves with every line intact, taking it into an occupied `## Now` leaves `STATE` alone, taking it into an empty one makes it `STATE`, and a done or unknown task is refused.
+  `files: state-contract/src/cli/write.rs, state-contract/src/edit.rs, state-contract/src/cli/mod.rs`
 
 ## Done
 
