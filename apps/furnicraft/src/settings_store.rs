@@ -13,6 +13,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use furnicraft_text::{Lang, Message};
 use furnicraft_ui::settings::Settings;
 
 /// The name of the settings file inside the application's config directory.
@@ -24,11 +25,36 @@ pub(crate) struct SettingsStore {
     path: Option<PathBuf>,
 }
 
+/// Why the workspace is running on its defaults, as a message that waits for a language.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Notice {
+    /// The platform named no config directory.
+    NoLocation,
+    /// The file does not exist yet; the first run is not an error.
+    NoFile,
+    /// The file exists but could not be read; the reason is the detail.
+    ReadFailed(String),
+    /// The file was read but this build cannot use it.
+    Unusable(String),
+}
+
+impl Notice {
+    /// The sentence in `lang`.
+    pub(crate) fn text(&self, lang: Lang) -> String {
+        match self {
+            Self::NoLocation => Message::NoticeNoSettingsLocation.text(lang).to_owned(),
+            Self::NoFile => Message::NoticeNoSavedSettings.text(lang).to_owned(),
+            Self::ReadFailed(detail) => Message::NoticeReadFailed.with(lang, [detail]),
+            Self::Unusable(detail) => Message::NoticeUnusable.with(lang, [detail]),
+        }
+    }
+}
+
 /// The settings read from disk and the reason the defaults were used, if they were.
 #[derive(Debug)]
 pub(crate) struct Loaded {
     pub(crate) settings: Settings,
-    pub(crate) notice: Option<String>,
+    pub(crate) notice: Option<Notice>,
 }
 
 impl SettingsStore {
@@ -57,35 +83,20 @@ impl SettingsStore {
     /// says the defaults are in use.
     pub(crate) fn load(&self) -> Loaded {
         let Some(path) = self.path() else {
-            return Loaded {
-                settings: Settings::default(),
-                notice: Some("No workspace settings location; using defaults.".to_owned()),
-            };
+            return Loaded { settings: Settings::default(), notice: Some(Notice::NoLocation) };
         };
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Loaded {
-                    settings: Settings::default(),
-                    notice: Some("No saved workspace settings yet; using the defaults.".to_owned()),
-                };
+                return Loaded { settings: Settings::default(), notice: Some(Notice::NoFile) };
             }
             Err(error) => {
-                return Loaded {
-                    settings: Settings::default(),
-                    notice: Some(format!(
-                        "Could not read the workspace settings ({}); using defaults.",
-                        reason(&error)
-                    )),
-                };
+                return Loaded { settings: Settings::default(), notice: Some(Notice::ReadFailed(reason(&error))) };
             }
         };
         match Settings::from_json(&text) {
             Ok(settings) => Loaded { settings, notice: None },
-            Err(error) => Loaded {
-                settings: Settings::default(),
-                notice: Some(format!("Could not use the workspace settings ({error}); using defaults.")),
-            },
+            Err(error) => Loaded { settings: Settings::default(), notice: Some(Notice::Unusable(error.to_string())) },
         }
     }
 
@@ -190,7 +201,7 @@ mod tests {
         let loaded = store.load();
         assert_eq!(loaded.settings, Settings::default());
         assert!(
-            loaded.notice.as_deref().unwrap_or_default().contains("defaults"),
+            loaded.notice.as_ref().map(|notice| notice.text(Lang::En)).unwrap_or_default().contains("defaults"),
             "a first run explains that the defaults are in use: {loaded:?}"
         );
     }
@@ -215,7 +226,10 @@ mod tests {
         fs::write(&path, "{\"version\": 1, \"appearance\": {").expect("write");
         let loaded = SettingsStore::at(path).load();
         assert_eq!(loaded.settings, Settings::default());
-        assert!(loaded.notice.as_deref().unwrap_or_default().contains("using defaults"), "{loaded:?}");
+        assert!(
+            loaded.notice.as_ref().map(|notice| notice.text(Lang::En)).unwrap_or_default().contains("using defaults"),
+            "{loaded:?}"
+        );
     }
 
     #[test]
@@ -228,7 +242,7 @@ mod tests {
         let loaded = SettingsStore::at(path).load();
         assert_eq!(loaded.settings, Settings::default());
         assert!(
-            loaded.notice.as_deref().unwrap_or_default().contains("version"),
+            loaded.notice.as_ref().map(|notice| notice.text(Lang::En)).unwrap_or_default().contains("version"),
             "the reason names the version mismatch: {loaded:?}"
         );
     }
