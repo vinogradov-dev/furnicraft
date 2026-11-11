@@ -182,3 +182,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   `EvaluationCache::finish` drops every entry the pass did not touch. Hiding a large assembly and
   showing it again rebuilds every mesh in it; keeping the entries while the flag is set means the
   cache has to know the hidden set instead of only the revision (U48).
+- `[ui]` The message table covers the captions, hints and menus of `crates/ui` and the shell, but the
+  detail of an engine `CommandError` and of a drag refusal in `gizmo_math` still reaches the status
+  bar as its English `thiserror` sentence. The `units` refusals are mapped (`length_error`,
+  `degrees_error`); the engine and drag ones need the same mapping at the UI boundary, or the status
+  bar says half a sentence in the other language (U49).
