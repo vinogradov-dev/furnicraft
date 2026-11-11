@@ -1,7 +1,8 @@
 //! The egui shell: panels, widgets and input wiring.
 //!
 //! Thin by design: actions are dispatched to the engine as commands, and the UI never mutates the
-//! document directly.
+//! document directly. Which node a viewport click selects and where a creation tool lands are the
+//! rules of `target.rs`.
 
 #![forbid(unsafe_code)]
 #![deny(
@@ -34,6 +35,7 @@ mod properties_card;
 mod scene_tree;
 mod section;
 pub mod settings;
+mod target;
 pub mod theme;
 pub mod toolbars;
 pub mod ui_scale;
@@ -55,8 +57,8 @@ use furnicraft_engine::{
     NodeUngroup, ObjectExtrudeHeightSet, ObjectPathExtrude, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, PanelNominalSize, Path,
-    PathCorner, Placement, Project,
+    CameraProjection, ContourEditError, ContourSegmentId, CornerMove, Id, LightKind, Path, PathCorner, Placement,
+    Project,
 };
 use furnicraft_units::Length;
 
@@ -72,6 +74,7 @@ use crate::pivot_card::PivotCard;
 use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::{Selection, TreeAction};
+use crate::target::{child_containing, creation_target, resolve_viewport_pick};
 use crate::toolbars::ToolAction;
 
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget, DrawDraft, DrawDraftError, DrawTool, DrawnPath};
@@ -79,11 +82,6 @@ pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
-
-/// Default length of a newly created panel, in millimetres.
-const NEW_PANEL_LENGTH_MM: i64 = 600;
-/// Default width of a newly created panel, in millimetres.
-const NEW_PANEL_WIDTH_MM: i64 = 400;
 
 /// A primitive waiting for its work-plane click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,7 +483,7 @@ impl Editor {
             return Err(DrawDraftError::NotStarted.to_string());
         };
         let parent = self.creation_target(session.project());
-        let placement = placement_in_parent(session.project(), parent, placement)?;
+        let placement = session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
         let object = draft.commit(session, parent, placement)?;
         let tool = draft.tool();
         self.drawing = None;
@@ -763,7 +761,7 @@ impl Editor {
             .first()
             .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
             .id();
-        let nominal_size = default_panel_size()?;
+        let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
         let params = json(&PanelCreate {
             parent,
             name: "Panel".to_owned(),
@@ -820,7 +818,7 @@ impl Editor {
     pub fn place_primitive(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
         let pending = self.pending_primitive.ok_or_else(|| "No primitive is waiting for a click.".to_owned())?;
         let parent = self.creation_target(session.project());
-        let placement = placement_in_parent(session.project(), parent, placement)?;
+        let placement = session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
         self.create_primitive(session, parent, pending.kind, pending.size, placement)?;
         self.pending_primitive = None;
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
@@ -1083,77 +1081,6 @@ impl Editor {
             self.selection.replace(parent);
         }
     }
-}
-
-/// The node a viewport click should select: the outermost closed container above the hit panel.
-///
-/// Walking up stops at the nearest open container, so an open level exposes its children. The root
-/// is not a selectable node; a top-level panel or container is selected directly.
-fn resolve_viewport_pick(project: &Project, open: &HashSet<Id>, hit: Id) -> Option<Id> {
-    if !project.contains_node(hit) {
-        return None;
-    }
-    if project.is_container(hit) {
-        return Some(hit);
-    }
-    let root = project.root().id();
-    let mut node = hit;
-    while let Some(parent) = project.parent_of(node) {
-        if parent == root || open.contains(&parent) {
-            break;
-        }
-        node = parent;
-    }
-    Some(node)
-}
-
-/// The container every creation tool lands in.
-///
-/// The scene root is the default parent, whatever the selection is: choosing a node must not
-/// silently change where a new path, panel, assembly, primitive, camera or light goes (ADR 0056).
-/// A child is created through an explicit entry instead, which arms a container; the arm falls back
-/// to the root as soon as that node is gone or cannot own children. Extruding a path is not a
-/// creation tool, so it stays a sibling of its path.
-fn creation_target(project: &Project, armed: Option<Id>) -> Id {
-    let root = project.root().id();
-    armed.filter(|id| *id != root && project.is_container(*id)).unwrap_or(root)
-}
-
-/// The same world placement expressed in `parent`'s frame.
-///
-/// The shell knows the work plane only in world space, while a command stores a placement relative
-/// to the parent container. `inverse(parent_world) ∘ world_placement` is that conversion, and the
-/// root's world placement is the identity, so a creation at the root is unchanged.
-fn placement_in_parent(project: &Project, parent: Id, world: Placement) -> Result<Placement, String> {
-    let parent_world = project
-        .world_placement(parent)
-        .ok_or_else(|| format!("the creation container {parent} is not in the scene"))?;
-    let parent_inverse = parent_world.inverse().map_err(|error| error.to_string())?;
-    Placement::compose(parent_inverse, world).map_err(|error| error.to_string())
-}
-
-/// The direct child of `container` whose subtree contains `node`.
-fn child_containing(project: &Project, container: Id, node: Id) -> Option<Id> {
-    if node == container {
-        return None;
-    }
-    let mut current = node;
-    for _ in 0..Project::MAX_ASSEMBLY_DEPTH {
-        let parent = project.parent_of(current)?;
-        if parent == container {
-            return Some(current);
-        }
-        current = parent;
-    }
-    None
-}
-
-fn default_panel_size() -> Result<PanelNominalSize, String> {
-    let length = Length::from_millimetres(NEW_PANEL_LENGTH_MM)
-        .ok_or_else(|| "default panel length is out of range".to_owned())?;
-    let width =
-        Length::from_millimetres(NEW_PANEL_WIDTH_MM).ok_or_else(|| "default panel width is out of range".to_owned())?;
-    PanelNominalSize::new(length, width).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -2349,7 +2276,7 @@ mod tests {
             .add_panel(
                 project.root().id(),
                 "Top",
-                default_panel_size().expect("size"),
+                PanelCreate::default_nominal_size().expect("size"),
                 None,
                 Length::from_millimetres(18).expect("thickness"),
                 Placement::IDENTITY,

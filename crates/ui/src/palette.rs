@@ -453,7 +453,7 @@ fn params_for(id: &str, session: &Session, context: &PaletteContext) -> Result<V
             json(&PanelCreate {
                 parent: create_parent(session, context),
                 name: "Panel".to_owned(),
-                nominal_size: crate::default_panel_size()?,
+                nominal_size: PanelCreate::default_nominal_size().map_err(|error| error.to_string())?,
                 material,
                 placement: Placement::IDENTITY,
             })

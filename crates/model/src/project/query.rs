@@ -135,6 +135,22 @@ impl Project {
         None
     }
 
+    /// The same world placement expressed in `parent`'s frame.
+    ///
+    /// `inverse(parent_world) ∘ world`. The root's world placement is normally the identity, so a
+    /// placement converted through the root comes back unchanged. A caller that knows a work-plane
+    /// frame only in world space converts it here before handing it to a command that stores a
+    /// placement relative to the parent.
+    ///
+    /// Returns [`ProjectError::NodeNotFound`] when `parent` is not in the tree and
+    /// [`ProjectError::PlacementCompose`] when the parent frame or the world placement is not a
+    /// rigid transform.
+    pub fn placement_in_parent(&self, parent: Id, world: Placement) -> Result<Placement, ProjectError> {
+        let parent_world = self.world_placement(parent).ok_or(ProjectError::NodeNotFound { id: parent })?;
+        let parent_inverse = parent_world.inverse().map_err(|_| ProjectError::PlacementCompose { id: parent })?;
+        Placement::compose(parent_inverse, world).map_err(|_| ProjectError::PlacementCompose { id: parent })
+    }
+
     /// The ids of the nodes that produce geometry at or below `id`, in tree order.
     ///
     /// A panel and an object both produce a drawable, so each yields itself; a container yields
@@ -311,8 +327,52 @@ impl Project {
 
 #[cfg(test)]
 mod tests {
+    use furnicraft_geom::DVec3;
+    use furnicraft_units::{Degrees, Length};
+
     use crate::fixtures::*;
     use crate::*;
+
+    #[test]
+    fn placement_in_parent_undoes_the_parent_frame() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let drawer = Id::new(3).expect("drawer id");
+        let world = Placement::IDENTITY
+            .with_translation(millimetres(30), millimetres(-10), millimetres(5))
+            .expect("a world placement");
+
+        assert_eq!(project.placement_in_parent(root, world), Ok(world), "the root frame is the identity");
+
+        let turned = Placement::IDENTITY
+            .with_translation(millimetres(100), Length::ZERO, Length::ZERO)
+            .and_then(|placement| {
+                placement.with_rotation_euler(EulerAngles {
+                    z: Degrees::from_millidegrees(90_000),
+                    ..EulerAngles::default()
+                })
+            })
+            .expect("a turned parent");
+        project.set_node_placement(drawer, turned).expect("turn the drawer");
+
+        let local = project.placement_in_parent(drawer, world).expect("the world frame in the parent");
+        // The parent is at (100, 0, 0) turned +90° about Z, so in its frame the world placement
+        // lands at (−10, 70, 5) and the world X axis points along its −Y axis.
+        assert!((local.translation() - DVec3::new(-10.0, 70.0, 5.0)).length() < 1e-9, "was {local:?}");
+        assert!((local.transform_vector(DVec3::X) - DVec3::new(0.0, -1.0, 0.0)).length() < 1e-9, "was {local:?}");
+
+        let parent_world = project.world_placement(drawer).expect("the parent's world frame");
+        let rebuilt = Placement::compose(parent_world, local).expect("compose the frames back");
+        assert!((rebuilt.translation() - world.translation()).length() < 1e-9, "was {rebuilt:?}");
+        assert!(rebuilt.rotation().dot(world.rotation()).abs() >= 1.0 - 1e-12, "was {rebuilt:?}");
+
+        let missing = Id::new(999).expect("id");
+        assert_eq!(
+            project.placement_in_parent(missing, world),
+            Err(ProjectError::NodeNotFound { id: missing }),
+            "an unknown parent has no frame"
+        );
+    }
 
     #[test]
     fn a_furniture_type_marks_a_container_as_a_component() {
