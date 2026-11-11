@@ -36,6 +36,8 @@ pub(crate) enum Notice {
     ReadFailed(String),
     /// The file was read but this build cannot use it.
     Unusable(String),
+    /// The file was read, but one value in it is not one this build knows.
+    UnknownPalette(String),
 }
 
 impl Notice {
@@ -46,6 +48,9 @@ impl Notice {
             Self::NoFile => Message::NoticeNoSavedSettings.text(lang).to_owned(),
             Self::ReadFailed(detail) => Message::NoticeReadFailed.with(lang, [detail]),
             Self::Unusable(detail) => Message::NoticeUnusable.with(lang, [detail]),
+            Self::UnknownPalette(name) => {
+                Message::NoticeUnknownPalette.with(lang, [name, Message::PaletteGraphiteCopper.text(lang)])
+            }
         }
     }
 }
@@ -94,8 +99,8 @@ impl SettingsStore {
                 return Loaded { settings: Settings::default(), notice: Some(Notice::ReadFailed(reason(&error))) };
             }
         };
-        match Settings::from_json(&text) {
-            Ok(settings) => Loaded { settings, notice: None },
+        match Settings::read_json(&text) {
+            Ok((settings, repairs)) => Loaded { settings, notice: repairs.into_iter().next().map(notice) },
             Err(error) => Loaded { settings: Settings::default(), notice: Some(Notice::Unusable(error.to_string())) },
         }
     }
@@ -108,6 +113,13 @@ impl SettingsStore {
         let text = settings.to_json().map_err(|error| error.to_string())?;
         write_atomically(path, text.as_bytes())
             .map_err(|error| format!("Could not save the workspace settings: {error}"))
+    }
+}
+
+/// The sentence for a value the loader had to replace.
+fn notice(repair: furnicraft_ui::settings::Repair) -> Notice {
+    match repair {
+        furnicraft_ui::settings::Repair::UnknownPalette(name) => Notice::UnknownPalette(name),
     }
 }
 
@@ -187,10 +199,10 @@ mod tests {
     fn custom() -> Settings {
         let mut settings = Settings::default();
         settings.appearance.theme = ThemeChoice::Light;
-        settings.appearance.accent = [0x11, 0x99, 0x44];
+        settings.appearance.accent = Some([0x11, 0x99, 0x44]);
         settings.appearance.ui_scale = 125;
         settings.viewport.grid_step_mm = 25;
-        settings.ribbon.opacity = 0.6;
+        settings.appearance.panel_opacity = 70;
         settings.recent.push(PathBuf::from("/tmp/cabinet.fcs"));
         settings
     }
@@ -245,6 +257,20 @@ mod tests {
             loaded.notice.as_ref().map(|notice| notice.text(Lang::En)).unwrap_or_default().contains("version"),
             "the reason names the version mismatch: {loaded:?}"
         );
+    }
+
+    #[test]
+    fn an_unknown_palette_loads_the_default_look_with_one_notice() {
+        let directory = scratch("palette");
+        let path = directory.join(FILE_NAME);
+        fs::write(&path, r#"{"version":1,"appearance":{"palette":"p3_graphite","ui_scale":125}}"#).expect("write");
+        let loaded = SettingsStore::at(path).load();
+        assert_eq!(loaded.settings.appearance.palette, furnicraft_ui::theme::ThemePreset::GraphiteCopper);
+        assert_eq!(loaded.settings.appearance.ui_scale, 125, "the rest of the file is kept");
+        let notice = loaded.notice.expect("one notice, not a silent replacement");
+        assert_eq!(notice, Notice::UnknownPalette("p3_graphite".to_owned()));
+        let text = notice.text(Lang::En);
+        assert!(text.contains("p3_graphite"), "the notice names the value it replaced: {text}");
     }
 
     #[test]

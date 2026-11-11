@@ -191,3 +191,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   bar as its English `thiserror` sentence. The `units` refusals are mapped (`length_error`,
   `degrees_error`); the engine and drag ones need the same mapping at the UI boundary, or the status
   bar says half a sentence in the other language (U49).
+- `[ui]` A preset tints the chrome but not the viewport: `scene::SceneColors` still names exactly two
+  frames, dark and light, whose clear colour, grid and line ink were chosen for the neutral palette,
+  so P2 ink·azure and P4 slate·mint draw their scene on a neutral background and the tinted ribbon
+  reads against it. Deriving the frame's ink from the active palette — a `SceneColors` per preset, or
+  a clear colour mixed from the palette's surface — closes the seam (U71, ADR 0089).

@@ -192,7 +192,8 @@ impl FurniCraftApp {
         let settings_store = SettingsStore::for_workspace();
         let loaded = settings_store.load();
         let settings = loaded.settings;
-        theme::install_with(&cc.egui_ctx, settings.appearance.theme.preference(), settings.appearance.accent);
+        let (preference, preset, accent) = settings.install_args();
+        theme::install_with(&cc.egui_ctx, preference, preset, accent);
         cc.egui_ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
         let render_state =
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
@@ -526,7 +527,8 @@ impl FurniCraftApp {
         self.settings.sanitize();
         let colors_before = self.shell.colors;
         if self.settings.appearance != before.appearance {
-            theme::install_with(ctx, self.settings.appearance.theme.preference(), self.settings.appearance.accent);
+            let (preference, preset, accent) = self.settings.install_args();
+            theme::install_with(ctx, preference, preset, accent);
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
             furnicraft_ui::set_language(ctx, self.settings.appearance.language.lang());
         }
