@@ -4,7 +4,7 @@
 //! The cards never compose placements or turn a point themselves; they print what the model
 //! already derived.
 
-use furnicraft_model::{Id, Pivot, Project};
+use furnicraft_model::{Id, PivotLocal, Project};
 use furnicraft_units::Length;
 
 /// Formats three exact lengths as one inspector value.
@@ -12,12 +12,13 @@ pub(crate) fn point(point: [Length; 3]) -> String {
     format!("{}  {}  {}", point[0], point[1], point[2])
 }
 
-/// The node's world position in millimetres.
+/// The world-space origin in millimetres.
 ///
-/// Returns `None` when the node is missing or the composed translation is outside the editable
-/// range, so a hostile document shows no invented number.
-pub(crate) fn world_position(project: &Project, node: Id) -> Option<String> {
-    Some(point(project.world_placement(node)?.translation_lengths()?))
+/// Returns `None` when the node is missing or the composed origin is outside the editable range,
+/// so a hostile document shows no invented number.
+pub(crate) fn world_origin(project: &Project, node: Id) -> Option<String> {
+    let origin = PivotLocal::from_local(project.origin_world(node)?)?;
+    Some(point(origin.components()))
 }
 
 /// The node's manipulation pivot in world space, in millimetres.
@@ -25,7 +26,7 @@ pub(crate) fn world_position(project: &Project, node: Id) -> Option<String> {
 /// This is the point both gizmos turn about. Returns `None` when the node is missing or the value
 /// is outside the editable range.
 pub(crate) fn world_pivot(project: &Project, node: Id) -> Option<String> {
-    let pivot = Pivot::from_local(project.pivot_world(node)?)?;
+    let pivot = PivotLocal::from_local(project.pivot_world(node)?)?;
     Some(point(pivot.components()))
 }
 
@@ -35,7 +36,7 @@ mod tests {
 
     use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID;
     use furnicraft_engine::{NodePlacementSet, Session};
-    use furnicraft_model::{Id, Pivot, Placement};
+    use furnicraft_model::{Id, PivotLocal, Placement};
     use furnicraft_testkit::{sample_catalog, sample_project};
 
     use super::*;
@@ -62,9 +63,9 @@ mod tests {
     }
 
     #[test]
-    fn the_world_position_is_the_composed_parent_frame() {
+    fn the_world_origin_is_the_composed_parent_frame() {
         let (session, front) = turned_session();
-        assert_eq!(world_position(session.project(), front).as_deref(), Some("100 mm  10 mm  0 mm"));
+        assert_eq!(world_origin(session.project(), front).as_deref(), Some("100 mm  10 mm  0 mm"));
         assert_eq!(world_pivot(session.project(), front).as_deref(), Some("100 mm  10 mm  0 mm"));
     }
 
@@ -72,7 +73,7 @@ mod tests {
     fn the_world_pivot_follows_a_local_pivot_move() {
         let (mut session, _front) = turned_session();
         let drawer = Id::new(3).expect("drawer id");
-        let pivot = Pivot::new(
+        let pivot = PivotLocal::new(
             Length::from_micrometres(1_500),
             Length::from_micrometres(-2_500),
             Length::from_micrometres(3_000),
@@ -84,10 +85,10 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_about_the_pivot_keeps_the_world_pivot_and_moves_the_world_position() {
+    fn a_turn_about_the_pivot_keeps_the_world_pivot_and_moves_the_world_origin() {
         let (mut session, _front) = turned_session();
         let drawer = Id::new(3).expect("drawer id");
-        let pivot = Pivot::new(
+        let pivot = PivotLocal::new(
             Length::from_micrometres(1_500),
             Length::from_micrometres(-2_500),
             Length::from_micrometres(3_000),
@@ -100,14 +101,14 @@ mod tests {
         set(&mut session, drawer, placement([104.0, -1.0, 0.0], [0.0, 0.0, 1.0, 0.0]));
 
         assert_eq!(world_pivot(session.project(), drawer).as_deref(), Some("102.5 mm  1.5 mm  3 mm"));
-        assert_eq!(world_position(session.project(), drawer).as_deref(), Some("104 mm  -1 mm  0 mm"));
+        assert_eq!(world_origin(session.project(), drawer).as_deref(), Some("104 mm  -1 mm  0 mm"));
     }
 
     #[test]
     fn a_missing_node_has_no_world_row() {
         let (session, _) = turned_session();
         let missing = Id::new(999).expect("id");
-        assert_eq!(world_position(session.project(), missing), None);
+        assert_eq!(world_origin(session.project(), missing), None);
         assert_eq!(world_pivot(session.project(), missing), None);
     }
 }

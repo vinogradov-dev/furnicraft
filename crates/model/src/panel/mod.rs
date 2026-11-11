@@ -34,7 +34,7 @@ use crate::panel::banding::{normalize_band_order, validate_corner_banding};
 use crate::panel::geometry::validate_dimension;
 use crate::panel_features::{CornerFeature, EdgeBow, validate_contour_features};
 use crate::{
-    Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MachiningId, MaterialId, Pivot,
+    Contour, ContourError, ContourSegmentError, ContourSegmentId, EdgeId, Id, MachiningId, MaterialId, PivotLocal,
     Placement, ProjectError, Properties, PropertyError, PropertyValue, VertexId,
 };
 
@@ -108,7 +108,7 @@ pub struct Panel {
     material: Option<MaterialId>,
     last_known_thickness: Length,
     placement: Placement,
-    pivot: Pivot,
+    pivot_local: PivotLocal,
     machining: Vec<Machining>,
     edge_banding: Vec<EdgeBanding>,
     corner_banding: Vec<CornerBanding>,
@@ -147,7 +147,7 @@ impl Panel {
             material,
             last_known_thickness,
             placement,
-            pivot: Pivot::ZERO,
+            pivot_local: PivotLocal::ZERO,
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
@@ -180,7 +180,7 @@ impl Panel {
             material,
             last_known_thickness,
             placement,
-            pivot: Pivot::ZERO,
+            pivot_local: PivotLocal::ZERO,
             machining: Vec::new(),
             edge_banding: Vec::new(),
             corner_banding: Vec::new(),
@@ -280,8 +280,8 @@ impl Panel {
     }
 
     /// The manipulation pivot in the panel-local frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
+    pub const fn pivot_local(&self) -> PivotLocal {
+        self.pivot_local
     }
 
     /// The typed properties of this panel.
@@ -541,7 +541,7 @@ impl Panel {
     pub(crate) fn move_frame_to(&mut self, min: [i64; 2]) -> Result<(), ProjectError> {
         if min == [0, 0] {
             // The frame did not move; the pivot is symbolic anyway, so make the invariant explicit.
-            self.pivot = Pivot::ZERO;
+            self.pivot_local = PivotLocal::ZERO;
             return Ok(());
         }
         let x = Length::from_micrometres(min[0]);
@@ -576,7 +576,7 @@ impl Panel {
             cutout.set_shape(shape);
         }
         self.placement = placement;
-        self.pivot = Pivot::ZERO;
+        self.pivot_local = PivotLocal::ZERO;
         self.machining = machining;
         Ok(())
     }
@@ -821,8 +821,8 @@ pub(crate) struct PanelWire {
     #[serde(default)]
     last_known_thickness: Option<Length>,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     machining: Vec<Machining>,
     #[serde(default)]
@@ -922,7 +922,7 @@ impl TryFrom<PanelWire> for Panel {
         let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
         validate_machining_records(&wire.machining)?;
         panel.outline = outline;
-        panel.pivot = wire.pivot;
+        panel.pivot_local = wire.pivot_local;
         panel.machining = wire.machining;
         panel.edge_banding = edge_banding;
         panel.corner_banding = wire.corner_banding;
@@ -1055,7 +1055,7 @@ mod tests {
         let ring = panel.outline_contour().expect("ring");
         assert_eq!(ring.bounds_micrometres().0, [0, 0], "the ring is anchored at the panel zero");
         assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(800), millimetres(600)).expect("new size"));
-        assert!(panel.pivot().is_zero(), "a panel's pivot is derived and always its base corner");
+        assert!(panel.pivot_local().is_zero(), "a panel's pivot is derived and always its base corner");
         let after_world = project.world_placement(panel_id).expect("world placement");
         assert!(
             (after_world.translation() - new_base).length() < 1.0e-9,
@@ -1229,7 +1229,7 @@ mod tests {
         assert_eq!(ring.bounds_micrometres(), ([0, 0], [100_000, 50_000]));
         assert_eq!(panel.nominal_size(), PanelNominalSize::new(millimetres(100), millimetres(50)).expect("size"));
         assert_eq!(panel.placement().translation(), DVec3::new(10.0, 10.0, 0.0), "the base corner is the local zero");
-        assert!(panel.pivot().is_zero(), "the local zero is the pivot");
+        assert!(panel.pivot_local().is_zero(), "the local zero is the pivot");
         assert_eq!(
             project.pivot_world(panel_id).expect("world pivot"),
             DVec3::new(10.0, 10.0, 0.0),

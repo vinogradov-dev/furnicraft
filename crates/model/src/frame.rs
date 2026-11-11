@@ -2,7 +2,7 @@
 //!
 //! A frame is chosen once, at creation. The content is moved so the chosen anchor sits at the node's
 //! own origin, the placement says where that origin is in the parent frame, the rotation is kept and
-//! the pivot starts at zero. The rule is one function, [`rebase_at_anchor`]; a content kind supplies
+//! the pivot starts at zero. The rule is one function, [`rebase_origin_at`]; a content kind supplies
 //! only its anchor for a strategy and a shifted copy of itself ([`Anchored`]). Nothing here moves
 //! anything on its own: the creation commands call the rule (ADR 0082).
 
@@ -12,15 +12,15 @@ use thiserror::Error;
 
 use crate::placement::lengths_from_millimetres;
 use crate::tree::panel_bounds;
-use crate::{Contour, ContourError, Node, Path, PathError, Pivot, Placement, PlacementError, RectCorner};
+use crate::{Contour, ContourError, Node, Path, PathError, Placement, PlacementError, RectCorner};
 
 /// The content point a newly created node puts at its local zero.
 ///
 /// A frame is chosen only at creation: an edit, a move or a turn never recomputes it (ADR 0082).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameAnchor {
-    /// The content's own creation pivot: an open chain's first point, a closed ring's bounds centre.
-    CreationPivot,
+    /// The content's own creation origin: an open chain's first point, a closed ring's bounds centre.
+    CreationOrigin,
     /// A corner of the content's bounds, min-X/min-Y by default.
     ///
     /// The corner is a parameter because a panel may be anchored at any of its four bounds corners
@@ -38,7 +38,7 @@ impl FrameAnchor {
     pub const fn corner(self) -> Option<RectCorner> {
         match self {
             Self::BBoxBaseCorner(corner) => Some(corner),
-            Self::CreationPivot | Self::CenterOfBounds => None,
+            Self::CreationOrigin | Self::CenterOfBounds => None,
         }
     }
 }
@@ -67,8 +67,6 @@ pub struct Rebased<T> {
     pub content: T,
     /// The placement of the new origin in the parent frame, with the rotation it already had.
     pub placement: Placement,
-    /// The pivot of the new node: always the local origin.
-    pub pivot: Pivot,
 }
 
 /// Moves `content` so `strategy`'s anchor becomes the node's local zero.
@@ -77,7 +75,7 @@ pub struct Rebased<T> {
 /// `placement.transform_point(anchor)` before the call equals `placement.transform_point(ZERO)`
 /// after it and no world point moves. The pivot starts at zero: the local zero is what the gizmo
 /// turns about, and a creation never invents a second handle (ADR 0082).
-pub fn rebase_at_anchor<T: Anchored>(
+pub fn rebase_origin_at<T: Anchored>(
     content: T,
     placement: Placement,
     strategy: FrameAnchor,
@@ -86,7 +84,7 @@ pub fn rebase_at_anchor<T: Anchored>(
     let translation = placement.transform_point(anchor_millimetres(anchor));
     let placement = Placement::new(translation, placement.rotation())?;
     let content = content.shifted(negated(anchor)?)?;
-    Ok(Rebased { content, placement, pivot: Pivot::ZERO })
+    Ok(Rebased { content, placement })
 }
 
 /// A micrometre point as the millimetres geometry and placements work in.
@@ -140,7 +138,7 @@ fn box_corner(corner: RectCorner, min: DVec3, max: DVec3) -> DVec3 {
 impl Anchored for Path {
     fn anchor(&self, strategy: FrameAnchor) -> Result<[Length; 3], FrameError> {
         match strategy {
-            FrameAnchor::CreationPivot => Ok(self.creation_pivot()?.components()),
+            FrameAnchor::CreationOrigin => Ok(self.creation_origin()?),
             FrameAnchor::BBoxBaseCorner(corner) => {
                 let (min, max) = self.bounds_micrometres();
                 Ok(flat_corner(corner, min, max))
@@ -164,7 +162,7 @@ impl Anchored for Path {
 impl Anchored for Contour {
     fn anchor(&self, strategy: FrameAnchor) -> Result<[Length; 3], FrameError> {
         match strategy {
-            FrameAnchor::CreationPivot | FrameAnchor::CenterOfBounds => {
+            FrameAnchor::CreationOrigin | FrameAnchor::CenterOfBounds => {
                 let (min, max) = self.bounds_micrometres();
                 Ok(flat_center(min, max))
             }
@@ -187,11 +185,11 @@ impl Anchored for Contour {
 impl Anchored for Vec<Node> {
     fn anchor(&self, strategy: FrameAnchor) -> Result<[Length; 3], FrameError> {
         match strategy {
-            FrameAnchor::CreationPivot => {
+            FrameAnchor::CreationOrigin => {
                 if panel_bounds(self, Placement::IDENTITY, 0).is_none() {
                     return Err(FrameError::NoBounds);
                 }
-                Err(FrameError::NoCreationPivot)
+                Err(FrameError::NoCreationOrigin)
             }
             FrameAnchor::CenterOfBounds => children_center(self),
             FrameAnchor::BBoxBaseCorner(corner) => {
@@ -218,7 +216,7 @@ impl Anchored for Vec<Node> {
 ///
 /// This is the anchor [`FrameAnchor::CenterOfBounds`] names for a group. A caller that has to
 /// decide the frame before it owns the children reads it here; the rule that moves them stays in
-/// [`rebase_at_anchor`]. Children without geometry — only cameras and lights — have no centre.
+/// [`rebase_origin_at`]. Children without geometry — only cameras and lights — have no centre.
 pub(crate) fn children_center(children: &[Node]) -> Result<[Length; 3], FrameError> {
     let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
         return Err(FrameError::NoBounds);
@@ -232,9 +230,9 @@ pub enum FrameError {
     /// The content has no bounds, so no strategy has a point to anchor on.
     #[error("the content has no bounds to anchor a frame on")]
     NoBounds,
-    /// A collection of children has no creation pivot of its own.
-    #[error("a container's children have no creation pivot; use the bounds centre or a bounds corner")]
-    NoCreationPivot,
+    /// A collection of children has no creation origin of its own.
+    #[error("a container's children have no creation origin; use the bounds centre or a bounds corner")]
+    NoCreationOrigin,
     /// The content is flat and cannot move along Z.
     #[error("flat content cannot move along Z by {micrometres} µm")]
     OffPlane {
@@ -308,11 +306,10 @@ mod tests {
         .expect("a polyline");
         let before = path_world_points(&line, Placement::IDENTITY);
 
-        let rebased = rebase_at_anchor(line, Placement::IDENTITY, FrameAnchor::CreationPivot).expect("rebase a line");
+        let rebased = rebase_origin_at(line, Placement::IDENTITY, FrameAnchor::CreationOrigin).expect("rebase a line");
 
         assert_eq!(rebased.placement.translation(), DVec3::new(600.0, 400.0, 0.0));
         assert_eq!(rebased.placement.rotation(), DQuat::IDENTITY);
-        assert!(rebased.pivot.is_zero(), "a creation leaves the pivot at the local zero");
         assert_eq!(rebased.content.bounds_micrometres().0, [0, 0], "the first point is the local zero");
         let after = path_world_points(&rebased.content, rebased.placement);
         assert_eq!(before.len(), after.len());
@@ -328,10 +325,9 @@ mod tests {
         let before = path_world_points(&rectangle, Placement::IDENTITY);
 
         let rebased =
-            rebase_at_anchor(rectangle, Placement::IDENTITY, FrameAnchor::CreationPivot).expect("rebase a ring");
+            rebase_origin_at(rectangle, Placement::IDENTITY, FrameAnchor::CreationOrigin).expect("rebase a ring");
 
         assert_eq!(rebased.placement.translation(), DVec3::new(650.0, 450.0, 0.0));
-        assert!(rebased.pivot.is_zero());
         let (min, max) = rebased.content.bounds_micrometres();
         assert_eq!((min, max), ([-50_000, -50_000], [50_000, 50_000]), "the ring straddles its own zero");
         let after = path_world_points(&rebased.content, rebased.placement);
@@ -347,7 +343,7 @@ mod tests {
         let parent = Placement::new(DVec3::new(-20.0, 75.0, 3.0), DQuat::from_rotation_z(0.75)).expect("parent");
         let before = path_world_points(&rectangle, parent);
 
-        let rebased = rebase_at_anchor(rectangle, parent, FrameAnchor::BASE_CORNER).expect("rebase in place");
+        let rebased = rebase_origin_at(rectangle, parent, FrameAnchor::BASE_CORNER).expect("rebase in place");
 
         assert_eq!(rebased.placement.rotation(), parent.rotation(), "the rotation is kept");
         assert_eq!(rebased.placement.translation(), parent.transform_point(DVec3::new(600.0, 400.0, 0.0)));
@@ -377,10 +373,9 @@ mod tests {
         let arc = arc_of(&ring);
         let (_, radius, start_angle, sweep) = arc_fields(&ring, arc);
 
-        let rebased = rebase_at_anchor(ring, Placement::IDENTITY, FrameAnchor::BASE_CORNER).expect("rebase a ring");
+        let rebased = rebase_origin_at(ring, Placement::IDENTITY, FrameAnchor::BASE_CORNER).expect("rebase a ring");
 
         assert_eq!(rebased.placement.translation(), DVec3::new(300.0, 200.0, 0.0));
-        assert!(rebased.pivot.is_zero());
         assert_eq!(arc_of(&rebased.content), arc, "the segment ids travel with their segments");
         let (moved_center, moved_radius, moved_angle, moved_sweep) = arc_fields(&rebased.content, arc);
         assert_eq!(moved_center, [Length::ZERO, Length::ZERO], "the centre moved with the ring");
@@ -401,7 +396,7 @@ mod tests {
             [millimetres(120), millimetres(60), Length::ZERO]
         );
         assert_eq!(FrameAnchor::BASE_CORNER.corner(), Some(RectCorner::BottomLeft));
-        assert_eq!(FrameAnchor::CreationPivot.corner(), None);
+        assert_eq!(FrameAnchor::CreationOrigin.corner(), None);
     }
 
     #[test]
@@ -419,21 +414,20 @@ mod tests {
         let anchor = children.anchor(FrameAnchor::CenterOfBounds).expect("the union centre");
 
         assert_eq!(anchor, [millimetres(505), millimetres(250), Length::from_micrometres(9_000)]);
-        let rebased = rebase_at_anchor(children, Placement::IDENTITY, FrameAnchor::CenterOfBounds).expect("rebase");
+        let rebased = rebase_origin_at(children, Placement::IDENTITY, FrameAnchor::CenterOfBounds).expect("rebase");
         assert_eq!(rebased.placement.translation(), DVec3::new(505.0, 250.0, 9.0));
-        assert!(rebased.pivot.is_zero());
         let (min, max) = panel_bounds(&rebased.content, Placement::IDENTITY, 0).expect("bounds");
         assert!((min + DVec3::new(505.0, 250.0, 9.0)).length() < 1e-3, "min was {min:?}");
         assert!((max - DVec3::new(505.0, 250.0, 9.0)).length() < 1e-3, "max was {max:?}");
     }
 
     #[test]
-    fn a_collection_without_bounds_or_creation_pivot_is_refused() {
+    fn a_collection_without_bounds_or_creation_origin_is_refused() {
         let empty: Vec<Node> = Vec::new();
         assert_eq!(empty.anchor(FrameAnchor::CenterOfBounds), Err(FrameError::NoBounds));
 
         let children = vec![sample_panel(Id::new(2).expect("id"), "Side").into()];
-        assert_eq!(children.anchor(FrameAnchor::CreationPivot), Err(FrameError::NoCreationPivot));
+        assert_eq!(children.anchor(FrameAnchor::CreationOrigin), Err(FrameError::NoCreationOrigin));
     }
 
     #[test]

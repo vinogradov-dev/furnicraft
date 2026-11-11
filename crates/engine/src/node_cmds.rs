@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError, PropertyChange, PropertyValue};
+use furnicraft_model::{Catalog, Id, PivotLocal, Placement, Project, ProjectError, PropertyChange, PropertyValue};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -398,7 +398,7 @@ pub struct NodePivotSet {
     /// Node whose pivot moves; a panel's pivot is derived and is refused.
     pub node: Id,
     /// The new pivot in the node's own frame, in exact micrometres.
-    pub pivot: Pivot,
+    pub pivot: PivotLocal,
 }
 
 /// The `node.pivot.set` command.

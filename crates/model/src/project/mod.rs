@@ -77,7 +77,7 @@ impl Project {
         let max_id = scan_tree(&root)?;
         let next_id = next_id_after(max_id)?;
         let mut root = root;
-        root.set_pivot(Pivot::ZERO);
+        root.set_pivot(PivotLocal::ZERO);
         Ok(Self {
             schema_version: Self::CURRENT_SCHEMA_VERSION,
             revision: Revision::ZERO,
@@ -211,7 +211,7 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
                         return Err(ProjectError::DuplicateId(panel.id()));
                     }
                     max_id = max_id.max(panel.id().get());
-                    if !panel.pivot().is_zero() {
+                    if !panel.pivot_local().is_zero() {
                         return Err(ProjectError::PanelPivotIsDerived { panel: panel.id() });
                     }
                     validate_panel_banding(panel)?;
@@ -371,7 +371,9 @@ mod tests {
         let project = sample_project();
         let mut wire = serde_json::to_value(&project).expect("serialize project");
         let panel = &mut wire["root"]["children"][0]["panel"];
-        panel["pivot"] = serde_json::json!([1_000, 0, 0]);
+        let fields = panel.as_object_mut().expect("the panel is an object");
+        fields.remove("pivot_local");
+        fields.insert("pivot".to_owned(), serde_json::json!([1_000, 0, 0]));
 
         let error = serde_json::from_value::<Project>(wire).expect_err("a panel pivot cannot be authored");
         assert!(error.to_string().contains("pivot is derived"), "error was {error}");

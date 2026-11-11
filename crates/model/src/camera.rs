@@ -10,7 +10,7 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
+use crate::{Id, PivotLocal, Placement, Properties, PropertyError, PropertyValue};
 
 /// How an authored camera projects the scene.
 ///
@@ -98,8 +98,8 @@ pub struct CameraNode {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
     projection: CameraProjection,
@@ -123,7 +123,14 @@ impl CameraNode {
         if !projection.is_valid() {
             return Err(CameraError::InvalidProjection);
         }
-        Ok(Self { id, name: name.into(), placement, pivot: Pivot::ZERO, properties: Properties::new(), projection })
+        Ok(Self {
+            id,
+            name: name.into(),
+            placement,
+            pivot_local: PivotLocal::ZERO,
+            properties: Properties::new(),
+            projection,
+        })
     }
 
     /// The stable camera id.
@@ -142,8 +149,8 @@ impl CameraNode {
     }
 
     /// The manipulation pivot in the camera's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
+    pub const fn pivot_local(&self) -> PivotLocal {
+        self.pivot_local
     }
 
     /// The projection parameters.
@@ -171,8 +178,8 @@ impl CameraNode {
     }
 
     /// Replaces the stored manipulation pivot.
-    pub(crate) fn set_pivot(&mut self, pivot: Pivot) {
-        self.pivot = pivot;
+    pub(crate) fn set_pivot(&mut self, pivot_local: PivotLocal) {
+        self.pivot_local = pivot_local;
     }
 
     /// Replaces the stable id when a subtree is copied.
@@ -211,8 +218,8 @@ struct CameraNodeWire {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
     projection: CameraProjection,
@@ -229,7 +236,7 @@ impl TryFrom<CameraNodeWire> for CameraNode {
             id: wire.id,
             name: wire.name,
             placement: wire.placement,
-            pivot: wire.pivot,
+            pivot_local: wire.pivot_local,
             properties: wire.properties,
             projection: wire.projection,
         })

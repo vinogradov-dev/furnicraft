@@ -9,7 +9,7 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
+use crate::{Id, PivotLocal, Placement, Properties, PropertyError, PropertyValue};
 
 /// The kinds of light a scene can carry.
 ///
@@ -35,8 +35,8 @@ pub struct LightNode {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
     kind: LightKind,
@@ -67,7 +67,7 @@ impl LightNode {
             id,
             name: name.into(),
             placement,
-            pivot: Pivot::ZERO,
+            pivot_local: PivotLocal::ZERO,
             properties: Properties::new(),
             kind,
             color,
@@ -91,8 +91,8 @@ impl LightNode {
     }
 
     /// The manipulation pivot in the light's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
+    pub const fn pivot_local(&self) -> PivotLocal {
+        self.pivot_local
     }
 
     /// The light kind.
@@ -135,8 +135,8 @@ impl LightNode {
     }
 
     /// Replaces the stored manipulation pivot.
-    pub(crate) fn set_pivot(&mut self, pivot: Pivot) {
-        self.pivot = pivot;
+    pub(crate) fn set_pivot(&mut self, pivot_local: PivotLocal) {
+        self.pivot_local = pivot_local;
     }
 
     /// Replaces the stable id when a subtree is copied.
@@ -186,8 +186,8 @@ struct LightNodeWire {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
     kind: LightKind,
@@ -209,7 +209,7 @@ impl TryFrom<LightNodeWire> for LightNode {
             id: wire.id,
             name: wire.name,
             placement: wire.placement,
-            pivot: wire.pivot,
+            pivot_local: wire.pivot_local,
             properties: wire.properties,
             kind: wire.kind,
             color: wire.color,

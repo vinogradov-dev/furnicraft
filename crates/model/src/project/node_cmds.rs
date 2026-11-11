@@ -14,7 +14,7 @@ impl Project {
     /// The pivot is authored data: changing it never moves the node, and changing the geometry never
     /// moves it. The root defines the world frame and has no pivot to edit, and a panel's pivot is
     /// derived from its base corner (ADR 0083), so both are refused.
-    pub fn set_node_pivot(&mut self, id: Id, pivot: Pivot) -> Result<Revision, ProjectError> {
+    pub fn set_node_pivot(&mut self, id: Id, pivot: PivotLocal) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
@@ -50,7 +50,7 @@ impl Project {
             return Err(ProjectError::PanelPivotIsDerived { panel: id });
         }
         let center = self.bounds_center_local(id).unwrap_or(DVec3::ZERO);
-        let pivot = Pivot::from_local(center).unwrap_or(Pivot::ZERO);
+        let pivot = PivotLocal::from_local(center).unwrap_or(PivotLocal::ZERO);
         self.set_node_pivot(id, pivot)
     }
 
@@ -274,7 +274,7 @@ impl Project {
             parent.children().iter().filter(|child| selected.contains(&child.id().get())).cloned().collect();
         let (placement, moved) = match children_center(&moved) {
             Ok(_) => {
-                let rebased = rebase_at_anchor(moved, Placement::IDENTITY, FrameAnchor::CenterOfBounds)
+                let rebased = rebase_origin_at(moved, Placement::IDENTITY, FrameAnchor::CenterOfBounds)
                     .map_err(|_| ProjectError::CreationFrame { id })?;
                 (rebased.placement, rebased.content)
             }
@@ -554,7 +554,7 @@ mod tests {
         assert_eq!(group.placement().rotation(), DQuat::IDENTITY);
         let translation = group.placement().translation();
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
-        assert_eq!(project.pivot_local(group_id), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group_id), Some(DVec3::ZERO));
         let pivot_world = project.pivot_world(group_id).expect("world pivot");
         assert!((pivot_world - centre).length() < 1.1e-3, "world pivot was {pivot_world:?}");
         assert_eq!(group.children().len(), 2);
@@ -642,7 +642,7 @@ mod tests {
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
         assert_eq!(container.placement().rotation(), DQuat::IDENTITY);
         assert_eq!(project.parent_of(group), Some(frame));
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_same_frame(project.world_placement(first).expect("first world"), first_world, "first");
         assert_same_frame(project.world_placement(second).expect("second world"), second_world, "second");
         let group_world = project.pivot_world(group).expect("group world pivot");
@@ -680,7 +680,7 @@ mod tests {
 
         let translation = project.container(group).expect("group").placement().translation();
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_same_frame(project.world_placement(panel).expect("panel world"), panel_world, "panel");
         assert_same_frame(project.world_placement(object).expect("object world"), object_world, "object");
         assert_eq!(project.panel(panel).expect("panel").placement().rotation(), DQuat::from_rotation_x(0.15));
@@ -700,7 +700,7 @@ mod tests {
         // Children without geometry have no centre, so their placements and the parent origin stay.
         let container = project.container(group).expect("group");
         assert_eq!(container.placement(), Placement::IDENTITY);
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_eq!(project.container(first).expect("first").placement(), Placement::IDENTITY);
         assert_eq!(project.container(second).expect("second").placement(), second_placement);
         assert_eq!(container.children().len(), 2);
@@ -759,12 +759,12 @@ mod tests {
         let panel = Id::new(2).expect("panel id");
         let revision = project.revision();
         let stored = project.panel(panel).expect("panel").placement();
-        let pivot = Pivot::new(millimetres(1), millimetres(2), millimetres(3));
+        let pivot = PivotLocal::new(millimetres(1), millimetres(2), millimetres(3));
 
         assert_eq!(project.set_node_pivot(panel, pivot), Err(ProjectError::PanelPivotIsDerived { panel }));
         assert_eq!(project.center_node_pivot(panel), Err(ProjectError::PanelPivotIsDerived { panel }));
         assert_eq!(project.revision(), revision, "a refused pivot edit does not bump the revision");
-        assert_eq!(project.pivot(panel), Some(Pivot::ZERO), "a panel's pivot stays at its base corner");
+        assert_eq!(project.pivot_local(panel), Some(PivotLocal::ZERO), "a panel's pivot stays at its base corner");
         assert_eq!(project.panel(panel).expect("panel").placement(), stored, "the refusal changes nothing");
     }
 }

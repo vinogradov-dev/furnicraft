@@ -156,7 +156,7 @@ pub(crate) fn move_targets(project: &Project, selection: &[Id]) -> Vec<MoveTarge
                 node,
                 start_local: project.node(node)?.placement(),
                 parent: project.world_placement(parent)?,
-                pivot_local: project.pivot_local(node)?,
+                pivot_local: project.pivot_local_mm(node)?,
             })
         })
         .collect()
@@ -962,7 +962,7 @@ mod tests {
 
         assert_eq!(target.start_local, project.node(cabinet).expect("node").placement());
         assert_eq!(target.parent, project.world_placement(project.root().id()).expect("root world"));
-        assert_eq!(target.pivot_local, project.pivot_local(cabinet).expect("pivot"));
+        assert_eq!(target.pivot_local, project.pivot_local_mm(cabinet).expect("pivot"));
         assert_ne!(target.pivot_local, DVec3::ZERO, "the target carries the authored pivot");
     }
 

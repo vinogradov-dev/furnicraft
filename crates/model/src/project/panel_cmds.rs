@@ -563,7 +563,7 @@ impl Project {
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let rebased = rebase_at_anchor(contour.clone(), placement, FrameAnchor::BASE_CORNER)
+        let rebased = rebase_origin_at(contour.clone(), placement, FrameAnchor::BASE_CORNER)
             .map_err(|_| ProjectError::CreationFrame { id })?;
         let panel = Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
@@ -800,7 +800,7 @@ mod tests {
             .expect("panel at the parent origin");
         let panel = project.panel(at_origin).expect("panel");
         assert_eq!(panel.placement().translation(), DVec3::ZERO, "a new panel is at the parent origin");
-        assert!(panel.pivot().is_zero(), "the base corner is the pivot");
+        assert!(panel.pivot_local().is_zero(), "the base corner is the pivot");
         assert_eq!(
             project.pivot_world(at_origin).expect("world pivot"),
             parent_placement.translation(),
@@ -820,7 +820,7 @@ mod tests {
             world.transform_point(DVec3::ZERO),
             "a turned placement turns about the base corner, not the bounds centre"
         );
-        assert_eq!(project.pivot(turned), Some(Pivot::ZERO));
+        assert_eq!(project.pivot_local(turned), Some(PivotLocal::ZERO));
     }
 
     #[test]
@@ -863,7 +863,7 @@ mod tests {
         let panel = project.panel(panel_id).expect("panel exists");
         assert_eq!(panel.nominal_size(), nominal);
         assert_eq!(panel.placement(), placement, "a resize keeps the base corner, so the translation stays");
-        assert_eq!(panel.pivot(), Pivot::ZERO, "a panel's pivot is derived and stays at its base corner");
+        assert_eq!(panel.pivot_local(), PivotLocal::ZERO, "a panel's pivot is derived and stays at its base corner");
 
         let missing = Id::new(999).expect("id");
         assert_eq!(project.set_panel_nominal_size(missing, nominal), Err(ProjectError::PanelNotFound { id: missing }));

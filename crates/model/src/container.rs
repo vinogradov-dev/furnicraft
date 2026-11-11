@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Id, Node, Pivot, Placement, Properties, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE,
+    Id, Node, PivotLocal, Placement, Properties, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE,
     SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
 };
 
@@ -23,8 +23,8 @@ pub struct Container {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     children: Vec<Node>,
     #[serde(default)]
     properties: Properties,
@@ -34,11 +34,18 @@ impl Container {
     /// Creates an ordinary container. Global id uniqueness is checked by [`Project::validate`].
     ///
     /// The pivot starts at zero: a container is born at its own local zero, and a caller that wants
-    /// the container grabbed at its content (a group) says so through [`crate::rebase_at_anchor`],
+    /// the container grabbed at its content (a group) says so through [`crate::rebase_origin_at`],
     /// which also moves the placement. The root has its pivot forced back to zero by
     /// [`Project::new`].
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, children: Vec<Node>) -> Self {
-        Self { id, name: name.into(), placement, pivot: Pivot::ZERO, children, properties: Properties::new() }
+        Self {
+            id,
+            name: name.into(),
+            placement,
+            pivot_local: PivotLocal::ZERO,
+            children,
+            properties: Properties::new(),
+        }
     }
 
     /// The stable container id.
@@ -57,8 +64,8 @@ impl Container {
     }
 
     /// The manipulation pivot in the container's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
+    pub const fn pivot_local(&self) -> PivotLocal {
+        self.pivot_local
     }
 
     /// The panels and nested containers in this container.
@@ -92,8 +99,8 @@ impl Container {
     }
 
     /// Replaces the stored manipulation pivot.
-    pub(crate) fn set_pivot(&mut self, pivot: Pivot) {
-        self.pivot = pivot;
+    pub(crate) fn set_pivot(&mut self, pivot_local: PivotLocal) {
+        self.pivot_local = pivot_local;
     }
 
     /// Replaces the stable id when a subtree is copied.

@@ -92,7 +92,7 @@ impl PlacementCard {
             return;
         };
 
-        let world = coords::world_position(session.project(), node);
+        let world = coords::world_origin(session.project(), node);
         let can_zero = draft.base.translation_lengths().is_some_and(|translation| translation != [Length::ZERO; 3]);
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;

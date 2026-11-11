@@ -140,7 +140,7 @@ mod tests {
     use furnicraft_model::{
         Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
         EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
-        PanelContourError, PanelMaterial, Pivot, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
+        PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
         Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
@@ -351,7 +351,7 @@ mod tests {
             .expect("a panel");
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
         assert_eq!(session.project().parent_of(panel), Some(parent));
-        assert_eq!(session.project().pivot(panel), Some(Pivot::ZERO), "the base corner is the pivot");
+        assert_eq!(session.project().pivot_local(panel), Some(PivotLocal::ZERO), "the base corner is the pivot");
 
         let source_world = session.project().world_placement(source).expect("source world");
         let world = session.project().world_placement(panel).expect("panel world");
@@ -395,14 +395,18 @@ mod tests {
         let panel = session.project().panel(created).expect("panel");
         assert_eq!(panel.outline_contour(), Some(&moved));
         assert_eq!(panel.nominal_size().length(), Length::from_millimetres(800).expect("length"));
-        assert_eq!(session.project().pivot(created), Some(Pivot::ZERO), "the outline edit keeps the pivot derived");
+        assert_eq!(
+            session.project().pivot_local(created),
+            Some(PivotLocal::ZERO),
+            "the outline edit keeps the pivot derived"
+        );
         assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
 
         // The re-anchored panel is a valid document: a save and load keeps it as it is.
         let text = serde_json::to_string(session.project()).expect("serialize the edited project");
         let decoded: furnicraft_model::Project = serde_json::from_str(&text).expect("reload the edited project");
         assert_eq!(decoded.panel(created).expect("reloaded panel").outline_contour(), Some(&moved));
-        assert_eq!(decoded.pivot(created), Some(Pivot::ZERO));
+        assert_eq!(decoded.pivot_local(created), Some(PivotLocal::ZERO));
 
         session.undo().expect("one undo restores the whole edit");
         assert_eq!(session.project().panel(created).expect("panel").outline_contour(), Some(&original));
@@ -1565,7 +1569,7 @@ mod tests {
         assert_eq!(session.project().revision().get(), revision.get() + 1);
         let container = session.project().container(group_id).expect("group");
         assert_ne!(container.placement().translation().length(), 0.0, "the group is anchored at the centre");
-        assert_eq!(session.project().pivot(group_id), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(group_id), Some(PivotLocal::ZERO));
         let world_panel = session.project().world_placement(panel).expect("panel world after");
         assert!(
             (world_panel.translation() - before_panel.translation()).length() < 1.1e-3,
@@ -1784,7 +1788,7 @@ mod tests {
 
         let before = project.panel(front).expect("front panel").clone();
         let before_world = project.world_placement(front).expect("world placement");
-        let before_pivot = project.pivot_local(front).expect("local pivot");
+        let before_pivot = project.pivot_local_mm(front).expect("local pivot");
         let zeroed =
             before.placement().with_translation(Length::ZERO, Length::ZERO, Length::ZERO).expect("zero translation");
         let mut expected = project.clone();
@@ -1803,7 +1807,7 @@ mod tests {
             before_world.rotation(),
             "the composed world rotation must not change"
         );
-        assert_eq!(session.project().pivot_local(front), Some(before_pivot), "the local pivot must not move");
+        assert_eq!(session.project().pivot_local_mm(front), Some(before_pivot), "the local pivot must not move");
         assert_eq!(session.project(), &expected, "only the placement may change");
 
         session.undo().expect("undo world zero");
@@ -1939,20 +1943,20 @@ mod tests {
         let mut session = sample_session();
         let drawer = Id::new(3).expect("drawer id");
         let root = session.project().root().id();
-        let pivot = Pivot::new(
+        let pivot = PivotLocal::new(
             Length::from_micrometres(1_500),
             Length::from_micrometres(-2_500),
             Length::from_micrometres(3_000),
         );
 
         session.dispatch("node.pivot.set", &json_params(&NodePivotSet { node: drawer, pivot })).expect("set pivot");
-        assert_eq!(session.project().pivot(drawer), Some(pivot));
+        assert_eq!(session.project().pivot_local(drawer), Some(pivot));
         assert!(session.can_undo());
 
         session.dispatch("node.pivot.center", &json_params(&NodePivotCenter { node: drawer })).expect("center pivot");
         assert_eq!(
-            session.project().pivot(drawer),
-            Some(Pivot::new(
+            session.project().pivot_local(drawer),
+            Some(PivotLocal::new(
                 Length::from_micrometres(350_000),
                 Length::from_micrometres(250_000),
                 Length::from_micrometres(9_000),
@@ -1960,11 +1964,11 @@ mod tests {
         );
 
         session.undo().expect("undo centring");
-        assert_eq!(session.project().pivot(drawer), Some(pivot));
+        assert_eq!(session.project().pivot_local(drawer), Some(pivot));
         session.undo().expect("undo set");
         // The drawer was built with children but a container is born at its own origin; the centre
         // is what `node.pivot.center` writes, not a default.
-        assert_eq!(session.project().pivot(drawer), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(drawer), Some(PivotLocal::ZERO));
         assert!(!session.can_undo(), "each pivot edit is exactly one undo entry");
 
         let registry = CommandRegistry::new();
@@ -1993,7 +1997,7 @@ mod tests {
             .dispatch("node.pivot.center", &json_params(&NodePivotCenter { node: panel }))
             .expect_err("a panel pivot is derived");
         assert!(matches!(error, CommandError::Model(ProjectError::PanelPivotIsDerived { panel: id }) if id == panel));
-        assert_eq!(session.project().pivot(panel), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(panel), Some(PivotLocal::ZERO));
         assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
     }
 }

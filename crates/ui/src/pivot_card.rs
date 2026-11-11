@@ -12,7 +12,7 @@
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PIVOT_CENTER_ID, NODE_PIVOT_SET_ID};
 use furnicraft_engine::{NodePivotCenter, NodePivotSet, Session};
-use furnicraft_model::{Id, Pivot, Project};
+use furnicraft_model::{Id, PivotLocal, Project};
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
@@ -34,14 +34,14 @@ pub(crate) struct PivotCard {
 #[derive(Clone, Debug, PartialEq)]
 struct Draft {
     node: Id,
-    base: Pivot,
+    base: PivotLocal,
     x: String,
     y: String,
     z: String,
 }
 
 impl Draft {
-    fn new(node: Id, base: Pivot) -> Self {
+    fn new(node: Id, base: PivotLocal) -> Self {
         let [x, y, z] = base.components();
         Self { node, base, x: x.to_string(), y: y.to_string(), z: z.to_string() }
     }
@@ -52,7 +52,7 @@ impl PivotCard {
     ///
     /// The root defines the world frame and has no editable pivot, so it never reaches here.
     pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, node: Id) {
-        let Some(current) = session.project().pivot(node) else {
+        let Some(current) = session.project().pivot_local(node) else {
             self.draft = None;
             self.error = None;
             return;
@@ -68,7 +68,7 @@ impl PivotCard {
                 ui.label(Message::ZeroMillimetres.text(lang));
                 ui.label(Message::PivotBaseCorner.text(lang));
             });
-            match coords::world_position(session.project(), node) {
+            match coords::world_origin(session.project(), node) {
                 Some(world) => ui.label(Message::PivotWorld.with(lang, [world])),
                 None => ui.label(Message::PivotWorldOutOfRange.text(lang)),
             };
@@ -153,8 +153,8 @@ struct Fields {
 
 /// Parses the three fields and moves the pivot, leaving the document untouched when nothing changed.
 fn apply_pivot(session: &mut Session, node: Id, fields: &Fields, lang: Lang) -> Result<(), String> {
-    let current = session.project().pivot(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
-    let pivot = Pivot::new(
+    let current = session.project().pivot_local(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
+    let pivot = PivotLocal::new(
         parse_length("X", &fields.x, lang)?,
         parse_length("Y", &fields.y, lang)?,
         parse_length("Z", &fields.z, lang)?,
@@ -168,9 +168,9 @@ fn apply_pivot(session: &mut Session, node: Id, fields: &Fields, lang: Lang) -> 
 
 /// Centres the pivot on the node's local bounds as one command.
 fn apply_center(session: &mut Session, node: Id, lang: Lang) -> Result<(), String> {
-    let current = session.project().pivot(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
+    let current = session.project().pivot_local(node).ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
     let center = session.project().bounds_center_local(node).unwrap_or_default();
-    let pivot = Pivot::from_local(center).unwrap_or_default();
+    let pivot = PivotLocal::from_local(center).unwrap_or_default();
     if pivot == current {
         return Ok(());
     }
@@ -195,7 +195,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_engine::Session;
-    use furnicraft_model::Pivot;
+    use furnicraft_model::PivotLocal;
     use furnicraft_testkit::{sample_catalog, sample_project};
     use furnicraft_text::Lang;
 
@@ -212,8 +212,8 @@ mod tests {
 
         apply_pivot(&mut session, drawer, &fields("1.5", "-2.5", "3"), Lang::En).expect("apply pivot");
         assert_eq!(
-            session.project().pivot(drawer),
-            Some(Pivot::new(
+            session.project().pivot_local(drawer),
+            Some(PivotLocal::new(
                 Length::from_micrometres(1_500),
                 Length::from_micrometres(-2_500),
                 Length::from_micrometres(3_000),
@@ -237,13 +237,16 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let drawer = Id::new(3).expect("drawer id");
         session
-            .dispatch(NODE_PIVOT_SET_ID, &json(&NodePivotSet { node: drawer, pivot: Pivot::ZERO }).expect("params"))
+            .dispatch(
+                NODE_PIVOT_SET_ID,
+                &json(&NodePivotSet { node: drawer, pivot: PivotLocal::ZERO }).expect("params"),
+            )
             .expect("clear pivot");
 
         apply_center(&mut session, drawer, Lang::En).expect("center pivot");
         assert_eq!(
-            session.project().pivot(drawer),
-            Some(Pivot::new(
+            session.project().pivot_local(drawer),
+            Some(PivotLocal::new(
                 Length::from_micrometres(350_000),
                 Length::from_micrometres(250_000),
                 Length::from_micrometres(9_000),
@@ -251,7 +254,7 @@ mod tests {
         );
         assert_eq!(session.project().revision().get(), 2);
         session.undo().expect("undo centring");
-        assert_eq!(session.project().pivot(drawer), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(drawer), Some(PivotLocal::ZERO));
     }
 
     #[test]
@@ -292,7 +295,7 @@ mod tests {
     #[test]
     fn the_draft_prefills_from_the_document() {
         let drawer = Id::new(3).expect("drawer id");
-        let pivot = Pivot::new(
+        let pivot = PivotLocal::new(
             Length::from_micrometres(350_000),
             Length::from_micrometres(250_000),
             Length::from_micrometres(9_000),

@@ -67,9 +67,9 @@ fn contour_world_points(contour: &Contour, placement: Placement) -> Vec<DVec3> {
 }
 
 /// The stored frame of a node: its placement (translation and rotation) and its pivot.
-fn frame_of(project: &Project, id: Id) -> (Placement, Pivot) {
+fn frame_of(project: &Project, id: Id) -> (Placement, PivotLocal) {
     let placement = project.node(id).expect("a node").placement();
-    let pivot = project.pivot(id).expect("a pivot");
+    let pivot = project.pivot_local(id).expect("a pivot");
     (placement, pivot)
 }
 
@@ -80,7 +80,7 @@ fn sample_resized_nominal() -> PanelNominalSize {
 
 /// The frame every creation leaves: the pivot on the local zero, named by the translation.
 fn assert_created_frame(project: &Project, id: Id, expected_translation: DVec3) {
-    assert_eq!(project.pivot_local(id), Some(DVec3::ZERO), "a creation leaves the pivot at the local zero");
+    assert_eq!(project.pivot_local_mm(id), Some(DVec3::ZERO), "a creation leaves the pivot at the local zero");
     let world = project.world_placement(id).expect("a world placement");
     assert_close(world.translation(), expected_translation, "the translation is the anchor's parent-frame position");
     assert_close(
@@ -134,23 +134,22 @@ fn drawn_figures() -> Vec<(&'static str, Path)> {
 }
 
 #[test]
-fn every_drawn_figure_anchors_its_creation_pivot_at_the_local_zero() {
+fn every_drawn_figure_anchors_its_creation_origin_at_the_local_zero() {
     let frame = parent_frame();
     for (name, path) in drawn_figures() {
         let mut project = sample_project();
         let root = project.root().id();
-        let anchor = path.anchor(FrameAnchor::CreationPivot).expect("a creation pivot");
+        let anchor = path.anchor(FrameAnchor::CreationOrigin).expect("a creation pivot");
         let expected_translation = frame.transform_point(point_of([anchor[0], anchor[1]]));
         let before = path_world_points(&path, frame);
 
-        let rebased = rebase_at_anchor(path, frame, FrameAnchor::CreationPivot).expect("rebase a figure");
+        let rebased = rebase_origin_at(path, frame, FrameAnchor::CreationOrigin).expect("rebase a figure");
         let stored = rebased.content.clone();
-        let id = project
-            .add_object_with_pivot(root, name, rebased.placement, Geometry::Path(rebased.content), rebased.pivot)
-            .expect("add the figure");
+        let id =
+            project.add_object(root, name, rebased.placement, Geometry::Path(rebased.content)).expect("add the figure");
 
         assert_eq!(
-            stored.anchor(FrameAnchor::CreationPivot),
+            stored.anchor(FrameAnchor::CreationOrigin),
             Ok([Length::ZERO; 3]),
             "{name}: the creation anchor is the local zero"
         );
@@ -164,22 +163,20 @@ fn every_drawn_figure_anchors_its_creation_pivot_at_the_local_zero() {
 }
 
 #[test]
-fn a_contour_and_the_body_it_grows_anchor_at_their_creation_pivot() {
+fn a_contour_and_the_body_it_grows_anchor_at_their_creation_origin() {
     let frame = parent_frame();
     let ring = ring(300, 200, 140, 90);
-    let anchor = ring.anchor(FrameAnchor::CreationPivot).expect("the ring's centre");
+    let anchor = ring.anchor(FrameAnchor::CreationOrigin).expect("the ring's centre");
     let expected_translation = frame.transform_point(point_of([anchor[0], anchor[1]]));
     let before = contour_world_points(&ring, frame);
 
-    let rebased = rebase_at_anchor(ring, frame, FrameAnchor::CreationPivot).expect("rebase a ring");
-    assert_eq!(rebased.content.anchor(FrameAnchor::CreationPivot), Ok([Length::ZERO; 3]));
+    let rebased = rebase_origin_at(ring, frame, FrameAnchor::CreationOrigin).expect("rebase a ring");
+    assert_eq!(rebased.content.anchor(FrameAnchor::CreationOrigin), Ok([Length::ZERO; 3]));
     let body = Constructive::extrude(rebased.content.into(), sample_thickness()).expect("extrude the ring");
 
     let mut project = sample_project();
     let root = project.root().id();
-    let id = project
-        .add_object_with_pivot(root, "Body", rebased.placement, Geometry::Constructive(body), rebased.pivot)
-        .expect("add the body");
+    let id = project.add_object(root, "Body", rebased.placement, Geometry::Constructive(body)).expect("add the body");
     assert_created_frame(&project, id, expected_translation);
 
     let stored = project.object(id).expect("the body").geometry().as_constructive().expect("a constructive payload");
@@ -201,7 +198,7 @@ fn a_primitive_is_born_centred_on_its_own_origin() {
     let id =
         project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Primitive(primitive)).expect("add the cube");
 
-    assert_eq!(project.pivot(id), Some(Pivot::ZERO), "a primitive keeps the zero pivot");
+    assert_eq!(project.pivot_local(id), Some(PivotLocal::ZERO), "a primitive keeps the zero pivot");
     assert_eq!(project.world_placement(id), Some(Placement::IDENTITY), "the primitive lands at its parent origin");
     assert_eq!(project.pivot_world(id), Some(DVec3::ZERO));
 }
@@ -214,7 +211,7 @@ fn a_panel_is_born_with_its_base_corner_at_the_local_zero() {
 
     let rectangle =
         project.add_panel(root, "Side", sample_nominal(), None, sample_thickness(), frame).expect("a rectangle panel");
-    assert_eq!(project.pivot(rectangle), Some(Pivot::ZERO), "a rectangle panel is born at its base corner");
+    assert_eq!(project.pivot_local(rectangle), Some(PivotLocal::ZERO), "a rectangle panel is born at its base corner");
     assert_eq!(project.panel(rectangle).expect("panel").placement(), frame, "the anchor is the given placement");
     assert_eq!(project.panel(rectangle).expect("panel").nominal_size(), sample_nominal());
 
@@ -223,7 +220,7 @@ fn a_panel_is_born_with_its_base_corner_at_the_local_zero() {
     let expected_translation = frame.transform_point(micrometre_point(corner));
     let panel =
         project.add_panel_contour(root, "Top", &ring, None, sample_thickness(), frame).expect("a contour panel");
-    assert_eq!(project.pivot(panel), Some(Pivot::ZERO), "a contour panel is born at its base corner");
+    assert_eq!(project.pivot_local(panel), Some(PivotLocal::ZERO), "a contour panel is born at its base corner");
     let stored = project.panel(panel).expect("panel").outline_contour().expect("a contour outline");
     assert_eq!(stored.bounds_micrometres().0, [0, 0], "the base corner is the local zero");
     assert_created_frame(&project, panel, expected_translation);
@@ -255,7 +252,11 @@ fn a_group_puts_the_children_centre_in_its_translation_and_keeps_their_world_pla
 
     let group = project.group_nodes(&[shelf, drawer], "Group").expect("group the selection");
 
-    assert_eq!(project.pivot(group), Some(Pivot::ZERO), "a group is anchored by its translation, not its pivot");
+    assert_eq!(
+        project.pivot_local(group),
+        Some(PivotLocal::ZERO),
+        "a group is anchored by its translation, not its pivot"
+    );
     assert_created_frame(&project, group, expected_world);
     for (id, before) in [(shelf, before[0]), (drawer, before[1]), (front, before[2])] {
         assert_close(
@@ -276,7 +277,7 @@ fn a_duplicate_copies_the_local_frame_exactly() {
     let mut project = sample_project();
     let root = project.root().id();
     let object = project.add_object(root, "Block", parent_frame(), Geometry::Mesh(box_mesh())).expect("add an object");
-    let pivot = Pivot::new(millimetres(5), millimetres(-7), millimetres(3));
+    let pivot = PivotLocal::new(millimetres(5), millimetres(-7), millimetres(3));
     project.set_node_pivot(object, pivot).expect("author the pivot");
 
     let copy = project.duplicate_node(object).expect("duplicate the object");
@@ -286,23 +287,22 @@ fn a_duplicate_copies_the_local_frame_exactly() {
         project.object(object).expect("original").placement(),
         "the copy keeps the local translation and rotation"
     );
-    assert_eq!(project.pivot(copy), Some(pivot), "the copy keeps the authored pivot");
+    assert_eq!(project.pivot_local(copy), Some(pivot), "the copy keeps the authored pivot");
     assert_eq!(project.pivot_world(copy), project.pivot_world(object), "the copy grabs where the original does");
 }
 
 #[test]
 fn a_geometry_edit_leaves_an_objects_frame_alone() {
     let frame = parent_frame();
-    let pivot = Pivot::new(millimetres(-3), millimetres(4), millimetres(9));
+    let pivot = PivotLocal::new(millimetres(-3), millimetres(4), millimetres(9));
     let mut project = sample_project();
     let root = project.root().id();
 
     let path = Path::rectangle([millimetres(600), millimetres(400)], [millimetres(700), millimetres(500)])
         .expect("a rectangle");
-    let rebased = rebase_at_anchor(path, frame, FrameAnchor::CreationPivot).expect("rebase the drawing");
-    let path_id = project
-        .add_object_with_pivot(root, "Drawn", rebased.placement, Geometry::Path(rebased.content), rebased.pivot)
-        .expect("add the drawing");
+    let rebased = rebase_origin_at(path, frame, FrameAnchor::CreationOrigin).expect("rebase the drawing");
+    let path_id =
+        project.add_object(root, "Drawn", rebased.placement, Geometry::Path(rebased.content)).expect("add the drawing");
     project.set_node_pivot(path_id, pivot).expect("author the pivot");
     let before = frame_of(&project, path_id);
     let edited = Path::rectangle([millimetres(590), millimetres(390)], [millimetres(720), millimetres(510)])
@@ -311,11 +311,10 @@ fn a_geometry_edit_leaves_an_objects_frame_alone() {
     assert_eq!(frame_of(&project, path_id), before, "a path edit keeps the frame");
 
     let ring = ring(300, 200, 140, 90);
-    let rebased = rebase_at_anchor(ring, frame, FrameAnchor::CreationPivot).expect("rebase the ring");
+    let rebased = rebase_origin_at(ring, frame, FrameAnchor::CreationOrigin).expect("rebase the ring");
     let body = Constructive::extrude(rebased.content.into(), sample_thickness()).expect("extrude the ring");
-    let body_id = project
-        .add_object_with_pivot(root, "Body", rebased.placement, Geometry::Constructive(body), rebased.pivot)
-        .expect("add the body");
+    let body_id =
+        project.add_object(root, "Body", rebased.placement, Geometry::Constructive(body)).expect("add the body");
     project.set_node_pivot(body_id, pivot).expect("author the pivot");
     let before = frame_of(&project, body_id);
     let edited = Path::rectangle([millimetres(250), millimetres(150)], [millimetres(480), millimetres(330)])
@@ -357,7 +356,7 @@ fn a_panel_outline_edit_reanchors_the_frame_and_keeps_the_world_shape() {
     project.set_panel_outline(id, edited.clone()).expect("edit the outline");
 
     let after = project.panel(id).expect("panel").placement();
-    assert_eq!(project.pivot(id), Some(Pivot::ZERO), "the derived pivot stays at the base corner");
+    assert_eq!(project.pivot_local(id), Some(PivotLocal::ZERO), "the derived pivot stays at the base corner");
     assert_eq!(after.rotation(), before.rotation(), "an outline edit keeps the rotation");
     assert_close(after.translation(), before.transform_point(shifted_min), "the translation follows the new corner");
     let stored = project.panel(id).expect("panel").outline_contour().expect("a contour outline");
@@ -372,7 +371,7 @@ fn a_panel_outline_edit_reanchors_the_frame_and_keeps_the_world_shape() {
 #[test]
 fn a_move_changes_only_the_translation() {
     let frame = parent_frame();
-    let pivot = Pivot::new(millimetres(8), millimetres(-2), millimetres(4));
+    let pivot = PivotLocal::new(millimetres(8), millimetres(-2), millimetres(4));
     let mut project = sample_project();
     let root = project.root().id();
     let id = project.add_object(root, "Block", frame, Geometry::Mesh(box_mesh())).expect("add an object");
@@ -384,7 +383,7 @@ fn a_move_changes_only_the_translation() {
     project.set_node_placement(id, moved).expect("move the object");
 
     assert_eq!(project.object(id).expect("object").placement(), moved);
-    assert_eq!(project.pivot(id), Some(pivot), "a move keeps the authored pivot");
+    assert_eq!(project.pivot_local(id), Some(pivot), "a move keeps the authored pivot");
     let expected_pivot = before_pivot + delta;
     assert_close(project.pivot_world(id).expect("world pivot"), expected_pivot, "the pivot moves with the node");
 }
@@ -392,7 +391,7 @@ fn a_move_changes_only_the_translation() {
 #[test]
 fn a_turn_about_the_pivot_keeps_the_pivot_world_fixed() {
     let frame = parent_frame();
-    let pivot = Pivot::new(millimetres(8), millimetres(-2), millimetres(4));
+    let pivot = PivotLocal::new(millimetres(8), millimetres(-2), millimetres(4));
     let mut project = sample_project();
     let root = project.root().id();
     let id = project.add_object(root, "Block", frame, Geometry::Mesh(box_mesh())).expect("add an object");
@@ -405,7 +404,7 @@ fn a_turn_about_the_pivot_keeps_the_pivot_world_fixed() {
     project.set_node_placement(id, turned).expect("turn the object");
 
     assert_close(project.pivot_world(id).expect("world pivot"), centre, "a turn about the pivot keeps it fixed");
-    assert_eq!(project.pivot(id), Some(pivot), "a turn keeps the local pivot");
+    assert_eq!(project.pivot_local(id), Some(pivot), "a turn keeps the local pivot");
     assert_eq!(project.object(id).expect("object").placement().rotation(), turned.rotation());
 
     let panel =
@@ -437,7 +436,7 @@ fn world_zero_clears_the_parent_translation_and_keeps_the_frame() {
     let after = project.panel(front).expect("front");
     assert_eq!(after.placement(), zeroed);
     assert_eq!(after.placement().rotation(), before.placement().rotation(), "world-zero keeps the rotation");
-    assert_eq!(after.pivot(), before.pivot(), "world-zero keeps the local pivot");
+    assert_eq!(after.pivot_local(), before.pivot_local(), "world-zero keeps the local pivot");
     assert_eq!(after.outline(), before.outline(), "world-zero keeps the local vertices");
     assert_eq!(
         project.world_placement(front).expect("world placement").rotation(),
@@ -453,12 +452,10 @@ fn undo_and_redo_restore_the_frame_bit_for_bit() {
     let before = project.clone();
 
     let ring = ring(300, 200, 140, 90);
-    let rebased = rebase_at_anchor(ring, parent_frame(), FrameAnchor::CreationPivot).expect("rebase the ring");
+    let rebased = rebase_origin_at(ring, parent_frame(), FrameAnchor::CreationOrigin).expect("rebase the ring");
     let body = Constructive::extrude(rebased.content.into(), sample_thickness()).expect("extrude the ring");
-    let id = project
-        .add_object_with_pivot(root, "Body", rebased.placement, Geometry::Constructive(body), rebased.pivot)
-        .expect("add the body");
-    let pivot = Pivot::new(millimetres(1), millimetres(2), millimetres(3));
+    let id = project.add_object(root, "Body", rebased.placement, Geometry::Constructive(body)).expect("add the body");
+    let pivot = PivotLocal::new(millimetres(1), millimetres(2), millimetres(3));
     project.set_node_pivot(id, pivot).expect("author the pivot");
     let edited = frame_of(&project, id);
     let after = project.clone();
@@ -478,11 +475,10 @@ fn a_round_trip_at_the_current_schema_keeps_every_frame_invariant() {
     let root = project.root().id();
     let frame = parent_frame();
     let path = Path::circle([millimetres(650), millimetres(450)], millimetres(50)).expect("a circle");
-    let rebased = rebase_at_anchor(path, frame, FrameAnchor::CreationPivot).expect("rebase the circle");
-    let drawing = project
-        .add_object_with_pivot(root, "Circle", rebased.placement, Geometry::Path(rebased.content), rebased.pivot)
-        .expect("add the circle");
-    let pivot = Pivot::new(millimetres(4), millimetres(5), millimetres(6));
+    let rebased = rebase_origin_at(path, frame, FrameAnchor::CreationOrigin).expect("rebase the circle");
+    let drawing =
+        project.add_object(root, "Circle", rebased.placement, Geometry::Path(rebased.content)).expect("add the circle");
+    let pivot = PivotLocal::new(millimetres(4), millimetres(5), millimetres(6));
     project.set_node_pivot(drawing, pivot).expect("author the pivot");
     let panel = project
         .add_panel_contour(root, "Top", &ring(300, 200, 140, 90), None, sample_thickness(), frame)
@@ -495,7 +491,7 @@ fn a_round_trip_at_the_current_schema_keeps_every_frame_invariant() {
 
     assert_eq!(decoded, project, "the round trip keeps the whole document");
     for id in ids {
-        assert_eq!(decoded.pivot(id), project.pivot(id), "the stored pivot survives the round trip");
+        assert_eq!(decoded.pivot_local(id), project.pivot_local(id), "the stored pivot survives the round trip");
         assert_eq!(decoded.node(id).expect("node").placement(), project.node(id).expect("node").placement());
         assert_eq!(decoded.world_placement(id), project.world_placement(id));
         assert_eq!(decoded.pivot_world(id), project.pivot_world(id));

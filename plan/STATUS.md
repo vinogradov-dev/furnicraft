@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X22 state=idle base=eba2f51 updated=2026-11-11
+STATE: milestone=M7 phase=A task=X34 state=doing base=eba2f51 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-X22 is next: a 1 mm corner drag on a shallow arc still turns it into a near-full circle, because the
-rebuild in `Arc::with_radius_through` picks its direction from the side of the old midpoint against
-the new chord instead of from the sweep the arc had.
+X34 is next: origin and pivot are separate concepts, and the code names, commands, card and schema
+must say so
 
 ## Index
 

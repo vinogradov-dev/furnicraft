@@ -6,7 +6,7 @@
 
 use furnicraft_geom::DVec3;
 
-use crate::{Container, Geometry, Id, Node, Panel, Pivot, Placement, Project, ProjectError};
+use crate::{Container, Geometry, Id, Node, Panel, PivotLocal, Placement, Project, ProjectError};
 
 /// The node with `id` at or below `children`, with its depth.
 ///
@@ -180,13 +180,13 @@ pub(crate) fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> 
 /// bounds, or the origin.
 ///
 /// Only the schema-5 migration writes this value now; a container created today is born at zero
-/// and a group puts its content at zero through [`crate::rebase_at_anchor`]. No later pass
+/// and a group puts its content at zero through [`crate::rebase_origin_at`]. No later pass
 /// re-normalizes a stored pivot.
-pub(crate) fn default_container_pivot(children: &[Node]) -> Pivot {
+pub(crate) fn default_container_pivot(children: &[Node]) -> PivotLocal {
     let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
-        return Pivot::ZERO;
+        return PivotLocal::ZERO;
     };
-    Pivot::from_local((min + max) * 0.5).unwrap_or(Pivot::ZERO)
+    PivotLocal::from_local((min + max) * 0.5).unwrap_or(PivotLocal::ZERO)
 }
 
 /// The local bounding box of an object's geometry, in millimetres.
@@ -338,9 +338,9 @@ mod tests {
 
         // A panel starts at its local zero, a container is born at its own origin — a group puts
         // the centre of its children into the translation instead — and the root is always zero.
-        assert_eq!(project.pivot(shelf), Some(Pivot::ZERO));
-        assert_eq!(project.pivot(drawer), Some(Pivot::ZERO));
-        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
+        assert_eq!(project.pivot_local(shelf), Some(PivotLocal::ZERO));
+        assert_eq!(project.pivot_local(drawer), Some(PivotLocal::ZERO));
+        assert_eq!(project.pivot_local(root), Some(PivotLocal::ZERO));
 
         project
             .set_node_placement(
@@ -356,18 +356,18 @@ mod tests {
             .expect("place drawer");
 
         // Placing a node changes only its world pivot, never the stored local one.
-        assert_eq!(project.pivot_local(shelf), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(shelf), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(shelf), Some(DVec3::new(100.0, 200.0, 300.0)));
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(drawer), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(drawer), Some(DVec3::new(10.0, 20.0, 30.0)));
-        assert_eq!(project.pivot_local(root), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(root), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(root), Some(DVec3::ZERO));
 
         let empty_placement = Placement::new(DVec3::new(-5.0, 7.0, 9.0), DQuat::IDENTITY).expect("empty placement");
         let empty = project.add_component(root, "Empty", empty_placement).expect("add empty assembly");
-        assert_eq!(project.pivot_local(empty), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(empty), Some(DVec3::ZERO));
         assert_eq!(project.pivot_world(empty), Some(DVec3::new(-5.0, 7.0, 9.0)));
-        assert_eq!(project.pivot_local(Id::new(999).expect("id")), None);
+        assert_eq!(project.pivot_local_mm(Id::new(999).expect("id")), None);
         assert_eq!(project.pivot_world(Id::new(999).expect("id")), None);
     }
 
@@ -382,7 +382,7 @@ mod tests {
                 Placement::new(DVec3::new(10.0, 20.0, 30.0), DQuat::IDENTITY).expect("drawer placement"),
             )
             .expect("place drawer");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
+        assert_eq!(project.pivot_local_mm(drawer), Some(DVec3::new(350.0, 250.0, 9.0)));
 
         let turn = DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2);
         project
@@ -392,7 +392,7 @@ mod tests {
             )
             .expect("turn drawer");
 
-        let local = project.pivot_local(drawer).expect("local pivot");
+        let local = project.pivot_local_mm(drawer).expect("local pivot");
         assert!(
             (local - DVec3::new(350.0, 250.0, 9.0)).length() < 1.0e-12,
             "the local pivot must not jump, was {local:?}"
@@ -409,7 +409,7 @@ mod tests {
         let front = Id::new(4).expect("front id");
 
         // A panel's pivot is derived from its base corner and cannot be authored.
-        assert_eq!(project.pivot_local(front), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(front), Some(DVec3::ZERO));
         assert!(matches!(project.center_node_pivot(front), Err(ProjectError::PanelPivotIsDerived { .. })));
 
         // Centring a container uses the union of its panels, including their child placements.
@@ -420,10 +420,10 @@ mod tests {
             )
             .expect("place front");
         project.center_node_pivot(drawer).expect("centre drawer");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::new(351.0, 252.0, 12.0)));
+        assert_eq!(project.pivot_local_mm(drawer), Some(DVec3::new(351.0, 252.0, 12.0)));
 
         // Moving or resizing geometry does not move the stored pivot.
-        let pivot = project.pivot(drawer);
+        let pivot = project.pivot_local(drawer);
         project
             .set_node_placement(
                 drawer,
@@ -433,12 +433,12 @@ mod tests {
         project
             .set_panel_nominal_size(front, PanelNominalSize::new(millimetres(900), millimetres(600)).expect("size"))
             .expect("resize front");
-        assert_eq!(project.pivot(drawer), pivot);
+        assert_eq!(project.pivot_local(drawer), pivot);
 
         // An explicit zero is a real value, and the root has no editable pivot.
-        project.set_node_pivot(drawer, Pivot::ZERO).expect("clear the pivot");
-        assert_eq!(project.pivot_local(drawer), Some(DVec3::ZERO));
-        assert!(matches!(project.set_node_pivot(root, Pivot::ZERO), Err(ProjectError::RootImmutable { .. })));
+        project.set_node_pivot(drawer, PivotLocal::ZERO).expect("clear the pivot");
+        assert_eq!(project.pivot_local_mm(drawer), Some(DVec3::ZERO));
+        assert!(matches!(project.set_node_pivot(root, PivotLocal::ZERO), Err(ProjectError::RootImmutable { .. })));
         assert!(matches!(project.center_node_pivot(root), Err(ProjectError::RootImmutable { .. })));
     }
 }

@@ -12,7 +12,7 @@
 use furnicraft_mesh::{evaluate_constructive, evaluate_primitive};
 use furnicraft_model::{
     Constructive, Contour, FrameAnchor, Geometry, Id, Path, Placement, Primitive, Project, ProjectError,
-    rebase_at_anchor,
+    rebase_origin_at,
 };
 use furnicraft_param::validate_extrusion_contour;
 use furnicraft_units::Length;
@@ -187,17 +187,11 @@ fn object_extrude_create_run(
         });
     }
     evaluate_contour(OBJECT_EXTRUDE_CREATE_ID, &params.contour)?;
-    let rebased = rebase_at_anchor(params.contour, params.placement, FrameAnchor::CreationPivot).map_err(|error| {
+    let rebased = rebase_origin_at(params.contour, params.placement, FrameAnchor::CreationOrigin).map_err(|error| {
         CommandError::InvalidParams { command: OBJECT_EXTRUDE_CREATE_ID, message: error.to_string() }
     })?;
     let constructive = Constructive::extrude(rebased.content.into(), params.height).map_err(ProjectError::from)?;
-    let id = project.add_object_with_pivot(
-        params.parent,
-        params.name,
-        rebased.placement,
-        Geometry::Constructive(constructive),
-        rebased.pivot,
-    )?;
+    let id = project.add_object(params.parent, params.name, rebased.placement, Geometry::Constructive(constructive))?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -423,15 +417,9 @@ fn object_path_create_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<ObjectPathCreate>(params, OBJECT_PATH_CREATE_ID)?;
     validate_name(&params.name, OBJECT_PATH_CREATE_ID)?;
-    let rebased = rebase_at_anchor(params.path, params.placement, FrameAnchor::CreationPivot)
+    let rebased = rebase_origin_at(params.path, params.placement, FrameAnchor::CreationOrigin)
         .map_err(|error| CommandError::InvalidParams { command: OBJECT_PATH_CREATE_ID, message: error.to_string() })?;
-    let id = project.add_object_with_pivot(
-        params.parent,
-        params.name,
-        rebased.placement,
-        Geometry::Path(rebased.content),
-        rebased.pivot,
-    )?;
+    let id = project.add_object(params.parent, params.name, rebased.placement, Geometry::Path(rebased.content))?;
     Ok(CommandOutcome::created(id))
 }
 
@@ -536,7 +524,7 @@ fn object_collapse_run(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, Pivot, Revision};
+    use furnicraft_model::{ContourSegment, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, PivotLocal, Revision};
     use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_project};
     use furnicraft_units::Degrees;
 
@@ -1043,7 +1031,8 @@ mod tests {
             .created_id()
             .expect("id");
         let stored = session.project().object_path(id).expect("the drawn path").clone();
-        let frame = session.project().object(id).map(|object| (object.placement(), object.pivot())).expect("object");
+        let frame =
+            session.project().object(id).map(|object| (object.placement(), object.pivot_local())).expect("object");
         let children = session.project().root().children().len();
 
         let value =
@@ -1059,7 +1048,7 @@ mod tests {
         let body = object.geometry().as_constructive().expect("the drawing is the body now");
         assert_eq!(body.path(), &stored, "the body owns the path that was drawn");
         assert_eq!(body.height(), Some(millimetres(18)));
-        assert_eq!((object.placement(), object.pivot()), frame, "extruding in place leaves the frame alone");
+        assert_eq!((object.placement(), object.pivot_local()), frame, "extruding in place leaves the frame alone");
         assert_eq!(session.project().root().children().len(), children, "no sibling body appears");
         assert!(session.project().object_path(id).is_err(), "the drawing is gone");
         assert!(!spec.enabled(&session, &value), "a body is not extruded a second time");
@@ -1170,7 +1159,7 @@ mod tests {
         let object = session.project().object(id).expect("object");
         assert_eq!(object.placement().translation().x, 650.0, "the ring's centre is the translation");
         assert_eq!(object.placement().translation().y, 450.0);
-        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO), "the creation pivot is the local zero");
+        assert_eq!(session.project().pivot_local(id), Some(PivotLocal::ZERO), "the creation pivot is the local zero");
         assert_eq!(
             session.project().object_path(id).expect("path").bounds_micrometres(),
             ([-50_000, -50_000], [50_000, 50_000]),
@@ -1188,7 +1177,7 @@ mod tests {
         let object = session.project().object(id).expect("object");
         assert_eq!(object.placement().translation().x, 600.0, "the first point is the translation");
         assert_eq!(object.placement().translation().y, 400.0);
-        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(id), Some(PivotLocal::ZERO));
         assert_eq!(
             session.project().object_path(id).expect("path").bounds_micrometres().0,
             [0, 0],
@@ -1210,7 +1199,7 @@ mod tests {
         let object = session.project().object(id).expect("object");
         assert_eq!(object.placement().translation().x, 50.0, "the ring's centre is the translation");
         assert_eq!(object.placement().translation().y, 25.0);
-        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO), "the creation pivot is the local zero");
+        assert_eq!(session.project().pivot_local(id), Some(PivotLocal::ZERO), "the creation pivot is the local zero");
         let body = object.geometry().as_constructive().expect("a body");
         assert_eq!(
             body.contour().expect("ring").bounds_micrometres(),
@@ -1271,7 +1260,7 @@ mod tests {
             world_placement.translation()
         );
         assert!(world_placement.rotation().dot(Placement::IDENTITY.rotation()).abs() >= 1.0 - 1e-12);
-        assert_eq!(session.project().pivot(id), Some(Pivot::ZERO));
+        assert_eq!(session.project().pivot_local(id), Some(PivotLocal::ZERO));
         assert_eq!(session.project().object_path(id).expect("path").bounds_micrometres().0, [0, 0]);
 
         session.undo().expect("one undo removes the drawing");
@@ -1280,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_geometry_replacement_leaves_the_creation_pivot_alone() {
+    fn a_geometry_replacement_leaves_the_creation_origin_alone() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let millimetres = |value| Length::from_millimetres(value).expect("length");
 
@@ -1291,7 +1280,7 @@ mod tests {
             .expect("create the drawing")
             .created_id()
             .expect("id");
-        let path_pivot = session.project().pivot(path_id).expect("pivot");
+        let path_pivot = session.project().pivot_local(path_id).expect("pivot");
         let replacement = Path::polyline(
             vec![[millimetres(1_000), millimetres(1_000)], [millimetres(2_000), millimetres(1_000)]],
             false,
@@ -1300,7 +1289,7 @@ mod tests {
         let value =
             serde_json::to_value(ObjectPathReplace { object: path_id, path: replacement }).expect("params serialize");
         session.dispatch(OBJECT_PATH_REPLACE_ID, &value).expect("replace the drawing");
-        assert_eq!(session.project().pivot(path_id), Some(path_pivot), "a path edit never moves the pivot");
+        assert_eq!(session.project().pivot_local(path_id), Some(path_pivot), "a path edit never moves the pivot");
 
         let body_id = session
             .dispatch(
@@ -1310,11 +1299,11 @@ mod tests {
             .expect("create extrusion")
             .created_id()
             .expect("id");
-        let body_pivot = session.project().pivot(body_id).expect("pivot");
+        let body_pivot = session.project().pivot_local(body_id).expect("pivot");
         let value = serde_json::to_value(ObjectContourReplace { object: body_id, path: rectangle(200, 100).into() })
             .expect("params serialize");
         session.dispatch(OBJECT_CONTOUR_REPLACE_ID, &value).expect("replace the contour");
-        assert_eq!(session.project().pivot(body_id), Some(body_pivot), "a contour edit never moves the pivot");
+        assert_eq!(session.project().pivot_local(body_id), Some(body_pivot), "a contour edit never moves the pivot");
     }
 
     #[test]

@@ -14,7 +14,7 @@ use furnicraft_engine::{PanelCreate, PrimitiveKind, Session};
 use furnicraft_model::Contour;
 use furnicraft_model::{
     Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, FaceSide, Geometry,
-    MachiningAnchor, MachiningParams, Mesh, Panel, Pivot, Placement,
+    MachiningAnchor, MachiningParams, Mesh, Panel, PivotLocal, Placement,
 };
 use furnicraft_model::{Path, PathCorner, Project};
 use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
@@ -432,7 +432,7 @@ fn a_drawing_in_a_turned_container_is_stored_in_the_parents_frame() {
         world_placement.translation()
     );
     assert!(world_placement.rotation().dot(Placement::IDENTITY.rotation()).abs() >= 1.0 - 1e-12);
-    assert_eq!(session.project().pivot(drawn.object), Some(Pivot::ZERO), "the local zero is the pivot");
+    assert_eq!(session.project().pivot_local(drawn.object), Some(PivotLocal::ZERO), "the local zero is the pivot");
     assert_eq!(session.project().object_path(drawn.object).expect("path").bounds_micrometres().0, [0, 0]);
 
     session.undo().expect("one undo removes the drawing");
@@ -813,7 +813,7 @@ fn a_clicked_primitive_lands_on_the_pointer_at_the_root_and_in_a_turned_containe
             "{what}: one click is one change"
         );
         assert_eq!(session.project().parent_of(cube), Some(armed.unwrap_or(root)), "{what}: the parent");
-        assert_eq!(session.project().pivot(cube), Some(Pivot::ZERO), "{what}: the local zero is the pivot");
+        assert_eq!(session.project().pivot_local(cube), Some(PivotLocal::ZERO), "{what}: the local zero is the pivot");
 
         let object = session.project().object(cube).expect("object");
         let stored = object.geometry().as_primitive().expect("the parameters are stored");

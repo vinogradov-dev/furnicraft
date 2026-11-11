@@ -53,7 +53,7 @@ pub use contour::{
 };
 pub use contour_edit::{ContourEditError, CornerMove, PathCorner};
 pub use contour_frames::{ArcFrame, CircleFrame, PolygonFrame, RectangleFrame};
-pub use frame::{Anchored, FrameAnchor, FrameError, Rebased, rebase_at_anchor};
+pub use frame::{Anchored, FrameAnchor, FrameError, Rebased, rebase_origin_at};
 pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
@@ -68,7 +68,7 @@ pub use panel::{
     PanelOutline, PanelRect, PanelRectError, RectCorner, RectEdge, RingBanding, SegmentSource,
 };
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
-pub use placement::{EulerAngles, Pivot, Placement, PlacementError};
+pub use placement::{EulerAngles, PivotLocal, Placement, PlacementError};
 pub use primitive::{
     Cube, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
     MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
