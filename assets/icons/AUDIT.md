@@ -137,8 +137,9 @@ Step 0 shipped as **U27** and step 1 as **U28**. Steps 2–4 are recorded below 
   (`tiny-skia::Pixmap::encode_png`). Plus a runtime audit test: every `Icon` the UI asks for exists
   and every drawn icon rasterises non-empty. Plus an alias table if a real duplicate appears; the
   README's "a shared drawing is two files" rule is the open question.
-- **Step 4 — coverage.** 37 zero-byte files: the whole `actions` theme (30) plus
-  `primitives/cone`, `bodies/revolve` and `bodies/sweep`. Tracked in `plan/debt.md` until drawn.
+- **Step 4 — coverage.** Done in U46: every declared theme is drawn except `primitives/cone`, which
+  waits for the cone primitive itself (`plan/debt.md`). U46 added `actions/command` for the palette,
+  so the declared set is 75 files and one zero-byte placeholder remains.
 
 ## 6. Deliberately not copied
 

@@ -535,7 +535,28 @@ mod tests {
         out
     }
 
-    fn draw(session: &Session, flags: &mut ViewFlags) -> Vec<String> {
+    /// The number of painted icon rasters: a drawn toggle is a texture mesh, not text.
+    fn drawn_images(shapes: &[egui::epaint::ClippedShape]) -> usize {
+        fn walk(shape: &egui::Shape, out: &mut usize) {
+            match shape {
+                egui::Shape::Mesh(_) => *out += 1,
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// One run's texts and its painted icon rasters.
+    fn draw(session: &Session, flags: &mut ViewFlags) -> (Vec<String>, usize) {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let mut selection = Selection::default();
@@ -543,8 +564,9 @@ mod tests {
             show(ui, session, &mut selection, flags);
         });
         let texts = drawn_text(&output.shapes);
+        let images = drawn_images(&output.shapes);
         output.drop_without_applying_deltas();
-        texts
+        (texts, images)
     }
 
     fn panel(id: u64) -> Panel {
@@ -574,7 +596,7 @@ mod tests {
         let session = Session::with_catalog(sample_project(), sample_catalog());
         let mut flags = ViewFlags::default();
         flags.set_hidden(Id::new(3).expect("drawer id"), true);
-        let texts = draw(&session, &mut flags);
+        let (texts, _) = draw(&session, &mut flags);
         assert!(texts.iter().any(|text| text.contains("Front")), "the hidden drawer still lists its front: {texts:?}");
         assert!(texts.iter().any(|text| text.contains("Shelf")), "a sibling branch is listed too: {texts:?}");
     }
@@ -584,15 +606,17 @@ mod tests {
         let session = Session::with_catalog(sample_project(), sample_catalog());
         let shelf = Id::new(2).expect("shelf id");
         let mut flags = ViewFlags::default();
-        let resting = draw(&session, &mut flags);
+        let (resting, resting_images) = draw(&session, &mut flags);
         assert!(
             !resting.iter().any(|text| text == "Hide" || text == "Lock"),
             "the eye and the padlock wait for the pointer: {resting:?}"
         );
+        assert_eq!(resting_images, 0, "a row at rest paints no toggle glyph");
 
         flags.set_hidden(shelf, true);
-        let hidden = draw(&session, &mut flags);
-        assert!(hidden.iter().any(|text| text == "Show"), "a hidden row keeps its eye: {hidden:?}");
+        let (hidden, hidden_images) = draw(&session, &mut flags);
+        assert!(!hidden.iter().any(|text| text == "Show"), "the eye is a glyph, not a caption: {hidden:?}");
+        assert_eq!(hidden_images, 1, "a hidden row keeps its eye");
         assert!(
             !hidden.iter().any(|text| text == "Lock"),
             "an unlocked row still hides its padlock until hovered: {hidden:?}"
@@ -600,8 +624,9 @@ mod tests {
 
         flags.set_locked(shelf, true);
         flags.set_hidden(shelf, false);
-        let locked = draw(&session, &mut flags);
-        assert!(locked.iter().any(|text| text == "Unlock"), "a locked row keeps its padlock: {locked:?}");
+        let (locked, locked_images) = draw(&session, &mut flags);
+        assert!(!locked.iter().any(|text| text == "Unlock"), "the padlock is a glyph, not a caption: {locked:?}");
+        assert_eq!(locked_images, 1, "a locked row keeps its padlock");
     }
 
     #[test]

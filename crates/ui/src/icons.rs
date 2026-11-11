@@ -205,6 +205,12 @@ icons!(View, "view", view {
     XRAY => "xray",
     TRANSLUCENT => "translucent",
     SLIDERS => "sliders",
+    AXON => "axon",
+    FRONT => "front",
+    LEFT => "left",
+    TOP => "top",
+    RIGHT => "right",
+    BOTTOM => "bottom",
 });
 
 icons!(Actions, "actions", actions {
@@ -228,6 +234,7 @@ icons!(Actions, "actions", actions {
     PRINT => "print",
     SETTINGS => "settings",
     SEARCH => "search",
+    COMMAND => "command",
     VISIBLE => "visible",
     HIDDEN => "hidden",
     LOCK => "lock",
@@ -790,7 +797,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 74);
+        assert_eq!(seen.len(), 81);
     }
 
     #[test]
@@ -875,6 +882,24 @@ mod tests {
                     .expect("a drawn icon rasterises small");
                     assert!(raster.pixels.iter().any(|pixel| pixel.a() > 0), "{name} is empty at {px} px");
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn every_chrome_icon_is_drawn() {
+        // U46: the header, the scene tree, the panel fold and the viewport cluster expect a glyph.
+        // A zero-byte file there is a text fallback on a surface that should not have one, so the
+        // three chrome themes are complete. `primitives/cone` stays a placeholder until the cone
+        // primitive lands (`plan/debt.md`).
+        for theme in [Theme::View, Theme::Actions, Theme::Window] {
+            for icon in theme.icons() {
+                assert!(
+                    icon.is_drawn(),
+                    "{}/{} is still a placeholder on a chrome surface",
+                    icon.theme().as_str(),
+                    icon.name()
+                );
             }
         }
     }

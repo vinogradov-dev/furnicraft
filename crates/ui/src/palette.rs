@@ -6,7 +6,7 @@
 //! the one path that snapshots the document for undo. History and the last-used order are session
 //! state owned by the shell, never document data.
 
-use egui::{Align, Context, Id, Key, Layout, Modifiers, RichText, TextEdit, Ui};
+use egui::{Align, Context, Id, Key, Layout, Modifiers, RichText, Sense, TextEdit, Ui, Vec2};
 use furnicraft_engine::node_cmds::{
     NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID, NODE_PIVOT_CENTER_ID,
     NODE_RENAME_ID, NODE_UNGROUP_ID,
@@ -22,7 +22,7 @@ use furnicraft_model::{CameraProjection, Id as NodeId, LightKind, Placement};
 use serde_json::Value;
 
 use crate::command::{dispatch, json};
-use crate::theme;
+use crate::{icons, theme};
 
 /// How many dispatched command ids the palette remembers.
 pub const MAX_HISTORY: usize = 8;
@@ -290,6 +290,8 @@ impl Palette {
         let response = egui::Modal::new(Id::unique("command_palette")).show(ctx, |ui| {
             ui.set_width(560.0);
             ui.horizontal(|ui| {
+                let (glyph, _) = ui.allocate_exact_size(Vec2::splat(icons::ICON_POINT_SIZE), Sense::hover());
+                icons::draw_icon(ui, icons::actions::COMMAND, glyph, icons::ICON_POINT_SIZE, theme::text(ui));
                 ui.heading("Commands");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new("Ctrl+K").small().color(theme::text_dim(ui)));

@@ -331,8 +331,7 @@ fn layout_popover(
                 ui.separator();
                 ui.label(egui::RichText::new("View preset").strong());
                 for preset in OpeningView::ALL {
-                    let on = view.preset == Some(preset);
-                    if ui.add(egui::Button::new(preset.label()).selected(on)).clicked() {
+                    if preset_row(ui, preset, view.preset == Some(preset)) {
                         action = Some(ClusterAction::SetPreset(preset));
                     }
                 }
@@ -348,6 +347,48 @@ fn layout_popover(
             });
         });
     action
+}
+
+/// The icon of a standard view: a screen plane with the direction the eye looks from.
+pub(crate) fn preset_icon(view: OpeningView) -> icons::Icon {
+    match view {
+        OpeningView::Axonometric => icons::view::AXON,
+        OpeningView::Front => icons::view::FRONT,
+        OpeningView::Left => icons::view::LEFT,
+        OpeningView::Top => icons::view::TOP,
+        OpeningView::Right => icons::view::RIGHT,
+        OpeningView::Bottom => icons::view::BOTTOM,
+    }
+}
+
+/// One row of the preset list: the view's glyph, its name and the selected face.
+///
+/// A popover row is not a text button: the preset list is the one place where a named view is a
+/// glyph the user learns, so the row draws the icon and keeps the name beside it as the label.
+fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, on);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(theme::RADIUS),
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let glyph =
+            egui::Rect::from_center_size(egui::pos2(rect.left() + 14.0, rect.center().y), egui::Vec2::splat(16.0));
+        icons::draw_icon(ui, preset_icon(view), glyph, 16.0, visuals.fg_stroke.color);
+        ui.painter().text(
+            egui::pos2(rect.left() + 28.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            view.label(),
+            egui::FontId::proportional(13.0),
+            visuals.fg_stroke.color,
+        );
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, view.label()));
+    }
+    response.clicked()
 }
 
 /// The display-settings popover above the cluster: the angle switch, the projection and three
@@ -415,5 +456,21 @@ pub(crate) fn projection_button(projection: Projection) -> (icons::Icon, &'stati
     match projection {
         Projection::Perspective { .. } => (icons::view::PERSPECTIVE, "Perspective view; switch to orthographic  (O)"),
         Projection::Orthographic { .. } => (icons::view::ORTHOGRAPHIC, "Orthographic view; switch to perspective  (O)"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_view_preset_has_its_own_drawn_glyph() {
+        let mut seen = std::collections::HashSet::new();
+        for view in OpeningView::ALL {
+            let icon = preset_icon(view);
+            assert!(icon.is_drawn(), "{view:?} still draws a placeholder");
+            assert!(seen.insert(icon.uri()), "{view:?} shares its glyph with another preset");
+        }
+        assert_eq!(seen.len(), OpeningView::ALL.len(), "the six presets own six glyphs");
     }
 }
