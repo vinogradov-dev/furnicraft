@@ -11,7 +11,7 @@ use eframe::egui;
 use furnicraft_ui::{icons, theme};
 
 /// A hairline across the panel, quieter than `ui.separator()` and on the spacing grid.
-pub(crate) fn rule(ui: &mut egui::Ui) {
+fn rule(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
     ui.painter().hline(rect.x_range(), rect.center().y, egui::Stroke::new(1.0, theme::line(ui)));
 }
@@ -98,7 +98,7 @@ pub(crate) fn side_panel(
 /// The header of an unfolded side panel: the title, a count chip and the fold chevron.
 ///
 /// Returns whether the chevron was clicked.
-pub(crate) fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
+fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
     let mut fold = false;
     egui::Frame::new().fill(theme::surface(ui)).inner_margin(egui::Margin::symmetric(theme::STEP as i8, 0)).show(
         ui,
@@ -119,7 +119,7 @@ pub(crate) fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
 }
 
 /// A small count chip beside a panel title.
-pub(crate) fn count_chip(ui: &mut egui::Ui, count: usize) {
+fn count_chip(ui: &mut egui::Ui, count: usize) {
     egui::Frame::new()
         .fill(theme::control(ui))
         .corner_radius(egui::CornerRadius::same(theme::RADIUS))
@@ -131,7 +131,7 @@ pub(crate) fn count_chip(ui: &mut egui::Ui, count: usize) {
 
 /// The folded panel: a 26 pt strip with the panel's icon and its title turned to read along the
 /// strip. A click anywhere on the strip restores the panel.
-pub(crate) fn collapsed_strip(ui: &mut egui::Ui, head: &PanelHead, restore: &mut bool) {
+fn collapsed_strip(ui: &mut egui::Ui, head: &PanelHead, restore: &mut bool) {
     let size = egui::vec2(ui.available_width(), ui.available_height());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if response.clicked() {
