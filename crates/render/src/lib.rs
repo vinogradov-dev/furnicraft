@@ -1,9 +1,21 @@
 //! The wgpu renderer.
 //!
-//! Owns an offscreen colour target, a depth buffer, pipelines and buffers. It knows nothing about
-//! `egui` and never creates a window: the shell registers the colour texture with `egui_wgpu` and
-//! displays it as an image. Scene geometry is uploaded when the document changes; camera changes
-//! only rewrite a small uniform buffer.
+//! Turns one scene frame into pixels: it owns the offscreen colour target, the depth and stencil
+//! attachment, the uploaded geometry and the passes that draw it. The pipeline state lives in
+//! `pipelines.rs` and the buffer wrappers in `gpu.rs`. It knows nothing about `egui` and never
+//! creates a window: the shell registers the colour texture with `egui_wgpu` and displays it as an
+//! image. Scene geometry is uploaded when the document changes; camera changes only rewrite a small
+//! uniform buffer.
+//!
+//! Layer: L5, above `scene` (which says what to draw) and below `ui` (which never links wgpu).
+//!
+//! Refuses: malformed geometry is a [`RenderError`] the shell can report, never a panic and never a
+//! silently missing object; a hostile target size is clamped, not trusted.
+//!
+//! Does not create geometry or measure anything: a vertex builder flattens what `scene` hands over
+//! and a pass draws it. It does not decide which frame to draw, and it holds no document data.
+//!
+//! Changes when: what a frame uploads, how a pass draws it, or the order the passes run in changes.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
@@ -14,6 +26,9 @@
     clippy::unreachable
 )]
 
+mod gpu;
+mod pipelines;
+
 use bytemuck::{Pod, Zeroable};
 use furnicraft_geom::{DMat4, DVec3, MeshData};
 use furnicraft_scene::{
@@ -23,15 +38,21 @@ use furnicraft_scene::{
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
+use self::gpu::{GpuLineList, GpuMesh, GpuTriangles, clamp_size, line_list, triangle_list};
+use self::pipelines::{
+    MAX_STENCIL_OWNERS, create_line_pipeline, create_shadow_pipeline, create_triangle_pipeline, edge_depth_state,
+    line_depth_state,
+};
+
 /// The offscreen colour format. `egui_wgpu::Renderer::register_native_texture` requires this
 /// exact format, and it is not an sRGB format, so the shader writes gamma-corrected values.
-const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(crate) const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// The depth and stencil attachment of the offscreen target.
 ///
 /// Depth chooses between the surfaces the frame draws. The stencil value records which drawable owns
 /// each pixel, which is what keeps the *hidden edges* style honest: a line shows through its own
 /// object and never through the object in front of it.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 
 /// Largest vertex count the renderer accepts for one uploaded primitive: a drawable's mesh or the
 /// whole frame's line list.
@@ -54,15 +75,6 @@ const MAX_CONTACT_SHADOWS: usize = 4096;
 
 /// The most views one frame may split into; the camera uniform holds one slot per view.
 pub const MAX_VIEWS: usize = 4;
-
-/// The stencil value an opaque face stamps so the *hidden edges* pass can recognise its own surface.
-///
-/// Zero is the cleared value and therefore means "no surface here". A drawable's slot counts from
-/// one, so a scene with more drawables than slots makes the nearest ones share a slot; that can
-/// only make one object's inside visible through another at a pixel both own, never a wrong object
-/// appearing out of nothing.
-const STENCIL_MASK: u32 = 0xff;
-const MAX_STENCIL_OWNERS: usize = STENCIL_MASK as usize;
 
 /// Gamma-space ink for a light viewport.
 const EDGE_COLOR_DARK: [f32; 4] = [0.06, 0.07, 0.08, 1.0];
@@ -157,20 +169,9 @@ pub enum RenderError {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 struct MeshVertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-    color: [f32; 4],
-}
-
-const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
-
-fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<MeshVertex>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &VERTEX_ATTRIBUTES,
-    }
+    pub(crate) position: [f32; 3],
+    pub(crate) normal: [f32; 3],
+    pub(crate) color: [f32; 4],
 }
 
 /// Uniform data shared by the mesh and grid pipelines.
@@ -191,30 +192,6 @@ struct CameraUniform {
     point_color: [[f32; 4]; MAX_POINT_LIGHTS],
     /// Gamma-space RGB and, in `a`, the contact-shadow strength.
     shadow: [f32; 4],
-}
-
-struct GpuMesh {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
-    /// World-space centre, used to order translucent objects back to front.
-    centre: DVec3,
-    /// The stencil value an opaque face of this drawable stamps, and the only value its hidden
-    /// edges accept, so a node's inside never shows through the node in front of it.
-    stencil_reference: u32,
-}
-
-/// One line-list vertex buffer: the grid and the frame's polylines each own one.
-struct GpuLineList {
-    vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
-}
-
-/// One indexed triangle buffer: the contact-shadow pass owns one.
-struct GpuTriangles {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
 }
 
 /// One drawable's contiguous run inside the flattened edge buffer.
@@ -780,250 +757,6 @@ impl ViewportRenderer {
     }
 }
 
-/// One opaque or translucent face pipeline at the scene's colour format.
-///
-/// A translucent style blends and writes no depth; an opaque one replaces the fragment and wins the
-/// depth test. The two differ only in these two states, so one constructor serves both.
-fn create_triangle_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    label: &str,
-    fragment_entry: &str,
-    style: ShadingStyle,
-) -> wgpu::RenderPipeline {
-    let translucent = style.is_translucent();
-    let target = face_target(if translucent { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_mesh"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout())],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            // Panels are thin solids; showing their back faces avoids holes when the camera
-            // moves inside a cutout.
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(face_depth_state(style)),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: std::slice::from_ref(&target),
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-/// The depth bias that lets an edge pass win against the face it lies on.
-///
-/// A line is one pixel wide and lies exactly on the surface it outlines, so without a bias the two
-/// fight for the pixel and the outline breaks up. A `LineList` pipeline cannot carry a depth bias at
-/// all — wgpu rejects it, because the slope term is undefined for a line — so the bias is applied
-/// where it belongs instead: the *faces* are pushed away from the camera by this much, and the
-/// unbias lines then win the comparison. A constant term in depth units is distance-independent,
-/// which is what a clip-space nudge is not: shifting NDC depth by a constant moves a far surface
-/// hundreds of millimetres and a near one barely at all.
-///
-/// At 24-bit depth one unit is about 6e-8 of the depth range, so `2` is far below any visible offset
-/// and far above the rounding error of the transform.
-const FACE_DEPTH_BIAS: wgpu::DepthBiasState = wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 };
-
-/// The depth state of the face pass: opaque faces write depth, translucent faces do not.
-///
-/// An opaque face also stamps the stencil buffer with the drawable's slot, because that stamp is
-/// what the *hidden edges* pass tests against. A translucent face stamps nothing: it never claims
-/// to occlude anything, so it cannot own a pixel either.
-fn face_depth_state(style: ShadingStyle) -> wgpu::DepthStencilState {
-    let translucent = style.is_translucent();
-    wgpu::DepthStencilState {
-        format: DEPTH_FORMAT,
-        // A translucent surface tests against the opaque scene but must not occlude a later
-        // object, so it writes no depth.
-        depth_write_enabled: Some(!translucent),
-        depth_compare: Some(if translucent { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Less }),
-        stencil: if translucent {
-            wgpu::StencilState::default()
-        } else {
-            // Every fragment that reaches this point has already won the depth test, so the nearest
-            // surface owns the pixel: write the drawable's slot.
-            let stamp = wgpu::StencilFaceState {
-                compare: wgpu::CompareFunction::Always,
-                fail_op: wgpu::StencilOperation::Keep,
-                depth_fail_op: wgpu::StencilOperation::Keep,
-                pass_op: wgpu::StencilOperation::Replace,
-            };
-            wgpu::StencilState { front: stamp, back: stamp, read_mask: STENCIL_MASK, write_mask: STENCIL_MASK }
-        },
-        // Only the opaque pass competes with the edge pass for a pixel, so only it is pushed away.
-        bias: if translucent { wgpu::DepthBiasState::default() } else { FACE_DEPTH_BIAS },
-    }
-}
-
-/// The scene colour target with an optional blend state.
-fn face_target(blend: Option<wgpu::BlendState>) -> Option<wgpu::ColorTargetState> {
-    Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })
-}
-
-/// One line pipeline with the given depth state.
-///
-/// The grid, the paths and both edge passes share `vs_line`; only the depth and stencil state
-/// differs. Nothing nudges a line toward the camera here: the faces are biased instead, so a line
-/// wins against its own surface at any distance.
-fn create_line_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    label: &str,
-    depth: wgpu::DepthStencilState,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_line"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout())],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::LineList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(depth),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("fs_line"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: std::slice::from_ref(&face_target(None)),
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-/// One unlit, blended triangle pipeline for the contact shadows.
-///
-/// The shadow has no faces to light and no texture: the vertex fan carries a radial alpha and the
-/// fragment entry returns the uniform's shadow colour times that alpha. It shares `vs_mesh`
-/// because a shadow is still a world-space triangle, only without a shading model.
-fn create_shadow_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("FurniCraft contact shadow pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_mesh"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout())],
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            // The ellipse is seen from either side when the camera dips below the floor.
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(shadow_depth_state()),
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("fs_shadow"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: std::slice::from_ref(&face_target(Some(wgpu::BlendState::ALPHA_BLENDING))),
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-/// The depth state of the shadow pass: it lies on the floor, so it is tested but never occludes.
-fn shadow_depth_state() -> wgpu::DepthStencilState {
-    wgpu::DepthStencilState {
-        format: DEPTH_FORMAT,
-        depth_write_enabled: Some(false),
-        depth_compare: Some(wgpu::CompareFunction::LessEqual),
-        stencil: wgpu::StencilState::default(),
-        bias: wgpu::DepthBiasState::default(),
-    }
-}
-
-/// The depth state of the grid and path lines: tested against the scene, writing nothing.
-///
-/// The visible-edge style uses the same depth comparison; it is a separate pipeline only because its
-/// stencil state may differ.
-fn line_depth_state() -> wgpu::DepthStencilState {
-    wgpu::DepthStencilState {
-        format: DEPTH_FORMAT,
-        depth_write_enabled: Some(false),
-        depth_compare: Some(wgpu::CompareFunction::LessEqual),
-        stencil: wgpu::StencilState::default(),
-        bias: wgpu::DepthBiasState::default(),
-    }
-}
-
-/// The depth and stencil state of the edge pass.
-///
-/// The pass draws after the faces, so the depth buffer already holds the nearest surface of every
-/// object. Two things decide what a line may show:
-///
-/// - *visible edges* (`through == false`) test depth with `LessEqual`, so a line behind a face
-///   disappears. The face pass carries [`FACE_DEPTH_BIAS`], so the line that lies on its own face
-///   still wins the pixel without the line being moved.
-/// - *hidden edges* (`through == true`) ignore depth, so the inside of an object stays visible.
-///   The stencil test stops that from leaking to the rest of the scene: an opaque face stamps its
-///   drawable's slot, and a hidden line is drawn only where the pixel is still uncovered
-///   (`stencil = 0`) or stamped with the line's own slot. A node behind the frontmost one carries a
-///   different slot, so its edges stay hidden exactly as in a visible-edge pass.
-///
-/// The reference value is the drawable's slot, set per drawable before its slice is drawn.
-fn edge_depth_state(through: bool) -> wgpu::DepthStencilState {
-    let stencil = if through {
-        // Keep the buffer untouched; only the comparison and the reference decide what shows.
-        let accept = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Equal,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::Keep,
-        };
-        wgpu::StencilState { front: accept, back: accept, read_mask: STENCIL_MASK, write_mask: 0 }
-    } else {
-        wgpu::StencilState::default()
-    };
-    wgpu::DepthStencilState {
-        format: DEPTH_FORMAT,
-        depth_write_enabled: Some(false),
-        depth_compare: Some(if through { wgpu::CompareFunction::Always } else { wgpu::CompareFunction::LessEqual }),
-        stencil,
-        bias: wgpu::DepthBiasState::default(),
-    }
-}
-
 /// The world-space centre of a drawable's local bounds, used to order translucent objects.
 ///
 /// A missing or non-finite position is ignored, and a mesh with none has no centre to sort by.
@@ -1121,48 +854,6 @@ fn sort_back_to_front(centres: &[DVec3], eye: DVec3, order: &mut Vec<usize>) {
         let near = centres.get(b).map_or(0.0, |centre| (centre - eye).length_squared());
         near.total_cmp(&far)
     });
-}
-
-fn clamp_size(width: u32, height: u32, max_dimension: u32) -> [u32; 2] {
-    let max_dimension = max_dimension.max(1);
-    [width.clamp(1, max_dimension), height.clamp(1, max_dimension)]
-}
-
-/// Uploads a line-list vertex buffer, or nothing when there are no vertices.
-fn line_list(
-    device: &wgpu::Device,
-    label: &str,
-    vertices: Vec<MeshVertex>,
-) -> Result<Option<GpuLineList>, RenderError> {
-    if vertices.is_empty() {
-        return Ok(None);
-    }
-    let vertex_count = u32::try_from(vertices.len()).map_err(|_| RenderError::MeshTooLarge { index: 0 })?;
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents: bytemuck::cast_slice(&vertices),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    Ok(Some(GpuLineList { vertex_buffer, vertex_count }))
-}
-
-/// Uploads an indexed triangle buffer, or nothing when there is no geometry.
-fn triangle_list(device: &wgpu::Device, label: &str, vertices: &[MeshVertex], indices: &[u32]) -> Option<GpuTriangles> {
-    if vertices.is_empty() || indices.is_empty() {
-        return None;
-    }
-    let index_count = u32::try_from(indices.len()).ok()?;
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents: bytemuck::cast_slice(vertices),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents: bytemuck::cast_slice(indices),
-        usage: wgpu::BufferUsages::INDEX,
-    });
-    Some(GpuTriangles { vertex_buffer, index_buffer, index_count })
 }
 
 /// Builds one triangle fan per contact shadow on the ground plane.
@@ -1450,6 +1141,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::pipelines::{FACE_DEPTH_BIAS, STENCIL_MASK, face_depth_state, shadow_depth_state};
     use furnicraft_model::Id;
 
     fn triangle() -> MeshData {
