@@ -120,6 +120,45 @@ impl Language {
     }
 }
 
+/// The narrowest panel opacity the settings offer, in percent.
+pub const MIN_PANEL_OPACITY: u32 = 55;
+
+/// The widest panel opacity the settings offer, in percent.
+pub const MAX_PANEL_OPACITY: u32 = 100;
+
+/// The opacity a fresh workspace opens with, in percent.
+pub const DEFAULT_PANEL_OPACITY: u32 = 92;
+
+/// How the icon pipeline colours a glyph.
+///
+/// The setting is read by the icon pass (U70): a semantic family gives an icon its hue, and the
+/// automatic mode drops to one ink where the raster is too small to carry a colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconColor {
+    /// A hue by semantic family, with a monochrome fallback below a 20 px raster.
+    #[default]
+    Auto,
+    /// A hue by semantic family at every size.
+    Always,
+    /// One ink everywhere.
+    Never,
+}
+
+impl IconColor {
+    /// Every mode in the order the window lists them.
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Always, Self::Never];
+
+    /// The user-visible name.
+    pub const fn label(self) -> Message {
+        match self {
+            Self::Auto => Message::IconColorAuto,
+            Self::Always => Message::IconColorAlways,
+            Self::Never => Message::IconColorNever,
+        }
+    }
+}
+
 /// The *Appearance* section.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -128,8 +167,14 @@ pub struct Appearance {
     pub theme: ThemeChoice,
     /// The language the interface speaks.
     pub language: Language,
-    /// The action accent, as sRGB bytes.
-    pub accent: [u8; 3],
+    /// The approved look the whole window is painted with.
+    pub palette: theme::ThemePreset,
+    /// The accent the user picked; `None` draws the accent the palette names.
+    pub accent: Option<[u8; 3]>,
+    /// The opacity of the chrome drawn over the scene, in percent.
+    pub panel_opacity: u32,
+    /// How the icon pipeline colours a glyph.
+    pub icon_color: IconColor,
     /// The UI scale, in percent.
     pub ui_scale: u32,
 }
@@ -139,16 +184,24 @@ impl Default for Appearance {
         Self {
             theme: ThemeChoice::default(),
             language: Language::default(),
-            accent: [theme::ACCENT.r(), theme::ACCENT.g(), theme::ACCENT.b()],
+            palette: theme::ThemePreset::default(),
+            accent: None,
+            panel_opacity: DEFAULT_PANEL_OPACITY,
+            icon_color: IconColor::default(),
             ui_scale: ui_scale::DEFAULT_PERCENT,
         }
     }
 }
 
 impl Appearance {
-    /// The accent as a colour.
-    pub fn accent_color(&self) -> egui::Color32 {
-        egui::Color32::from_rgb(self.accent[0], self.accent[1], self.accent[2])
+    /// The accent override as a colour, if the user picked one.
+    pub fn accent_color(&self) -> Option<egui::Color32> {
+        self.accent.map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+    }
+
+    /// The accent the window draws with in the `dark` variant, override included.
+    pub fn drawn_accent(&self, dark: bool) -> egui::Color32 {
+        self.accent_color().unwrap_or_else(|| self.palette.palette(dark).accent)
     }
 }
 
@@ -183,32 +236,16 @@ impl Default for ViewportSettings {
     }
 }
 
-/// The *Ribbon* section.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RibbonSettings {
-    /// The opacity of the ribbon background, from 0 to 1.
-    pub opacity: f32,
-}
-
-impl Default for RibbonSettings {
-    fn default() -> Self {
-        Self { opacity: 1.0 }
-    }
-}
-
 /// Everything the workspace remembers between runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// The schema version written by this build.
     pub version: u32,
-    /// Theme, accent and UI scale.
+    /// Theme, palette, accent and UI scale.
     pub appearance: Appearance,
     /// Default display style, grid, edges and opening view.
     pub viewport: ViewportSettings,
-    /// Ribbon background opacity.
-    pub ribbon: RibbonSettings,
     /// Recently opened scenes, newest first.
     pub recent: Vec<PathBuf>,
 }
@@ -219,10 +256,21 @@ impl Default for Settings {
             version: SETTINGS_VERSION,
             appearance: Appearance::default(),
             viewport: ViewportSettings::default(),
-            ribbon: RibbonSettings::default(),
             recent: Vec::new(),
         }
     }
+}
+
+/// A value the settings file carried that this build replaced with its default.
+///
+/// A file that loads with one unknown value is repaired rather than rejected: a palette name written
+/// by a newer build must not cost the user their recent files and their viewport defaults, and the
+/// shell reports the repair in the status bar instead of silently reinterpreting it (`AGENTS.md`
+/// §4.5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Repair {
+    /// The palette name is not one this build knows; the default preset is in use.
+    UnknownPalette(String),
 }
 
 /// Why a settings file could not be used.
@@ -248,6 +296,14 @@ impl Settings {
     /// otherwise turn a missing version into the current one. Every value is clamped afterwards, so
     /// a hand-edited file still yields a usable workspace.
     pub fn from_json(text: &str) -> Result<Self, SettingsError> {
+        Self::read_json(text).map(|(settings, _)| settings)
+    }
+
+    /// The same read, reporting the values it had to replace with their defaults.
+    ///
+    /// An unknown value is a report, not a rejection: the rest of the file — the recent list, the
+    /// viewport defaults, the scale — still describes the workspace the user left.
+    pub fn read_json(text: &str) -> Result<(Self, Vec<Repair>), SettingsError> {
         #[derive(Deserialize)]
         struct Probe {
             #[serde(default)]
@@ -257,10 +313,16 @@ impl Settings {
         if probe.version != SETTINGS_VERSION {
             return Err(SettingsError::Version { found: probe.version, expected: SETTINGS_VERSION });
         }
-        let mut settings: Self = serde_json::from_str(text)?;
+        let mut value: serde_json::Value = serde_json::from_str(text)?;
+        let mut repairs = Vec::new();
+        if let Some(repair) = repair_palette(&mut value) {
+            repairs.push(repair);
+        }
+        migrate_accent(&mut value);
+        let mut settings: Self = serde_json::from_value(value)?;
         settings.version = SETTINGS_VERSION;
         settings.sanitize();
-        Ok(settings)
+        Ok((settings, repairs))
     }
 
     /// Serialises the workspace as pretty JSON.
@@ -272,14 +334,10 @@ impl Settings {
     pub fn sanitize(&mut self) {
         self.version = SETTINGS_VERSION;
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(ui_scale::MIN_PERCENT, ui_scale::MAX_PERCENT);
+        self.appearance.panel_opacity = self.appearance.panel_opacity.clamp(MIN_PANEL_OPACITY, MAX_PANEL_OPACITY);
         self.viewport.grid_step_mm = self.viewport.grid_step_mm.clamp(MIN_GRID_STEP_MM, MAX_GRID_STEP_MM);
         self.viewport.roll_step_degrees =
             self.viewport.roll_step_degrees.clamp(MIN_ROLL_STEP_DEGREES, MAX_ROLL_STEP_DEGREES);
-        self.ribbon.opacity = if self.ribbon.opacity.is_finite() {
-            self.ribbon.opacity.clamp(0.0, 1.0)
-        } else {
-            RibbonSettings::default().opacity
-        };
         let mut seen = Vec::new();
         self.recent.retain(|path| {
             let fresh = !seen.contains(path);
@@ -298,36 +356,69 @@ impl Settings {
         self.recent.truncate(MAX_RECENT);
     }
 
-    /// The theme as the value `theme::install_with` takes.
-    pub const fn install_args(&self) -> (egui::ThemePreference, [u8; 3]) {
-        (self.appearance.theme.preference(), self.appearance.accent)
+    /// The theme, palette and accent as the values `theme::install_with` takes.
+    pub const fn install_args(&self) -> (egui::ThemePreference, theme::ThemePreset, Option<[u8; 3]>) {
+        (self.appearance.theme.preference(), self.appearance.palette, self.appearance.accent)
+    }
+}
+
+/// Replaces a palette name this build does not know with the default and reports it.
+///
+/// The stored name is read out of the JSON tree before the typed read, so one unknown name costs
+/// one value and not the whole file. A value that is not a string at all is left for `serde` to
+/// reject: that is a corrupt file, not an older one.
+fn repair_palette(value: &mut serde_json::Value) -> Option<Repair> {
+    let slot = value.get_mut("appearance")?.get_mut("palette")?;
+    let serde_json::Value::String(name) = slot else {
+        return None;
+    };
+    if theme::ThemePreset::from_stored_name(name).is_some() {
+        return None;
+    }
+    let unknown = std::mem::take(name);
+    *slot = serde_json::Value::String(theme::ThemePreset::default().stored_name().to_owned());
+    Some(Repair::UnknownPalette(unknown))
+}
+
+/// Drops the accent a workspace written before U71 carried.
+///
+/// Before the presets there was one palette, so every file stored its accent whether or not the user
+/// picked it; keeping that value would paint P1 graphite·copper in the old blue. A file without a
+/// palette therefore starts on the accent its palette names, while an accent written by this build
+/// is an override and is kept.
+fn migrate_accent(value: &mut serde_json::Value) {
+    let Some(appearance) = value.get_mut("appearance").and_then(serde_json::Value::as_object_mut) else {
+        return;
+    };
+    if appearance.contains_key("palette") {
+        return;
+    }
+    if appearance.contains_key("accent") {
+        appearance.insert("accent".to_owned(), serde_json::Value::Null);
     }
 }
 
 /// Which section of the settings window is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SettingsSection {
-    /// Theme, accent and UI scale.
+    /// Theme, palette, accent and UI scale.
     #[default]
     Appearance,
     /// Display style, grid, edges and opening view.
     Viewport,
-    /// Ribbon background opacity.
-    Ribbon,
     /// The shortcut table.
     Shortcuts,
 }
 
 impl SettingsSection {
     /// Every section in the order the window lists them.
-    pub const ALL: [Self; 4] = [Self::Appearance, Self::Viewport, Self::Ribbon, Self::Shortcuts];
+    pub const ALL: [Self; 3] = [Self::Appearance, Self::Viewport, Self::Shortcuts];
 
     /// The user-visible name.
     pub const fn label(self) -> Message {
         match self {
             Self::Appearance => Message::SectionAppearance,
             Self::Viewport => Message::SectionViewport,
-            Self::Ribbon => Message::SectionRibbon,
             Self::Shortcuts => Message::SectionShortcuts,
         }
     }
@@ -374,7 +465,6 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
                 outcome.changed |= match *section {
                     SettingsSection::Appearance => appearance_ui(ui, settings, lang),
                     SettingsSection::Viewport => viewport_ui(ui, settings, lang),
-                    SettingsSection::Ribbon => ribbon_ui(ui, settings, lang),
                     SettingsSection::Shortcuts => shortcuts_ui(ui, lang),
                 };
             });
@@ -389,7 +479,7 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
     outcome
 }
 
-/// The *Appearance* page: theme, language, accent and UI scale.
+/// The *Appearance* page: theme, palette, accent, opacity, icons, language and scale.
 fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
     let mut changed = false;
     ui.heading(Message::SectionAppearance.text(lang));
@@ -400,6 +490,55 @@ fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         }
     });
     ui.add_space(theme::STEP);
+    ui.label(egui::RichText::new(Message::Palette.text(lang)).color(theme::text_dim(ui)));
+    ui.horizontal(|ui| {
+        for preset in theme::ThemePreset::ALL {
+            changed |= preset_card(ui, settings, preset, lang);
+        }
+    });
+    ui.label(egui::RichText::new(Message::PaletteHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP);
+    ui.horizontal(|ui| {
+        ui.label(Message::Accent.text(lang));
+        // The button shows the colour the window actually draws with, so a palette's own accent is
+        // the starting point rather than a placeholder; a pick replaces it for both variants.
+        let drawn = settings.appearance.drawn_accent(ui.visuals().dark_mode).to_array();
+        let mut bytes = [drawn[0], drawn[1], drawn[2]];
+        // The colour well sizes itself from `interact_size`, which this theme keeps at zero width so
+        // a text button is as wide as its caption; a well has to be told it is a square.
+        let picked = ui
+            .scope(|ui| {
+                ui.spacing_mut().interact_size = egui::vec2(theme::HEADER_CONTROL_HEIGHT, theme::HEADER_CONTROL_HEIGHT);
+                ui.color_edit_button_srgb(&mut bytes)
+            })
+            .inner;
+        if picked.changed() {
+            settings.appearance.accent = Some(bytes);
+            changed = true;
+        }
+    })
+    .response
+    .on_hover_text(Message::AccentHint.text(lang));
+    ui.add_space(theme::STEP);
+    ui.horizontal(|ui| {
+        ui.label(Message::PanelOpacity.text(lang));
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut settings.appearance.panel_opacity, MIN_PANEL_OPACITY..=MAX_PANEL_OPACITY)
+                    .suffix(" %"),
+            )
+            .changed();
+    });
+    ui.label(egui::RichText::new(Message::PanelOpacityHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP);
+    ui.horizontal(|ui| {
+        ui.label(Message::IconColor.text(lang));
+        for mode in IconColor::ALL {
+            changed |= ui.radio_value(&mut settings.appearance.icon_color, mode, mode.label().text(lang)).changed();
+        }
+    });
+    ui.label(egui::RichText::new(Message::IconColorHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP);
     ui.label(egui::RichText::new(Message::Language.text(lang)).color(theme::text_dim(ui)));
     ui.horizontal(|ui| {
         for choice in Language::ALL {
@@ -407,16 +546,63 @@ fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         }
     });
     ui.add_space(theme::STEP);
-    ui.horizontal(|ui| {
-        ui.label(Message::Accent.text(lang));
-        changed |= ui.color_edit_button_srgb(&mut settings.appearance.accent).changed();
-    });
-    ui.add_space(theme::STEP);
     // The control edits `egui`'s zoom factor and writes back the percentage it applied; the stored
     // scale follows the live value, so the next launch opens at the scale the user sees.
     changed |= ui_scale::show(ui, &mut settings.appearance.ui_scale).changed();
     ui.label(egui::RichText::new(Message::ScaleHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP * 2.0);
+    // Reset is the way back from a colour picked by hand; it keeps the language and the scale, which
+    // are not part of the look and which the user tuned for their own screen.
+    if ui.button(Message::ResetAppearance.text(lang)).on_hover_text(Message::ResetAppearanceHint.text(lang)).clicked() {
+        settings.appearance = Appearance {
+            language: settings.appearance.language,
+            ui_scale: settings.appearance.ui_scale,
+            ..Appearance::default()
+        };
+        changed = true;
+    }
     changed
+}
+
+/// One palette card: the sweeps of the preset, its name, and a border that marks the active one.
+///
+/// The card is painted in the preset's own colours for the variant the window draws, so the two
+/// cards that are not active still show what choosing them would do. Picking one drops the accent
+/// override, because the accent on the card is part of the look it names.
+fn preset_card(ui: &mut Ui, settings: &mut Settings, preset: theme::ThemePreset, lang: Lang) -> bool {
+    let ramp = preset.palette(ui.visuals().dark_mode);
+    let selected = settings.appearance.palette == preset;
+    let stroke =
+        egui::Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { theme::accent(ui) } else { theme::line(ui) });
+    let card = egui::Frame::new()
+        .fill(ramp.panel)
+        .stroke(stroke)
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS))
+        .inner_margin(egui::Margin::same(6))
+        .show(ui, |ui| {
+            ui.set_min_width(96.0);
+            ui.horizontal(|ui| {
+                for fill in [ramp.chrome, ramp.control, ramp.text, ramp.accent] {
+                    swatch(ui, fill);
+                }
+            });
+            ui.label(egui::RichText::new(preset.label().text(lang)).small().color(ramp.text));
+        });
+    if !card.response.interact(egui::Sense::click()).clicked() {
+        return false;
+    }
+    if selected {
+        return false;
+    }
+    settings.appearance.palette = preset;
+    settings.appearance.accent = None;
+    true
+}
+
+/// A small rectangle of one colour, so a card shows the palette it names.
+fn swatch(ui: &mut Ui, fill: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 10.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(2), fill);
 }
 
 /// The *Viewport* page: the defaults a new viewport opens with.
@@ -473,19 +659,6 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         .changed();
     ui.label(egui::RichText::new(Message::ViewportDefaultsHint.text(lang)).small().color(theme::text_dim(ui)));
     changed
-}
-
-/// The *Ribbon* page: one opacity slider.
-fn ribbon_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
-    ui.heading(Message::SectionRibbon.text(lang));
-    let mut percent = settings.ribbon.opacity * 100.0;
-    let response =
-        ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %").text(Message::BackgroundOpacity.text(lang)));
-    if response.changed() {
-        settings.ribbon.opacity = (percent / 100.0).clamp(0.0, 1.0);
-    }
-    ui.label(egui::RichText::new(Message::RibbonOpacityHint.text(lang)).small().color(theme::text_dim(ui)));
-    response.changed()
 }
 
 /// The *Shortcuts* page: the keys the shell already listens for.
@@ -551,7 +724,10 @@ mod tests {
             appearance: Appearance {
                 theme: ThemeChoice::Light,
                 language: Language::Russian,
-                accent: [0x11, 0x99, 0x44],
+                palette: theme::ThemePreset::InkAzure,
+                accent: Some([0x11, 0x99, 0x44]),
+                panel_opacity: 70,
+                icon_color: IconColor::Never,
                 ui_scale: 125,
             },
             viewport: ViewportSettings {
@@ -562,7 +738,6 @@ mod tests {
                 opening_view: OpeningView::Top,
                 roll_step_degrees: 5,
             },
-            ribbon: RibbonSettings { opacity: 0.6 },
             recent: vec![PathBuf::from("/tmp/cabinet.fcs"), PathBuf::from("/tmp/shelf.fcs")],
         }
     }
@@ -573,6 +748,10 @@ mod tests {
         let json = settings.to_json().expect("serialise");
         let restored = Settings::from_json(&json).expect("parse");
         assert_eq!(restored, settings);
+        assert_eq!(restored.appearance.palette, theme::ThemePreset::InkAzure);
+        assert_eq!(restored.appearance.accent, Some([0x11, 0x99, 0x44]));
+        assert_eq!(restored.appearance.panel_opacity, 70);
+        assert_eq!(restored.appearance.icon_color, IconColor::Never);
     }
 
     #[test]
@@ -593,12 +772,87 @@ mod tests {
 
     #[test]
     fn a_value_outside_its_range_is_clamped_on_read() {
-        let json = r#"{"version":1,"appearance":{"ui_scale":900},"viewport":{"grid_step_mm":0,"roll_step_degrees":0},"ribbon":{"opacity":7.0}}"#;
+        let json = r#"{"version":1,"appearance":{"ui_scale":900,"panel_opacity":5},"viewport":{"grid_step_mm":0,"roll_step_degrees":0}}"#;
         let settings = Settings::from_json(json).expect("parse and repair");
         assert_eq!(settings.appearance.ui_scale, ui_scale::MAX_PERCENT);
+        assert_eq!(settings.appearance.panel_opacity, MIN_PANEL_OPACITY);
         assert_eq!(settings.viewport.grid_step_mm, MIN_GRID_STEP_MM);
         assert_eq!(settings.viewport.roll_step_degrees, MIN_ROLL_STEP_DEGREES);
-        assert_eq!(settings.ribbon.opacity, 1.0);
+    }
+
+    #[test]
+    fn the_panel_opacity_is_a_percentage_inside_its_range() {
+        assert_eq!(DEFAULT_PANEL_OPACITY, 92, "the owner's default leaves the scene a little visible");
+        const { assert!(MIN_PANEL_OPACITY < DEFAULT_PANEL_OPACITY) };
+        const { assert!(DEFAULT_PANEL_OPACITY < MAX_PANEL_OPACITY) };
+        assert_eq!(Appearance::default().panel_opacity, DEFAULT_PANEL_OPACITY);
+
+        let json = r#"{"version":1,"appearance":{"panel_opacity":100}}"#;
+        assert_eq!(Settings::from_json(json).expect("parse").appearance.panel_opacity, MAX_PANEL_OPACITY);
+        let json = r#"{"version":1,"appearance":{"panel_opacity":0}}"#;
+        assert_eq!(Settings::from_json(json).expect("parse").appearance.panel_opacity, MIN_PANEL_OPACITY);
+    }
+
+    #[test]
+    fn a_file_from_before_the_presets_starts_on_the_palette_accent() {
+        let json = r#"{"version":1,"appearance":{"theme":"dark","accent":[47,159,212],"ui_scale":100},"ribbon":{"opacity":0.51}}"#;
+        let (settings, repairs) = Settings::read_json(json).expect("a pre-U71 file loads");
+        assert_eq!(settings.appearance.palette, theme::ThemePreset::GraphiteCopper);
+        assert_eq!(settings.appearance.accent, None, "the old accent belonged to the old palette");
+        assert_eq!(settings.appearance.panel_opacity, DEFAULT_PANEL_OPACITY);
+        assert_eq!(settings.appearance.ui_scale, 100);
+        assert!(repairs.is_empty());
+
+        let json = r#"{"version":1,"appearance":{"palette":"slate_mint","accent":[17,153,68]}}"#;
+        let settings = Settings::from_json(json).expect("load");
+        assert_eq!(settings.appearance.accent, Some([17, 153, 68]), "an accent this build wrote is an override");
+    }
+
+    #[test]
+    fn a_file_without_a_palette_opens_on_the_default_look() {
+        let json = r#"{"version":1,"appearance":{"theme":"dark"}}"#;
+        let (settings, repairs) = Settings::read_json(json).expect("parse");
+        assert_eq!(settings.appearance.palette, theme::ThemePreset::GraphiteCopper);
+        assert_eq!(settings.appearance.accent, None, "no override: the palette's own accent is drawn");
+        assert_eq!(settings.appearance.panel_opacity, DEFAULT_PANEL_OPACITY);
+        assert!(repairs.is_empty(), "a missing field is not a repair: {repairs:?}");
+    }
+
+    #[test]
+    fn an_unknown_palette_is_repaired_and_reported() {
+        let json = r#"{"version":1,"appearance":{"palette":"p3_graphite","ui_scale":125},"recent":["/tmp/a.fcs"]}"#;
+        let (settings, repairs) = Settings::read_json(json).expect("one unknown value is not a corrupt file");
+        assert_eq!(settings.appearance.palette, theme::ThemePreset::GraphiteCopper, "P1 stands in");
+        assert_eq!(settings.appearance.ui_scale, 125, "the rest of the file survives");
+        assert_eq!(settings.recent, vec![PathBuf::from("/tmp/a.fcs")]);
+        assert_eq!(repairs, vec![Repair::UnknownPalette("p3_graphite".to_owned())]);
+        assert_eq!(
+            Settings::from_json(json).expect("the plain read").appearance.palette,
+            theme::ThemePreset::GraphiteCopper
+        );
+    }
+
+    #[test]
+    fn a_palette_that_is_not_a_name_is_still_a_corrupt_file() {
+        let json = r#"{"version":1,"appearance":{"palette":7}}"#;
+        assert!(Settings::from_json(json).is_err(), "a wrong type is corrupt, not older");
+    }
+
+    #[test]
+    fn the_default_appearance_keeps_the_language_and_the_scale_of_a_reset() {
+        // What the Reset button does: the look returns to the defaults, the words and the scale stay.
+        let mut settings = custom();
+        settings.appearance = Appearance {
+            language: settings.appearance.language,
+            ui_scale: settings.appearance.ui_scale,
+            ..Appearance::default()
+        };
+        assert_eq!(settings.appearance.palette, theme::ThemePreset::GraphiteCopper);
+        assert_eq!(settings.appearance.accent, None);
+        assert_eq!(settings.appearance.panel_opacity, DEFAULT_PANEL_OPACITY);
+        assert_eq!(settings.appearance.icon_color, IconColor::Auto);
+        assert_eq!(settings.appearance.language, Language::Russian);
+        assert_eq!(settings.appearance.ui_scale, 125);
     }
 
     #[test]
@@ -611,17 +865,6 @@ mod tests {
         let json = r#"{"version":1,"viewport":{"roll_step_degrees":7}}"#;
         let settings = Settings::from_json(json).expect("parse");
         assert_eq!(settings.viewport.roll_step_degrees, 7, "a value in range is kept");
-    }
-
-    #[test]
-    fn a_negative_or_non_finite_opacity_falls_back_to_the_default() {
-        let json = r#"{"version":1,"ribbon":{"opacity":-2.0}}"#;
-        let settings = Settings::from_json(json).expect("parse and repair");
-        assert_eq!(settings.ribbon.opacity, 0.0, "a negative opacity clamps to invisible");
-
-        let mut settings = Settings { ribbon: RibbonSettings { opacity: f32::NAN }, ..Settings::default() };
-        settings.sanitize();
-        assert_eq!(settings.ribbon.opacity, RibbonSettings::default().opacity);
     }
 
     #[test]
@@ -645,8 +888,18 @@ mod tests {
         let root = Container::new(Id::new(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
         let project = Project::new(root).expect("project");
         let document = serde_json::to_string(&project).expect("serialise");
-        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent", "language"]
-        {
+        for key in [
+            "ui_scale",
+            "grid_step_mm",
+            "roll_step_degrees",
+            "panel_opacity",
+            "accent",
+            "palette",
+            "theme",
+            "recent",
+            "language",
+            "icon_color",
+        ] {
             assert!(!document.contains(key), "`{key}` is workspace state and must stay out of the .fcs");
         }
     }

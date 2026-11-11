@@ -81,6 +81,10 @@ messages! {
         "Could not use the workspace settings ({}); using defaults.",
         "Не удалось применить настройки рабочей области ({}); используются значения по умолчанию."
     ],
+    NoticeUnknownPalette = [
+        "The saved palette “{}” is unknown to this build; {} is in use.",
+        "Сохранённая палитра «{}» неизвестна этой сборке; используется {}."
+    ],
 
     // ── Status bar ──────────────────────────────────────────────────────────
     LockedStatus = ["Locked · {}", "Заблокировано · {}"],
@@ -712,13 +716,24 @@ messages! {
     Done = ["Done", "Готово"],
     SectionAppearance = ["Appearance", "Оформление"],
     SectionViewport = ["Viewport", "Область просмотра"],
-    SectionRibbon = ["Ribbon", "Лента"],
     SectionShortcuts = ["Shortcuts", "Горячие клавиши"],
     Theme = ["Theme", "Тема"],
     ThemeDark = ["Dark", "Тёмная"],
     ThemeLight = ["Light", "Светлая"],
     ThemeSystem = ["System", "Системная"],
+    Palette = ["Palette", "Палитра"],
+    PaletteGraphiteCopper = ["Graphite · copper", "Графит · медь"],
+    PaletteInkAzure = ["Ink · azure", "Чернила · лазурь"],
+    PaletteSlateMint = ["Slate · mint", "Сланец · мята"],
+    PaletteHint = [
+        "A preset paints the whole window in both variants; the accent is the one colour you can replace.",
+        "Палитра окрашивает всё окно в обоих вариантах; акцент — единственный цвет, который можно заменить."
+    ],
     Accent = ["Accent", "Акцент"],
+    AccentHint = [
+        "One accent for the dark and the light window; Reset returns to the palette's own.",
+        "Один акцент для тёмного и светлого окна; сброс возвращает акцент палитры."
+    ],
     Language = ["Language", "Язык"],
     LanguageEnglish = ["English", "English"],
     LanguageRussian = ["Русский", "Русский"],
@@ -743,10 +758,23 @@ messages! {
         "These are the defaults of a new viewport; the open view keeps its own state.",
         "Это настройки нового вида; открытый вид сохраняет своё состояние."
     ],
-    BackgroundOpacity = ["Background opacity", "Непрозрачность фона"],
-    RibbonOpacityHint = [
-        "Lower values let the scene under the ribbon show through its body.",
-        "Меньшие значения позволяют сцене под лентой просвечивать сквозь неё."
+    PanelOpacity = ["Panel opacity", "Непрозрачность панелей"],
+    PanelOpacityHint = [
+        "Lower values let the scene show through the chrome drawn over it.",
+        "Меньшие значения позволяют сцене просвечивать сквозь панели над ней."
+    ],
+    IconColor = ["Icon colour", "Цвет значков"],
+    IconColorAuto = ["Automatic", "Автоматически"],
+    IconColorAlways = ["Always", "Всегда"],
+    IconColorNever = ["Never", "Никогда"],
+    IconColorHint = [
+        "Icons take their hue from the semantic family; Automatic falls back to monochrome below a 20 px raster.",
+        "Значки берут оттенок из смыслового семейства; «Автоматически» переходит в монохромный при растре меньше 20 px."
+    ],
+    ResetAppearance = ["Reset", "Сбросить"],
+    ResetAppearanceHint = [
+        "Restores the default palette, accent, opacity and icon colour.",
+        "Возвращает палитру, акцент, прозрачность и цвет значков по умолчанию."
     ],
     ShortcutsHint = [
         "The same keys the ribbon, the header and the status bar name.",

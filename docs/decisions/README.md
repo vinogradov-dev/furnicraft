@@ -92,6 +92,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0085](0085-the-plan-stays-markdown.md) | The plan is markdown, written through one tool — not a database | Accepted |
 | [0086](0086-the-interface-speaks-two-languages.md) | The interface speaks two languages, and a generated name keeps the one that made it | Accepted |
 | [0087](0087-the-viewports-own-colours-follow-the-theme.md) | The viewport's own colours follow the theme variant; material colours never do | Accepted |
+| [0088](0088-origin-and-pivot-are-different-points.md) | Origin and pivot are different points | Accepted; refines 0026 and 0082, settles 0083 |
+| [0089](0089-three-palettes-are-data-and-derive-their-states.md) | Three palettes are data: one ramp per variant, derived states, one accent override | Accepted |
 
 ## Format
 
@@ -112,4 +114,3 @@ What it buys, what it costs, and the condition under which it should be revisite
 ```
 
 The code and `AGENTS.md` stay the authority for rules; a record keeps the reason.
-| [0088](0088-origin-and-pivot-are-different-points.md) | Origin and pivot are different points | Accepted; refines 0026 and 0082, settles 0083 |

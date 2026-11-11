@@ -1575,9 +1575,9 @@ impl Document {
         };
         let mut outcome = None;
         // The ribbon is a raised chrome surface, so it takes the surface fill rather than the panel
-        // one that the side panels use behind their content. The settings slider scales that fill's
+        // one that the side panels use behind their content. The Appearance slider scales that fill's
         // alpha, letting the scene it covers show through without changing any other surface.
-        let fill = theme::surface(ui).gamma_multiply(settings.ribbon.opacity);
+        let fill = theme::at_opacity(theme::surface(ui), settings.appearance.panel_opacity);
         // The band the strip occupies is also the band it owns the pointer over, so the tools behind
         // it never see a hover or a click there. The measured rectangle wins once egui has sized the
         // area, which is what keeps the blocked band and the drawn one the same.

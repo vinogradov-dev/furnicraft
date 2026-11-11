@@ -13,22 +13,29 @@ use egui::{
     Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Visuals, style::WidgetVisuals, style::Widgets, vec2,
 };
 use furnicraft_scene::SceneColors;
+use furnicraft_text::Message;
+use serde::{Deserialize, Serialize};
 
 /// The darkest chrome: the window frame around the panels.
-pub const CHROME: Color32 = Color32::from_rgb(0x1a, 0x1c, 0x20);
+pub const CHROME: Color32 = Color32::from_rgb(0x14, 0x17, 0x1b);
 
 /// A raised surface: the header, the ribbon body and the panel headers.
-pub const SURFACE: Color32 = Color32::from_rgb(0x22, 0x25, 0x2b);
+pub const SURFACE: Color32 = Color32::from_rgb(0x1a, 0x1e, 0x24);
 
 /// The panel background, a shade above [`SURFACE`] where content sits.
-pub const PANEL: Color32 = Color32::from_rgb(0x27, 0x2a, 0x31);
+pub const PANEL: Color32 = Color32::from_rgb(0x22, 0x27, 0x2e);
 
-/// A control's resting fill, and the hovered one.
-pub const CONTROL: Color32 = Color32::from_rgb(0x2f, 0x32, 0x38);
-/// A hovered control.
-pub const CONTROL_HOVER: Color32 = Color32::from_rgb(0x39, 0x3d, 0x44);
-/// A pressed control.
-pub const CONTROL_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x24);
+/// A control's resting fill.
+pub const CONTROL: Color32 = Color32::from_rgb(0x2a, 0x30, 0x37);
+
+/// A hovered control: [`CONTROL`] one step towards [`TEXT`].
+///
+/// Hover, press, the hairline and the disabled ink are not palette data of their own: they are one
+/// step away from a base token, so six ramps stay eleven values each instead of seventeen.
+pub const CONTROL_HOVER: Color32 = mix(CONTROL, TEXT, 6);
+
+/// A pressed control: [`CONTROL`] sunk towards [`CHROME`].
+pub const CONTROL_ACTIVE: Color32 = mix(CONTROL, CHROME, 55);
 
 /// The translucent fill of a floating cluster over the viewport: [`SURFACE`] at about 88 %.
 ///
@@ -38,22 +45,25 @@ pub const CONTROL_ACTIVE: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x24);
 pub const FLOATING: Color32 = Color32::from_rgba_premultiplied(0x1e, 0x21, 0x26, 224);
 
 /// Primary text.
-pub const TEXT: Color32 = Color32::from_rgb(0xdd, 0xdf, 0xe2);
+pub const TEXT: Color32 = Color32::from_rgb(0xd8, 0xdd, 0xe3);
 
 /// Secondary text: hints, units, group captions.
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x95, 0x99, 0xa0);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8b, 0x94, 0x9f);
 
-/// Text that cannot be acted on.
-pub const TEXT_DISABLED: Color32 = Color32::from_rgb(0x5f, 0x63, 0x69);
+/// Text that cannot be acted on: [`TEXT_DIM`] folded into the panel it sits on.
+pub const TEXT_DISABLED: Color32 = mix(TEXT_DIM, PANEL, 45);
 
-/// A hairline between sections.
-pub const LINE: Color32 = Color32::from_rgb(0x36, 0x39, 0x3e);
+/// A hairline between sections: [`CONTROL`] one step towards [`TEXT`].
+pub const LINE: Color32 = mix(CONTROL, TEXT, 8);
+
+/// The smallest contrast the accent may have against the surface it is drawn on.
+pub const ACCENT_CONTRAST: f32 = 3.0;
 
 /// The action accent: the armed tool, the active tab, the selection.
-pub const ACCENT: Color32 = Color32::from_rgb(0x2f, 0x9f, 0xd4);
+pub const ACCENT: Color32 = Color32::from_rgb(0xe0, 0xa2, 0x4a);
 
 /// Accent as a background, once it has to carry text or an icon.
-pub const ACCENT_FILL: Color32 = Color32::from_rgb(0x1f, 0x6e, 0x94);
+pub const ACCENT_FILL: Color32 = Color32::from_rgb(0x8a, 0x5a, 0x1f);
 
 /// A destructive action's text, only while it can be taken.
 pub const DANGER: Color32 = Color32::from_rgb(0xd9, 0x5c, 0x5c);
@@ -214,53 +224,265 @@ pub struct Palette {
 impl Palette {
     /// The same palette with the user's accent.
     ///
-    /// The filled accent is derived from the chosen colour, so a pale accent still carries white
-    /// text: it is folded towards the dark end while the accent line itself stays as picked.
+    /// The override is one colour for both variants, so it is first pushed away from the surface
+    /// until it reads on it (a bright pick stays as it is on slate and is folded dark for a light
+    /// variant), then the filled accent is derived from the result, so a pale accent still carries
+    /// the body text it holds.
     pub fn with_accent(self, accent: Color32) -> Self {
-        let fold = |channel: u8| ((u16::from(channel) * 2) / 3).min(255) as u8;
-        Self { accent, accent_fill: Color32::from_rgb(fold(accent.r()), fold(accent.g()), fold(accent.b())), ..self }
+        let accent = self.readable(accent);
+        let accent_fill = if self.dark { mix(accent, Color32::BLACK, 34) } else { mix(accent, self.panel, 75) };
+        Self { accent, accent_fill, ..self }
+    }
+
+    /// `accent` moved away from this palette's surface until it has [`ACCENT_CONTRAST`].
+    ///
+    /// A pick that already reads is kept exactly as chosen; one that does not is folded towards
+    /// white on a dark palette and towards black on a light one, in 5 % steps.
+    fn readable(self, accent: Color32) -> Color32 {
+        let away = if self.dark { Color32::WHITE } else { Color32::BLACK };
+        (0..=20)
+            .map(|step| mix(accent, away, step * 5))
+            .find(|candidate| contrast_ratio(*candidate, self.surface) >= ACCENT_CONTRAST)
+            .unwrap_or(away)
     }
 }
 
-/// The dark palette the editor has drawn with since U38.
-pub const DARK: Palette = Palette {
-    dark: true,
+/// The base tokens of one variant of one preset.
+///
+/// A ramp names only what a designer chooses; the hover, press, line and disabled tokens are mixed
+/// from these, so a preset is eleven values per variant and a new token costs one field here and one
+/// per ramp. `plan/notes/U71.md` holds the measured tables these ramps come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ramp {
+    /// The window frame behind the panels.
+    pub chrome: Color32,
+    /// The header, the ribbon body and the panel headers.
+    pub surface: Color32,
+    /// The panel background where content sits.
+    pub panel: Color32,
+    /// A control at rest.
+    pub control: Color32,
+    /// A translucent cluster over the viewport, alpha included.
+    pub floating: Color32,
+    /// Primary text.
+    pub text: Color32,
+    /// Secondary text.
+    pub text_dim: Color32,
+    /// The action accent.
+    pub accent: Color32,
+    /// The accent used as a filled background.
+    pub accent_fill: Color32,
+    /// A destructive action's text.
+    pub danger: Color32,
+    /// A warning text.
+    pub warn: Color32,
+}
+
+impl Ramp {
+    /// The full palette this ramp paints for `dark`.
+    pub const fn palette(self, dark: bool) -> Palette {
+        let (hover, active, line, disabled) = if dark {
+            (
+                mix(self.control, self.text, 6),
+                mix(self.control, self.chrome, 55),
+                mix(self.control, self.text, 8),
+                mix(self.text_dim, self.panel, 45),
+            )
+        } else {
+            (
+                mix(self.control, self.text, 5),
+                mix(self.control, self.text, 10),
+                mix(self.control, self.text, 12),
+                mix(self.text_dim, self.panel, 30),
+            )
+        };
+        Palette {
+            dark,
+            chrome: self.chrome,
+            surface: self.surface,
+            panel: self.panel,
+            control: self.control,
+            control_hover: hover,
+            control_active: active,
+            floating: self.floating,
+            text: self.text,
+            text_dim: self.text_dim,
+            text_disabled: disabled,
+            line,
+            accent: self.accent,
+            accent_fill: self.accent_fill,
+            danger: self.danger,
+            warn: self.warn,
+        }
+    }
+}
+
+/// P1 graphite·copper, dark: the values the consts above name.
+const GRAPHITE_COPPER_DARK: Ramp = Ramp {
     chrome: CHROME,
     surface: SURFACE,
     panel: PANEL,
     control: CONTROL,
-    control_hover: CONTROL_HOVER,
-    control_active: CONTROL_ACTIVE,
     floating: FLOATING,
     text: TEXT,
     text_dim: TEXT_DIM,
-    text_disabled: TEXT_DISABLED,
-    line: LINE,
     accent: ACCENT,
     accent_fill: ACCENT_FILL,
     danger: DANGER,
     warn: WARN,
 };
 
-/// The light palette: the same rhythm on paper instead of slate.
-pub const LIGHT: Palette = Palette {
-    dark: false,
-    chrome: Color32::from_rgb(0xe6, 0xe9, 0xed),
-    surface: Color32::from_rgb(0xf1, 0xf3, 0xf5),
-    panel: Color32::from_rgb(0xfa, 0xfb, 0xfc),
-    control: Color32::from_rgb(0xe2, 0xe6, 0xea),
-    control_hover: Color32::from_rgb(0xd5, 0xda, 0xdf),
-    control_active: Color32::from_rgb(0xc6, 0xcc, 0xd2),
-    floating: Color32::from_rgba_premultiplied(0xf1, 0xf3, 0xf5, 224),
-    text: Color32::from_rgb(0x1f, 0x23, 0x28),
-    text_dim: Color32::from_rgb(0x5c, 0x63, 0x6b),
-    text_disabled: Color32::from_rgb(0xa0, 0xa6, 0xad),
-    line: Color32::from_rgb(0xcd, 0xd2, 0xd8),
-    accent: ACCENT,
-    accent_fill: ACCENT_FILL,
-    danger: Color32::from_rgb(0xc0, 0x39, 0x2b),
-    warn: Color32::from_rgb(0x8a, 0x62, 0x00),
+/// P1 graphite·copper, light: the same rhythm on paper.
+const GRAPHITE_COPPER_LIGHT: Ramp = Ramp {
+    chrome: Color32::from_rgb(0xe7, 0xe9, 0xec),
+    surface: Color32::from_rgb(0xf0, 0xf2, 0xf4),
+    panel: Color32::from_rgb(0xf7, 0xf8, 0xf9),
+    control: Color32::from_rgb(0xe4, 0xe7, 0xeb),
+    floating: Color32::from_rgba_premultiplied(0xd4, 0xd6, 0xd8, 224),
+    text: Color32::from_rgb(0x23, 0x27, 0x2d),
+    text_dim: Color32::from_rgb(0x5f, 0x6a, 0x75),
+    accent: Color32::from_rgb(0xa6, 0x62, 0x0f),
+    accent_fill: Color32::from_rgb(0xf0, 0xd3, 0xa8),
+    danger: Color32::from_rgb(0xb2, 0x3b, 0x3b),
+    warn: Color32::from_rgb(0x8a, 0x5a, 0x0f),
 };
+
+/// P2 ink·azure, dark.
+const INK_AZURE_DARK: Ramp = Ramp {
+    chrome: Color32::from_rgb(0x10, 0x13, 0x19),
+    surface: Color32::from_rgb(0x17, 0x1b, 0x22),
+    panel: Color32::from_rgb(0x1e, 0x23, 0x2b),
+    control: Color32::from_rgb(0x27, 0x2e, 0x38),
+    floating: Color32::from_rgba_premultiplied(0x1a, 0x1f, 0x27, 224),
+    text: Color32::from_rgb(0xd7, 0xde, 0xe8),
+    text_dim: Color32::from_rgb(0x87, 0x92, 0xa1),
+    accent: Color32::from_rgb(0x4a, 0x9e, 0xff),
+    accent_fill: Color32::from_rgb(0x21, 0x5f, 0x9e),
+    danger: DANGER,
+    warn: WARN,
+};
+
+/// P2 ink·azure, light.
+const INK_AZURE_LIGHT: Ramp = Ramp {
+    chrome: Color32::from_rgb(0xe7, 0xed, 0xf4),
+    surface: Color32::from_rgb(0xf0, 0xf4, 0xf9),
+    panel: Color32::from_rgb(0xf7, 0xf9, 0xfc),
+    control: Color32::from_rgb(0xe2, 0xe9, 0xf2),
+    floating: Color32::from_rgba_premultiplied(0xd4, 0xd7, 0xda, 224),
+    text: Color32::from_rgb(0x1d, 0x25, 0x30),
+    text_dim: Color32::from_rgb(0x58, 0x65, 0x76),
+    accent: Color32::from_rgb(0x1f, 0x6f, 0xd0),
+    accent_fill: Color32::from_rgb(0xcf, 0xe0, 0xf7),
+    danger: Color32::from_rgb(0xb2, 0x3b, 0x3b),
+    warn: Color32::from_rgb(0x8a, 0x5a, 0x0f),
+};
+
+/// P4 slate·mint, dark.
+const SLATE_MINT_DARK: Ramp = Ramp {
+    chrome: Color32::from_rgb(0x11, 0x17, 0x15),
+    surface: Color32::from_rgb(0x18, 0x20, 0x1d),
+    panel: Color32::from_rgb(0x22, 0x2b, 0x27),
+    control: Color32::from_rgb(0x2a, 0x35, 0x30),
+    floating: Color32::from_rgba_premultiplied(0x1b, 0x24, 0x20, 224),
+    text: Color32::from_rgb(0xd9, 0xe3, 0xdd),
+    text_dim: Color32::from_rgb(0x8a, 0x9a, 0x92),
+    accent: Color32::from_rgb(0x4f, 0xd1, 0xa5),
+    accent_fill: Color32::from_rgb(0x1e, 0x6e, 0x55),
+    danger: DANGER,
+    warn: WARN,
+};
+
+/// P4 slate·mint, light.
+const SLATE_MINT_LIGHT: Ramp = Ramp {
+    chrome: Color32::from_rgb(0xe8, 0xee, 0xea),
+    surface: Color32::from_rgb(0xf1, 0xf6, 0xf3),
+    panel: Color32::from_rgb(0xf8, 0xfb, 0xf9),
+    control: Color32::from_rgb(0xe3, 0xeb, 0xe7),
+    floating: Color32::from_rgba_premultiplied(0xd5, 0xd9, 0xd7, 224),
+    text: Color32::from_rgb(0x1e, 0x2a, 0x25),
+    text_dim: Color32::from_rgb(0x57, 0x6b, 0x62),
+    accent: Color32::from_rgb(0x17, 0x79, 0x5c),
+    accent_fill: Color32::from_rgb(0xcd, 0xeb, 0xdd),
+    danger: Color32::from_rgb(0xb2, 0x3b, 0x3b),
+    warn: Color32::from_rgb(0x8a, 0x5a, 0x0f),
+};
+
+/// The dark palette the editor opens with: P1 graphite·copper.
+pub const DARK: Palette = GRAPHITE_COPPER_DARK.palette(true);
+
+/// The light palette of the default preset: P1 graphite·copper on paper.
+pub const LIGHT: Palette = GRAPHITE_COPPER_LIGHT.palette(false);
+
+/// One of the three looks the owner approved (`plan/notes/U71.md`).
+///
+/// A preset is data, not a code path: each variant is a [`Ramp`], and every other colour of the
+/// palette is mixed from it. The stored name is the settings file's, so renaming a variant is a
+/// migration rather than a refactor; P3 was designed and is deliberately not shipped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreset {
+    /// P1 graphite·copper: a warm action accent on neutral slate. The default.
+    #[default]
+    GraphiteCopper,
+    /// P2 ink·azure: a blue action accent on ink.
+    InkAzure,
+    /// P4 slate·mint: a mint action accent on a green-grey slate.
+    SlateMint,
+}
+
+impl ThemePreset {
+    /// Every preset, in the order the Appearance page draws them.
+    pub const ALL: [Self; 3] = [Self::GraphiteCopper, Self::InkAzure, Self::SlateMint];
+
+    /// The user-visible name.
+    pub const fn label(self) -> Message {
+        match self {
+            Self::GraphiteCopper => Message::PaletteGraphiteCopper,
+            Self::InkAzure => Message::PaletteInkAzure,
+            Self::SlateMint => Message::PaletteSlateMint,
+        }
+    }
+
+    /// The name the settings file stores.
+    pub const fn stored_name(self) -> &'static str {
+        match self {
+            Self::GraphiteCopper => "graphite_copper",
+            Self::InkAzure => "ink_azure",
+            Self::SlateMint => "slate_mint",
+        }
+    }
+
+    /// The preset a stored name means, or `None` for a name this build does not know.
+    pub fn from_stored_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.stored_name() == name)
+    }
+
+    /// This preset's dark palette.
+    pub const fn dark(self) -> Palette {
+        match self {
+            Self::GraphiteCopper => GRAPHITE_COPPER_DARK.palette(true),
+            Self::InkAzure => INK_AZURE_DARK.palette(true),
+            Self::SlateMint => SLATE_MINT_DARK.palette(true),
+        }
+    }
+
+    /// This preset's light palette.
+    pub const fn light(self) -> Palette {
+        match self {
+            Self::GraphiteCopper => GRAPHITE_COPPER_LIGHT.palette(false),
+            Self::InkAzure => INK_AZURE_LIGHT.palette(false),
+            Self::SlateMint => SLATE_MINT_LIGHT.palette(false),
+        }
+    }
+
+    /// This preset's palette for `dark`.
+    ///
+    /// The flag is the same one `egui` stores on its [`Visuals`], so a caller that has the variant
+    /// never has to name a [`Palette`] itself.
+    pub const fn palette(self, dark: bool) -> Palette {
+        if dark { self.dark() } else { self.light() }
+    }
+}
 
 /// The primary text colour of the active theme.
 pub fn text(ui: &egui::Ui) -> Color32 {
@@ -455,15 +677,24 @@ pub fn install(ctx: &egui::Context) {
     ctx.all_styles_mut(apply);
 }
 
-/// Installs both variants from the chosen theme preference and accent.
+/// Installs both variants of `preset` and the theme preference on `ctx`.
 ///
 /// The active variant is `egui`'s business: it keeps the two styles apart and swaps them when the
-/// preference changes, so the settings window only has to call this once per change. An accent is
-/// applied to both palettes so a switch from dark to light keeps the same action colour.
-pub fn install_with(ctx: &egui::Context, preference: egui::ThemePreference, accent: [u8; 3]) {
-    let accent = Color32::from_rgb(accent[0], accent[1], accent[2]);
-    let dark = DARK.with_accent(accent);
-    let light = LIGHT.with_accent(accent);
+/// preference changes, so the settings window only has to call this once per change. `accent` is the
+/// user's override, or `None` to let each variant draw the accent its ramp names; an override is one
+/// colour for both variants, so [`Palette::with_accent`] keeps it readable on each surface.
+pub fn install_with(
+    ctx: &egui::Context,
+    preference: egui::ThemePreference,
+    preset: ThemePreset,
+    accent: Option<[u8; 3]>,
+) {
+    let (mut dark, mut light) = (preset.dark(), preset.light());
+    if let Some(accent) = accent {
+        let accent = Color32::from_rgb(accent[0], accent[1], accent[2]);
+        dark = dark.with_accent(accent);
+        light = light.with_accent(accent);
+    }
     ctx.style_mut_of(egui::Theme::Dark, |style| apply_with(style, dark));
     ctx.style_mut_of(egui::Theme::Light, |style| apply_with(style, light));
     ctx.set_theme(preference);
@@ -483,6 +714,52 @@ pub fn scene_colors(theme: egui::Theme) -> SceneColors {
         egui::Theme::Dark => SceneColors::DARK,
         egui::Theme::Light => SceneColors::LIGHT,
     }
+}
+
+/// `a` moved `percent` of the way to `b`, channel by channel.
+///
+/// Integer arithmetic on purpose: a ramp is a constant, so a palette must never depend on the
+/// rounding of a float at start-up, and `percent` above 100 is the same as 100.
+pub const fn mix(a: Color32, b: Color32, percent: u32) -> Color32 {
+    Color32::from_rgb(
+        mix_channel(a.r(), b.r(), percent),
+        mix_channel(a.g(), b.g(), percent),
+        mix_channel(a.b(), b.b(), percent),
+    )
+}
+
+/// One channel of [`mix`], rounded to the nearest step.
+const fn mix_channel(a: u8, b: u8, percent: u32) -> u8 {
+    let percent = if percent > 100 { 100 } else { percent };
+    ((a as u32 * (100 - percent) + b as u32 * percent + 50) / 100) as u8
+}
+
+/// An opaque `fill` drawn at `percent` opacity.
+///
+/// `Color32` is premultiplied, so the alpha alone is scaled and the colour is rebuilt: a translucent
+/// surface is the same colour with a smaller alpha, not a darker one. The input has to be opaque —
+/// every chrome surface is.
+pub fn at_opacity(fill: Color32, percent: u32) -> Color32 {
+    let alpha = (u16::from(fill.a()) * u16::from(percent.min(100) as u8) / 100) as u8;
+    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha)
+}
+
+/// The WCAG contrast ratio between two opaque colours, from 1 (equal) to 21.
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (first, second) = (relative_luminance(a), relative_luminance(b));
+    let (bright, dark) = if first > second { (first, second) } else { (second, first) };
+    (bright + 0.05) / (dark + 0.05)
+}
+
+/// The relative luminance of an opaque colour, as WCAG defines it.
+pub fn relative_luminance(color: Color32) -> f32 {
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+}
+
+/// One sRGB channel, undoing the transfer curve.
+fn linear(channel: u8) -> f32 {
+    let channel = f32::from(channel) / 255.0;
+    if channel <= 0.04045 { channel / 12.92 } else { ((channel + 0.055) / 1.055).powf(2.4) }
 }
 
 /// A frame for one chrome surface: the fill and the hairline that closes it.
@@ -516,56 +793,180 @@ mod tests {
 
     use super::*;
 
-    /// The relative luminance of an opaque colour, ignoring the sRGB transfer curve.
-    ///
-    /// The editor needs a contrast floor, not a WCAG certificate: this is enough to catch a panel
-    /// fill that swallows its own text.
-    fn luminance(color: Color32) -> f32 {
-        0.2126 * f32::from(color.r()) + 0.7152 * f32::from(color.g()) + 0.0722 * f32::from(color.b())
+    /// The spread of a colour's channels: how far it is from grey.
+    fn spread(color: Color32) -> i32 {
+        let (r, g, b) = (i32::from(color.r()), i32::from(color.g()), i32::from(color.b()));
+        r.max(g).max(b) - r.min(g).min(b)
     }
 
-    #[test]
-    fn every_text_colour_reads_on_its_surface() {
-        for (text, surface, name) in [
-            (TEXT, PANEL, "body on a panel"),
-            (TEXT, SURFACE, "body on a header"),
-            (TEXT, CONTROL, "body on a control"),
-            (TEXT_DIM, PANEL, "dim text on a panel"),
-            (TEXT_DIM, SURFACE, "dim text on a header"),
-        ] {
-            let delta = (luminance(text) - luminance(surface)).abs();
-            assert!(delta > 60.0, "{name} has too little contrast: {delta:.0}");
+    /// Every preset and variant, with the name a failure has to print.
+    fn every_palette() -> Vec<(String, Palette)> {
+        let mut palettes = Vec::new();
+        for preset in ThemePreset::ALL {
+            palettes.push((format!("{preset:?} dark"), preset.dark()));
+            palettes.push((format!("{preset:?} light"), preset.light()));
         }
-        assert!(luminance(TEXT_DISABLED) < luminance(TEXT_DIM), "disabled text is quieter than dim text");
-        assert!(luminance(TEXT) > luminance(TEXT_DIM), "body text is brighter than dim text");
+        palettes
     }
 
     #[test]
-    fn the_accent_is_the_only_saturated_colour() {
-        // Every chrome colour is neutral; a single channel out of line would tint the whole window.
-        for color in [CHROME, SURFACE, PANEL, CONTROL, CONTROL_HOVER, CONTROL_ACTIVE, LINE, TEXT] {
-            let (r, g, b) = (i32::from(color.r()), i32::from(color.g()), i32::from(color.b()));
-            let spread = r.max(g).max(b) - r.min(g).min(b);
-            assert!(spread <= 12, "{color:?} is not neutral");
+    fn every_palette_keeps_its_text_readable() {
+        for (name, palette) in every_palette() {
+            let ratio = |a: Color32, b: Color32| contrast_ratio(a, b);
+            for (ink, fill, least, what) in [
+                (palette.text, palette.panel, 4.5, "body text on a panel"),
+                (palette.text, palette.surface, 4.5, "body text on a header"),
+                (palette.text, palette.control, 4.5, "body text on a control"),
+                (palette.text, palette.accent_fill, 3.0, "body text on the filled accent"),
+                (palette.text_dim, palette.panel, 3.0, "dim text on a panel"),
+                (palette.text_dim, palette.surface, 3.0, "dim text on a header"),
+                (palette.accent, palette.surface, ACCENT_CONTRAST, "the accent on a header"),
+                (palette.accent, palette.panel, ACCENT_CONTRAST, "the accent on a panel"),
+                (palette.danger, palette.panel, 3.0, "a destructive label"),
+                (palette.warn, palette.panel, 3.0, "a warning label"),
+            ] {
+                let measured = ratio(ink, fill);
+                assert!(measured >= least, "{name}: {what} is {measured:.2}:1, under {least}:1");
+            }
+            // Disabled ink is quieter than dim ink, measured against the surface both sit on.
+            assert!(
+                ratio(palette.text_disabled, palette.panel) < ratio(palette.text_dim, palette.panel),
+                "{name}: disabled text has to read as quieter than dim text"
+            );
+            // A hover and a press are visible against the control they replace.
+            assert_ne!(palette.control_hover, palette.control, "{name}: hovering changes nothing");
+            assert!(
+                relative_luminance(palette.control_active) < relative_luminance(palette.control),
+                "{name}: a pressed control sinks into the panel"
+            );
+            assert_ne!(palette.line, palette.panel, "{name}: a hairline has to be visible on a panel");
         }
-        let spread = |color: Color32| {
-            let (r, g, b) = (i32::from(color.r()), i32::from(color.g()), i32::from(color.b()));
-            r.max(g).max(b) - r.min(g).min(b)
-        };
-        assert!(spread(ACCENT) >= 100, "the accent has to read as an action, not as grey");
     }
 
     #[test]
-    fn installing_the_theme_leaves_no_default_colour_behind() {
+    fn a_preset_tints_the_chrome_but_never_colours_it() {
+        for (name, palette) in every_palette() {
+            for (what, color) in [
+                ("chrome", palette.chrome),
+                ("surface", palette.surface),
+                ("panel", palette.panel),
+                ("control", palette.control),
+                ("control_hover", palette.control_hover),
+                ("control_active", palette.control_active),
+                ("line", palette.line),
+                ("text", palette.text),
+            ] {
+                assert!(spread(color) <= 24, "{name}: {what} {color:?} is a colour, not a tint");
+            }
+            // The accent is the one saturated colour of the window: it carries the action.
+            assert!(spread(palette.accent) >= 90, "{name}: the accent has to read as an action, not as grey");
+            assert!(
+                spread(palette.accent) > 4 * spread(palette.panel),
+                "{name}: the accent has to outshine the chrome"
+            );
+        }
+    }
+
+    #[test]
+    fn the_presets_are_three_distinct_looks() {
+        for (index, first) in ThemePreset::ALL.iter().enumerate() {
+            for second in &ThemePreset::ALL[index + 1..] {
+                assert_ne!(first.dark(), second.dark(), "{first:?} and {second:?} draw the same dark window");
+                assert_ne!(first.light(), second.light(), "{first:?} and {second:?} draw the same light window");
+                assert_ne!(first.dark().accent, second.dark().accent, "{first:?} and {second:?} share an accent");
+            }
+        }
+    }
+
+    #[test]
+    fn a_stored_preset_name_round_trips_through_the_settings_file() {
+        for preset in ThemePreset::ALL {
+            let json = serde_json::to_string(&preset).expect("serialise");
+            assert_eq!(json, format!("\"{}\"", preset.stored_name()));
+            assert_eq!(ThemePreset::from_stored_name(preset.stored_name()), Some(preset));
+            let restored: ThemePreset = serde_json::from_str(&json).expect("read back");
+            assert_eq!(restored, preset);
+        }
+        assert_eq!(ThemePreset::from_stored_name("p3_graphite"), None, "P3 is not shipped");
+        assert_eq!(ThemePreset::default(), ThemePreset::GraphiteCopper, "a fresh workspace opens on P1");
+    }
+
+    #[test]
+    fn an_accent_override_reads_on_both_variants() {
+        // A pick that is comfortable on slate is far too bright for paper; the light variant folds it.
+        let bright = Color32::from_rgb(0xe0, 0xa2, 0x4a);
+        for preset in ThemePreset::ALL {
+            for palette in [preset.dark(), preset.light()] {
+                let overridden = palette.with_accent(bright);
+                assert!(
+                    contrast_ratio(overridden.accent, overridden.surface) >= ACCENT_CONTRAST,
+                    "{preset:?}: the override vanishes into the surface"
+                );
+                assert!(
+                    contrast_ratio(overridden.text, overridden.accent_fill) >= 3.0,
+                    "{preset:?}: text on the derived accent fill has to read"
+                );
+            }
+            assert_eq!(preset.dark().with_accent(bright).accent, bright, "a pick that reads is kept exactly");
+            assert!(
+                relative_luminance(preset.light().with_accent(bright).accent) < relative_luminance(bright),
+                "the light variant folds a bright accent down"
+            );
+        }
+    }
+
+    #[test]
+    fn installing_a_preset_leaves_no_default_colour_behind() {
         let ctx = egui::Context::default();
-        install(&ctx);
-        for theme in [egui::Theme::Dark, egui::Theme::Light] {
-            let style = ctx.style_of(theme);
-            assert_eq!(style.visuals.panel_fill, PANEL, "{theme:?} keeps the palette");
-            assert_eq!(style.visuals.override_text_color, Some(TEXT), "{theme:?} keeps the text colour");
-            assert_eq!(style.spacing.item_spacing.y, STEP, "{theme:?} keeps the rhythm");
-            assert_eq!(style.text_styles.get(&TextStyle::Body).map(|font| font.size), Some(12.0));
+        for preset in ThemePreset::ALL {
+            install_with(&ctx, egui::ThemePreference::Dark, preset, None);
+            for (theme, palette) in [(egui::Theme::Dark, preset.dark()), (egui::Theme::Light, preset.light())] {
+                let style = ctx.style_of(theme);
+                assert_eq!(style.visuals.panel_fill, palette.panel, "{preset:?} {theme:?} keeps the palette");
+                assert_eq!(style.visuals.override_text_color, Some(palette.text), "{preset:?} {theme:?} text");
+                assert_eq!(style.visuals.hyperlink_color, palette.accent, "{preset:?} {theme:?} accent");
+                assert_eq!(style.spacing.item_spacing.y, STEP, "{theme:?} keeps the rhythm");
+                assert_eq!(style.text_styles.get(&TextStyle::Body).map(|font| font.size), Some(12.0));
+            }
         }
+        // A switch repaints the installed styles; no restart and no second install step.
+        install_with(&ctx, egui::ThemePreference::Dark, ThemePreset::SlateMint, None);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, ThemePreset::SlateMint.dark().panel);
+        // The accent override reaches both variants and survives the switch between them.
+        install_with(&ctx, egui::ThemePreference::System, ThemePreset::InkAzure, Some([0x11, 0x99, 0x44]));
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let accent = ctx.style_of(theme).visuals.hyperlink_color;
+            assert!(spread(accent) > 4 * spread(ThemePreset::InkAzure.palette(theme == egui::Theme::Dark).panel));
+        }
+    }
+
+    #[test]
+    fn a_surface_at_an_opacity_keeps_its_colour() {
+        let surface = SURFACE;
+        let ninety_two = at_opacity(surface, 92);
+        let [r, g, b, a] = ninety_two.to_srgba_unmultiplied();
+        assert_eq!(a, 234, "92 % of an opaque fill");
+        for (kept, original) in [(r, surface.r()), (g, surface.g()), (b, surface.b())] {
+            assert!(
+                i32::from(kept).abs_diff(i32::from(original)) <= 1,
+                "the colour is kept and only the alpha moves: {kept} against {original}"
+            );
+        }
+        assert_eq!(at_opacity(surface, 100), surface, "a full opacity is the fill itself");
+        assert_eq!(at_opacity(surface, 140).a(), 255, "a value past the range clamps instead of wrapping");
+        assert!(at_opacity(surface, 55).a() < ninety_two.a(), "a lower setting lets more of the scene through");
+    }
+
+    #[test]
+    fn a_mix_moves_between_two_colours_and_clamps_its_weight() {
+        let (black, white) = (Color32::BLACK, Color32::WHITE);
+        assert_eq!(mix(black, white, 0), black);
+        assert_eq!(mix(black, white, 100), white);
+        assert_eq!(mix(black, white, 150), white, "a weight past 100 clamps");
+        assert_eq!(mix(black, white, 50), Color32::from_rgb(128, 128, 128));
+        assert!(relative_luminance(mix(black, white, 25)) < relative_luminance(mix(black, white, 75)));
+        assert!((contrast_ratio(white, black) - 21.0).abs() < 0.01, "the WCAG scale runs from 1 to 21");
+        assert_eq!(contrast_ratio(white, white), 1.0);
     }
 
     #[test]
