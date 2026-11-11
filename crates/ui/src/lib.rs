@@ -48,7 +48,53 @@ pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use draw::{DrawDraft, DrawDraftError, DrawTool, DrawnPath};
 pub use editor::Editor;
+pub use furnicraft_text::{Counted, Lang, Message};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};
 pub use toolbars::{RibbonTab, RibbonView, RibbonViewAction, ToolGroup};
 pub use view_flags::ViewFlags;
+
+/// The `egui` memory key the shell publishes the workspace language under.
+///
+/// The language is workspace settings, not document data: the shell writes it once per frame and
+/// every surface reads it, so a new panel never has to thread a `Lang` through five signatures to
+/// draw one caption. A test publishes its own language the same way.
+const LANGUAGE_KEY: &str = "furnicraft.language";
+
+/// Publishes the language every surface draws in.
+pub fn set_language(ctx: &egui::Context, lang: Lang) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(LANGUAGE_KEY), lang));
+}
+
+/// The language every surface draws in.
+pub fn language(ctx: &egui::Context) -> Lang {
+    ctx.data(|data| data.get_temp(egui::Id::unique(LANGUAGE_KEY))).unwrap_or_default()
+}
+
+/// The sentence for `message` in the language of this context.
+pub fn text(ctx: &egui::Context, message: Message) -> &'static str {
+    message.text(language(ctx))
+}
+
+/// The interface's words for a refused length, so a raw `thiserror` sentence never reaches the
+/// screen. The error itself stays English for logs and tests.
+pub fn length_error(error: furnicraft_units::LengthParseError) -> Message {
+    use furnicraft_units::LengthParseError as Error;
+    match error {
+        Error::Empty => Message::LengthErrorEmpty,
+        Error::Invalid => Message::LengthErrorInvalid,
+        Error::TooPrecise => Message::LengthErrorTooPrecise,
+        Error::OutOfRange => Message::LengthErrorOutOfRange,
+    }
+}
+
+/// The interface's words for a refused angle, for the same reason as [`length_error`].
+pub fn degrees_error(error: furnicraft_units::DegreesParseError) -> Message {
+    use furnicraft_units::DegreesParseError as Error;
+    match error {
+        Error::Empty => Message::DegreesErrorEmpty,
+        Error::Invalid => Message::DegreesErrorInvalid,
+        Error::TooPrecise => Message::DegreesErrorTooPrecise,
+        Error::OutOfRange => Message::DegreesErrorOutOfRange,
+    }
+}

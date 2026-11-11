@@ -31,29 +31,29 @@ impl NavigationMode {
     pub(crate) const ALL: [Self; 3] = [Self::Orbit, Self::Pan, Self::Zoom];
 
     /// The short name the status bar shows.
-    pub(crate) const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> furnicraft_text::Message {
         match self {
-            Self::Orbit => "Orbit",
-            Self::Pan => "Pan",
-            Self::Zoom => "Zoom",
+            Self::Orbit => furnicraft_text::Message::ShortcutOrbit,
+            Self::Pan => furnicraft_text::Message::ShortcutPan,
+            Self::Zoom => furnicraft_text::Message::ShortcutZoom,
         }
     }
 
     /// The gesture the status bar asks for once the mode is armed.
-    pub(crate) const fn gesture(self) -> &'static str {
+    pub(crate) const fn gesture(self) -> furnicraft_text::Message {
         match self {
-            Self::Orbit => "Drag in the viewport to orbit  ·  Esc done",
-            Self::Pan => "Drag in the viewport to pan  ·  Esc done",
-            Self::Zoom => "Drag vertically to zoom  ·  Esc done",
+            Self::Orbit => furnicraft_text::Message::GestureOrbit,
+            Self::Pan => furnicraft_text::Message::GesturePan,
+            Self::Zoom => furnicraft_text::Message::GestureZoom,
         }
     }
 
     /// The tooltip and the accessible name.
-    pub(crate) const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> furnicraft_text::Message {
         match self {
-            Self::Orbit => "Orbit  ·  drag in the viewport",
-            Self::Pan => "Pan  ·  drag in the viewport",
-            Self::Zoom => "Zoom  ·  drag vertically",
+            Self::Orbit => furnicraft_text::Message::NavOrbitLabel,
+            Self::Pan => furnicraft_text::Message::NavPanLabel,
+            Self::Zoom => furnicraft_text::Message::NavZoomLabel,
         }
     }
 
@@ -206,36 +206,79 @@ pub(crate) fn show(
                 ui.horizontal_wrapped(|ui| {
                     navigation_buttons(ui, state);
                     theme::divider(ui);
-                    if icons::tool_button(ui, icons::view::FRAME_ALL, "Frame all", Some("F"), true, false).clicked() {
+                    if icons::tool_button(
+                        ui,
+                        icons::view::FRAME_ALL,
+                        furnicraft_text::Message::ToolFrameAll.text(furnicraft_ui::language(ui.ctx())),
+                        Some("F"),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
                         action = Some(ClusterAction::FrameAll);
                     }
-                    if icons::tool_button(ui, icons::view::HOME, "Home", None, true, false).clicked() {
+                    if icons::tool_button(
+                        ui,
+                        icons::view::HOME,
+                        furnicraft_text::Message::HeaderHome.text(furnicraft_ui::language(ui.ctx())),
+                        None,
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
                         action = Some(ClusterAction::Home);
                     }
                     theme::divider(ui);
-                    if let Some(style) = style_buttons(ui, view.style) {
+                    if let Some(style) = style_buttons(ui, view.style, furnicraft_ui::language(ui.ctx())) {
                         action = Some(ClusterAction::SetStyle(style));
                     }
                     theme::divider(ui);
                     let open = state.layout_open;
-                    if icons::tool_button(ui, icons::view::LAYOUT, "Layout", None, true, open).clicked() {
+                    if icons::tool_button(
+                        ui,
+                        icons::view::LAYOUT,
+                        furnicraft_text::Message::Layout.text(furnicraft_ui::language(ui.ctx())),
+                        None,
+                        true,
+                        open,
+                    )
+                    .clicked()
+                    {
                         state.layout_open = !state.layout_open;
                         state.settings_open = false;
                     }
                     // A single view already fills the workspace, so there is nothing to expand: the
                     // button is drawn disabled instead of entering a mode it cannot leave.
                     let (icon, label) = if view.maximized {
-                        (icons::view::RESTORE, "Restore")
+                        (icons::view::RESTORE, furnicraft_text::Message::Restore)
                     } else {
-                        (icons::view::MAXIMIZE, "Expand")
+                        (icons::view::MAXIMIZE, furnicraft_text::Message::Expand)
                     };
-                    if icons::tool_button(ui, icon, label, Some("Alt+W"), view.layout.leaves() > 1, view.maximized)
-                        .clicked()
+                    if icons::tool_button(
+                        ui,
+                        icon,
+                        label.text(furnicraft_ui::language(ui.ctx())),
+                        Some("Alt+W"),
+                        view.layout.leaves() > 1,
+                        view.maximized,
+                    )
+                    .clicked()
                     {
                         action = Some(ClusterAction::ToggleMaximize);
                     }
                     let open = state.settings_open;
-                    if icons::tool_button(ui, icons::view::SLIDERS, "Display settings", None, true, open).clicked() {
+                    if icons::tool_button(
+                        ui,
+                        icons::view::SLIDERS,
+                        furnicraft_text::Message::DisplaySettings.text(furnicraft_ui::language(ui.ctx())),
+                        None,
+                        true,
+                        open,
+                    )
+                    .clicked()
+                    {
                         state.settings_open = !state.settings_open;
                         state.layout_open = false;
                     }
@@ -266,28 +309,44 @@ pub(crate) fn show(
 fn navigation_buttons(ui: &mut egui::Ui, state: &mut ViewCluster) {
     for mode in NavigationMode::ALL {
         let on = state.navigation == Some(mode);
-        if icons::tool_button_labelled(ui, mode.icon(), navigation_caption(mode), mode.label(), true, on).clicked() {
+        if icons::tool_button_labelled(
+            ui,
+            mode.icon(),
+            navigation_caption(mode).text(furnicraft_ui::language(ui.ctx())),
+            mode.label().text(furnicraft_ui::language(ui.ctx())),
+            true,
+            on,
+        )
+        .clicked()
+        {
             state.navigation = (!on).then_some(mode);
         }
     }
 }
 
 /// The short placeholder face of one navigation mode.
-const fn navigation_caption(mode: NavigationMode) -> &'static str {
+const fn navigation_caption(mode: NavigationMode) -> furnicraft_text::Message {
     match mode {
-        NavigationMode::Orbit => "Orbit",
-        NavigationMode::Pan => "Pan",
-        NavigationMode::Zoom => "Zoom",
+        NavigationMode::Orbit => furnicraft_text::Message::ShortcutOrbit,
+        NavigationMode::Pan => furnicraft_text::Message::ShortcutPan,
+        NavigationMode::Zoom => furnicraft_text::Message::ShortcutZoom,
     }
 }
 
 /// The five display styles; the view's own style draws pressed and a click asks for a change.
-fn style_buttons(ui: &mut egui::Ui, current: ShadingStyle) -> Option<ShadingStyle> {
+fn style_buttons(ui: &mut egui::Ui, current: ShadingStyle, lang: furnicraft_text::Lang) -> Option<ShadingStyle> {
     let mut asked = None;
     for style in ShadingStyle::ALL {
         let on = current == style;
-        if icons::tool_button_labelled(ui, shading_icon(style), shading_caption(style), shading_label(style), true, on)
-            .clicked()
+        if icons::tool_button_labelled(
+            ui,
+            shading_icon(style),
+            shading_caption(style, lang),
+            shading_label(style, lang),
+            true,
+            on,
+        )
+        .clicked()
         {
             asked = Some(style);
         }
@@ -321,33 +380,83 @@ fn layout_popover(
                 .inner_margin(egui::Margin::same(10));
             frame.show(ui, |ui| {
                 ui.set_width(220.0);
-                ui.label(egui::RichText::new("Layout").strong());
+                ui.label(
+                    egui::RichText::new(furnicraft_text::Message::Layout.text(furnicraft_ui::language(ui.ctx())))
+                        .strong(),
+                );
                 for kind in LayoutKind::ALL {
                     let on = view.layout == kind;
-                    if ui.add(egui::Button::new(kind.label()).selected(on)).clicked() {
+                    if ui
+                        .add(egui::Button::new(kind.label().text(furnicraft_ui::language(ui.ctx()))).selected(on))
+                        .clicked()
+                    {
                         action = Some(ClusterAction::SetLayout(kind));
                     }
                 }
                 ui.separator();
-                ui.label(egui::RichText::new("View preset").strong());
+                ui.label(
+                    egui::RichText::new(furnicraft_text::Message::ViewPreset.text(furnicraft_ui::language(ui.ctx())))
+                        .strong(),
+                );
                 for preset in OpeningView::ALL {
-                    let on = view.preset == Some(preset);
-                    if ui.add(egui::Button::new(preset.label()).selected(on)).clicked() {
+                    if preset_row(ui, preset, view.preset == Some(preset), furnicraft_ui::language(ui.ctx())) {
                         action = Some(ClusterAction::SetPreset(preset));
                     }
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} of {MAX_LEAVES} views · drag a border to resize",
-                        view.layout.leaves()
-                    ))
+                    egui::RichText::new(
+                        furnicraft_text::Message::ViewsOfMax
+                            .with(furnicraft_ui::language(ui.ctx()), [view.layout.leaves(), MAX_LEAVES]),
+                    )
                     .small()
                     .color(theme::text_dim(ui)),
                 );
             });
         });
     action
+}
+
+/// The icon of a standard view: a screen plane with the direction the eye looks from.
+pub(crate) fn preset_icon(view: OpeningView) -> icons::Icon {
+    match view {
+        OpeningView::Axonometric => icons::view::AXON,
+        OpeningView::Front => icons::view::FRONT,
+        OpeningView::Left => icons::view::LEFT,
+        OpeningView::Top => icons::view::TOP,
+        OpeningView::Right => icons::view::RIGHT,
+        OpeningView::Bottom => icons::view::BOTTOM,
+    }
+}
+
+/// One row of the preset list: the view's glyph, its name and the selected face.
+///
+/// A popover row is not a text button: the preset list is the one place where a named view is a
+/// glyph the user learns, so the row draws the icon and keeps the name beside it as the label.
+fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool, lang: furnicraft_text::Lang) -> bool {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 22.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, on);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(theme::RADIUS),
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let glyph =
+            egui::Rect::from_center_size(egui::pos2(rect.left() + 14.0, rect.center().y), egui::Vec2::splat(16.0));
+        icons::draw_icon(ui, preset_icon(view), glyph, 16.0, visuals.fg_stroke.color);
+        ui.painter().text(
+            egui::pos2(rect.left() + 28.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            view.label(lang),
+            egui::FontId::proportional(13.0),
+            visuals.fg_stroke.color,
+        );
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, view.label(lang)));
+    }
+    response.clicked()
 }
 
 /// The display-settings popover above the cluster: the angle switch, the projection and three
@@ -374,33 +483,70 @@ fn settings_popover(
                 .inner_margin(egui::Margin::same(10));
             frame.show(ui, |ui| {
                 ui.set_width(230.0);
-                ui.label(egui::RichText::new("Display").strong());
-                let angles = ui.checkbox(&mut state.show_angles, "Show projection and angles");
-                angles.on_hover_text(if state.angles_visible() {
-                    "The orientation readout is drawn under the cube"
-                } else {
-                    "Draw the pitch, yaw, roll and the projection under the cube"
-                });
+                ui.label(
+                    egui::RichText::new(
+                        furnicraft_text::Message::DisplayHeading.text(furnicraft_ui::language(ui.ctx())),
+                    )
+                    .strong(),
+                );
+                let angles = ui.checkbox(
+                    &mut state.show_angles,
+                    furnicraft_text::Message::ShowProjectionAngles.text(furnicraft_ui::language(ui.ctx())),
+                );
+                angles.on_hover_text(
+                    if state.angles_visible() {
+                        furnicraft_text::Message::ProjectionAnglesOn
+                    } else {
+                        furnicraft_text::Message::ProjectionAnglesOff
+                    }
+                    .text(furnicraft_ui::language(ui.ctx())),
+                );
                 let (icon, hint) = projection_button(view.projection);
-                let toggle = icons::tool_button(ui, icon, hint, Some("O"), view.owns_view, false);
-                if toggle.on_disabled_hover_text("An authored camera owns the projection").clicked() {
+                let toggle = icons::tool_button(
+                    ui,
+                    icon,
+                    hint.text(furnicraft_ui::language(ui.ctx())),
+                    Some("O"),
+                    view.owns_view,
+                    false,
+                );
+                if toggle
+                    .on_disabled_hover_text(
+                        furnicraft_text::Message::AuthoredCameraOwns.text(furnicraft_ui::language(ui.ctx())),
+                    )
+                    .clicked()
+                {
                     action = Some(ClusterAction::ToggleProjection);
                 }
-                ui.checkbox(&mut state.all_edges, "Show every triangle edge")
-                    .on_hover_text("Diagnostic: keeps the triangulation diagonals the form-edge view hides.");
+                ui.checkbox(
+                    &mut state.all_edges,
+                    furnicraft_text::Message::ShowEveryTriangleEdge.text(furnicraft_ui::language(ui.ctx())),
+                )
+                .on_hover_text(furnicraft_text::Message::AllEdgesHint.text(furnicraft_ui::language(ui.ctx())));
                 ui.separator();
-                ui.checkbox(&mut state.contact_shadows, "Contact shadows")
-                    .on_hover_text("A soft shadow under every object that rests on the floor.");
+                ui.checkbox(
+                    &mut state.contact_shadows,
+                    furnicraft_text::Message::ContactShadows.text(furnicraft_ui::language(ui.ctx())),
+                )
+                .on_hover_text(furnicraft_text::Message::ContactShadowsHint.text(furnicraft_ui::language(ui.ctx())));
                 for (value, label) in [
-                    (&mut state.grid_strength, "Grid"),
-                    (&mut state.edge_strength, "Edges"),
-                    (&mut state.shadow_strength, "Shadow"),
+                    (&mut state.grid_strength, furnicraft_text::Message::GridStrength),
+                    (&mut state.edge_strength, furnicraft_text::Message::EdgesStrength),
+                    (&mut state.shadow_strength, furnicraft_text::Message::ShadowStrength),
                 ] {
-                    ui.add(egui::Slider::new(value, 0.0..=100.0).text(label).fixed_decimals(0));
+                    ui.add(
+                        egui::Slider::new(value, 0.0..=100.0)
+                            .text(label.text(furnicraft_ui::language(ui.ctx())))
+                            .fixed_decimals(0),
+                    );
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new(format!("Work plane · {}", view.work_plane)).small().color(theme::text_dim(ui)),
+                    egui::RichText::new(
+                        furnicraft_text::Message::WorkPlane.with(furnicraft_ui::language(ui.ctx()), [view.work_plane]),
+                    )
+                    .small()
+                    .color(theme::text_dim(ui)),
                 );
             });
         });
@@ -411,9 +557,25 @@ fn settings_popover(
 ///
 /// The icon draws the mode the view is *in*, and the hint names the switch, so the control never
 /// claims a state the camera has not reached.
-pub(crate) fn projection_button(projection: Projection) -> (icons::Icon, &'static str) {
+pub(crate) fn projection_button(projection: Projection) -> (icons::Icon, furnicraft_text::Message) {
     match projection {
-        Projection::Perspective { .. } => (icons::view::PERSPECTIVE, "Perspective view; switch to orthographic  (O)"),
-        Projection::Orthographic { .. } => (icons::view::ORTHOGRAPHIC, "Orthographic view; switch to perspective  (O)"),
+        Projection::Perspective { .. } => (icons::view::PERSPECTIVE, furnicraft_text::Message::PerspectiveViewHint),
+        Projection::Orthographic { .. } => (icons::view::ORTHOGRAPHIC, furnicraft_text::Message::OrthographicViewHint),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_view_preset_has_its_own_drawn_glyph() {
+        let mut seen = std::collections::HashSet::new();
+        for view in OpeningView::ALL {
+            let icon = preset_icon(view);
+            assert!(icon.is_drawn(), "{view:?} still draws a placeholder");
+            assert!(seen.insert(icon.uri()), "{view:?} shares its glyph with another preset");
+        }
+        assert_eq!(seen.len(), OpeningView::ALL.len(), "the six presets own six glyphs");
     }
 }

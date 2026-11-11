@@ -12,13 +12,21 @@ use egui::{Color32, DragValue, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_SET_ID};
 use furnicraft_engine::{NodePropertyClear, NodePropertySet, Session};
 use furnicraft_model::{FurnType, Id, PropertyValue};
+use furnicraft_text::Message;
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
 use crate::section::section;
 
 /// The property kinds the card can add without a prototype schema.
-const NEW_KIND_NAMES: [&str; 6] = ["Text", "Integer", "Bool", "Length", "Angle", "Furniture type"];
+const NEW_KIND_NAMES: [Message; 6] = [
+    Message::PropertyKindText,
+    Message::PropertyKindInteger,
+    Message::PropertyKindBool,
+    Message::PropertyKindLength,
+    Message::PropertyKindAngle,
+    Message::PropertyKindFurnitureType,
+];
 
 fn new_value(kind: usize) -> PropertyValue {
     match kind {
@@ -67,19 +75,23 @@ impl PropertiesCard {
         let mut edits = Vec::new();
 
         ui.separator();
-        section(ui, "properties", "Properties", true, |ui| {
+        let lang = crate::language(ui.ctx());
+        section(ui, "properties", Message::PropertiesTitle.text(lang), true, |ui| {
             ui.horizontal(|ui| {
-                let status = if is_component { "Component" } else { "Group" };
-                ui.label(RichText::new(status).strong());
+                let status = if is_component { Message::ContainerRoleComponent } else { Message::ContainerRoleGroup };
+                ui.label(RichText::new(status.text(lang)).strong());
                 if let Some(furntype) = session.project().furntype(node) {
-                    let text =
-                        if furntype.is_unclassified() { "unclassified".to_owned() } else { format!("type {furntype}") };
+                    let text = if furntype.is_unclassified() {
+                        Message::Unclassified.text(lang).to_owned()
+                    } else {
+                        Message::TypeWith.with(lang, [furntype])
+                    };
                     ui.label(text);
                 }
             });
 
             if properties.is_empty() {
-                ui.label("No properties.");
+                ui.label(Message::NoProperties.text(lang));
             }
             for (key, value) in properties.iter() {
                 edit_row(ui, key, value, &mut self.drafts, &mut edits);
@@ -87,16 +99,20 @@ impl PropertiesCard {
 
             ui.separator();
             ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut self.new_key).hint_text("key").desired_width(140.0));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_key).hint_text(Message::KeyHint.text(lang)).desired_width(140.0),
+                );
                 egui::ComboBox::from_id_salt("properties.new_kind")
-                    .selected_text(NEW_KIND_NAMES.get(self.new_kind).copied().unwrap_or("Text"))
+                    .selected_text(
+                        NEW_KIND_NAMES.get(self.new_kind).copied().unwrap_or(Message::PropertyKindText).text(lang),
+                    )
                     .show_ui(ui, |ui| {
                         for (index, name) in NEW_KIND_NAMES.iter().enumerate() {
-                            ui.selectable_value(&mut self.new_kind, index, *name);
+                            ui.selectable_value(&mut self.new_kind, index, name.text(lang));
                         }
                     });
                 let can_add = valid_new_key(&self.new_key) && !properties.contains_key(self.new_key.trim());
-                if ui.add_enabled(can_add, egui::Button::new("Add")).clicked() {
+                if ui.add_enabled(can_add, egui::Button::new(Message::Add.text(lang))).clicked() {
                     let key = self.new_key.trim().to_owned();
                     edits.push(Edit::Set { key: key.clone(), value: new_value(self.new_kind) });
                     self.drafts.remove(&key);
@@ -224,7 +240,7 @@ fn edit_row(
                 ui.label(RichText::new(value.to_string()).weak());
             }
         }
-        if ui.small_button("✕").on_hover_text("Clear property").clicked() {
+        if ui.small_button("✕").on_hover_text(Message::CmdClearProperty.text(crate::language(ui.ctx()))).clicked() {
             edits.push(Edit::Clear { key: key.to_owned() });
         }
     });

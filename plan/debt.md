@@ -118,15 +118,6 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   `PrimitiveKind` has no `Cone` and `crates/param` builds no cone solid, so the tab draws the three
   primitives the document really has. A cone needs the model variant, the kernel plan and the drawn
   `primitives/cone` asset in one change; drawing the icon alone would offer a tool that cannot build.
-- `[ui]` 38 of the 74 declared icons are zero-byte placeholders: 25 of the 30 `actions` files
-  (confirm, dismiss, cancel, delete, duplicate, rename, copy, paste, remove, the four `file-*`
-  entries, print, search, the four visibility and lock toggles, expand, collapse, warning, error,
-  info, help),
-  `primitives/cone`, `bodies/revolve`, `bodies/sweep` and the ten view glyphs U40 added for the
-  floating cluster (orbit, pan, zoom, layout, sliders and the five shading styles). The empty-file
-  fallback keeps every surface usable with its text label, but the cluster wraps onto several rows in
-  a narrow viewport until U46 draws them. Measured 2026-11-11, after X32 drew `actions/add`. See
-  `assets/icons/AUDIT.md` §5 and ADR 0055.
 - `[ui]` The regular polygon's `Sides` field has no refusal state: a value outside `3..=128` is
   clamped and a non-number falls back to six, while the field keeps the typed text. The tool builds
   a valid polygon instead of failing, but a typo is not named. A validated field can land with the
@@ -191,3 +182,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   `EvaluationCache::finish` drops every entry the pass did not touch. Hiding a large assembly and
   showing it again rebuilds every mesh in it; keeping the entries while the flag is set means the
   cache has to know the hidden set instead of only the revision (U48).
+- `[ui]` The message table covers the captions, hints and menus of `crates/ui` and the shell, but the
+  detail of an engine `CommandError` and of a drag refusal in `gizmo_math` still reaches the status
+  bar as its English `thiserror` sentence. The `units` refusals are mapped (`length_error`,
+  `degrees_error`); the engine and drag ones need the same mapping at the UI boundary, or the status
+  bar says half a sentence in the other language (U49).

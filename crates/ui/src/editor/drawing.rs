@@ -12,6 +12,7 @@
 
 use furnicraft_engine::Session;
 use furnicraft_model::Placement;
+use furnicraft_text::Lang;
 use furnicraft_units::Length;
 
 use super::Editor;
@@ -82,13 +83,18 @@ impl Editor {
     /// zero. The new node becomes the selection and immediately enters contour edit mode with its
     /// grips, so the figure the user just drew can be reshaped without a second click. Escape or
     /// Enter leaves that mode. A refused path leaves the draft and the selection untouched.
-    pub fn commit_drawing(&mut self, session: &mut Session, placement: Placement) -> Result<DrawnPath, String> {
+    pub fn commit_drawing(
+        &mut self,
+        session: &mut Session,
+        placement: Placement,
+        lang: Lang,
+    ) -> Result<DrawnPath, String> {
         let Some(draft) = self.drawing.as_ref() else {
             return Err(DrawDraftError::NotStarted.to_string());
         };
         let parent = self.creation_target(session.project());
         let placement = session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
-        let object = draft.commit(session, parent, placement)?;
+        let object = draft.commit(session, parent, placement, lang)?;
         let tool = draft.tool();
         self.drawing = None;
         self.selection.replace(object);
@@ -115,9 +121,10 @@ impl Editor {
         &mut self,
         session: &mut Session,
         placement: Placement,
+        lang: Lang,
     ) -> Result<DrawnPath, String> {
         self.close_drawing().map_err(|error| error.to_string())?;
-        match self.commit_drawing(session, placement) {
+        match self.commit_drawing(session, placement, lang) {
             Ok(drawn) => Ok(drawn),
             Err(error) => {
                 self.reopen_drawing();

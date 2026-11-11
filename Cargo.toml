@@ -13,6 +13,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 # internal
 furnicraft-units = { path = "crates/units" }
+furnicraft-text = { path = "crates/text" }
 furnicraft-geom = { path = "crates/geom" }
 furnicraft-kernel = { path = "crates/kernel" }
 furnicraft-model = { path = "crates/model" }

@@ -1,6 +1,7 @@
 //! Command metadata, the static registry and dispatch errors.
 
 use furnicraft_model::{Catalog, Id, MachiningId, MaterialId, Project, ProjectError};
+use furnicraft_text::Message;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -47,11 +48,12 @@ impl CommandOutcome {
 
 /// Metadata and implementation of one document command.
 ///
-/// The id is lowercase `<area>.<verb>` and stable forever. The label is user-facing English.
+/// The id is lowercase `<area>.<verb>` and stable forever. The label is a [`Message`], so the
+/// palette, a CLI and the assistant print the same words in the user's language.
 #[derive(Clone, Copy, Debug)]
 pub struct CommandSpec {
     id: &'static str,
-    label: &'static str,
+    label: Message,
     enabled_fn: fn(&Session, &Value) -> bool,
     run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
 }
@@ -60,7 +62,7 @@ impl CommandSpec {
     /// Defines a command from its metadata and implementation.
     pub const fn new(
         id: &'static str,
-        label: &'static str,
+        label: Message,
         enabled_fn: fn(&Session, &Value) -> bool,
         run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
     ) -> Self {
@@ -73,7 +75,7 @@ impl CommandSpec {
     }
 
     /// The user-facing command label.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         self.label
     }
 
@@ -215,129 +217,140 @@ pub enum CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use furnicraft_text::Lang;
 
     #[test]
     fn registry_exposes_panel_commands() {
         let registry = CommandRegistry::new();
         let create = registry.get("panel.create").expect("panel.create is registered");
         assert_eq!(create.id(), "panel.create");
-        assert_eq!(create.label(), "Create panel");
+        assert_eq!(create.label().text(Lang::En), "Create panel");
         let rename = registry.get("panel.rename").expect("panel.rename is registered");
         assert_eq!(rename.id(), "panel.rename");
-        assert_eq!(rename.label(), "Rename panel");
+        assert_eq!(rename.label().text(Lang::En), "Rename panel");
         let resize = registry.get("panel.resize").expect("panel.resize is registered");
         assert_eq!(resize.id(), "panel.resize");
-        assert_eq!(resize.label(), "Resize panel");
+        assert_eq!(resize.label().text(Lang::En), "Resize panel");
         let material = registry.get("panel.material.set").expect("panel.material.set is registered");
         assert_eq!(material.id(), "panel.material.set");
-        assert_eq!(material.label(), "Set panel material");
+        assert_eq!(material.label().text(Lang::En), "Set panel material");
         let band = registry.get("panel.edge_banding.set").expect("panel.edge_banding.set is registered");
         assert_eq!(band.id(), "panel.edge_banding.set");
-        assert_eq!(band.label(), "Set edge banding");
+        assert_eq!(band.label().text(Lang::En), "Set edge banding");
         let clear = registry.get("panel.edge_banding.clear").expect("panel.edge_banding.clear is registered");
         assert_eq!(clear.id(), "panel.edge_banding.clear");
-        assert_eq!(clear.label(), "Clear edge banding");
+        assert_eq!(clear.label().text(Lang::En), "Clear edge banding");
         let corner_band_set = registry.get("panel.corner_banding.set").expect("panel.corner_banding.set is registered");
         assert_eq!(corner_band_set.id(), "panel.corner_banding.set");
-        assert_eq!(corner_band_set.label(), "Set corner banding");
+        assert_eq!(corner_band_set.label().text(Lang::En), "Set corner banding");
         let corner_band_clear =
             registry.get("panel.corner_banding.clear").expect("panel.corner_banding.clear is registered");
         assert_eq!(corner_band_clear.id(), "panel.corner_banding.clear");
-        assert_eq!(corner_band_clear.label(), "Clear corner banding");
+        assert_eq!(corner_band_clear.label().text(Lang::En), "Clear corner banding");
         let corner_set = registry.get("panel.corner.set").expect("panel.corner.set is registered");
         assert_eq!(corner_set.id(), "panel.corner.set");
-        assert_eq!(corner_set.label(), "Set corner feature");
+        assert_eq!(corner_set.label().text(Lang::En), "Set corner feature");
         let corner_clear = registry.get("panel.corner.clear").expect("panel.corner.clear is registered");
         assert_eq!(corner_clear.id(), "panel.corner.clear");
-        assert_eq!(corner_clear.label(), "Clear corner feature");
+        assert_eq!(corner_clear.label().text(Lang::En), "Clear corner feature");
         let bow_set = registry.get("panel.bow.set").expect("panel.bow.set is registered");
         assert_eq!(bow_set.id(), "panel.bow.set");
-        assert_eq!(bow_set.label(), "Set edge bow");
+        assert_eq!(bow_set.label().text(Lang::En), "Set edge bow");
         let bow_clear = registry.get("panel.bow.clear").expect("panel.bow.clear is registered");
         assert_eq!(bow_clear.id(), "panel.bow.clear");
-        assert_eq!(bow_clear.label(), "Clear edge bow");
+        assert_eq!(bow_clear.label().text(Lang::En), "Clear edge bow");
         let add = registry.get("panel.machining.add").expect("panel.machining.add is registered");
         assert_eq!(add.id(), "panel.machining.add");
-        assert_eq!(add.label(), "Add machining");
+        assert_eq!(add.label().text(Lang::En), "Add machining");
         let update = registry.get("panel.machining.update").expect("panel.machining.update is registered");
         assert_eq!(update.id(), "panel.machining.update");
-        assert_eq!(update.label(), "Update machining");
+        assert_eq!(update.label().text(Lang::En), "Update machining");
         let remove = registry.get("panel.machining.remove").expect("panel.machining.remove is registered");
         assert_eq!(remove.id(), "panel.machining.remove");
-        assert_eq!(remove.label(), "Remove machining");
+        assert_eq!(remove.label().text(Lang::En), "Remove machining");
         let reposition = registry.get("panel.machining.move").expect("panel.machining.move is registered");
         assert_eq!(reposition.id(), "panel.machining.move");
-        assert_eq!(reposition.label(), "Move machining");
+        assert_eq!(reposition.label().text(Lang::En), "Move machining");
         let outline_set = registry.get("panel.outline.set").expect("panel.outline.set is registered");
         assert_eq!(outline_set.id(), "panel.outline.set");
-        assert_eq!(outline_set.label(), "Set panel outline");
+        assert_eq!(outline_set.label().text(Lang::En), "Set panel outline");
         let outline_contour = registry.get("panel.outline.to_contour").expect("panel.outline.to_contour is registered");
         assert_eq!(outline_contour.id(), "panel.outline.to_contour");
-        assert_eq!(outline_contour.label(), "Bake panel outline into a contour");
+        assert_eq!(outline_contour.label().text(Lang::En), "Bake panel outline into a contour");
         let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
         assert_eq!(assembly_create.id(), "assembly.create");
-        assert_eq!(assembly_create.label(), "Create assembly");
+        assert_eq!(assembly_create.label().text(Lang::En), "Create assembly");
         let node_rename = registry.get("node.rename").expect("node.rename is registered");
         assert_eq!(node_rename.id(), "node.rename");
-        assert_eq!(node_rename.label(), "Rename");
+        assert_eq!(node_rename.label().text(Lang::En), "Rename");
         let delete = registry.get("node.delete").expect("node.delete is registered");
         assert_eq!(delete.id(), "node.delete");
-        assert_eq!(delete.label(), "Delete");
+        assert_eq!(delete.label().text(Lang::En), "Delete");
         let duplicate = registry.get("node.duplicate").expect("node.duplicate is registered");
         assert_eq!(duplicate.id(), "node.duplicate");
-        assert_eq!(duplicate.label(), "Duplicate");
+        assert_eq!(duplicate.label().text(Lang::En), "Duplicate");
         let group = registry.get("node.group").expect("node.group is registered");
         assert_eq!(group.id(), "node.group");
-        assert_eq!(group.label(), "Group");
+        assert_eq!(group.label().text(Lang::En), "Group");
         let ungroup = registry.get("node.ungroup").expect("node.ungroup is registered");
         assert_eq!(ungroup.id(), "node.ungroup");
-        assert_eq!(ungroup.label(), "Ungroup");
+        assert_eq!(ungroup.label().text(Lang::En), "Ungroup");
         let placement = registry.get("node.placement.set").expect("node.placement.set is registered");
         assert_eq!(placement.id(), "node.placement.set");
-        assert_eq!(placement.label(), "Place");
+        assert_eq!(placement.label().text(Lang::En), "Place");
         let placement_world_zero =
             registry.get("node.placement.world_zero").expect("node.placement.world_zero is registered");
         assert_eq!(placement_world_zero.id(), "node.placement.world_zero");
-        assert_eq!(placement_world_zero.label(), "Zero translation");
+        assert_eq!(placement_world_zero.label().text(Lang::En), "Zero translation");
         let placement_many = registry.get("node.placement.set_many").expect("node.placement.set_many is registered");
         assert_eq!(placement_many.id(), "node.placement.set_many");
-        assert_eq!(placement_many.label(), "Place selection");
+        assert_eq!(placement_many.label().text(Lang::En), "Place selection");
         let pivot_set = registry.get("node.pivot.set").expect("node.pivot.set is registered");
         assert_eq!(pivot_set.id(), "node.pivot.set");
-        assert_eq!(pivot_set.label(), "Set pivot");
+        assert_eq!(pivot_set.label().text(Lang::En), "Set pivot");
         let pivot_center = registry.get("node.pivot.center").expect("node.pivot.center is registered");
         assert_eq!(pivot_center.id(), "node.pivot.center");
-        assert_eq!(pivot_center.label(), "Center pivot");
+        assert_eq!(pivot_center.label().text(Lang::En), "Center pivot");
         let property_set = registry.get("node.property.set").expect("node.property.set is registered");
         assert_eq!(property_set.id(), "node.property.set");
-        assert_eq!(property_set.label(), "Set property");
+        assert_eq!(property_set.label().text(Lang::En), "Set property");
         let property_many = registry.get("node.property.set_many").expect("node.property.set_many is registered");
         assert_eq!(property_many.id(), "node.property.set_many");
-        assert_eq!(property_many.label(), "Set properties");
+        assert_eq!(property_many.label().text(Lang::En), "Set properties");
         let property_clear = registry.get("node.property.clear").expect("node.property.clear is registered");
         assert_eq!(property_clear.id(), "node.property.clear");
-        assert_eq!(property_clear.label(), "Clear property");
+        assert_eq!(property_clear.label().text(Lang::En), "Clear property");
         let convert =
             registry.get("node.component.convert_to_group").expect("node.component.convert_to_group is registered");
         assert_eq!(convert.id(), "node.component.convert_to_group");
-        assert_eq!(convert.label(), "Convert to group");
+        assert_eq!(convert.label().text(Lang::En), "Convert to group");
         let create_object = registry.get("object.primitive.create").expect("object.primitive.create is registered");
         assert_eq!(create_object.id(), "object.primitive.create");
-        assert_eq!(create_object.label(), "Create primitive");
+        assert_eq!(create_object.label().text(Lang::En), "Create primitive");
         let replace_primitive =
             registry.get("object.primitive.replace").expect("object.primitive.replace is registered");
         assert_eq!(replace_primitive.id(), "object.primitive.replace");
-        assert_eq!(replace_primitive.label(), "Replace primitive parameters");
+        assert_eq!(replace_primitive.label().text(Lang::En), "Replace primitive parameters");
         let create_path = registry.get("object.path.create").expect("object.path.create is registered");
         assert_eq!(create_path.id(), "object.path.create");
-        assert_eq!(create_path.label(), "Create path");
+        assert_eq!(create_path.label().text(Lang::En), "Create path");
         let replace_path = registry.get("object.path.replace").expect("object.path.replace is registered");
         assert_eq!(replace_path.id(), "object.path.replace");
-        assert_eq!(replace_path.label(), "Replace path");
+        assert_eq!(replace_path.label().text(Lang::En), "Replace path");
         let move_vertices = registry.get("mesh.vertices.move").expect("mesh.vertices.move is registered");
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
-        assert_eq!(move_vertices.label(), "Move vertices");
+        assert_eq!(move_vertices.label().text(Lang::En), "Move vertices");
         assert!(registry.get("missing.command").is_none());
         assert_eq!(registry.specs().len(), 51);
+    }
+
+    #[test]
+    fn every_command_label_resolves_in_every_language() {
+        let registry = CommandRegistry::new();
+        for spec in registry.specs() {
+            for lang in Lang::ALL {
+                assert!(!spec.label().text(lang).trim().is_empty(), "{} has no label in {lang:?}", spec.id());
+            }
+        }
     }
 }

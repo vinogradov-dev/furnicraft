@@ -9,6 +9,7 @@ use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::{NodeRename, Session};
 use furnicraft_model::{Id, Project};
+use furnicraft_text::Message;
 
 use crate::command::{dispatch, json};
 use crate::section::section;
@@ -44,23 +45,17 @@ enum ContainerKind {
 }
 
 impl ContainerKind {
-    const fn label(self) -> &'static str {
+    const fn label(self) -> Message {
         match self {
-            Self::Component => "Component",
-            Self::Group => "Group",
+            Self::Component => Message::ContainerRoleComponent,
+            Self::Group => Message::ContainerRoleGroup,
         }
     }
 
-    const fn description(self) -> &'static str {
+    const fn description(self) -> Message {
         match self {
-            Self::Component => {
-                "A furniture or industrial component. It keeps its own identity and must be converted to a group \
-                 before Ungroup will flatten it."
-            }
-            Self::Group => {
-                "An organisational container with no furniture type. Ungroup flattens it into its parent without \
-                 moving any child in world space."
-            }
+            Self::Component => Message::ContainerComponentDescription,
+            Self::Group => Message::ContainerGroupDescription,
         }
     }
 }
@@ -80,7 +75,7 @@ impl ContainerCard {
         let Some((kind, name, children)) = container_summary(session.project(), container_id) else {
             self.draft = None;
             self.error = None;
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(crate::language(ui.ctx())));
             return ContainerAction::None;
         };
         let name = name.to_owned();
@@ -97,14 +92,17 @@ impl ContainerCard {
         let mut rename = None;
         let mut name_error = None;
         ui.separator();
-        section(ui, "container.name", "Name", true, |ui| {
+        section(ui, "container.name", Message::SectionName.text(crate::language(ui.ctx())), true, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-                let clicked = ui.button("Rename").clicked();
+                let clicked = ui.button(Message::CmdRename.text(crate::language(ui.ctx()))).clicked();
                 if response.lost_focus() || clicked {
                     let trimmed = draft.name.trim();
                     if trimmed.is_empty() {
-                        name_error = Some(format!("{} name must not be empty.", kind.label()));
+                        name_error = Some(
+                            Message::NameMustNotBeEmpty
+                                .with(crate::language(ui.ctx()), [kind.label().text(crate::language(ui.ctx()))]),
+                        );
                     } else if trimmed != name {
                         rename = Some(trimmed.to_owned());
                     }
@@ -113,20 +111,23 @@ impl ContainerCard {
         });
 
         ui.separator();
-        section(ui, "container.summary", "Container", true, |ui| {
-            ui.label(RichText::new(kind.label()).strong());
+        let lang = crate::language(ui.ctx());
+        section(ui, "container.summary", Message::SectionContainer.text(lang), true, |ui| {
+            ui.label(RichText::new(kind.label().text(lang)).strong());
             ui.label(if is_root {
-                "Root; it defines the world frame and is never a furniture component.".to_owned()
+                Message::RootDescription.text(lang).to_owned()
             } else {
-                kind.description().to_owned()
+                kind.description().text(lang).to_owned()
             });
-            ui.label(format!("Children  {children}"));
+            ui.label(Message::ChildrenCount.with(lang, [children]));
         });
 
         if !is_root {
             ui.separator();
-            section(ui, "container.creation", "Create inside", true, |ui| {
-                if ui.button("Add child").on_hover_text("The next created node lands in this container").clicked() {
+            let lang = crate::language(ui.ctx());
+            section(ui, "container.creation", Message::SectionCreateInside.text(lang), true, |ui| {
+                if ui.button(Message::TreeAddChild.text(lang)).on_hover_text(Message::AddChildHint.text(lang)).clicked()
+                {
                     action = ContainerAction::AddChild;
                 }
             });

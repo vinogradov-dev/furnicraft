@@ -16,6 +16,8 @@ use egui::{Align, Context, Id, Layout, Modal, Ui};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use furnicraft_text::{Lang, Message};
+
 use crate::display::{OpeningView, ShadingStyle, shading_label};
 use crate::{theme, ui_scale};
 
@@ -55,11 +57,11 @@ impl ThemeChoice {
     pub const ALL: [Self; 3] = [Self::Dark, Self::Light, Self::System];
 
     /// The user-visible name.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         match self {
-            Self::Dark => "Dark",
-            Self::Light => "Light",
-            Self::System => "System",
+            Self::Dark => Message::ThemeDark,
+            Self::Light => Message::ThemeLight,
+            Self::System => Message::ThemeSystem,
         }
     }
 
@@ -73,12 +75,58 @@ impl ThemeChoice {
     }
 }
 
+/// The language the interface speaks, as the workspace stores it.
+///
+/// A saved `.fcs` never carries this: the language belongs to the workspace, not to the scene, so
+/// the same file opens in whatever language the person looking at it chose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    /// English.
+    #[default]
+    English,
+    /// Russian.
+    Russian,
+}
+
+impl Language {
+    /// Every language in the order the window lists them.
+    pub const ALL: [Self; 2] = [Self::English, Self::Russian];
+
+    /// The message-table language this choice selects.
+    pub const fn lang(self) -> Lang {
+        match self {
+            Self::English => Lang::En,
+            Self::Russian => Lang::Ru,
+        }
+    }
+
+    /// The choice that selects `lang`.
+    pub const fn from_lang(lang: Lang) -> Self {
+        match lang {
+            Lang::En => Self::English,
+            Lang::Ru => Self::Russian,
+        }
+    }
+
+    /// The language's own name, never translated: a user who cannot read the current language has
+    /// to be able to find their own in the list.
+    pub const fn label(self) -> Message {
+        match self {
+            Self::English => Message::LanguageEnglish,
+            Self::Russian => Message::LanguageRussian,
+        }
+    }
+}
+
 /// The *Appearance* section.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
     /// The theme variant, or the operating system's preference.
     pub theme: ThemeChoice,
+    /// The language the interface speaks.
+    pub language: Language,
     /// The action accent, as sRGB bytes.
     pub accent: [u8; 3],
     /// The UI scale, in percent.
@@ -89,6 +137,7 @@ impl Default for Appearance {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
+            language: Language::default(),
             accent: [theme::ACCENT.r(), theme::ACCENT.g(), theme::ACCENT.b()],
             ui_scale: ui_scale::DEFAULT_PERCENT,
         }
@@ -273,12 +322,12 @@ impl SettingsSection {
     pub const ALL: [Self; 4] = [Self::Appearance, Self::Viewport, Self::Ribbon, Self::Shortcuts];
 
     /// The user-visible name.
-    pub const fn label(self) -> &'static str {
+    pub const fn label(self) -> Message {
         match self {
-            Self::Appearance => "Appearance",
-            Self::Viewport => "Viewport",
-            Self::Ribbon => "Ribbon",
-            Self::Shortcuts => "Shortcuts",
+            Self::Appearance => Message::SectionAppearance,
+            Self::Viewport => Message::SectionViewport,
+            Self::Ribbon => Message::SectionRibbon,
+            Self::Shortcuts => Message::SectionShortcuts,
         }
     }
 }
@@ -298,12 +347,13 @@ pub struct SettingsOutcome {
 /// Escape and a click on the backdrop close it, like every other modal of the application.
 pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSection) -> SettingsOutcome {
     let mut outcome = SettingsOutcome::default();
+    let lang = settings.appearance.language.lang();
     let response = Modal::new(Id::unique("settings_window")).show(ctx, |ui| {
         ui.set_width(640.0);
         ui.horizontal(|ui| {
-            ui.heading("Settings");
+            ui.heading(crate::text(ui.ctx(), Message::SettingsTitle));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Done").clicked() {
+                if ui.button(crate::text(ui.ctx(), Message::Done)).clicked() {
                     outcome.close = true;
                 }
             });
@@ -313,7 +363,7 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
             ui.vertical(|ui| {
                 ui.set_width(150.0);
                 for entry in SettingsSection::ALL {
-                    ui.selectable_value(section, entry, entry.label());
+                    ui.selectable_value(section, entry, entry.label().text(lang));
                 }
             });
             ui.separator();
@@ -321,10 +371,10 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
                 ui.set_min_width(430.0);
                 ui.set_min_height(320.0);
                 outcome.changed |= match *section {
-                    SettingsSection::Appearance => appearance_ui(ui, settings),
-                    SettingsSection::Viewport => viewport_ui(ui, settings),
-                    SettingsSection::Ribbon => ribbon_ui(ui, settings),
-                    SettingsSection::Shortcuts => shortcuts_ui(ui),
+                    SettingsSection::Appearance => appearance_ui(ui, settings, lang),
+                    SettingsSection::Viewport => viewport_ui(ui, settings, lang),
+                    SettingsSection::Ribbon => ribbon_ui(ui, settings, lang),
+                    SettingsSection::Shortcuts => shortcuts_ui(ui, lang),
                 };
             });
         });
@@ -338,19 +388,26 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
     outcome
 }
 
-/// The *Appearance* page: theme, accent and UI scale.
-fn appearance_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
+/// The *Appearance* page: theme, language, accent and UI scale.
+fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
     let mut changed = false;
-    ui.heading("Appearance");
-    ui.label(egui::RichText::new("Theme").color(theme::text_dim(ui)));
+    ui.heading(Message::SectionAppearance.text(lang));
+    ui.label(egui::RichText::new(Message::Theme.text(lang)).color(theme::text_dim(ui)));
     ui.horizontal(|ui| {
         for choice in ThemeChoice::ALL {
-            changed |= ui.radio_value(&mut settings.appearance.theme, choice, choice.label()).changed();
+            changed |= ui.radio_value(&mut settings.appearance.theme, choice, choice.label().text(lang)).changed();
+        }
+    });
+    ui.add_space(theme::STEP);
+    ui.label(egui::RichText::new(Message::Language.text(lang)).color(theme::text_dim(ui)));
+    ui.horizontal(|ui| {
+        for choice in Language::ALL {
+            changed |= ui.radio_value(&mut settings.appearance.language, choice, choice.label().text(lang)).changed();
         }
     });
     ui.add_space(theme::STEP);
     ui.horizontal(|ui| {
-        ui.label("Accent");
+        ui.label(Message::Accent.text(lang));
         changed |= ui.color_edit_button_srgb(&mut settings.appearance.accent).changed();
     });
     ui.add_space(theme::STEP);
@@ -361,42 +418,39 @@ fn appearance_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
         changed |= settings.appearance.ui_scale != live;
         settings.appearance.ui_scale = live;
     }
-    ui.label(
-        egui::RichText::new("The scale applies to the whole window; icons are rasterised at the new pixel size.")
-            .small()
-            .color(theme::text_dim(ui)),
-    );
+    ui.label(egui::RichText::new(Message::ScaleHint.text(lang)).small().color(theme::text_dim(ui)));
     changed
 }
 
 /// The *Viewport* page: the defaults a new viewport opens with.
-fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
+fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
     let mut changed = false;
-    ui.heading("Viewport");
+    ui.heading(Message::SectionViewport.text(lang));
     ui.horizontal(|ui| {
-        ui.label("Display style");
-        egui::ComboBox::from_id_salt("settings_style").selected_text(shading_label(settings.viewport.style)).show_ui(
-            ui,
-            |ui| {
+        ui.label(Message::DisplayStyle.text(lang));
+        egui::ComboBox::from_id_salt("settings_style")
+            .selected_text(shading_label(settings.viewport.style, lang))
+            .show_ui(ui, |ui| {
                 for style in ShadingStyle::ALL {
-                    changed |= ui.selectable_value(&mut settings.viewport.style, style, shading_label(style)).changed();
+                    changed |=
+                        ui.selectable_value(&mut settings.viewport.style, style, shading_label(style, lang)).changed();
                 }
-            },
-        );
+            });
     });
     ui.horizontal(|ui| {
-        ui.label("Opening view");
+        ui.label(Message::OpeningView.text(lang));
         egui::ComboBox::from_id_salt("settings_opening_view")
-            .selected_text(settings.viewport.opening_view.label())
+            .selected_text(settings.viewport.opening_view.label(lang))
             .show_ui(ui, |ui| {
                 for view in OpeningView::ALL {
-                    changed |= ui.selectable_value(&mut settings.viewport.opening_view, view, view.label()).changed();
+                    changed |=
+                        ui.selectable_value(&mut settings.viewport.opening_view, view, view.label(lang)).changed();
                 }
             });
     });
     ui.add_space(theme::STEP);
     ui.horizontal(|ui| {
-        ui.label("Roll ring step");
+        ui.label(Message::RollRingStep.text(lang));
         changed |= ui
             .add(
                 egui::DragValue::new(&mut settings.viewport.roll_step_degrees)
@@ -404,10 +458,10 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
                     .suffix(" °")
                     .speed(0.2),
             )
-            .on_hover_text("Degrees per step when the ring under the corner widget is turned by hand.")
+            .on_hover_text(Message::RollRingStepHint.text(lang))
             .changed();
     });
-    changed |= ui.checkbox(&mut settings.viewport.grid, "Show the floor grid").changed();
+    changed |= ui.checkbox(&mut settings.viewport.grid, Message::ShowFloorGrid.text(lang)).changed();
     changed |= ui
         .add(
             egui::DragValue::new(&mut settings.viewport.grid_step_mm)
@@ -417,44 +471,33 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
         )
         .changed();
     changed |= ui
-        .checkbox(&mut settings.viewport.all_edges, "Show every triangle edge")
-        .on_hover_text("Diagnostic: keeps the triangulation diagonals the form-edge view hides.")
+        .checkbox(&mut settings.viewport.all_edges, Message::ShowEveryTriangleEdge.text(lang))
+        .on_hover_text(Message::AllEdgesHint.text(lang))
         .changed();
-    ui.label(
-        egui::RichText::new("These are the defaults of a new viewport; the open view keeps its own state.")
-            .small()
-            .color(theme::text_dim(ui)),
-    );
+    ui.label(egui::RichText::new(Message::ViewportDefaultsHint.text(lang)).small().color(theme::text_dim(ui)));
     changed
 }
 
 /// The *Ribbon* page: one opacity slider.
-fn ribbon_ui(ui: &mut Ui, settings: &mut Settings) -> bool {
-    ui.heading("Ribbon");
+fn ribbon_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
+    ui.heading(Message::SectionRibbon.text(lang));
     let mut percent = settings.ribbon.opacity * 100.0;
-    let response = ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %").text("Background opacity"));
+    let response =
+        ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %").text(Message::BackgroundOpacity.text(lang)));
     if response.changed() {
         settings.ribbon.opacity = (percent / 100.0).clamp(0.0, 1.0);
     }
-    ui.label(
-        egui::RichText::new("Lower values let the scene under the ribbon show through its body.")
-            .small()
-            .color(theme::text_dim(ui)),
-    );
+    ui.label(egui::RichText::new(Message::RibbonOpacityHint.text(lang)).small().color(theme::text_dim(ui)));
     response.changed()
 }
 
 /// The *Shortcuts* page: the keys the shell already listens for.
-fn shortcuts_ui(ui: &mut Ui) -> bool {
-    ui.heading("Shortcuts");
-    ui.label(
-        egui::RichText::new("The same keys the ribbon, the header and the status bar name.")
-            .small()
-            .color(theme::text_dim(ui)),
-    );
+fn shortcuts_ui(ui: &mut Ui, lang: Lang) -> bool {
+    ui.heading(Message::SectionShortcuts.text(lang));
+    ui.label(egui::RichText::new(Message::ShortcutsHint.text(lang)).small().color(theme::text_dim(ui)));
     egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
         egui::Grid::new("settings_shortcuts").num_columns(2).striped(true).show(ui, |ui| {
-            for (key, action) in shortcut_table() {
+            for (key, action) in shortcut_table(lang) {
                 ui.label(egui::RichText::new(key).strong());
                 ui.label(action);
                 ui.end_row();
@@ -468,29 +511,33 @@ fn shortcuts_ui(ui: &mut Ui) -> bool {
 ///
 /// A key shown here is a key the shell listens for; the drawing tools come from the same table the
 /// ribbon hints use, so a renamed shortcut cannot leave this page stale.
-pub fn shortcut_table() -> Vec<(String, String)> {
-    let mut rows = vec![
-        ("Ctrl+N".to_owned(), "Open an empty scene in a new tab".to_owned()),
-        ("Ctrl+W".to_owned(), "Close the active tab".to_owned()),
-        ("Ctrl+S".to_owned(), "Save the scene".to_owned()),
-        ("Ctrl+Z".to_owned(), "Undo".to_owned()),
-        ("Ctrl+Y".to_owned(), "Redo".to_owned()),
-        ("Ctrl+K".to_owned(), "Command palette".to_owned()),
-        ("F".to_owned(), "Frame all".to_owned()),
-        ("O".to_owned(), "Perspective / orthographic".to_owned()),
-        ("Alt+W".to_owned(), "Expand / restore the active view".to_owned()),
-        ("G".to_owned(), "Toggle the drawing grid".to_owned()),
-        ("Esc".to_owned(), "Cancel the current tool".to_owned()),
-        ("MMB".to_owned(), "Orbit".to_owned()),
-        ("Shift+MMB".to_owned(), "Pan".to_owned()),
-        ("Ctrl+MMB".to_owned(), "Zoom".to_owned()),
+pub fn shortcut_table(lang: Lang) -> Vec<(String, String)> {
+    let mut rows: Vec<(&str, Message)> = vec![
+        ("Ctrl+N", Message::ShortcutNewScene),
+        ("Ctrl+W", Message::ShortcutCloseTab),
+        ("Ctrl+S", Message::ShortcutSave),
+        ("Ctrl+Z", Message::ShortcutUndo),
+        ("Ctrl+Y", Message::ShortcutRedo),
+        ("Ctrl+K", Message::ShortcutPalette),
+        ("F", Message::ShortcutFrameAll),
+        ("O", Message::ShortcutProjection),
+        ("Alt+W", Message::ShortcutExpand),
+        ("G", Message::ShortcutGrid),
+        ("Esc", Message::ShortcutCancel),
+        ("MMB", Message::ShortcutOrbit),
+        ("Shift+MMB", Message::ShortcutPan),
+        ("Ctrl+MMB", Message::ShortcutZoom),
     ];
+    let mut table = Vec::with_capacity(rows.len() + crate::toolbars::CONTOUR_TOOLS.len());
+    for (key, action) in rows.drain(..) {
+        table.push((key.to_owned(), action.text(lang).to_owned()));
+    }
     for tool in crate::toolbars::CONTOUR_TOOLS {
         if let Some(key) = crate::toolbars::shortcut_label(tool) {
-            rows.push((key.to_owned(), tool.label().to_owned()));
+            table.push((key.to_owned(), tool.label().text(lang).to_owned()));
         }
     }
-    rows
+    table
 }
 
 #[cfg(test)]
@@ -504,7 +551,12 @@ mod tests {
     fn custom() -> Settings {
         Settings {
             version: SETTINGS_VERSION,
-            appearance: Appearance { theme: ThemeChoice::Light, accent: [0x11, 0x99, 0x44], ui_scale: 125 },
+            appearance: Appearance {
+                theme: ThemeChoice::Light,
+                language: Language::Russian,
+                accent: [0x11, 0x99, 0x44],
+                ui_scale: 125,
+            },
             viewport: ViewportSettings {
                 style: ShadingStyle::Wireframe,
                 grid: false,
@@ -596,20 +648,39 @@ mod tests {
         let root = Container::new(Id::new(1).expect("id"), "Scene", Placement::IDENTITY, Vec::new());
         let project = Project::new(root).expect("project");
         let document = serde_json::to_string(&project).expect("serialise");
-        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent"] {
+        for key in ["ui_scale", "grid_step_mm", "roll_step_degrees", "opacity", "accent", "theme", "recent", "language"]
+        {
             assert!(!document.contains(key), "`{key}` is workspace state and must stay out of the .fcs");
         }
     }
 
     #[test]
     fn the_shortcut_table_names_every_drawing_tool() {
-        let rows = shortcut_table();
+        let rows = shortcut_table(Lang::En);
         for tool in crate::toolbars::CONTOUR_TOOLS {
             assert!(
-                rows.iter().any(|(_, action)| action == tool.label()),
+                rows.iter().any(|(_, action)| action == tool.label().text(Lang::En)),
                 "{} is missing from the shortcut page",
-                tool.label()
+                tool.label().text(Lang::En)
             );
         }
+    }
+
+    #[test]
+    fn a_scene_saved_in_russian_loads_in_english_with_its_names_unchanged() {
+        let root = Container::new(Id::new(1).expect("id"), "Шкаф", Placement::IDENTITY, Vec::new());
+        let project = Project::new(root).expect("project");
+        let json = serde_json::to_string(&project).expect("serialise");
+        let restored: Project = serde_json::from_str(&json).expect("load");
+        assert_eq!(restored.root().name(), "Шкаф", "the language never renames a node");
+        assert_eq!(Language::from_lang(Lang::En), Language::English);
+    }
+
+    #[test]
+    fn a_settings_file_without_a_language_opens_in_english() {
+        let json = r#"{"version":1,"appearance":{"ui_scale":100}}"#;
+        let settings = Settings::from_json(json).expect("parse");
+        assert_eq!(settings.appearance.language, Language::English);
+        assert_eq!(settings.appearance.language.lang(), Lang::En);
     }
 }

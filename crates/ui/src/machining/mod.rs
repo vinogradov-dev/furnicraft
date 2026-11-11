@@ -22,6 +22,7 @@ use furnicraft_model::{
     EdgeId, EdgeRef, FaceSide, Id, MACHINING_DESCRIPTORS, Machining, MachiningAnchor, MachiningCapabilities,
     MachiningCategory, MachiningId, MachiningKind, MachiningParams, Panel,
 };
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
@@ -71,7 +72,7 @@ impl MachiningSection {
         self.retain_existing(panel);
 
         if panel.machining().is_empty() {
-            ui.label("No machining.");
+            ui.label(Message::NoMachining.text(crate::language(ui.ctx())));
         }
         let count = panel.machining().len();
         let mut contour_request = None;
@@ -160,26 +161,37 @@ impl MachiningSection {
         actions: &mut Vec<MachiningAction>,
     ) -> bool {
         let id = record.id();
-        let messages = bound_messages(diagnostics, id);
+        let messages = bound_messages(diagnostics, id, crate::language(ui.ctx()));
         let mut open = self.open.contains(&id);
 
         ui.horizontal(|ui| {
-            if ui.small_button(if open { "▾" } else { "▸" }).on_hover_text("Show or hide this operation").clicked()
+            if ui
+                .small_button(if open { "▾" } else { "▸" })
+                .on_hover_text(Message::ShowHideOperation.text(crate::language(ui.ctx())))
+                .clicked()
             {
                 open = !open;
             }
-            ui.label(RichText::new(operation_title(record)).strong());
+            ui.label(RichText::new(operation_title(record, crate::language(ui.ctx()))).strong());
             if !messages.is_empty() {
                 ui.colored_label(Color32::YELLOW, "⚠").on_hover_text(messages.join("\n"));
             }
-            if ui.add_enabled(index > 0, egui::Button::new("↑").small()).on_hover_text("Move earlier").clicked() {
+            if ui
+                .add_enabled(index > 0, egui::Button::new("↑").small())
+                .on_hover_text(Message::MoveEarlier.text(crate::language(ui.ctx())))
+                .clicked()
+            {
                 actions.push(MachiningAction::Move { panel: panel_id, machining: id, index: index - 1 });
             }
-            if ui.add_enabled(index + 1 < count, egui::Button::new("↓").small()).on_hover_text("Move later").clicked()
+            if ui
+                .add_enabled(index + 1 < count, egui::Button::new("↓").small())
+                .on_hover_text(Message::MoveLater.text(crate::language(ui.ctx())))
+                .clicked()
             {
                 actions.push(MachiningAction::Move { panel: panel_id, machining: id, index: index + 1 });
             }
-            if ui.small_button("−").on_hover_text("Remove operation").clicked() {
+            if ui.small_button("−").on_hover_text(Message::RemoveOperation.text(crate::language(ui.ctx()))).clicked()
+            {
                 actions.push(MachiningAction::Remove { panel: panel_id, machining: id });
             }
         });
@@ -245,13 +257,17 @@ impl MachiningSection {
     /// Draws the add menu from the descriptor table, grouped by category.
     fn show_add_menu(&mut self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<MachiningAction>) {
         ui.horizontal(|ui| {
-            ComboBox::from_id_salt(("machining_add", panel_id.get())).selected_text("Add operation").show_ui(
-                ui,
-                |ui| {
+            ComboBox::from_id_salt(("machining_add", panel_id.get()))
+                .selected_text(Message::AddOperation.text(crate::language(ui.ctx())))
+                .show_ui(ui, |ui| {
                     for (category, kinds) in add_menu_groups() {
-                        ui.label(RichText::new(category.label()).weak());
+                        ui.label(
+                            RichText::new(machining_category_label(category).text(crate::language(ui.ctx()))).weak(),
+                        );
                         for kind in kinds {
-                            if ui.selectable_label(false, kind.label()).clicked()
+                            if ui
+                                .selectable_label(false, machining_kind_label(kind).text(crate::language(ui.ctx())))
+                                .clicked()
                                 && let Some(anchor) = default_anchor(kind, panel)
                             {
                                 actions.push(MachiningAction::Add {
@@ -263,24 +279,37 @@ impl MachiningSection {
                         }
                         ui.separator();
                     }
-                },
-            );
+                });
         });
     }
 }
 
 /// The heading of one operation row: the kind and the anchor it acts on.
-fn operation_title(record: &Machining) -> String {
-    format!("{} · {}", record.params().kind().label(), anchor_label(record.anchor()))
+fn operation_title(record: &Machining, lang: Lang) -> String {
+    format!("{} · {}", machining_kind_label(record.params().kind()).text(lang), anchor_label(record.anchor(), lang))
+}
+
+/// The interface's name for a machining kind, so the model's English label never reaches the card.
+fn machining_kind_label(kind: MachiningKind) -> Message {
+    match kind {
+        MachiningKind::Cutout => Message::MachiningCutout,
+    }
+}
+
+/// The interface's name for an add-menu category.
+fn machining_category_label(category: MachiningCategory) -> Message {
+    match category {
+        MachiningCategory::Cut => Message::MachiningCategoryCut,
+    }
 }
 
 /// A short user-facing name for an anchor.
-fn anchor_label(anchor: MachiningAnchor) -> String {
+fn anchor_label(anchor: MachiningAnchor, lang: Lang) -> String {
     match anchor {
-        MachiningAnchor::Face { side } => format!("Face {}", side.label()),
+        MachiningAnchor::Face { side } => Message::FaceWith.with(lang, [side.label()]),
         MachiningAnchor::Edge { edge } => match edge {
-            EdgeRef::Rect { edge } => format!("Edge {}", edge_label(edge.get())),
-            EdgeRef::Ring { segment } => format!("Segment {}", segment.get()),
+            EdgeRef::Rect { edge } => Message::EdgeWith.with(lang, [edge_label(edge.get()).text(lang)]),
+            EdgeRef::Ring { segment } => Message::SegmentWith.with(lang, [segment.get()]),
         },
     }
 }
@@ -298,11 +327,11 @@ pub(crate) fn diagnostic_machining(diagnostic: &PanelDiagnostic) -> Option<Machi
 }
 
 /// The diagnostics bound to one record, formatted for the card.
-fn bound_messages(diagnostics: &[PanelDiagnostic], id: MachiningId) -> Vec<String> {
+fn bound_messages(diagnostics: &[PanelDiagnostic], id: MachiningId, lang: Lang) -> Vec<String> {
     diagnostics
         .iter()
         .filter(|diagnostic| diagnostic_machining(diagnostic) == Some(id))
-        .map(diagnostic_message)
+        .map(|diagnostic| diagnostic_message(diagnostic, lang).into_owned())
         .collect()
 }
 
@@ -351,7 +380,9 @@ fn anchor_editor(
     capabilities: MachiningCapabilities,
 ) -> Option<MachiningAnchor> {
     let MachiningAnchor::Face { side } = current else {
-        ui.label(format!("Anchor  {}", anchor_label(current)));
+        ui.label(
+            Message::AnchorWith.with(crate::language(ui.ctx()), [anchor_label(current, crate::language(ui.ctx()))]),
+        );
         return None;
     };
     if !capabilities.face() {
@@ -359,12 +390,17 @@ fn anchor_editor(
     }
     let mut chosen = side;
     ui.horizontal(|ui| {
-        ui.label("Entry");
+        ui.label(Message::Entry.text(crate::language(ui.ctx())));
         ComboBox::from_id_salt(("machining_face", panel_id.get(), machining.get()))
-            .selected_text(format!("Face {}", side.label()))
+            .selected_text(Message::FaceWith.with(crate::language(ui.ctx()), [side.label()]))
             .show_ui(ui, |ui| {
                 for option in [FaceSide::A, FaceSide::B] {
-                    if ui.selectable_label(side == option, format!("Face {}", option.label())).clicked()
+                    if ui
+                        .selectable_label(
+                            side == option,
+                            Message::FaceWith.with(crate::language(ui.ctx()), [option.label()]),
+                        )
+                        .clicked()
                         && side != option
                     {
                         chosen = option;
@@ -624,13 +660,13 @@ mod tests {
             MachiningAnchor::face(FaceSide::B),
             cutout(sample_cutout_rect(), CutoutDepth::Through),
         );
-        assert_eq!(operation_title(&record), "Cutout · Face B");
+        assert_eq!(operation_title(&record, Lang::En), "Cutout · Face B");
         let edge = Machining::new(
             MachiningId::new(6).expect("id"),
             MachiningAnchor::edge(EdgeRef::Rect { edge: EdgeId::new(1).expect("edge") }),
             cutout(sample_cutout_rect(), CutoutDepth::Through),
         );
-        assert_eq!(operation_title(&edge), "Cutout · Edge Bottom");
+        assert_eq!(operation_title(&edge, Lang::En), "Cutout · Edge Bottom");
     }
 
     #[test]

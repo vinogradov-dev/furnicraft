@@ -102,12 +102,12 @@ impl LayoutKind {
     pub(crate) const ALL: [Self; 4] = [Self::Single, Self::TwoColumns, Self::TwoRows, Self::Quad];
 
     /// The user-visible name, used as the caption and the tooltip.
-    pub(crate) const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> furnicraft_text::Message {
         match self {
-            Self::Single => "One view",
-            Self::TwoColumns => "Two vertical",
-            Self::TwoRows => "Two horizontal",
-            Self::Quad => "Four views",
+            Self::Single => furnicraft_text::Message::LayoutOneView,
+            Self::TwoColumns => furnicraft_text::Message::LayoutTwoVertical,
+            Self::TwoRows => furnicraft_text::Message::LayoutTwoHorizontal,
+            Self::Quad => furnicraft_text::Message::LayoutFourViews,
         }
     }
 

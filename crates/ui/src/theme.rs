@@ -88,9 +88,9 @@ pub const RIBBON_ROW_HEIGHT: f32 = 56.0;
 /// The cell is the same for every tool of a row and grows with the window between this floor and
 /// [`RIBBON_BUTTON_MAX_WIDTH`], because a caption must never size its own button (ADR 0067). The
 /// floor is set by the longest caption the ribbon can draw: the Russian `Прямоугольник` measures
-/// 91 pt at [`crate::icons::RIBBON_CAPTION_POINT_SIZE`], and the cell padding brings the cell to 99,
-/// rounded up to 104.
-pub const RIBBON_BUTTON_MIN_WIDTH: f32 = 104.0;
+/// 91 pt at [`crate::icons::RIBBON_CAPTION_POINT_SIZE`], and the longest U49 caption measures 98,
+/// so the cell padding brings the floor to 106, rounded up to 108.
+pub const RIBBON_BUTTON_MIN_WIDTH: f32 = 108.0;
 
 /// The widest a ribbon cell may be, in points.
 ///
@@ -566,7 +566,7 @@ mod tests {
         const CELL_FLOOR: f32 = RIBBON_BUTTON_MIN_WIDTH;
         const CELL_CEILING: f32 = RIBBON_BUTTON_MAX_WIDTH;
         const { assert!(CELL_FLOOR < CELL_CEILING) };
-        const { assert!(CELL_FLOOR >= 2.0 * RIBBON_BUTTON_PADDING + 91.0) };
+        const { assert!(CELL_FLOOR >= 2.0 * RIBBON_BUTTON_PADDING + 98.0) };
         // The chrome rows keep one order: the header is busiest, the bar is the quietest, and the
         // ribbon is the tallest because it carries an icon over a caption.
         const { assert!(HEADER_HEIGHT > STATUS_HEIGHT) };

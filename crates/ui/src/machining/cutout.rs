@@ -6,6 +6,7 @@
 
 use egui::{ComboBox, Ui};
 use furnicraft_model::{Cutout, CutoutDepth, CutoutShape, Id, MachiningId, PanelRect};
+use furnicraft_text::Message;
 use furnicraft_units::Length;
 
 use crate::contour_edit::ContourEntry;
@@ -27,10 +28,10 @@ enum DepthMode {
 impl DepthMode {
     const ALL: [Self; 2] = [Self::Through, Self::Blind];
 
-    const fn label(self) -> &'static str {
+    const fn label(self) -> Message {
         match self {
-            Self::Through => "Through",
-            Self::Blind => "Blind",
+            Self::Through => Message::Through,
+            Self::Blind => Message::Blind,
         }
     }
 
@@ -88,24 +89,37 @@ fn show_shape(ui: &mut Ui, shape: &CutoutShape, entry: ContourEntry) -> (Option<
         CutoutShape::Contour(contour) => {
             let segments = contour.segments().len();
             let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
-            let suffix = if arcs > 0 { format!(" · {arcs} arcs") } else { String::new() };
+            let lang = crate::language(ui.ctx());
+            let mut summary = Message::counted(
+                segments,
+                Message::PanelContourRingOne,
+                Message::PanelContourRingFew,
+                Message::PanelContourRingMany,
+            )
+            .text(lang);
+            if arcs > 0 {
+                summary.push_str(
+                    &Message::counted(arcs, Message::ArcSuffixOne, Message::ArcSuffixFew, Message::ArcSuffixMany)
+                        .text(lang),
+                );
+            }
             let mut edit_contour = false;
             ui.horizontal(|ui| {
-                ui.label(format!("Contour ring · {segments} segments{suffix}"));
+                ui.label(summary);
                 match entry {
                     ContourEntry::Editing => {
-                        ui.label("Editing in the viewport. Apply or cancel in the viewport toolbar.");
+                        ui.label(Message::PanelEditingInViewport.text(lang));
                     }
                     ContourEntry::Busy => {
-                        ui.label("Finish the current contour edit in the viewport first.");
+                        ui.label(Message::PanelFinishContour.text(lang));
                     }
                     ContourEntry::SelectSingle => {
-                        ui.label("Select only this panel to edit its contour.");
+                        ui.label(Message::PanelSelectSingle.text(lang));
                     }
                     ContourEntry::Ready => {
                         edit_contour = ui
-                            .button("Edit contour")
-                            .on_hover_text("Reshapes this ring in the viewport. Undo restores the stored ring.")
+                            .button(Message::PanelEditContour.text(lang))
+                            .on_hover_text(Message::CutoutReshapeHint.text(lang))
                             .clicked();
                     }
                 }
@@ -137,13 +151,13 @@ fn show_rectangle(ui: &mut Ui, rect: PanelRect) -> Option<PanelRect> {
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Width");
+        ui.label(Message::Width.text(crate::language(ui.ctx())));
         let (width, _) = millimetre_field(ui, rect.width(), 0.1..=10_000.0);
         if let Some(width) = width.and_then(positive_length) {
             next = PanelRect::new(next.x(), next.y(), width, next.height()).unwrap_or(next);
             committed = true;
         }
-        ui.label("Height");
+        ui.label(Message::FieldHeight.text(crate::language(ui.ctx())));
         let (height, _) = millimetre_field(ui, rect.height(), 0.1..=10_000.0);
         if let Some(height) = height.and_then(positive_length) {
             next = PanelRect::new(next.x(), next.y(), next.width(), height).unwrap_or(next);
@@ -169,12 +183,14 @@ fn show_depth(
     };
     let mut committed = false;
     ui.horizontal(|ui| {
-        ui.label("Depth");
+        ui.label(Message::Depth.text(crate::language(ui.ctx())));
         ComboBox::from_id_salt(("cutout_depth", panel_id.get(), machining.get()))
-            .selected_text(current.label())
+            .selected_text(current.label().text(crate::language(ui.ctx())))
             .show_ui(ui, |ui| {
                 for option in DepthMode::ALL {
-                    if ui.selectable_label(mode == option, option.label()).clicked() && mode != option {
+                    if ui.selectable_label(mode == option, option.label().text(crate::language(ui.ctx()))).clicked()
+                        && mode != option
+                    {
                         mode = option;
                         committed = true;
                     }

@@ -30,7 +30,8 @@ body, and a maximised window makes the cells wider — up to a point, not withou
   caption, and the icon-plus-caption block is centred in the cell rather than pinned to the top, so a
   one-line and a two-line caption share their optical centre;
 - the floor is derived from the longest caption the interface will ever draw: the Russian
-  `Прямоугольник` at the 10.5 pt caption size, which is the U49 requirement, not a guess.
+  `Прямоугольник` at the 10.5 pt caption size measures 91 pt, and U49's longest caption measures
+  98, so the cell floor is 108, not a guess.
 
 `icons::ribbon_button` takes that width and paints one cell for every caption:
 
@@ -51,8 +52,8 @@ A cell has a floor, so a tab of seven tools can be wider than the window: the bo
 
 ## Consequences
 The row is one pitch at every window width, a colour change or a new caption no longer moves a
-neighbour, and the longest caption the interface will ever draw — the Russian `Прямоугольник` at
-91 pt — fits the floor, which is the U49 requirement. The costs are a second measurement per frame
+neighbour, and the longest caption the interface will ever draw — 98 pt at the 10.5 pt size —
+fits the 108 pt floor, which is the U49 requirement. The costs are a second measurement per frame
 (one division and a clamp), a horizontal scroll on a very narrow window, and the rule that a cell's
 width is a property of the ribbon rather than of a button, which every caller now has to respect.
 

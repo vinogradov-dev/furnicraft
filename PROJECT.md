@@ -211,6 +211,7 @@ only when the crates exist.
 
 | Layer | Crate | Responsibility | Depends on |
 |---|---|---|---|
+| L0 | `furnicraft-text` | The interface's words: `Lang::{En, Ru}`, one `Message` per user-facing string, its `[&str; Lang::COUNT]` table, and counted messages that pick the Russian one/few/many form | — |
 | L0 | `furnicraft-units` | `Length` in micrometres and `Degrees` in millidegrees, thickness helpers, parsing and formatting in mm and degrees | serde |
 | L0 | `furnicraft-geom` | `glam` re-exports, `Frame`, indexed `MeshData`; bounds and planes as features need them | glam, serde |
 | L1 | `furnicraft-kernel` | Geometry kernel **port**: `Profile`, opaque `BodyId`, extrusion (linear sweep), booleans, tessellation, measures. No third-party kernel types | geom, thiserror |

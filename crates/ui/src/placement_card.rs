@@ -13,6 +13,7 @@ use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PLACEMENT_SET_ID, NODE_PLACEMENT_WORLD_ZERO_ID};
 use furnicraft_engine::{NodePlacementSet, NodePlacementWorldZero, Session};
 use furnicraft_model::{EulerAngles, Id, Placement};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
@@ -74,19 +75,20 @@ impl PlacementCard {
             self.draft = Draft::new(node, current);
         }
 
-        ui.label(RichText::new("Placement").strong());
+        ui.label(RichText::new(Message::Placement.text(crate::language(ui.ctx()))).strong());
         let parent_name = session
             .project()
             .parent_of(node)
             .and_then(|parent| session.project().container(parent))
             .map(|container| container.name().to_owned());
+        let lang = crate::language(ui.ctx());
         let translation_title = match parent_name {
-            Some(name) => format!("Translation (local to {name})"),
-            None => "Translation (local to the parent)".to_owned(),
+            Some(name) => Message::TranslationLocalTo.with(lang, [name]),
+            None => Message::TranslationLocalToParent.text(lang).to_owned(),
         };
 
         let Some(draft) = self.draft.as_mut() else {
-            ui.colored_label(Color32::LIGHT_RED, "The stored translation is outside the editable millimetre range.");
+            ui.colored_label(Color32::LIGHT_RED, Message::TranslationOutOfRange.text(crate::language(ui.ctx())));
             return;
         };
 
@@ -95,7 +97,8 @@ impl PlacementCard {
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
         let mut commit = false;
         let mut zero = false;
-        section(ui, "placement.transform", "Transform", true, |ui| {
+        let lang = crate::language(ui.ctx());
+        section(ui, "placement.transform", Message::SectionTransform.text(lang), true, |ui| {
             section(ui, "placement.transform.translation", translation_title, true, |ui| {
                 for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
                     ui.horizontal(|ui| {
@@ -106,19 +109,19 @@ impl PlacementCard {
                     });
                 }
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(can_zero, egui::Button::new("Zero translation")).clicked() {
+                    if ui.add_enabled(can_zero, egui::Button::new(Message::CmdZeroTranslation.text(lang))).clicked() {
                         zero = true;
                     }
                 });
                 match &world {
-                    Some(world) => ui.label(format!("World position  {world}")),
-                    None => ui.label("World position  outside the editable range"),
+                    Some(world) => ui.label(Message::WorldPosition.with(lang, [world])),
+                    None => ui.label(Message::WorldPositionOutOfRange.text(lang)),
                 };
             });
             section(
                 ui,
                 "placement.transform.rotation",
-                format!("Rotation ({})", EulerAngles::ORDER_LABEL),
+                Message::RotationWithOrder.with(lang, [EulerAngles::ORDER_LABEL]),
                 true,
                 |ui| {
                     for (label, text) in [("X", &mut draft.rx), ("Y", &mut draft.ry), ("Z", &mut draft.rz)] {
@@ -131,7 +134,7 @@ impl PlacementCard {
                     }
                 },
             );
-            if ui.button("Apply").clicked() {
+            if ui.button(Message::Apply.text(lang)).clicked() {
                 commit = true;
             }
         });
@@ -140,7 +143,7 @@ impl PlacementCard {
         }
 
         if zero {
-            match apply_world_zero(session, node) {
+            match apply_world_zero(session, node, lang) {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
@@ -162,7 +165,7 @@ impl PlacementCard {
             ry: draft.ry.clone(),
             rz: draft.rz.clone(),
         };
-        match apply_placement(session, node, &fields) {
+        match apply_placement(session, node, &fields, lang) {
             Ok(()) => {
                 self.error = None;
                 self.draft = None;
@@ -189,17 +192,18 @@ struct Fields {
 /// Only the half that changed is rebuilt: a translation edit keeps the exact stored quaternion and a
 /// rotation edit keeps the exact stored translation. An Euler triple that wraps to the displayed one,
 /// or one that describes the same rotation in another way, is not a change.
-fn apply_placement(session: &mut Session, node: Id, fields: &Fields) -> Result<(), String> {
+fn apply_placement(session: &mut Session, node: Id, fields: &Fields, lang: Lang) -> Result<(), String> {
     let current = session
         .project()
         .node(node)
         .map(|node| node.placement())
-        .ok_or_else(|| format!("node {node} is not in the scene"))?;
-    let translation = [parse_length("X", &fields.x)?, parse_length("Y", &fields.y)?, parse_length("Z", &fields.z)?];
+        .ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
+    let translation =
+        [parse_length("X", &fields.x, lang)?, parse_length("Y", &fields.y, lang)?, parse_length("Z", &fields.z, lang)?];
     let rotation = EulerAngles {
-        x: parse_degrees("Rotate X", &fields.rx)?,
-        y: parse_degrees("Rotate Y", &fields.ry)?,
-        z: parse_degrees("Rotate Z", &fields.rz)?,
+        x: parse_degrees(&Message::RotateAxis.with(lang, ["X"]), &fields.rx, lang)?,
+        y: parse_degrees(&Message::RotateAxis.with(lang, ["Y"]), &fields.ry, lang)?,
+        z: parse_degrees(&Message::RotateAxis.with(lang, ["Z"]), &fields.rz, lang)?,
     };
 
     let mut placement = current;
@@ -219,20 +223,22 @@ fn apply_placement(session: &mut Session, node: Id, fields: &Fields) -> Result<(
 }
 
 /// Clears the parent-frame translation through `node.placement.world_zero`, keeping the rotation.
-fn apply_world_zero(session: &mut Session, node: Id) -> Result<(), String> {
+fn apply_world_zero(session: &mut Session, node: Id, lang: Lang) -> Result<(), String> {
     if session.project().node(node).is_none() {
-        return Err(format!("node {node} is not in the scene"));
+        return Err(Message::NodeNotInScene.with(lang, [node]));
     }
     let params = json(&NodePlacementWorldZero { node })?;
     dispatch(session, NODE_PLACEMENT_WORLD_ZERO_ID, &params).map(|_| ())
 }
 
-fn parse_length(label: &str, text: &str) -> Result<Length, String> {
-    Length::parse_millimetres(text).map_err(|error| format!("{label}: {error}"))
+fn parse_length(label: &str, text: &str, lang: Lang) -> Result<Length, String> {
+    Length::parse_millimetres(text)
+        .map_err(|error| Message::FieldWithError.with(lang, [label, crate::length_error(error).text(lang)]))
 }
 
-fn parse_degrees(label: &str, text: &str) -> Result<Degrees, String> {
-    Degrees::parse_degrees(text).map_err(|error| format!("{label}: {error}"))
+fn parse_degrees(label: &str, text: &str, lang: Lang) -> Result<Degrees, String> {
+    Degrees::parse_degrees(text)
+        .map_err(|error| Message::FieldWithError.with(lang, [label, crate::degrees_error(error).text(lang)]))
 }
 
 #[cfg(test)]
@@ -279,7 +285,8 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("10", "-2.5", "3", "0", "0", "0")).expect("apply placement");
+        apply_placement(&mut session, panel, &fields("10", "-2.5", "3", "0", "0", "0"), Lang::En)
+            .expect("apply placement");
         let placement = session.project().panel(panel).expect("panel").placement();
         assert_eq!(
             placement.translation_lengths(),
@@ -299,7 +306,8 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "90", "0", "45")).expect("apply rotation");
+        apply_placement(&mut session, panel, &fields("0", "0", "0", "90", "0", "45"), Lang::En)
+            .expect("apply rotation");
         let placement = session.project().panel(panel).expect("panel").placement();
         assert_eq!(placement.translation(), Placement::IDENTITY.translation());
         let angles = placement.rotation_euler();
@@ -316,7 +324,7 @@ mod tests {
     fn an_unchanged_placement_does_not_touch_history() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
-        apply_placement(&mut session, panel, &identity_fields()).expect("apply identity");
+        apply_placement(&mut session, panel, &identity_fields(), Lang::En).expect("apply identity");
         assert!(!session.can_undo());
     }
 
@@ -325,10 +333,11 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "360", "-720", "0")).expect("apply full turn");
+        apply_placement(&mut session, panel, &fields("0", "0", "0", "360", "-720", "0"), Lang::En)
+            .expect("apply full turn");
         assert!(!session.can_undo(), "a full turn is not a change");
 
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "0", "0", "0")).expect("apply identity");
+        apply_placement(&mut session, panel, &fields("0", "0", "0", "0", "0", "0"), Lang::En).expect("apply identity");
         assert!(!session.can_undo());
     }
 
@@ -337,22 +346,22 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        let error =
-            apply_placement(&mut session, panel, &fields("wide", "0", "0", "0", "0", "0")).expect_err("invalid X");
+        let error = apply_placement(&mut session, panel, &fields("wide", "0", "0", "0", "0", "0"), Lang::En)
+            .expect_err("invalid X");
         assert!(error.starts_with("X: "), "error was {error}");
         assert!(!session.can_undo());
 
-        let error =
-            apply_placement(&mut session, panel, &fields("0", "1.2345", "0", "0", "0", "0")).expect_err("too precise");
+        let error = apply_placement(&mut session, panel, &fields("0", "1.2345", "0", "0", "0", "0"), Lang::En)
+            .expect_err("too precise");
         assert!(error.starts_with("Y: "), "error was {error}");
 
-        let error = apply_placement(&mut session, panel, &fields("0", "0", "0", "spin", "0", "0"))
+        let error = apply_placement(&mut session, panel, &fields("0", "0", "0", "spin", "0", "0"), Lang::En)
             .expect_err("invalid rotate X");
         assert!(error.starts_with("Rotate X: "), "error was {error}");
         assert!(!session.can_undo());
 
         let missing = Id::new(999).expect("id");
-        let error = apply_placement(&mut session, missing, &identity_fields()).expect_err("missing node");
+        let error = apply_placement(&mut session, missing, &identity_fields(), Lang::En).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
     }
 
@@ -360,7 +369,7 @@ mod tests {
     fn the_draft_prefills_from_the_document_and_reads_it_back_exactly() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
-        apply_placement(&mut session, panel, &fields("12.5", "-7", "0.125", "30.5", "-15", "90"))
+        apply_placement(&mut session, panel, &fields("12.5", "-7", "0.125", "30.5", "-15", "90"), Lang::En)
             .expect("apply placement");
         let placement = session.project().panel(panel).expect("panel").placement();
 
@@ -374,15 +383,15 @@ mod tests {
 
         let rebuilt = placement
             .with_translation(
-                parse_length("X", &draft.x).expect("x"),
-                parse_length("Y", &draft.y).expect("y"),
-                parse_length("Z", &draft.z).expect("z"),
+                parse_length("X", &draft.x, Lang::En).expect("x"),
+                parse_length("Y", &draft.y, Lang::En).expect("y"),
+                parse_length("Z", &draft.z, Lang::En).expect("z"),
             )
             .expect("rebuild translation")
             .with_rotation_euler(EulerAngles {
-                x: parse_degrees("Rotate X", &draft.rx).expect("rx"),
-                y: parse_degrees("Rotate Y", &draft.ry).expect("ry"),
-                z: parse_degrees("Rotate Z", &draft.rz).expect("rz"),
+                x: parse_degrees("Rotate X", &draft.rx, Lang::En).expect("rx"),
+                y: parse_degrees("Rotate Y", &draft.ry, Lang::En).expect("ry"),
+                z: parse_degrees("Rotate Z", &draft.rz, Lang::En).expect("rz"),
             })
             .expect("rebuild rotation");
         assert_eq!(rebuilt, placement);
@@ -402,7 +411,7 @@ mod tests {
 
         let mut draft = Draft::new(panel, placement).expect("draft");
         draft.rx = "45".to_owned();
-        apply_placement(&mut session, panel, &fields_from_draft(&draft)).expect("rotate");
+        apply_placement(&mut session, panel, &fields_from_draft(&draft), Lang::En).expect("rotate");
 
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.translation(), placement.translation());
@@ -423,7 +432,7 @@ mod tests {
 
         let mut draft = Draft::new(panel, placement).expect("draft");
         draft.x = "10".to_owned();
-        apply_placement(&mut session, panel, &fields_from_draft(&draft)).expect("move");
+        apply_placement(&mut session, panel, &fields_from_draft(&draft), Lang::En).expect("move");
 
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.rotation(), placement.rotation());
@@ -443,7 +452,7 @@ mod tests {
         project.set_node_placement(panel, start).expect("place the panel");
         let mut session = Session::with_catalog(project, sample_catalog());
 
-        apply_world_zero(&mut session, panel).expect("zero the translation");
+        apply_world_zero(&mut session, panel, Lang::En).expect("zero the translation");
 
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.translation_lengths(), Some([Length::ZERO; 3]));
@@ -453,7 +462,7 @@ mod tests {
         assert_eq!(session.project().panel(panel).expect("panel").placement(), start);
         assert!(!session.can_undo(), "world zero must be exactly one undo entry");
 
-        let error = apply_world_zero(&mut session, Id::new(999).expect("id")).expect_err("missing node");
+        let error = apply_world_zero(&mut session, Id::new(999).expect("id"), Lang::En).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
     }
 

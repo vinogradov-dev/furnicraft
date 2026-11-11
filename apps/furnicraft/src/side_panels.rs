@@ -8,6 +8,7 @@
 //! Changes when: the header row, the folded strip or the fold and restore gesture changes.
 
 use eframe::egui;
+use furnicraft_text::Message;
 use furnicraft_ui::{icons, theme};
 
 /// A hairline across the panel, quieter than `ui.separator()` and on the spacing grid.
@@ -27,7 +28,7 @@ pub(crate) enum PanelSide {
 /// strip keeps.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PanelHead {
-    pub(crate) title: &'static str,
+    pub(crate) title: furnicraft_text::Message,
     pub(crate) count: usize,
     pub(crate) icon: icons::Icon,
     pub(crate) default_width: f32,
@@ -105,10 +106,19 @@ fn panel_header(ui: &mut egui::Ui, head: &PanelHead) -> bool {
         |ui| {
             ui.set_height(theme::PANEL_HEADER_HEIGHT);
             ui.horizontal_centered(|ui| {
-                ui.label(egui::RichText::new(head.title).strong());
+                ui.label(egui::RichText::new(head.title.text(furnicraft_ui::language(ui.ctx()))).strong());
                 count_chip(ui, head.count);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button_at(ui, icons::actions::COLLAPSE, 12.0, "Fold panel", true, false).clicked() {
+                    if icons::icon_button_at(
+                        ui,
+                        icons::actions::COLLAPSE,
+                        12.0,
+                        Message::FoldPanel.text(furnicraft_ui::language(ui.ctx())),
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
                         fold = true;
                     }
                 });
@@ -149,12 +159,19 @@ fn collapsed_strip(ui: &mut egui::Ui, head: &PanelHead, restore: &mut bool) {
     // The title is turned so it reads bottom to top. `with_angle` turns about the galley's top-left
     // corner, so the corner is offset by the rotated half-size to centre the turned text.
     let dim = theme::text_dim(ui);
-    let galley = ui.painter().layout_no_wrap(head.title.to_owned(), egui::FontId::proportional(12.0), dim);
+    let galley = ui.painter().layout_no_wrap(
+        head.title.text(furnicraft_ui::language(ui.ctx())).to_owned(),
+        egui::FontId::proportional(12.0),
+        dim,
+    );
     let size = galley.size();
     let center = egui::pos2(rect.center().x, rect.center().y + theme::PANEL_HEADER_HEIGHT / 2.0);
     let pos = egui::pos2(center.x - size.y / 2.0, center.y + size.x / 2.0);
     ui.painter().add(egui::epaint::TextShape::new(pos, galley, dim).with_angle(-std::f32::consts::FRAC_PI_2));
-    response.on_hover_text(format!("Open the {} panel", head.title));
+    response.on_hover_text(
+        Message::OpenPanel
+            .with(furnicraft_ui::language(ui.ctx()), [head.title.text(furnicraft_ui::language(ui.ctx()))]),
+    );
 }
 
 #[cfg(test)]
@@ -170,7 +187,7 @@ mod tests {
         furnicraft_ui::theme::install(&ctx);
         ctx.global_style_mut(|style| style.animation_time = 0.0);
         let head = PanelHead {
-            title: "Scene",
+            title: Message::PanelScene,
             count: 4,
             icon: icons::scene::ASSEMBLY,
             default_width: 240.0,

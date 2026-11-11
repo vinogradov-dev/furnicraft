@@ -12,6 +12,7 @@ use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::scene_cmds::LIGHT_PARAMS_SET_ID;
 use furnicraft_engine::{LightParamsSet, NodeRename, Session};
 use furnicraft_model::{Id, LightKind, LightNode};
+use furnicraft_text::{Lang, Message};
 
 use crate::command::{dispatch, json};
 use crate::section::section;
@@ -64,17 +65,18 @@ impl LightCard {
             return;
         };
 
+        let lang = crate::language(ui.ctx());
         let mut rename = None;
         let mut name_error = None;
         ui.separator();
-        section(ui, "light.name", "Name", true, |ui| {
+        section(ui, "light.name", Message::SectionName.text(lang), true, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-                let clicked = ui.button("Rename").clicked();
+                let clicked = ui.button(Message::CmdRename.text(lang)).clicked();
                 if response.lost_focus() || clicked {
                     let trimmed = draft.name.trim();
                     if trimmed.is_empty() {
-                        name_error = Some("Light name must not be empty.".to_owned());
+                        name_error = Some(Message::LightNameEmpty.text(lang).to_owned());
                     } else if trimmed != name {
                         rename = Some(trimmed.to_owned());
                     }
@@ -84,17 +86,17 @@ impl LightCard {
 
         let mut apply = false;
         ui.separator();
-        section(ui, "light.params", "Light", true, |ui| {
+        section(ui, "light.params", Message::SectionLight.text(lang), true, |ui| {
             let mut kind_changed = false;
             ui.horizontal(|ui| {
-                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Sun, "Sun").changed();
-                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Point, "Point").changed();
+                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Sun, Message::Sun.text(lang)).changed();
+                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Point, Message::Point.text(lang)).changed();
             });
             if kind_changed && draft.kind == LightKind::Point {
                 draft.intensity = power_for_point_switch(draft.intensity);
             }
             ui.horizontal(|ui| {
-                ui.label("Colour");
+                ui.label(Message::Colour.text(lang));
                 for (component, value) in ["R", "G", "B"].into_iter().zip(draft.color.iter_mut()) {
                     ui.label(component);
                     ui.add(DragValue::new(value).speed(0.01).range(0.0..=1.0).fixed_decimals(3));
@@ -103,8 +105,11 @@ impl LightCard {
             ui.horizontal(|ui| {
                 // A sun stores an irradiance multiplier; a point light stores radiant power in watts
                 // ([ADR 0039]). The two units get their own label and drag speed.
-                let (label, speed) =
-                    if draft.kind == LightKind::Point { ("Power (W)", 10.0) } else { ("Intensity", 0.05) };
+                let (label, speed) = if draft.kind == LightKind::Point {
+                    (Message::PowerWatts.text(lang), 10.0)
+                } else {
+                    (Message::Intensity.text(lang), 0.05)
+                };
                 ui.label(label);
                 ui.add(
                     DragValue::new(&mut draft.intensity)
@@ -113,7 +118,7 @@ impl LightCard {
                         .fixed_decimals(2),
                 );
             });
-            if ui.button("Apply light").clicked() {
+            if ui.button(Message::ApplyLight.text(lang)).clicked() {
                 apply = true;
             }
         });
@@ -136,7 +141,7 @@ impl LightCard {
             return;
         }
         if apply {
-            match params_from_draft(&fields).and_then(|request| apply_params(session, request)) {
+            match params_from_draft(&fields, lang).and_then(|request| apply_params(session, request)) {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
@@ -155,14 +160,16 @@ fn power_for_point_switch(intensity: f32) -> f32 {
 }
 
 /// Builds the command request, refusing a value that is not finite or is outside its range.
-fn params_from_draft(draft: &Draft) -> Result<LightParamsSet, String> {
+fn params_from_draft(draft: &Draft, lang: Lang) -> Result<LightParamsSet, String> {
     let color = draft.color;
     if !color.iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value)) {
-        return Err("Colour components must be between 0 and 1.".to_owned());
+        return Err(Message::ColourComponents.text(lang).to_owned());
     }
     if !draft.intensity.is_finite() || !(0.0..=LightNode::MAX_INTENSITY).contains(&draft.intensity) {
-        let unit = if draft.kind == LightKind::Point { "Power" } else { "Intensity" };
-        return Err(format!("{unit} must be between 0 and {}.", LightNode::MAX_INTENSITY));
+        let unit = if draft.kind == LightKind::Point { Message::Power } else { Message::Intensity };
+        return Err(
+            Message::IntensityRange.with(lang, [unit.text(lang), LightNode::MAX_INTENSITY.to_string().as_str()])
+        );
     }
     Ok(LightParamsSet { light: draft.light, kind: draft.kind, color, intensity: draft.intensity })
 }
@@ -210,7 +217,7 @@ mod tests {
         let (_, light) = light_session();
         let draft = Draft::new(light, "Key", LightKind::Sun, [1.0, 0.9, 0.8], 2.0);
         assert_eq!(
-            params_from_draft(&draft),
+            params_from_draft(&draft, Lang::En),
             Ok(LightParamsSet { light, kind: LightKind::Sun, color: [1.0, 0.9, 0.8], intensity: 2.0 })
         );
     }
@@ -227,9 +234,9 @@ mod tests {
             color: [1.5, 0.0, 0.0],
             intensity: 1.0,
         };
-        assert!(params_from_draft(&bad_color).is_err());
+        assert!(params_from_draft(&bad_color, Lang::En).is_err());
         let bad_intensity = Draft { color: [1.0; 3], intensity: f32::NAN, ..bad_color };
-        assert!(params_from_draft(&bad_intensity).is_err());
+        assert!(params_from_draft(&bad_intensity, Lang::En).is_err());
         assert_eq!(session.project().revision(), before);
     }
 

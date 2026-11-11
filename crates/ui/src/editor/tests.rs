@@ -373,7 +373,9 @@ fn a_committed_drawing_is_one_path_object_and_one_undo_entry() {
         .expect("opposite corner");
 
     let revision = session.project().revision();
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the rectangle");
+    let drawn = editor
+        .commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+        .expect("commit the rectangle");
     assert_eq!(drawn.tool, DrawTool::Rectangle);
     assert!(editor.drawing().is_none(), "the tool ends with the commit");
     assert_eq!(editor.selected_nodes(), [drawn.object], "the new node is selected");
@@ -415,7 +417,8 @@ fn a_drawing_in_a_turned_container_is_stored_in_the_parents_frame() {
 
     let world = Placement::IDENTITY.with_translation(mm(200), mm(100), mm(900)).expect("the work plane");
     let before = session.project().revision();
-    let drawn = editor.commit_drawing(&mut session, world).expect("commit into the container");
+    let drawn =
+        editor.commit_drawing(&mut session, world, furnicraft_text::Lang::En).expect("commit into the container");
     assert_eq!(session.project().revision(), before.checked_next().expect("revision"));
     assert_eq!(session.project().parent_of(drawn.object), Some(parent), "the node lands in the armed container");
 
@@ -473,7 +476,7 @@ fn closing_through_a_pending_arc_commits_a_closed_path() {
     assert!(editor.drawing().is_some_and(DrawDraft::can_close), "Close is offered and will work");
     let revision = session.project().revision();
     let drawn = editor
-        .close_and_commit_drawing(&mut session, Placement::IDENTITY)
+        .close_and_commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
         .expect("close through the pending arc and commit");
     assert!(editor.drawing().is_none(), "the close ends the tool");
     assert_eq!(session.project().revision(), revision.checked_next().expect("revision"));
@@ -510,7 +513,9 @@ fn the_ribbon_reports_a_close_instead_of_running_it() {
     editor.drawing_point([mm(600), mm(400)]).expect("right run");
     let revision = session.project().revision();
 
-    let outcome = editor.apply_ribbon_actions(&mut session, vec![ToolAction::CloseDrawing]).expect("the ribbon runs");
+    let outcome = editor
+        .apply_ribbon_actions(&mut session, vec![ToolAction::CloseDrawing], furnicraft_text::Lang::En)
+        .expect("the ribbon runs");
     assert!(outcome.close_draft, "the ribbon asks the shell for the close and its commit");
     assert_eq!(session.project().revision(), revision, "reporting a close writes nothing");
     assert!(!session.can_undo(), "and leaves no undo entry behind");
@@ -534,7 +539,9 @@ fn a_refused_close_leaves_the_ring_open_and_the_document_untouched() {
     editor.drawing_point([mm(600), mm(400)]).expect("right run");
     let revision = session.project().revision();
 
-    editor.close_and_commit_drawing(&mut session, Placement::IDENTITY).expect_err("the document refuses the commit");
+    editor
+        .close_and_commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+        .expect_err("the document refuses the commit");
     assert_eq!(session.project().revision(), revision, "a refused close writes nothing");
     assert!(!session.can_undo(), "and leaves no undo entry behind");
     let draft = editor.drawing().expect("the draft survives a refusal");
@@ -560,15 +567,22 @@ fn every_new_tool_commits_its_path_and_opens_the_edit() {
         for point in points {
             editor.drawing_point([mm(point.0), mm(point.1)]).expect("a tool point");
         }
-        let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("the figure commits");
+        let drawn = editor
+            .commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En)
+            .expect("the figure commits");
         assert_eq!(drawn.tool, tool);
         let path = session.project().object_path(drawn.object).expect("a path object");
-        assert_eq!(path.is_closed(), tool.is_closed(), "{} keeps its closure", tool.label());
+        assert_eq!(
+            path.is_closed(),
+            tool.is_closed(),
+            "{} keeps its closure",
+            tool.label().text(furnicraft_text::Lang::En)
+        );
         assert_eq!(
             editor.contour_edit().map(ContourEdit::target),
             Some(ContourTarget::Path(drawn.object)),
             "{} opens its edit mode",
-            tool.label()
+            tool.label().text(furnicraft_text::Lang::En)
         );
         editor.end_contour_edit();
     }
@@ -588,7 +602,8 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     editor.start_drawing(DrawTool::Line);
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
     editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(root), "a drawing lands at the root");
 
     editor.select_node(Some(inner));
@@ -636,7 +651,8 @@ fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
     editor.start_drawing(DrawTool::Line);
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("start");
     editor.drawing_point([Length::from_millimetres(300).expect("x"), Length::ZERO]).expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the line");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(assembly), "the path lands in the arm");
 
     let target = editor.creation_target(session.project());
@@ -683,7 +699,9 @@ fn deleting_the_armed_container_clears_the_arm() {
     let mut editor = Editor::new();
 
     assert!(editor.arm_creation(session.project(), inner));
-    editor.run_action(&mut session, TreeAction::Delete { node: outer }).expect("delete the outer assembly");
+    editor
+        .run_action(&mut session, TreeAction::Delete { node: outer }, furnicraft_text::Lang::En)
+        .expect("delete the outer assembly");
     assert!(editor.creation_parent().is_none(), "deleting an ancestor of the arm clears it");
     assert_eq!(editor.creation_target(session.project()), root);
 }
@@ -698,7 +716,10 @@ fn a_refused_drawing_keeps_the_draft_and_the_selection() {
     editor.drawing_point([Length::ZERO, Length::ZERO]).expect("one corner");
 
     let revision = session.project().revision();
-    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err(), "one point is no path");
+    assert!(
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).is_err(),
+        "one point is no path"
+    );
     assert!(editor.drawing().is_some(), "the draft stays");
     assert_eq!(session.project().revision(), revision);
     assert!(!session.can_undo());
@@ -709,7 +730,7 @@ fn committing_without_a_draft_reports_it() {
     let (project, _panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
-    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY).is_err());
+    assert!(editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).is_err());
 }
 
 #[test]
@@ -723,7 +744,8 @@ fn an_open_polyline_commits_as_drawn() {
     editor
         .drawing_point([Length::from_millimetres(400).expect("x"), Length::from_millimetres(300).expect("y")])
         .expect("end");
-    let drawn = editor.commit_drawing(&mut session, Placement::IDENTITY).expect("commit the chain");
+    let drawn =
+        editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the chain");
     let path = session.project().object_path(drawn.object).expect("a path object");
     assert!(!path.is_closed());
     assert_eq!(path.entries().len(), 2);
@@ -888,7 +910,7 @@ fn the_extrude_action_turns_a_closed_path_into_the_body_that_owns_it() {
     let height = Length::from_millimetres(18).expect("height");
     let children_before = session.project().root().children().len();
 
-    editor.extrude_path(&mut session, path, height).expect("extrude the path");
+    editor.extrude_path(&mut session, path, height, furnicraft_text::Lang::En).expect("extrude the path");
     assert_eq!(editor.selected_node(), Some(path), "the node becomes the body in place");
     let object = session.project().object(path).expect("object");
     assert_eq!(object.name(), "Drawing", "the node keeps its name");
@@ -898,7 +920,10 @@ fn the_extrude_action_turns_a_closed_path_into_the_body_that_owns_it() {
     assert_eq!(session.project().root().children().len(), children_before, "no sibling body is left behind");
     assert!(session.project().object_path(path).is_err(), "the drawing is the body now");
     let revision = session.project().revision();
-    assert!(editor.extrude_path(&mut session, path, height).is_err(), "a body is not extruded a second time");
+    assert!(
+        editor.extrude_path(&mut session, path, height, furnicraft_text::Lang::En).is_err(),
+        "a body is not extruded a second time"
+    );
     assert_eq!(session.project().revision(), revision, "the refused extrusion changes nothing");
 }
 
@@ -908,7 +933,9 @@ fn a_pulled_height_becomes_the_next_extrusions_default() {
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
     editor.select_node(Some(path));
-    editor.extrude_path(&mut session, path, Length::from_millimetres(100).expect("height")).expect("extrude the path");
+    editor
+        .extrude_path(&mut session, path, Length::from_millimetres(100).expect("height"), furnicraft_text::Lang::En)
+        .expect("extrude the path");
     assert_eq!(editor.extrude_height_text(), "100", "the ribbon starts at the default");
 
     let height = Length::from_millimetres(240).expect("height");
@@ -929,7 +956,9 @@ fn one_undo_restores_the_drawing_a_body_came_from() {
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
     editor.select_node(Some(path));
-    editor.extrude_path(&mut session, path, Length::from_millimetres(18).expect("height")).expect("extrude the path");
+    editor
+        .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"), furnicraft_text::Lang::En)
+        .expect("extrude the path");
 
     undo(&mut session, &mut editor);
     assert!(session.project().object_path(path).is_ok(), "undo restores the drawing");
@@ -944,7 +973,7 @@ fn an_open_path_is_refused_with_a_readable_reason() {
     let mut editor = Editor::new();
     let revision = session.project().revision();
     let error = editor
-        .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"))
+        .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"), furnicraft_text::Lang::En)
         .expect_err("an open chain is no ring");
     assert!(error.contains("open path"), "the message names the problem: {error}");
     assert_eq!(session.project().revision(), revision, "a refused extrusion changes nothing");
@@ -965,7 +994,9 @@ fn a_body_keeps_the_paths_placement_and_frame() {
         .expect("placement");
     let params = crate::command::json(&furnicraft_engine::NodePlacementSet { node: path, placement }).expect("params");
     session.dispatch(furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_ID, &params).expect("move the drawing");
-    editor.extrude_path(&mut session, path, Length::from_millimetres(18).expect("height")).expect("extrude");
+    editor
+        .extrude_path(&mut session, path, Length::from_millimetres(18).expect("height"), furnicraft_text::Lang::En)
+        .expect("extrude");
     let body = editor.selected_node().expect("the body");
     assert_eq!(session.project().node(body).expect("body node").placement(), placement);
 }
@@ -1027,7 +1058,13 @@ fn the_drawing_shortcuts_name_their_tool() {
     let mut editor = Editor::new();
     for (key, shift, tool) in cases {
         let shortcut = crate::toolbars::Shortcut { key, shift };
-        assert_eq!(crate::toolbars::shortcut(tool), Some(shortcut), "{} starts {}", key.name(), tool.label());
+        assert_eq!(
+            crate::toolbars::shortcut(tool),
+            Some(shortcut),
+            "{} starts {}",
+            key.name(),
+            tool.label().text(furnicraft_text::Lang::En)
+        );
         editor.start_drawing(tool);
         assert_eq!(editor.drawing().map(DrawDraft::tool), Some(tool));
         editor.cancel_drawing();
@@ -1376,11 +1413,15 @@ fn a_locked_node_still_selects_and_refuses_a_destructive_command() {
     assert!(editor.is_locked(panel));
     assert_eq!(editor.selected_node(), Some(panel), "a lock never takes the selection away");
     assert_eq!(editor.locked_selection(session.project()), Some(panel), "the viewport sees the refusal");
-    assert!(editor.locked_refusal(session.project(), panel).is_some_and(|refusal| refusal.contains("locked")));
+    assert!(
+        editor
+            .locked_refusal(session.project(), panel, furnicraft_text::Lang::En)
+            .is_some_and(|refusal| refusal.contains("locked"))
+    );
 
     let revision = session.project().revision();
     let refusal = editor
-        .run_action(&mut session, TreeAction::Delete { node: panel })
+        .run_action(&mut session, TreeAction::Delete { node: panel }, furnicraft_text::Lang::En)
         .expect_err("a locked node refuses the delete");
     assert!(refusal.contains("locked"), "the refusal says why: {refusal}");
     assert_eq!(session.project().revision(), revision, "a refusal dispatches nothing");
@@ -1388,7 +1429,9 @@ fn a_locked_node_still_selects_and_refuses_a_destructive_command() {
 
     editor.set_locked(panel, false);
     assert_eq!(editor.locked_selection(session.project()), None, "unlocking ends the refusal");
-    editor.run_action(&mut session, TreeAction::Delete { node: panel }).expect("the unlocked delete runs");
+    editor
+        .run_action(&mut session, TreeAction::Delete { node: panel }, furnicraft_text::Lang::En)
+        .expect("the unlocked delete runs");
     assert!(!session.project().contains_node(panel));
 }
 
@@ -1404,7 +1447,9 @@ fn a_locked_container_refuses_a_group_and_an_ungroup() {
 
     let revision = session.project().revision();
     assert!(
-        editor.run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }).is_err(),
+        editor
+            .run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }, furnicraft_text::Lang::En)
+            .is_err(),
         "grouping a locked node would restructure it"
     );
     assert_eq!(session.project().revision(), revision);
@@ -1412,7 +1457,9 @@ fn a_locked_container_refuses_a_group_and_an_ungroup() {
     editor.set_locked(first, false);
     editor.set_locked(second, true);
     assert!(
-        editor.run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }).is_err(),
+        editor
+            .run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }, furnicraft_text::Lang::En)
+            .is_err(),
         "one locked node in the selection is enough"
     );
     assert_eq!(session.project().revision(), revision);
@@ -1430,7 +1477,9 @@ fn a_deleted_node_drops_its_flags_and_an_undo_starts_clean() {
     // this test watches vanish with the node.
     editor.set_locked(panel, false);
 
-    editor.run_action(&mut session, TreeAction::Delete { node: panel }).expect("delete the panel");
+    editor
+        .run_action(&mut session, TreeAction::Delete { node: panel }, furnicraft_text::Lang::En)
+        .expect("delete the panel");
     assert!(!editor.flags().is_hidden(panel), "the flag goes with the node");
     assert!(!editor.flags().is_locked(panel));
 

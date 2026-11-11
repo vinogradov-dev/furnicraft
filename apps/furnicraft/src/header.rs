@@ -17,6 +17,7 @@
 
 use eframe::egui;
 use eframe::egui::Ui;
+use furnicraft_text::Message;
 
 use crate::icons::{self, Icon};
 use crate::tabs::TabId;
@@ -87,6 +88,7 @@ pub struct HeaderState {
 /// The File menu is passed in as a closure so the shell keeps its existing [`crate::file_menu`]
 /// menu, its dialogs and its path handling: the header only gives it a place to live on the row.
 pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -> Option<HeaderAction> {
+    let lang = furnicraft_ui::language(ui.ctx());
     let height = theme::HEADER_HEIGHT;
     let mut action = None;
     egui::Frame::new().fill(theme::surface(ui)).inner_margin(egui::Margin::symmetric(8, 0)).show(ui, |ui| {
@@ -101,7 +103,7 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
                 ui.label(egui::RichText::new(theme::PRODUCT_NAME).strong().size(13.5));
                 theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
-                if icon_button(ui, icons::view::HOME, "Home", true, false).clicked() {
+                if icon_button(ui, icons::view::HOME, Message::HeaderHome.text(lang), true, false).clicked() {
                     action = Some(HeaderAction::Home);
                 }
                 theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
@@ -109,16 +111,16 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
                 file_menu(ui);
                 theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
-                if icon_button(ui, icons::actions::FILE_SAVE, "Save  (Ctrl+S)", true, false).clicked() {
+                if icon_button(ui, icons::actions::FILE_SAVE, Message::HeaderSave.text(lang), true, false).clicked() {
                     action = Some(HeaderAction::Save);
                 }
                 theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
 
-                let hint = if state.can_undo { "Undo  (Ctrl+Z)" } else { "Nothing to undo" };
+                let hint = if state.can_undo { Message::HeaderUndo } else { Message::HeaderNothingToUndo }.text(lang);
                 if icon_button(ui, icons::actions::UNDO, hint, state.can_undo, false).clicked() && state.can_undo {
                     action = Some(HeaderAction::Undo);
                 }
-                let hint = if state.can_redo { "Redo  (Ctrl+Y)" } else { "Nothing to redo" };
+                let hint = if state.can_redo { Message::HeaderRedo } else { Message::HeaderNothingToRedo }.text(lang);
                 if icon_button(ui, icons::actions::REDO, hint, state.can_redo, false).clicked() && state.can_redo {
                     action = Some(HeaderAction::Redo);
                 }
@@ -131,7 +133,7 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
             },
             |ui| {
                 let mut action = None;
-                if icon_button(ui, icons::actions::SETTINGS, "Settings", true, false).clicked() {
+                if icon_button(ui, icons::actions::SETTINGS, Message::SettingsTitle.text(lang), true, false).clicked() {
                     action = Some(HeaderAction::Settings);
                 }
                 action
@@ -147,6 +149,7 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
 /// A row that outgrows the window is clipped at its right edge; the active tab is the one the row
 /// keeps in view because every tab is the same width budget, so the row never reorders itself.
 fn tab_row(ui: &mut Ui, state: &HeaderState) -> Option<HeaderAction> {
+    let lang = furnicraft_ui::language(ui.ctx());
     let mut action = None;
     ui.horizontal(|ui| {
         for tab in &state.tabs {
@@ -156,7 +159,7 @@ fn tab_row(ui: &mut Ui, state: &HeaderState) -> Option<HeaderAction> {
                 None => {}
             }
         }
-        if icon_button(ui, icons::actions::ADD, "New scene  (Ctrl+N)", true, false).clicked() {
+        if icon_button(ui, icons::actions::ADD, Message::HeaderNewScene.text(lang), true, false).clicked() {
             action = Some(HeaderAction::NewTab);
         }
     });
@@ -197,9 +200,17 @@ fn tab_view(ui: &mut Ui, tab: &TabView) -> Option<TabClick> {
                     .on_hover_text(&tab.title);
             });
             if tab.dirty {
-                ui.label(egui::RichText::new("●").size(9.0).color(theme::warn(ui))).on_hover_text("Unsaved changes");
+                ui.label(egui::RichText::new("●").size(9.0).color(theme::warn(ui)))
+                    .on_hover_text(Message::HeaderUnsaved.text(furnicraft_ui::language(ui.ctx())));
             }
-            let close = icons::icon_button_at(ui, icons::window::CLOSE, 11.0, "Close the tab", true, false);
+            let close = icons::icon_button_at(
+                ui,
+                icons::window::CLOSE,
+                11.0,
+                Message::HeaderCloseTab.text(furnicraft_ui::language(ui.ctx())),
+                true,
+                false,
+            );
             close_clicked = close.clicked();
             close_rect = Some(close.rect);
         });
@@ -272,9 +283,15 @@ mod tests {
 
     /// Runs the header and returns its text shapes.
     fn drawn(state: &HeaderState) -> Vec<String> {
+        drawn_in(state, furnicraft_text::Lang::En)
+    }
+
+    /// Runs the header in one language, so a switch can be compared without a document.
+    fn drawn_in(state: &HeaderState, lang: furnicraft_text::Lang) -> Vec<String> {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         ctx.enable_accesskit();
+        furnicraft_ui::set_language(&ctx, lang);
         let output = ctx.run_ui(Default::default(), |ui| {
             show(ui, state, |_ui| {});
         });
@@ -411,5 +428,33 @@ mod tests {
             1,
             "exactly the active tab draws the accent, and it draws it solid: {drawn:?}"
         );
+    }
+
+    fn labels_in(state: &HeaderState, lang: furnicraft_text::Lang) -> Vec<String> {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        ctx.enable_accesskit();
+        furnicraft_ui::set_language(&ctx, lang);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            show(ui, state, |_ui| {});
+        });
+        let labels = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| update.nodes.iter().filter_map(|(_, node)| node.label().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        output.drop_without_applying_deltas();
+        labels
+    }
+
+    #[test]
+    fn switching_the_language_redraws_the_header() {
+        let state = state(vec![tab(0, "cabinet.fcs", false, true)], true);
+        let english = labels_in(&state, furnicraft_text::Lang::En);
+        let russian = labels_in(&state, furnicraft_text::Lang::Ru);
+        assert!(english.iter().any(|label| label.contains("Home")), "{english:?}");
+        assert!(russian.iter().any(|label| label.contains("Главная")), "{russian:?}");
+        assert_ne!(english, russian, "the same header names its controls differently");
     }
 }

@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use egui::{Align, Context, Id, Layout, Modal, RichText, Ui};
 
+use furnicraft_text::Message;
+
 use crate::theme;
 
 /// What the Home surface asked for.
@@ -38,22 +40,32 @@ pub fn show(ctx: &Context, recent: &[PathBuf]) -> Option<HomeAction> {
             ui.horizontal(|ui| {
                 ui.heading(theme::PRODUCT_NAME);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Close  (Esc)").clicked() {
+                    if ui.button(Message::HomeClose.text(crate::language(ctx))).clicked() {
                         action = Some(HomeAction::Close);
                     }
                 });
             });
-            ui.label(RichText::new("Start a scene").color(theme::text_dim(ui)));
+            ui.label(RichText::new(Message::HomeStartScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)));
             ui.add_space(theme::STEP * 2.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add(egui::Button::new(RichText::new("New scene").size(14.0)).min_size(egui::vec2(150.0, 32.0)))
+                    .add(
+                        egui::Button::new(
+                            RichText::new(Message::HomeNewScene.text(crate::language(ui.ctx()))).size(14.0),
+                        )
+                        .min_size(egui::vec2(150.0, 32.0)),
+                    )
                     .clicked()
                 {
                     action = Some(HomeAction::New);
                 }
                 if ui
-                    .add(egui::Button::new(RichText::new("Open scene…").size(14.0)).min_size(egui::vec2(150.0, 32.0)))
+                    .add(
+                        egui::Button::new(
+                            RichText::new(Message::HomeOpenScene.text(crate::language(ui.ctx()))).size(14.0),
+                        )
+                        .min_size(egui::vec2(150.0, 32.0)),
+                    )
                     .clicked()
                 {
                     action = Some(HomeAction::Open);
@@ -62,9 +74,11 @@ pub fn show(ctx: &Context, recent: &[PathBuf]) -> Option<HomeAction> {
             ui.add_space(theme::STEP * 2.0);
             template_card(ui, &mut action);
             ui.add_space(theme::STEP * 2.0);
-            ui.label(RichText::new("Recent files").strong());
+            ui.label(RichText::new(Message::HomeRecentFiles.text(crate::language(ui.ctx()))).strong());
             if recent.is_empty() {
-                ui.label(RichText::new("No scene opened yet.").color(theme::text_dim(ui)));
+                ui.label(
+                    RichText::new(Message::HomeNoScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)),
+                );
             } else {
                 egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
                     for path in recent {
@@ -92,15 +106,15 @@ fn template_card(ui: &mut Ui, action: &mut Option<HomeAction>) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Empty template").strong());
+                    ui.label(RichText::new(Message::HomeEmptyTemplate.text(crate::language(ui.ctx()))).strong());
                     ui.label(
-                        RichText::new("A fresh scene with the default catalogue and nothing else.")
+                        RichText::new(Message::HomeEmptyTemplateHint.text(crate::language(ui.ctx())))
                             .small()
                             .color(theme::text_dim(ui)),
                     );
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Use template").clicked() {
+                    if ui.button(Message::HomeUseTemplate.text(crate::language(ui.ctx()))).clicked() {
                         *action = Some(HomeAction::EmptyTemplate);
                     }
                 });
@@ -110,7 +124,8 @@ fn template_card(ui: &mut Ui, action: &mut Option<HomeAction>) {
 
 /// One recent file: its name and its directory in one selectable row.
 fn recent_row(ui: &mut Ui, path: &Path, action: &mut Option<HomeAction>) {
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("(unnamed)");
+    let name =
+        path.file_name().and_then(|name| name.to_str()).unwrap_or(Message::HomeUnnamed.text(crate::language(ui.ctx())));
     let directory = path.parent().map(|parent| parent.display().to_string()).unwrap_or_default();
     let label = egui::RichText::new(format!("{name}\n{directory}"));
     let response = ui.selectable_label(false, label);

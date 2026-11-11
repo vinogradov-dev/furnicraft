@@ -18,6 +18,7 @@ use eframe::egui;
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Ui, Vec2};
 use furnicraft_geom::DVec3;
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection};
+use furnicraft_text::{Lang, Message};
 use furnicraft_ui::{icons, theme};
 use furnicraft_units::Degrees;
 
@@ -223,7 +224,7 @@ impl Gizmo {
             ui.scope_id().with("orientation_projection"),
             icon,
             BUTTON_ICON_POINT_SIZE,
-            hint,
+            hint.text(furnicraft_ui::language(ui.ctx())),
         )
         .clicked()
         {
@@ -314,7 +315,7 @@ impl Gizmo {
             if response.clicked() {
                 action = Some(GizmoAction::RollTo(Degrees::from_millidegrees(degree * 1_000)));
             }
-            let _ = response.on_hover_text(format!("Roll to {degree}°"));
+            let _ = response.on_hover_text(Message::RollToDegree.with(furnicraft_ui::language(ui.ctx()), [degree]));
         }
 
         action
@@ -420,7 +421,7 @@ fn home_button(ui: &Ui, rect: Rect) -> bool {
     ui.painter().rect_filled(rect, egui::CornerRadius::same(theme::RADIUS), visuals.weak_bg_fill);
     let glyph = Rect::from_center_size(rect.center(), Vec2::splat(14.0));
     icons::draw_icon(ui, icons::view::HOME, glyph, 14.0, visuals.fg_stroke.color);
-    response.on_hover_text("Home  ·  back to the axonometric view").clicked()
+    response.on_hover_text(Message::HomeHint.text(furnicraft_ui::language(ui.ctx()))).clicked()
 }
 
 /// Paints the one-line readout under the widget.
@@ -429,7 +430,7 @@ fn home_button(ui: &Ui, rect: Rect) -> bool {
 /// widget's right edge because the widget sits in the viewport's corner, so the text grows into the
 /// scene instead of running under a side panel.
 fn paint_readout(ui: &Ui, widget: Rect, camera: Camera) {
-    let text = readout(camera);
+    let text = readout(camera, Lang::En);
     let color = theme::text_dim(ui);
     let galley = ui.painter().layout_no_wrap(text, FontId::proportional(9.5), color);
     let size = galley.size();
@@ -448,19 +449,17 @@ fn paint_readout(ui: &Ui, widget: Rect, camera: Camera) {
 /// -51.7° rather than 308.3°; the roll is the camera's field about its own view axis, presented the
 /// same way, so a 270° roll reads as -90.0°. The projection is named the way the toggle names it,
 /// and every number is formatted through `furnicraft-units` so the readout has one source of truth.
-pub(crate) fn readout(camera: Camera) -> String {
+pub(crate) fn readout(camera: Camera, lang: Lang) -> String {
     let pitch = Degrees::from_radians(camera.pitch()).unwrap_or(Degrees::ZERO);
     let yaw = signed_degrees(camera.yaw());
     let roll = signed_degrees(camera.roll());
     let projection = match camera.projection() {
-        Projection::Orthographic { .. } => "Ortho",
-        Projection::Perspective { .. } => "Persp",
+        Projection::Orthographic { .. } => Message::ProjectionOrthoShort,
+        Projection::Perspective { .. } => Message::ProjectionPerspShort,
     };
-    format!(
-        "Pitch {} · Yaw {} · Roll {} · {projection}",
-        pitch.format_fixed(1),
-        yaw.format_fixed(1),
-        roll.format_fixed(1)
+    Message::OrientationReadout.with(
+        lang,
+        [pitch.format_fixed(1), yaw.format_fixed(1), roll.format_fixed(1), projection.text(lang).to_owned()],
     )
 }
 
@@ -581,7 +580,7 @@ mod tests {
         let mut camera = Camera::default();
         camera.look_from(DVec3::new(0.6, 0.8, 0.5));
         assert!(matches!(camera.projection(), Projection::Perspective { .. }));
-        let text = readout(camera);
+        let text = readout(camera, Lang::En);
         assert!(text.starts_with("Pitch "), "the line starts with the pitch: {text}");
         assert!(text.contains(" · Yaw "), "and continues with the yaw: {text}");
         assert!(text.contains(" · Roll "), "and the roll: {text}");
@@ -601,10 +600,10 @@ mod tests {
         }
 
         camera.toggle_projection();
-        assert!(readout(camera).ends_with("Ortho"), "an orthographic view names the mode");
+        assert!(readout(camera, Lang::En).ends_with("Ortho"), "an orthographic view names the mode");
 
         camera.roll_to(std::f64::consts::FRAC_PI_2);
-        assert!(readout(camera).contains("Roll 90.0°"), "the readout shows the camera's roll field");
+        assert!(readout(camera, Lang::En).contains("Roll 90.0°"), "the readout shows the camera's roll field");
     }
 
     #[test]

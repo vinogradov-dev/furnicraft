@@ -17,6 +17,7 @@ use egui::Ui;
 use furnicraft_engine::object_cmds::{OBJECT_EXTRUDE_HEIGHT_SET_ID, OBJECT_PATH_EXTRUDE_ID};
 use furnicraft_engine::{ObjectExtrudeHeightSet, ObjectPathExtrude, Session};
 use furnicraft_model::{Id, Path};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
@@ -61,7 +62,7 @@ impl Editor {
         };
         let mut actions = Vec::new();
         toolbars::show(ui, &mut self.toolbars, context, &mut actions);
-        self.apply_ribbon_actions(session, actions)
+        self.apply_ribbon_actions(session, actions, crate::language(ui.ctx()))
     }
 
     /// Runs the actions one drawn ribbon asked for and reports what the shell must still do.
@@ -73,6 +74,7 @@ impl Editor {
         &mut self,
         session: &mut Session,
         actions: Vec<ToolAction>,
+        lang: Lang,
     ) -> Result<toolbars::RibbonOutcome, String> {
         let target = self.creation_target(session.project());
         let mut outcome = toolbars::RibbonOutcome::default();
@@ -88,7 +90,7 @@ impl Editor {
                 ToolAction::CreateCamera => self.create_camera(session, target)?,
                 ToolAction::CreateLight => self.create_light(session, target)?,
                 ToolAction::ExtrudePath { object, height } => {
-                    self.extrude_path(session, object, height)?;
+                    self.extrude_path(session, object, height, lang)?;
                     outcome.extruded = Some((object, height));
                 }
                 ToolAction::ClearCreationParent => self.clear_creation_parent(),
@@ -119,13 +121,19 @@ impl Editor {
     /// placement and pivot: the drawing is not left behind as a second object, and the selection
     /// stays on the one node the user was editing. A live contour edit of that node ends here: the
     /// node is a body now, and its pull arrow would compete with the corner grips for the pointer.
-    pub(super) fn extrude_path(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
+    pub(super) fn extrude_path(
+        &mut self,
+        session: &mut Session,
+        object: Id,
+        height: Length,
+        lang: Lang,
+    ) -> Result<(), String> {
         session
             .project()
             .object_path(object)
             .map_err(|error| error.to_string())?
             .to_contour()
-            .map_err(|error| format!("The selected path cannot be extruded: {error}"))?;
+            .map_err(|error| Message::ExtrudeRefused.with(lang, [error]))?;
         let params = json(&ObjectPathExtrude { object, height })?;
         dispatch(session, OBJECT_PATH_EXTRUDE_ID, &params)?;
         self.end_contour_edit();

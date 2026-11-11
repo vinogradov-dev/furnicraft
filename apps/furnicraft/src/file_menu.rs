@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use eframe::egui::{Color32, Id, Modal, TextEdit, Ui};
+use furnicraft_text::{Lang, Message};
 
 /// One file operation the user asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,25 +84,31 @@ pub(crate) struct ConfirmClose {
 
 impl ConfirmClose {
     /// Asks about the scene `title` names, the way the tab row shows it.
-    pub(crate) fn tab(title: impl Into<String>) -> Self {
+    pub(crate) fn tab(title: impl Into<String>, lang: Lang) -> Self {
         Self {
-            title: format!("Close \u{201c}{}\u{201d}?", title.into()),
-            body: "This scene has unsaved changes. Closing the tab discards them.".to_owned(),
-            discard: "Discard and close".to_owned(),
+            title: Message::CloseTitle.with(lang, [title.into()]),
+            body: Message::CloseBody.text(lang).to_owned(),
+            discard: Message::DiscardAndClose.text(lang).to_owned(),
         }
     }
 
     /// Asks about the whole window, when `unsaved` open scenes would go with it.
-    pub(crate) fn quit(unsaved: usize) -> Self {
-        let body = match unsaved {
-            1 => "One open scene has unsaved changes. Quitting discards them.".to_owned(),
-            count => format!("{count} open scenes have unsaved changes. Quitting discards them."),
+    pub(crate) fn quit(unsaved: usize, lang: Lang) -> Self {
+        let body = if unsaved == 1 {
+            Message::QuitOneBody.text(lang).to_owned()
+        } else {
+            Message::counted(unsaved, Message::QuitManyOne, Message::QuitManyFew, Message::QuitManyMany).text(lang)
         };
-        Self { title: format!("Quit {}?", crate::theme::PRODUCT_NAME), body, discard: "Discard and quit".to_owned() }
+        Self {
+            title: Message::QuitTitle.with(lang, [crate::theme::PRODUCT_NAME]),
+            body,
+            discard: Message::DiscardAndQuit.text(lang).to_owned(),
+        }
     }
 
     /// Draws the question and returns the answer the user picked, if any.
     pub(crate) fn show(&self, ctx: &egui::Context) -> Option<CloseAnswer> {
+        let lang = furnicraft_ui::language(ctx);
         let mut answer = None;
         Modal::new(Id::unique("scene-confirm-close")).show(ctx, |ui| {
             ui.set_width(380.0);
@@ -112,7 +119,7 @@ impl ConfirmClose {
                 if ui.button(&self.discard).clicked() {
                     answer = Some(CloseAnswer::Discard);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(Message::Cancel.text(lang)).clicked() {
                     answer = Some(CloseAnswer::Cancel);
                 }
             });
@@ -145,33 +152,34 @@ impl FileMenu {
     /// this function creates no panel of its own. *New* and *Open* open a tab, so neither of them
     /// discards the scene in front of the user and neither has to ask.
     pub(crate) fn show(&mut self, ui: &mut Ui) -> Option<FileAction> {
+        let lang = furnicraft_ui::language(ui.ctx());
         let mut action = None;
-        let button = egui::Button::new("File")
+        let button = egui::Button::new(Message::File.text(lang))
             .min_size(egui::vec2(crate::theme::HEADER_TEXT_WIDTH, crate::theme::HEADER_CONTROL_HEIGHT));
         egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
-            if ui.button("New").clicked() {
+            if ui.button(Message::MenuNew.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::New);
             }
-            if ui.button("Open…").clicked() {
+            if ui.button(Message::MenuOpen.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::Open);
             }
             ui.separator();
-            if ui.button("Save").clicked() {
+            if ui.button(Message::MenuSave.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::Save);
             }
-            if ui.button("Save As…").clicked() {
+            if ui.button(Message::MenuSaveAs.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::SaveAs);
             }
             ui.separator();
-            if ui.button("Close tab").clicked() {
+            if ui.button(Message::MenuCloseTab.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::Close);
             }
-            if ui.button("Exit").clicked() {
+            if ui.button(Message::MenuExit.text(lang)).clicked() {
                 ui.close();
                 action = self.command(MenuCommand::Quit);
             }
@@ -209,12 +217,12 @@ impl FileMenu {
     }
 
     /// The bare file name the header's tab draws; the dirty marker is its own glyph there.
-    pub(crate) fn file_name(&self) -> String {
+    pub(crate) fn file_name(&self, lang: Lang) -> String {
         self.current
             .as_deref()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
-            .unwrap_or("Untitled")
+            .unwrap_or(Message::Untitled.text(lang))
             .to_owned()
     }
 
@@ -267,24 +275,25 @@ impl FileMenu {
         let mut keep = true;
         Modal::new(Id::unique("scene-file-path")).show(ctx, |ui| {
             ui.set_width(460.0);
+            let lang = furnicraft_ui::language(ui.ctx());
             let (title, primary) = match dialog.mode {
-                PathMode::Open => ("Open scene", "Open"),
-                PathMode::SaveAs => ("Save scene as", "Save"),
+                PathMode::Open => (Message::OpenSceneTitle, Message::OpenButton),
+                PathMode::SaveAs => (Message::SaveSceneAsTitle, Message::SaveButton),
             };
-            ui.heading(title);
+            ui.heading(title.text(lang));
             if dialog.mode == PathMode::Open {
                 // Opening a file adds a tab, so the scene in front of the user stays exactly where
                 // it is: the dialog only says where the new one comes from.
-                ui.label("The scene opens in a new tab; the open scenes are left as they are.");
+                ui.label(Message::OpenNewTabHint.text(lang));
             }
             ui.horizontal(|ui| {
-                ui.label("Path");
+                ui.label(Message::PathLabel.text(lang));
                 ui.add(TextEdit::singleline(&mut dialog.path).desired_width(f32::INFINITY));
             });
             if dialog.mode == PathMode::Open {
                 let files = scene_files_near(&dialog.path);
                 if !files.is_empty() {
-                    ui.label("Nearby scenes");
+                    ui.label(Message::NearbyScenes.text(lang));
                     egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
                         for file in files {
                             let name = file.file_name().and_then(|name| name.to_str()).unwrap_or_default();
@@ -301,13 +310,13 @@ impl FileMenu {
             ui.separator();
             let mut submit = false;
             ui.horizontal(|ui| {
-                submit = ui.button(primary).clicked();
-                if ui.button("Cancel").clicked() {
+                submit = ui.button(primary.text(lang)).clicked();
+                if ui.button(Message::Cancel.text(lang)).clicked() {
                     keep = false;
                 }
             });
             if submit {
-                match submit_dialog(&mut dialog) {
+                match submit_dialog(&mut dialog, lang) {
                     Some(chosen) => {
                         action = Some(chosen);
                         keep = false;
@@ -324,10 +333,10 @@ impl FileMenu {
 }
 
 /// Validates the typed path and turns it into an action, or records why it cannot.
-fn submit_dialog(dialog: &mut PathDialog) -> Option<FileAction> {
+fn submit_dialog(dialog: &mut PathDialog, lang: Lang) -> Option<FileAction> {
     let path = dialog.path.trim();
     if path.is_empty() {
-        dialog.error = Some("Enter a file path.".to_owned());
+        dialog.error = Some(Message::EnterFilePath.text(lang).to_owned());
         return None;
     }
     let path = PathBuf::from(path);
@@ -406,7 +415,7 @@ mod tests {
     fn the_close_question_names_the_tab_and_offers_both_answers() {
         // The question belongs to the shell, so this test only proves it is the document's name it
         // asks about and that both answers exist; the modal itself needs an egui pass.
-        let question = ConfirmClose::tab("cabinet.fcs");
+        let question = ConfirmClose::tab("cabinet.fcs", Lang::En);
         assert_eq!(question.title, "Close \u{201c}cabinet.fcs\u{201d}?");
         assert!(question.body.contains("unsaved changes"));
         assert_ne!(CloseAnswer::Discard, CloseAnswer::Cancel, "cancel and discard are different answers");
@@ -414,10 +423,10 @@ mod tests {
 
     #[test]
     fn the_quit_question_counts_the_unsaved_scenes() {
-        let one = ConfirmClose::quit(1);
+        let one = ConfirmClose::quit(1, Lang::En);
         assert_eq!(one.title, format!("Quit {}?", crate::theme::PRODUCT_NAME));
         assert!(one.body.contains("One open scene"), "one scene reads as a sentence, not as `1 scenes`: {}", one.body);
-        let many = ConfirmClose::quit(3);
+        let many = ConfirmClose::quit(3, Lang::En);
         assert!(many.body.contains("3 open scenes"), "and a count reads as one: {}", many.body);
         assert_eq!(many.discard, "Discard and quit");
     }
@@ -444,7 +453,7 @@ mod tests {
     #[test]
     fn an_empty_path_is_rejected_by_the_dialog() {
         let mut dialog = PathDialog { mode: PathMode::Open, path: "   ".to_owned(), error: None };
-        assert_eq!(submit_dialog(&mut dialog), None);
+        assert_eq!(submit_dialog(&mut dialog, Lang::En), None);
         assert!(dialog.error.is_some());
     }
 
@@ -467,12 +476,12 @@ mod tests {
     #[test]
     fn the_file_name_and_the_path_come_from_the_open_file() {
         let mut menu = FileMenu::new();
-        assert_eq!(menu.file_name(), "Untitled");
+        assert_eq!(menu.file_name(Lang::En), "Untitled");
         assert_eq!(menu.path(), None);
         menu.set_path(Some(PathBuf::from("/tmp/cabinet.fcs")));
-        assert_eq!(menu.file_name(), "cabinet.fcs");
+        assert_eq!(menu.file_name(Lang::En), "cabinet.fcs");
         assert_eq!(menu.path(), Some(Path::new("/tmp/cabinet.fcs")), "the path names the tab for a re-open");
         menu.set_path(None);
-        assert_eq!(menu.file_name(), "Untitled", "a new scene has no file to overwrite");
+        assert_eq!(menu.file_name(Lang::En), "Untitled", "a new scene has no file to overwrite");
     }
 }

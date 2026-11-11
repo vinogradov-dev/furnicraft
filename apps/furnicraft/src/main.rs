@@ -224,7 +224,7 @@ impl FurniCraftApp {
     /// Undo, redo and save are the same operations the menu and the keyboard already take, and every
     /// one of them acts on the active tab only, so the header adds a place to click and never a
     /// second code path into a document.
-    fn handle_header_action(&mut self, action: HeaderAction) {
+    fn handle_header_action(&mut self, action: HeaderAction, lang: furnicraft_text::Lang) {
         match action {
             HeaderAction::Home => {
                 self.home_open = true;
@@ -235,7 +235,7 @@ impl FurniCraftApp {
             HeaderAction::Save => {
                 let requested = self.tabs.active_mut().request_save();
                 if let Some(action) = requested {
-                    self.handle_file_action(action);
+                    self.handle_file_action(action, lang);
                 }
             }
             HeaderAction::Settings => {
@@ -250,12 +250,12 @@ impl FurniCraftApp {
             HeaderAction::ActivateTab(id) => {
                 self.tabs.activate(id);
             }
-            HeaderAction::CloseTab(id) => self.close_tab(id),
+            HeaderAction::CloseTab(id) => self.close_tab(id, lang),
         }
     }
 
     /// Performs the operation the File menu returned and reports a failure in the status bar.
-    fn handle_file_action(&mut self, action: FileAction) {
+    fn handle_file_action(&mut self, action: FileAction, lang: furnicraft_text::Lang) {
         self.tabs.active_mut().last_error = None;
         let recorded = match &action {
             FileAction::Open(path) | FileAction::Save(path) => Some(path.clone()),
@@ -267,11 +267,11 @@ impl FurniCraftApp {
             FileAction::Save(path) => self.tabs.active_mut().save(&path),
             FileAction::Close => {
                 let active = self.tabs.active_id();
-                self.close_tab(active);
+                self.close_tab(active, lang);
                 Ok(())
             }
             FileAction::Quit => {
-                self.request_quit();
+                self.request_quit(lang);
                 Ok(())
             }
         };
@@ -316,13 +316,13 @@ impl FurniCraftApp {
     ///
     /// The last tab is never removed: its payload becomes an empty scene, so the window always has
     /// one document to draw and the folds, the cluster and the settings keep their home.
-    fn close_tab(&mut self, id: TabId) {
+    fn close_tab(&mut self, id: TabId, lang: furnicraft_text::Lang) {
         let unsaved = self.tabs.document(id).is_some_and(Document::is_dirty);
         match self.tabs.close(id, unsaved) {
             CloseOutcome::NeedsConfirmation(id) => {
-                let title = self.tabs.document(id).map(Document::file_name).unwrap_or_default();
+                let title = self.tabs.document(id).map(|document| document.file_name(lang)).unwrap_or_default();
                 self.pending_close =
-                    Some(CloseQuestion { request: CloseRequest::Tab(id), title: ConfirmClose::tab(title) });
+                    Some(CloseQuestion { request: CloseRequest::Tab(id), title: ConfirmClose::tab(title, lang) });
             }
             CloseOutcome::Closed(document) => self.forget(document),
             CloseOutcome::LastTab(id) => self.empty_tab(id),
@@ -334,13 +334,13 @@ impl FurniCraftApp {
     ///
     /// One question covers the window: a quit is one gesture, and asking per tab would leave the
     /// user to answer the same question several times for one decision.
-    fn request_quit(&mut self) {
+    fn request_quit(&mut self, lang: furnicraft_text::Lang) {
         let unsaved = self.tabs.iter().filter(|(_, document)| document.is_dirty()).count();
         match unsaved {
             0 => self.quit_requested = true,
             count => {
                 self.pending_close =
-                    Some(CloseQuestion { request: CloseRequest::Quit, title: ConfirmClose::quit(count) });
+                    Some(CloseQuestion { request: CloseRequest::Quit, title: ConfirmClose::quit(count, lang) });
             }
         }
     }
@@ -425,7 +425,7 @@ impl FurniCraftApp {
     fn scene_tree(&mut self, ui: &mut egui::Ui, inset: f32) {
         let Self { shell, tabs, .. } = self;
         let head = PanelHead {
-            title: "Scene",
+            title: furnicraft_text::Message::PanelScene,
             count: tabs.active().node_count(),
             icon: icons::scene::ASSEMBLY,
             default_width: 240.0,
@@ -442,7 +442,7 @@ impl FurniCraftApp {
     fn panel_card(&mut self, ui: &mut egui::Ui, inset: f32) {
         let Self { shell, tabs, .. } = self;
         let head = PanelHead {
-            title: "Inspector",
+            title: furnicraft_text::Message::PanelInspector,
             count: tabs.active().editor.selected_nodes().len(),
             icon: icons::actions::SETTINGS,
             default_width: 300.0,
@@ -475,7 +475,7 @@ impl FurniCraftApp {
         };
         // A locked node refuses a destructive command here, before the dispatch: the lock is a
         // guard on a gesture, so it never becomes a document rule (ADR 0065).
-        if let Some(refusal) = tabs.active().locked_command_refusal(&id) {
+        if let Some(refusal) = tabs.active().locked_command_refusal(&id, furnicraft_ui::language(ui.ctx())) {
             tabs.active_mut().last_error = Some(refusal);
             return;
         }
@@ -521,6 +521,7 @@ impl FurniCraftApp {
         if self.settings.appearance != before.appearance {
             theme::install_with(ctx, self.settings.appearance.theme.preference(), self.settings.appearance.accent);
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
+            furnicraft_ui::set_language(ctx, self.settings.appearance.language.lang());
         }
         if self.settings.viewport != before.viewport {
             let Self { tabs, shell, settings, .. } = self;
@@ -542,11 +543,11 @@ impl FurniCraftApp {
         self.home_open = false;
         match action {
             furnicraft_ui::home::HomeAction::New | furnicraft_ui::home::HomeAction::EmptyTemplate => {
-                self.handle_file_action(FileAction::New);
+                self.handle_file_action(FileAction::New, furnicraft_ui::language(ctx));
             }
             furnicraft_ui::home::HomeAction::Open => self.tabs.active_mut().request_open(),
             furnicraft_ui::home::HomeAction::OpenRecent(path) => {
-                self.handle_file_action(FileAction::Open(path));
+                self.handle_file_action(FileAction::Open(path), furnicraft_ui::language(ctx));
             }
             furnicraft_ui::home::HomeAction::Close => {}
         }
@@ -555,6 +556,9 @@ impl FurniCraftApp {
 
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The language is workspace settings, published once per frame so every surface draws the
+        // same words without threading a `Lang` through every signature (U49).
+        furnicraft_ui::set_language(ui.ctx(), self.settings.appearance.language.lang());
         {
             let Self { tabs, shell, settings, .. } = self;
             if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster) {
@@ -581,14 +585,14 @@ impl eframe::App for FurniCraftApp {
                 tabs.active_mut().handle_shortcuts(shortcuts, shell)
             };
             if let Some(action) = requested {
-                self.handle_file_action(action);
+                self.handle_file_action(action, furnicraft_ui::language(ui.ctx()));
             }
             if shortcuts.new_tab {
-                self.handle_file_action(FileAction::New);
+                self.handle_file_action(FileAction::New, furnicraft_ui::language(ui.ctx()));
             }
             if shortcuts.close_tab {
                 let active = self.tabs.active_id();
-                self.close_tab(active);
+                self.close_tab(active, furnicraft_ui::language(ui.ctx()));
             }
         }
 
@@ -600,7 +604,7 @@ impl eframe::App for FurniCraftApp {
                     .iter()
                     .map(|(id, document)| TabView {
                         id,
-                        title: document.file_name(),
+                        title: document.file_name(furnicraft_ui::language(ui.ctx())),
                         dirty: document.is_dirty(),
                         active: id == active,
                     })
@@ -620,13 +624,13 @@ impl eframe::App for FurniCraftApp {
             });
         }
         if let Some(action) = file_action {
-            self.handle_file_action(action);
+            self.handle_file_action(action, furnicraft_ui::language(ui.ctx()));
         }
         if let Some(action) = self.tabs.active_mut().show_dialogs(ui.ctx()) {
-            self.handle_file_action(action);
+            self.handle_file_action(action, furnicraft_ui::language(ui.ctx()));
         }
         if let Some(action) = header_action {
-            self.handle_header_action(action);
+            self.handle_header_action(action, furnicraft_ui::language(ui.ctx()));
         }
         self.close_question(ui.ctx());
 
@@ -690,8 +694,11 @@ mod tests {
         for (projection, expected_icon, action) in cases {
             let (icon, hint) = projection_button(projection);
             assert_eq!(icon, expected_icon, "{projection:?} draws itself, not the mode a click would reach");
-            assert!(hint.contains(action), "the hint names the switch to `{action}`: {hint}");
-            assert!(hint.contains("(O)"), "the hint keeps the shortcut: {hint}");
+            assert!(
+                hint.text(furnicraft_text::Lang::En).contains(action),
+                "the hint names the switch to `{action}`: {hint:?}"
+            );
+            assert!(hint.text(furnicraft_text::Lang::En).contains("(O)"), "the hint keeps the shortcut: {hint:?}");
         }
     }
 

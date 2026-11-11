@@ -833,6 +833,7 @@ appears in a toolbar does not become a geometry icon.
 | print | sheet above a printer bar | |
 | settings | gear, 6–8 teeth | |
 | search | magnifier, handle at 45° | |
+| command palette | a prompt field: a frame with `>` and a caret | opens the command list |
 | visible / hidden | eye / eye with a slash | |
 | lock / unlock | padlock, shackle closed / open | |
 | expand / collapse | chevron down / right | one direction convention |
@@ -859,8 +860,8 @@ units, solid shapes). They are not shrunken toolbar drawings.
 
 `assets/icons/actions/<name>.svg`, kebab-case: `confirm`, `dismiss`, `cancel`, `undo`, `redo`,
 `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`,
-`file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `visible`, `hidden`,
-`lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help`.
+`file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `command`, `visible`,
+`hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help`.
 
 A theme owns its icons: `contour/close` closes a ring, `actions/dismiss` dismisses a surface. They are
 different actions with different glyphs; never rename a geometry action to free a name.

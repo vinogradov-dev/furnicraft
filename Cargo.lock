@@ -1302,6 +1302,7 @@ dependencies = [
  "furnicraft-render",
  "furnicraft-scene",
  "furnicraft-testkit",
+ "furnicraft-text",
  "furnicraft-ui",
  "furnicraft-units",
  "log",
@@ -1316,6 +1317,7 @@ dependencies = [
  "furnicraft-model",
  "furnicraft-param",
  "furnicraft-testkit",
+ "furnicraft-text",
  "furnicraft-units",
  "serde",
  "serde_json",
@@ -1431,6 +1433,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "furnicraft-text"
+version = "0.1.0"
+
+[[package]]
 name = "furnicraft-ui"
 version = "0.1.0"
 dependencies = [
@@ -1440,6 +1446,7 @@ dependencies = [
  "furnicraft-model",
  "furnicraft-scene",
  "furnicraft-testkit",
+ "furnicraft-text",
  "furnicraft-units",
  "serde",
  "serde_json",

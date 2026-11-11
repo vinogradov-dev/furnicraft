@@ -17,6 +17,8 @@ use furnicraft_model::{Container, Id, Node, Panel, Project};
 
 use crate::icons;
 use crate::theme;
+use furnicraft_text::Message;
+
 use crate::view_flags::ViewFlags;
 
 /// The glyph size of a row's visibility and lock toggles, in points.
@@ -134,7 +136,7 @@ pub(crate) fn show(
     actions
 }
 
-fn container_label(project: &Project, container: &Container) -> RichText {
+fn container_label(ui: &Ui, project: &Project, container: &Container) -> RichText {
     let name = container.name();
     if container.id() == project.root().id() {
         return RichText::new(name).strong();
@@ -144,7 +146,7 @@ fn container_label(project: &Project, container: &Container) -> RichText {
     }
     let badge = match project.furntype(container.id()) {
         Some(furntype) if !furntype.is_unclassified() => furntype.to_string(),
-        _ => "component".to_owned(),
+        _ => Message::TreeBadgeComponent.text(crate::language(ui.ctx())).to_owned(),
     };
     RichText::new(format!("{name}  [{badge}]"))
 }
@@ -165,7 +167,7 @@ fn show_container(
     let is_component = container.is_component();
     let state_id = ui.make_persistent_id(("scene_container", id.get()));
     let state = CollapsingState::load_with_default_open(ui.ctx(), state_id, depth < 2);
-    let label = container_label(project, container);
+    let label = container_label(ui, project, container);
     let (_toggle, header, _) =
         state.show_header(ui, |ui| row(ui, id, label, selection.contains(id), flags, !is_root)).body(|ui| {
             for child in container.children() {
@@ -202,10 +204,10 @@ fn show_node(
         Node::Panel(panel) => show_panel(ui, panel, selection, flags, actions, group),
         Node::Object(object) => show_object(ui, object, selection, flags, actions, group),
         Node::Camera(camera) => {
-            show_leaf(ui, camera.id(), camera.name(), "camera", selection, flags, actions, group);
+            show_leaf(ui, camera.id(), camera.name(), Message::TreeBadgeCamera, selection, flags, actions, group);
         }
         Node::Light(light) => {
-            show_leaf(ui, light.id(), light.name(), "light", selection, flags, actions, group);
+            show_leaf(ui, light.id(), light.name(), Message::TreeBadgeLight, selection, flags, actions, group);
         }
     }
 }
@@ -216,13 +218,13 @@ fn show_leaf(
     ui: &mut Ui,
     id: Id,
     name: &str,
-    kind: &str,
+    kind: Message,
     selection: &mut Selection,
     flags: &mut ViewFlags,
     actions: &mut Vec<TreeAction>,
     group: &[Id],
 ) {
-    let label = RichText::new(format!("{name}  [{kind}]"));
+    let label = RichText::new(format!("{name}  [{}]", kind.text(crate::language(ui.ctx()))));
     let hidden = flags.is_hidden(id);
     let locked = flags.is_locked(id);
     let response = row(ui, id, label, selection.contains(id), flags, true);
@@ -241,13 +243,18 @@ fn show_object(
     group: &[Id],
 ) {
     let id = object.id();
+    let lang = crate::language(ui.ctx());
     let kind = match object.geometry() {
-        furnicraft_model::Geometry::Mesh(_) => "mesh",
-        furnicraft_model::Geometry::Primitive(primitive) => primitive.shape_name(),
-        furnicraft_model::Geometry::Constructive(_) => "contour",
-        furnicraft_model::Geometry::Path(_) => "path",
+        furnicraft_model::Geometry::Mesh(_) => Message::TreeBadgeMesh,
+        furnicraft_model::Geometry::Primitive(primitive) => match primitive.kind() {
+            furnicraft_model::PrimitiveKind::Cube => Message::TreeBadgeCube,
+            furnicraft_model::PrimitiveKind::Cylinder => Message::TreeBadgeCylinder,
+            furnicraft_model::PrimitiveKind::Sphere => Message::TreeBadgeSphere,
+        },
+        furnicraft_model::Geometry::Constructive(_) => Message::TreeBadgeContour,
+        furnicraft_model::Geometry::Path(_) => Message::TreeBadgePath,
     };
-    let label = RichText::new(format!("{}  [{kind}]", object.name()));
+    let label = RichText::new(format!("{}  [{}]", object.name(), kind.text(lang)));
     let hidden = flags.is_hidden(id);
     let locked = flags.is_locked(id);
     let response = row(ui, id, label, selection.contains(id), flags, true);
@@ -260,11 +267,11 @@ fn show_object(
 fn object_menu(ui: &mut Ui, id: Id, hidden: bool, locked: bool, group: &[Id], actions: &mut Vec<TreeAction>) {
     group_entry(ui, group, actions);
     view_menu(ui, id, hidden, locked, false, actions);
-    if ui.button("Duplicate").clicked() {
+    if ui.button(Message::CmdDuplicate.text(crate::language(ui.ctx()))).clicked() {
         actions.push(TreeAction::Duplicate { node: id });
         ui.close();
     }
-    if ui.button("Delete").clicked() {
+    if ui.button(Message::CmdDelete.text(crate::language(ui.ctx()))).clicked() {
         actions.push(TreeAction::Delete { node: id });
         ui.close();
     }
@@ -296,7 +303,7 @@ fn group_entry(ui: &mut Ui, group: &[Id], actions: &mut Vec<TreeAction>) {
     if group.is_empty() {
         return;
     }
-    if ui.button("Group selection").clicked() {
+    if ui.button(Message::TreeGroupSelection.text(crate::language(ui.ctx()))).clicked() {
         actions.push(TreeAction::Group { nodes: group.to_vec() });
         ui.close();
     }
@@ -326,25 +333,29 @@ fn container_menu(
     group_entry(ui, group, actions);
     view_menu(ui, id, hidden, locked, is_root, actions);
     if !is_root {
-        if ui.button("Add child").on_hover_text("Create the next node inside this container").clicked() {
+        if ui
+            .button(Message::TreeAddChild.text(crate::language(ui.ctx())))
+            .on_hover_text(Message::TreeAddChildHint.text(crate::language(ui.ctx())))
+            .clicked()
+        {
             actions.push(TreeAction::AddChild { parent: id });
             ui.close();
         }
         ui.separator();
-        if ui.button("Duplicate").clicked() {
+        if ui.button(Message::CmdDuplicate.text(crate::language(ui.ctx()))).clicked() {
             actions.push(TreeAction::Duplicate { node: id });
             ui.close();
         }
         if is_component {
-            if ui.button("Convert to group").clicked() {
+            if ui.button(Message::CmdConvertToGroup.text(crate::language(ui.ctx()))).clicked() {
                 actions.push(TreeAction::ConvertToGroup { node: id });
                 ui.close();
             }
-        } else if ui.button("Ungroup").clicked() {
+        } else if ui.button(Message::CmdUngroup.text(crate::language(ui.ctx()))).clicked() {
             actions.push(TreeAction::Ungroup { node: id });
             ui.close();
         }
-        if ui.button("Delete").clicked() {
+        if ui.button(Message::CmdDelete.text(crate::language(ui.ctx()))).clicked() {
             actions.push(TreeAction::Delete { node: id });
             ui.close();
         }
@@ -354,11 +365,11 @@ fn container_menu(
 fn panel_menu(ui: &mut Ui, id: Id, hidden: bool, locked: bool, group: &[Id], actions: &mut Vec<TreeAction>) {
     group_entry(ui, group, actions);
     view_menu(ui, id, hidden, locked, false, actions);
-    if ui.button("Duplicate").clicked() {
+    if ui.button(Message::CmdDuplicate.text(crate::language(ui.ctx()))).clicked() {
         actions.push(TreeAction::Duplicate { node: id });
         ui.close();
     }
-    if ui.button("Delete").clicked() {
+    if ui.button(Message::CmdDelete.text(crate::language(ui.ctx()))).clicked() {
         actions.push(TreeAction::Delete { node: id });
         ui.close();
     }
@@ -370,21 +381,30 @@ fn panel_menu(ui: &mut Ui, id: Id, hidden: bool, locked: bool, group: &[Id], act
 /// scene, so it only offers *Show all*.
 fn view_menu(ui: &mut Ui, id: Id, hidden: bool, locked: bool, is_root: bool, actions: &mut Vec<TreeAction>) {
     if !is_root {
-        if ui.button(if hidden { "Show" } else { "Hide" }).clicked() {
+        let lang = crate::language(ui.ctx());
+        if ui.button(if hidden { Message::TreeShow } else { Message::TreeHide }.text(lang)).clicked() {
             actions.push(TreeAction::SetHidden { node: id, hidden: !hidden });
             ui.close();
         }
-        if ui.button(if locked { "Unlock" } else { "Lock" }).clicked() {
+        if ui.button(if locked { Message::TreeUnlock } else { Message::TreeLock }.text(lang)).clicked() {
             actions.push(TreeAction::SetLocked { node: id, locked: !locked });
             ui.close();
         }
         ui.separator();
     }
-    if ui.button("Isolate").on_hover_text("Hide every other branch of the scene").clicked() {
+    if ui
+        .button(Message::TreeIsolate.text(crate::language(ui.ctx())))
+        .on_hover_text(Message::TreeIsolateHint.text(crate::language(ui.ctx())))
+        .clicked()
+    {
         actions.push(TreeAction::Isolate { node: id });
         ui.close();
     }
-    if ui.button("Show all").on_hover_text("Show every hidden node again").clicked() {
+    if ui
+        .button(Message::TreeShowAll.text(crate::language(ui.ctx())))
+        .on_hover_text(Message::TreeShowAllHint.text(crate::language(ui.ctx())))
+        .clicked()
+    {
         actions.push(TreeAction::ShowAll);
         ui.close();
     }
@@ -440,15 +460,21 @@ fn row(ui: &mut Ui, id: Id, label: RichText, selected: bool, flags: &mut ViewFla
         let lock =
             egui::Rect::from_min_size(egui::pos2(eye.right(), rect.top()), egui::vec2(TOGGLE_CELL, rect.height()));
         if hovered || hidden {
-            let (icon, caption) =
-                if hidden { (icons::actions::HIDDEN, "Show") } else { (icons::actions::VISIBLE, "Hide") };
+            let (icon, caption) = if hidden {
+                (icons::actions::HIDDEN, Message::TreeShow)
+            } else {
+                (icons::actions::VISIBLE, Message::TreeHide)
+            };
             if toggle(ui, eye, id, "visibility", icon, caption) {
                 flags.set_hidden(id, !hidden);
             }
         }
         if hovered || locked {
-            let (icon, caption) =
-                if locked { (icons::actions::UNLOCK, "Unlock") } else { (icons::actions::LOCK, "Lock") };
+            let (icon, caption) = if locked {
+                (icons::actions::UNLOCK, Message::TreeUnlock)
+            } else {
+                (icons::actions::LOCK, Message::TreeLock)
+            };
             if toggle(ui, lock, id, "lock", icon, caption) {
                 flags.set_locked(id, !locked);
             }
@@ -458,7 +484,7 @@ fn row(ui: &mut Ui, id: Id, label: RichText, selected: bool, flags: &mut ViewFla
 }
 
 /// One 16 pt row toggle: its glyph, or its caption while the asset is an empty placeholder.
-fn toggle(ui: &mut Ui, rect: egui::Rect, id: Id, kind: &str, icon: icons::Icon, caption: &str) -> bool {
+fn toggle(ui: &mut Ui, rect: egui::Rect, id: Id, kind: &str, icon: icons::Icon, caption: Message) -> bool {
     let response = ui.interact(rect, ui.make_persistent_id(("scene_toggle", id.get(), kind)), Sense::click());
     let wash = if response.is_pointer_button_down_on() {
         theme::control_active(ui)
@@ -478,12 +504,12 @@ fn toggle(ui: &mut Ui, rect: egui::Rect, id: Id, kind: &str, icon: icons::Icon, 
         ui.painter().with_clip_rect(rect).text(
             rect.center(),
             Align2::CENTER_CENTER,
-            caption,
+            caption.text(crate::language(ui.ctx())),
             FontId::proportional(TOGGLE_TEXT_SIZE),
             ink,
         );
     }
-    response.on_hover_text(caption).clicked()
+    response.on_hover_text(caption.text(crate::language(ui.ctx()))).clicked()
 }
 
 /// Returns the first panel in depth-first order, used to open the card on a useful node.
@@ -535,7 +561,28 @@ mod tests {
         out
     }
 
-    fn draw(session: &Session, flags: &mut ViewFlags) -> Vec<String> {
+    /// The number of painted icon rasters: a drawn toggle is a texture mesh, not text.
+    fn drawn_images(shapes: &[egui::epaint::ClippedShape]) -> usize {
+        fn walk(shape: &egui::Shape, out: &mut usize) {
+            match shape {
+                egui::Shape::Mesh(_) => *out += 1,
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = 0;
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// One run's texts and its painted icon rasters.
+    fn draw(session: &Session, flags: &mut ViewFlags) -> (Vec<String>, usize) {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let mut selection = Selection::default();
@@ -543,8 +590,9 @@ mod tests {
             show(ui, session, &mut selection, flags);
         });
         let texts = drawn_text(&output.shapes);
+        let images = drawn_images(&output.shapes);
         output.drop_without_applying_deltas();
-        texts
+        (texts, images)
     }
 
     fn panel(id: u64) -> Panel {
@@ -574,7 +622,7 @@ mod tests {
         let session = Session::with_catalog(sample_project(), sample_catalog());
         let mut flags = ViewFlags::default();
         flags.set_hidden(Id::new(3).expect("drawer id"), true);
-        let texts = draw(&session, &mut flags);
+        let (texts, _) = draw(&session, &mut flags);
         assert!(texts.iter().any(|text| text.contains("Front")), "the hidden drawer still lists its front: {texts:?}");
         assert!(texts.iter().any(|text| text.contains("Shelf")), "a sibling branch is listed too: {texts:?}");
     }
@@ -584,15 +632,17 @@ mod tests {
         let session = Session::with_catalog(sample_project(), sample_catalog());
         let shelf = Id::new(2).expect("shelf id");
         let mut flags = ViewFlags::default();
-        let resting = draw(&session, &mut flags);
+        let (resting, resting_images) = draw(&session, &mut flags);
         assert!(
             !resting.iter().any(|text| text == "Hide" || text == "Lock"),
             "the eye and the padlock wait for the pointer: {resting:?}"
         );
+        assert_eq!(resting_images, 0, "a row at rest paints no toggle glyph");
 
         flags.set_hidden(shelf, true);
-        let hidden = draw(&session, &mut flags);
-        assert!(hidden.iter().any(|text| text == "Show"), "a hidden row keeps its eye: {hidden:?}");
+        let (hidden, hidden_images) = draw(&session, &mut flags);
+        assert!(!hidden.iter().any(|text| text == "Show"), "the eye is a glyph, not a caption: {hidden:?}");
+        assert_eq!(hidden_images, 1, "a hidden row keeps its eye");
         assert!(
             !hidden.iter().any(|text| text == "Lock"),
             "an unlocked row still hides its padlock until hovered: {hidden:?}"
@@ -600,8 +650,9 @@ mod tests {
 
         flags.set_locked(shelf, true);
         flags.set_hidden(shelf, false);
-        let locked = draw(&session, &mut flags);
-        assert!(locked.iter().any(|text| text == "Unlock"), "a locked row keeps its padlock: {locked:?}");
+        let (locked, locked_images) = draw(&session, &mut flags);
+        assert!(!locked.iter().any(|text| text == "Unlock"), "the padlock is a glyph, not a caption: {locked:?}");
+        assert_eq!(locked_images, 1, "a locked row keeps its padlock");
     }
 
     #[test]

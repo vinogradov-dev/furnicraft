@@ -6,6 +6,7 @@
 //! stretching the texture it uploaded at the old one (`assets/README.md`, ADR 0047).
 
 use egui::{Response, Slider, Ui};
+use furnicraft_text::Message;
 
 /// The smallest UI scale the control offers, in percent.
 pub const MIN_PERCENT: u32 = 75;
@@ -48,12 +49,16 @@ pub fn factor(percent: u32) -> f32 {
 /// owns no field and survives a panel rebuild without restoring a stale value.
 pub fn show(ui: &mut Ui) -> Response {
     let mut percent = percent(ui.ctx().zoom_factor());
-    let response =
-        ui.add(Slider::new(&mut percent, MIN_PERCENT..=MAX_PERCENT).step_by(5.0).suffix(" %").text("UI scale"));
+    let response = ui.add(
+        Slider::new(&mut percent, MIN_PERCENT..=MAX_PERCENT)
+            .step_by(5.0)
+            .suffix(" %")
+            .text(Message::UiScale.text(crate::language(ui.ctx()))),
+    );
     if response.changed() {
         ui.ctx().set_zoom_factor(factor(percent));
     }
-    response.on_hover_text("Icons are rasterised at the new pixel size instead of stretched")
+    response.on_hover_text(Message::UiScaleHint.text(crate::language(ui.ctx())))
 }
 
 #[cfg(test)]

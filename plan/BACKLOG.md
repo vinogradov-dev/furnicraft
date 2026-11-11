@@ -25,57 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
-  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
-  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
-  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
-  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
-  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
-  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
-  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
-  are needed by U48.
-  A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
-  Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
-  `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,
-  footprint and coverage tests; `Theme::ALL` and the uri count (`56`) move together with a new icon.
-  `files: assets/icons, crates/ui/src/icons.rs`
-
-- `[ ]` **U49** the interface speaks English and Russian: one typed message table behind a language
-  switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
-  in the layer map and `PROJECT.md` in the same change) holds `Lang::{En, Ru}` and one `Message`
-  variant per string; `Message::text(self, lang) -> &'static str` reads a `&[&str; Lang::COUNT]`
-  table, so adding a third language changes `Lang` and turns every missing translation into a
-  compile error instead of an English fallback. Every call site in `crates/ui` and
-  `apps/furnicraft` draws through that table: the header, the ribbon tabs, group captions and button
-  captions, the scene tree context menu, all inspector cards and section titles, the status bar,
-  the file and modal dialogs, and the argument messages of `PanelDiagnostic`
-  (`crates/ui/src/panel_card.rs` `diagnostic_message` moves into the table and stops being a
-  `String` builder where the variant carries no argument). `CommandSpec::label` becomes a
-  `Message` too — all 48 specs — so the palette (U47) and any future CLI or assistant print the
-  same words; the `id` stays the identity and is never translated. Russian needs real plurals, so
-  a counting message is a constructor rather than one format string: `Message::more(n)` and the
-  like pick one/few/many themselves. The language is workspace settings, never document data: it is
-  chosen in the U41 *Settings* window, applies at once, and a saved `.fcs` never carries it. A name
-  the editor generates on its own — `{} body`, `{} drawing` — is fixed in the language that created
-  it, and switching the language never renames a node; that rule goes into ADR 0067 with the rest.
-  Not translated: command ids, `FurnType` numbers, material and node names, `mm`, and the
-  `thiserror` messages of `model`, `units` and `project`, which stay English for logs and tests and
-  are mapped to a `Message` at the UI boundary instead of being shown raw. Tests: every `Message`
-  variant is non-empty in both languages; a missing language cannot compile; every command spec
-  label resolves in both languages; switching the language redraws the header, the ribbon and a
-  card without touching the project revision or the undo stack; a scene saved in Russian loads in
-  English with its node names unchanged; the longest Russian ribbon caption fits the 48 pt labelled
-  button of U39 without clipping. Session notes: `Lang` is a plain enum and the table is
-  `const`, so `crates/text` needs no serde, no `egui` and no file I/O — it is data, like
-  `furnicraft-units`. The 48 labels are the `CommandSpec::new` calls in
-  `crates/engine/src/commands.rs`; `label()` is read in `crates/ui/src/toolbars.rs`,
-  `crates/ui/src/lib.rs` and `apps/furnicraft/src/header.rs`. Existing inline strings are ~530 in
-  `crates/ui` and ~200 in `apps/furnicraft`; `theme::PRODUCT_NAME` and the logo stay as they are.
-  Do this after U39–U48 so the labels stop moving, and before M8/M9, which add hardware, cutting
-  lists and CNC text on top of the same surface. A future move to per-language files (a translator
-  working outside the repository) reuses `Message` as the key, so this does not lock the format.
-  `files: crates/ui/src, apps/furnicraft/src, xtask/src/main.rs`
-
 - `[ ]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
   *Scene* and *Inspector* disappears — the tree and the card already say what they hold, and the
   number cost a document scan on every rebuild — and the fold chevron moves to the edge facing the
@@ -172,6 +121,57 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U49** the interface speaks English and Russian: one typed message table behind a language
+  switch, and no user-facing string left inline. A new `crates/text` (L0, no dependencies, registered
+  in the layer map and `PROJECT.md` in the same change) holds `Lang::{En, Ru}` and one `Message`
+  variant per string; `Message::text(self, lang) -> &'static str` reads a `&[&str; Lang::COUNT]`
+  table, so adding a third language changes `Lang` and turns every missing translation into a
+  compile error instead of an English fallback. Every call site in `crates/ui` and
+  `apps/furnicraft` draws through that table: the header, the ribbon tabs, group captions and button
+  captions, the scene tree context menu, all inspector cards and section titles, the status bar,
+  the file and modal dialogs, and the argument messages of `PanelDiagnostic`
+  (`crates/ui/src/panel_card.rs` `diagnostic_message` moves into the table and stops being a
+  `String` builder where the variant carries no argument). `CommandSpec::label` becomes a
+  `Message` too — all 48 specs — so the palette (U47) and any future CLI or assistant print the
+  same words; the `id` stays the identity and is never translated. Russian needs real plurals, so
+  a counting message is a constructor rather than one format string: `Message::more(n)` and the
+  like pick one/few/many themselves. The language is workspace settings, never document data: it is
+  chosen in the U41 *Settings* window, applies at once, and a saved `.fcs` never carries it. A name
+  the editor generates on its own — `{} body`, `{} drawing` — is fixed in the language that created
+  it, and switching the language never renames a node; that rule goes into ADR 0067 with the rest.
+  Not translated: command ids, `FurnType` numbers, material and node names, `mm`, and the
+  `thiserror` messages of `model`, `units` and `project`, which stay English for logs and tests and
+  are mapped to a `Message` at the UI boundary instead of being shown raw. Tests: every `Message`
+  variant is non-empty in both languages; a missing language cannot compile; every command spec
+  label resolves in both languages; switching the language redraws the header, the ribbon and a
+  card without touching the project revision or the undo stack; a scene saved in Russian loads in
+  English with its node names unchanged; the longest Russian ribbon caption fits the 48 pt labelled
+  button of U39 without clipping. Session notes: `Lang` is a plain enum and the table is
+  `const`, so `crates/text` needs no serde, no `egui` and no file I/O — it is data, like
+  `furnicraft-units`. The 48 labels are the `CommandSpec::new` calls in
+  `crates/engine/src/commands.rs`; `label()` is read in `crates/ui/src/toolbars.rs`,
+  `crates/ui/src/lib.rs` and `apps/furnicraft/src/header.rs`. Existing inline strings are ~530 in
+  `crates/ui` and ~200 in `apps/furnicraft`; `theme::PRODUCT_NAME` and the logo stay as they are.
+  Do this after U39–U48 so the labels stop moving, and before M8/M9, which add hardware, cutting
+  lists and CNC text on top of the same surface. A future move to per-language files (a translator
+  working outside the repository) reuses `Message` as the key, so this does not lock the format.
+  `files: crates/ui/src, apps/furnicraft/src, xtask/src/main.rs` — `c027309`
+
+- `[x]` **U46** the icon set catches up with the new surfaces: the header, the ribbon groups, the
+  viewport bar and the split layout get their drawings under `assets/icons`, so no chrome surface
+  is left as a text fallback. New: `view/orbit`, `view/pan`, `view/zoom`, `view/layout`,
+  `view/shaded-edges`, `view/wireframe`, `view/xray`, `view/translucent`, `view/sliders`,
+  `view/front`, `view/top`, `view/right`, `view/axon`, `actions/command` for the palette, plus the
+  remaining `actions` files the header and the settings use. Each follows `STYLE_GUIDE.md` and `assets/README.md`, gets its README row, its
+  button and the existing footprint/coverage test, and a shared drawing stays two files per theme.
+  The tree's four `actions` toggles (`visible`, `hidden`, `lock`, `unlock`) are part of this task and
+  are needed by U48.
+  A placeholder that is still empty keeps the text fallback, so this task can land in slices without breaking a surface.
+  Session notes: the `window` theme and `actions/{file-save,undo,redo,settings}` are drawn;
+  `assets/README.md` lists both. `crates/ui/src/icons.rs` guards every non-empty file with the 24-grid,
+  footprint and coverage tests; `Theme::ALL` and the uri count (`56`) move together with a new icon.
+  `files: assets/icons, crates/ui/src/icons.rs` — `21a2d6a`
 
 - `[x]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
   visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,

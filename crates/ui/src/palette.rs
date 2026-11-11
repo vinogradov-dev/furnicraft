@@ -6,7 +6,7 @@
 //! the one path that snapshots the document for undo. History and the last-used order are session
 //! state owned by the shell, never document data.
 
-use egui::{Align, Context, Id, Key, Layout, Modifiers, RichText, TextEdit, Ui};
+use egui::{Align, Context, Id, Key, Layout, Modifiers, RichText, Sense, TextEdit, Ui, Vec2};
 use furnicraft_engine::node_cmds::{
     NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID, NODE_PIVOT_CENTER_ID,
     NODE_RENAME_ID, NODE_UNGROUP_ID,
@@ -19,19 +19,17 @@ use furnicraft_engine::{
     SceneActiveCameraSet, Session,
 };
 use furnicraft_model::{CameraProjection, Id as NodeId, LightKind, Placement};
+use furnicraft_text::{Counted, Lang, Message};
 use serde_json::Value;
 
 use crate::command::{dispatch, json};
-use crate::theme;
+use crate::{icons, theme};
 
 /// How many dispatched command ids the palette remembers.
 pub const MAX_HISTORY: usize = 8;
 
 /// The height of one command row, in points.
 const ROW_HEIGHT: f32 = 22.0;
-
-/// The reason a command without a parameter builder gives.
-const NEEDS_SELECTION: &str = "Needs a selection.";
 
 /// The selection and creation target the parameter builders read.
 ///
@@ -51,8 +49,8 @@ impl PaletteContext {
         Self { selection, parent }
     }
 
-    fn primary(&self) -> Result<NodeId, String> {
-        self.selection.last().copied().ok_or_else(|| NEEDS_SELECTION.to_owned())
+    fn primary(&self, lang: Lang) -> Result<NodeId, String> {
+        self.selection.last().copied().ok_or_else(|| Message::PaletteNeedsSelection.text(lang).to_owned())
     }
 }
 
@@ -70,8 +68,8 @@ impl Entry {
     }
 
     /// The user-facing command label.
-    pub fn label(&self) -> &'static str {
-        self.spec.label()
+    pub fn label(&self, lang: Lang) -> &'static str {
+        self.spec.label().text(lang)
     }
 
     /// The parameters a dispatch would use, or why the palette cannot build them.
@@ -109,6 +107,7 @@ pub enum PaletteKey {
 #[derive(Debug, Default)]
 pub struct Palette {
     open: bool,
+    lang: Lang,
     query: String,
     highlight: usize,
     history: Vec<String>,
@@ -187,7 +186,7 @@ impl Palette {
         let query = self.query.trim().to_ascii_lowercase();
         let mut ranked = Vec::new();
         for spec in CommandRegistry::new().specs() {
-            let Some(rank) = rank(*spec, &query, &self.history) else {
+            let Some(rank) = rank(*spec, &query, &self.history, self.lang) else {
                 continue;
             };
             ranked.push((rank, self.entry(session, context, *spec)));
@@ -281,6 +280,7 @@ impl Palette {
         if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowDown)) {
             self.handle(PaletteKey::Down, session, context);
         }
+        self.lang = crate::language(ctx);
         let mut chosen = None;
         if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter)) {
             chosen = self.handle(PaletteKey::Enter, session, context);
@@ -290,13 +290,18 @@ impl Palette {
         let response = egui::Modal::new(Id::unique("command_palette")).show(ctx, |ui| {
             ui.set_width(560.0);
             ui.horizontal(|ui| {
-                ui.heading("Commands");
+                let (glyph, _) = ui.allocate_exact_size(Vec2::splat(icons::ICON_POINT_SIZE), Sense::hover());
+                icons::draw_icon(ui, icons::actions::COMMAND, glyph, icons::ICON_POINT_SIZE, theme::text(ui));
+                ui.heading(Message::PaletteHeading.text(crate::language(ui.ctx())));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new("Ctrl+K").small().color(theme::text_dim(ui)));
                 });
             });
-            let search = ui
-                .add(TextEdit::singleline(&mut self.query).hint_text("Search commands…").desired_width(f32::INFINITY));
+            let search = ui.add(
+                TextEdit::singleline(&mut self.query)
+                    .hint_text(Message::PaletteSearch.text(crate::language(ui.ctx())))
+                    .desired_width(f32::INFINITY),
+            );
             if self.focus_pending {
                 search.request_focus();
                 self.focus_pending = false;
@@ -309,7 +314,9 @@ impl Palette {
 
             let entries = self.entries(session, context);
             if entries.is_empty() {
-                ui.label(RichText::new("No command matches that search.").color(theme::text_dim(ui)));
+                ui.label(
+                    RichText::new(Message::PaletteNoMatch.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)),
+                );
             } else {
                 let index = self.highlight.min(entries.len().saturating_sub(1));
                 self.highlight = index;
@@ -337,7 +344,13 @@ impl Palette {
                 ui.separator();
                 ui.colored_label(ui.visuals().warn_fg_color, notice);
             }
-            ui.label(RichText::new(format!("{} commands", entries.len())).small().color(theme::text_dim(ui)));
+            let count: Counted = Message::counted(
+                entries.len(),
+                Message::PaletteCountOne,
+                Message::PaletteCountFew,
+                Message::PaletteCountMany,
+            );
+            ui.label(RichText::new(count.text(crate::language(ui.ctx()))).small().color(theme::text_dim(ui)));
         });
         if response.should_close() {
             self.close();
@@ -347,12 +360,13 @@ impl Palette {
 
     /// Builds the parameters for one id and checks that the session allows it.
     fn prepare(&self, session: &Session, context: &PaletteContext, id: &str) -> Result<Value, String> {
-        let spec = CommandRegistry::new().get(id).ok_or_else(|| format!("Unknown command `{id}`."))?;
-        let params = params_for(id, session, context)?;
+        let spec =
+            CommandRegistry::new().get(id).ok_or_else(|| Message::PaletteUnknownCommand.with(self.lang, [id]))?;
+        let params = params_for(id, session, context, self.lang)?;
         if spec.enabled(session, &params) {
             Ok(params)
         } else {
-            Err("The current selection does not allow this.".to_owned())
+            Err(Message::PaletteNotAllowed.text(self.lang).to_owned())
         }
     }
 
@@ -379,12 +393,12 @@ impl Palette {
 }
 
 /// The match rank of one command, or `None` when the query excludes it.
-fn rank(spec: CommandSpec, query: &str, history: &[String]) -> Option<u32> {
+fn rank(spec: CommandSpec, query: &str, history: &[String], lang: Lang) -> Option<u32> {
     if query.is_empty() {
         let recent = history.iter().position(|id| id == spec.id()).map_or(100, |index| index as u32);
         return Some(recent);
     }
-    let label = spec.label().to_ascii_lowercase();
+    let label = spec.label().text(lang).to_ascii_lowercase();
     let id = spec.id().to_ascii_lowercase();
     if label.starts_with(query) {
         Some(0)
@@ -404,42 +418,42 @@ fn rank(spec: CommandSpec, query: &str, history: &[String]) -> Option<u32> {
 /// The builder exists for the node families and the camera/light actions first. Every other spec
 /// is listed but reports [`NEEDS_SELECTION`] until it gets a builder, so the palette never guesses
 /// a size, name or material.
-fn params_for(id: &str, session: &Session, context: &PaletteContext) -> Result<Value, String> {
+fn params_for(id: &str, session: &Session, context: &PaletteContext, lang: Lang) -> Result<Value, String> {
     match id {
         NODE_DELETE_ID => {
-            let node = context.primary()?;
+            let node = context.primary(lang)?;
             json(&NodeDelete { node })
         }
         NODE_DUPLICATE_ID => {
-            let node = context.primary()?;
+            let node = context.primary(lang)?;
             json(&NodeDuplicate { node })
         }
         NODE_RENAME_ID => {
-            context.primary()?;
-            Err("Needs a new name; rename the node in the inspector.".to_owned())
+            context.primary(lang)?;
+            Err(Message::PaletteNeedsNewName.text(lang).to_owned())
         }
         NODE_GROUP_ID => {
             if context.selection.len() < 2 {
-                return Err("Needs two or more selected nodes.".to_owned());
+                return Err(Message::PaletteNeedsTwoNodes.text(lang).to_owned());
             }
-            json(&NodeGroup { nodes: context.selection.clone(), name: "Group".to_owned() })
+            json(&NodeGroup { nodes: context.selection.clone(), name: Message::GeneratedGroup.text(lang).to_owned() })
         }
         NODE_UNGROUP_ID => {
-            let node = context.primary()?;
+            let node = context.primary(lang)?;
             json(&NodeUngroup { node })
         }
         NODE_COMPONENT_CONVERT_TO_GROUP_ID => {
-            let node = context.primary()?;
+            let node = context.primary(lang)?;
             json(&NodeComponentConvertToGroup { node })
         }
         NODE_PIVOT_CENTER_ID => {
-            let node = context.primary()?;
+            let node = context.primary(lang)?;
             json(&NodePivotCenter { node })
         }
         SCENE_ACTIVE_CAMERA_SET_ID => {
-            let camera = context.primary()?;
+            let camera = context.primary(lang)?;
             if session.project().camera(camera).is_none() {
-                return Err("Needs a selected camera.".to_owned());
+                return Err(Message::PaletteNeedsCamera.text(lang).to_owned());
             }
             json(&SceneActiveCameraSet { camera: Some(camera) })
         }
@@ -448,11 +462,11 @@ fn params_for(id: &str, session: &Session, context: &PaletteContext) -> Result<V
                 .catalog()
                 .panel_materials()
                 .first()
-                .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
+                .ok_or_else(|| Message::PaletteAddPanelMaterial.text(lang).to_owned())?
                 .id();
             json(&PanelCreate {
                 parent: create_parent(session, context),
-                name: "Panel".to_owned(),
+                name: Message::ToolPanel.text(lang).to_owned(),
                 nominal_size: PanelCreate::default_nominal_size().map_err(|error| error.to_string())?,
                 material,
                 placement: Placement::IDENTITY,
@@ -460,24 +474,24 @@ fn params_for(id: &str, session: &Session, context: &PaletteContext) -> Result<V
         }
         furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID => json(&AssemblyCreate {
             parent: create_parent(session, context),
-            name: "Assembly".to_owned(),
+            name: Message::ToolAssembly.text(lang).to_owned(),
             placement: Placement::IDENTITY,
         }),
         CAMERA_CREATE_ID => json(&CameraCreate {
             parent: create_parent(session, context),
-            name: "Camera".to_owned(),
+            name: Message::ToolCamera.text(lang).to_owned(),
             placement: Placement::IDENTITY,
             projection: CameraProjection::DEFAULT,
         }),
         LIGHT_CREATE_ID => json(&LightCreate {
             parent: create_parent(session, context),
-            name: "Light".to_owned(),
+            name: Message::ToolLight.text(lang).to_owned(),
             placement: Placement::IDENTITY,
             kind: LightKind::Sun,
             color: [1.0, 0.97, 0.92],
             intensity: 1.0,
         }),
-        _ => Err(NEEDS_SELECTION.to_owned()),
+        _ => Err(Message::PaletteNeedsSelection.text(lang).to_owned()),
     }
 }
 
@@ -494,7 +508,7 @@ fn entry_job(ui: &Ui, entry: &Entry) -> egui::WidgetText {
     job.wrap.max_width = (ui.available_width() - 16.0).max(1.0);
     job.wrap.max_rows = 1;
     job.append(
-        entry.label(),
+        entry.label(crate::language(ui.ctx())),
         0.0,
         egui::TextFormat { font_id: body.clone(), color: theme::text(ui), ..Default::default() },
     );

@@ -18,6 +18,7 @@ use furnicraft_model::{
     ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MachiningId,
     MaterialId, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
 };
+use furnicraft_text::Message;
 use furnicraft_units::Length;
 use serde_json::Value;
 
@@ -92,21 +93,24 @@ pub(crate) enum PanelAction {
 }
 
 /// Draws the shared *Edit contour* entry state and returns whether the button was pressed.
-fn contour_entry(ui: &mut Ui, entry: ContourEntry, hover: &str) -> bool {
+fn contour_entry(ui: &mut Ui, entry: ContourEntry, hover: Message) -> bool {
+    let lang = crate::language(ui.ctx());
     match entry {
         ContourEntry::Editing => {
-            ui.label("Editing in the viewport. Apply or cancel in the viewport toolbar.");
+            ui.label(Message::PanelEditingInViewport.text(lang));
             false
         }
         ContourEntry::Busy => {
-            ui.label("Finish the current contour edit in the viewport first.");
+            ui.label(Message::PanelFinishContour.text(lang));
             false
         }
         ContourEntry::SelectSingle => {
-            ui.label("Select only this panel to edit its contour.");
+            ui.label(Message::PanelSelectSingle.text(lang));
             false
         }
-        ContourEntry::Ready => ui.button("Edit contour").on_hover_text(hover).clicked(),
+        ContourEntry::Ready => {
+            ui.button(Message::PanelEditContour.text(lang)).on_hover_text(hover.text(lang)).clicked()
+        }
     }
 }
 
@@ -121,11 +125,11 @@ enum CornerMode {
 impl CornerMode {
     const ALL: [Self; 3] = [Self::None, Self::Radius, Self::Chamfer];
 
-    const fn label(self) -> &'static str {
+    const fn label(self) -> Message {
         match self {
-            Self::None => "None",
-            Self::Radius => "Radius",
-            Self::Chamfer => "Chamfer",
+            Self::None => Message::CornerNone,
+            Self::Radius => Message::CornerRadius,
+            Self::Chamfer => Message::CornerChamfer,
         }
     }
 }
@@ -144,10 +148,11 @@ impl PanelCard {
         contour_target: Option<ContourTarget>,
         single_selection: bool,
     ) -> PanelAction {
+        let lang = crate::language(ui.ctx());
         let Some(panel_id) = selected else {
             self.draft = None;
             self.error = None;
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(lang));
             return PanelAction::None;
         };
 
@@ -158,11 +163,11 @@ impl PanelCard {
         let Some(panel) = session.project().panel(panel_id) else {
             self.draft = None;
             self.error = None;
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(lang));
             return PanelAction::None;
         };
         let Some(draft) = self.draft.as_mut() else {
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(lang));
             return PanelAction::None;
         };
 
@@ -176,14 +181,14 @@ impl PanelCard {
             .panel_geometry(panel_id)
             .map_or_else(|_| panel.last_known_thickness(), |geometry| geometry.thickness());
         ui.separator();
-        section(ui, "panel.name", "Name", true, |ui| {
+        section(ui, "panel.name", Message::SectionName.text(lang), true, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-                let clicked = ui.button("Rename").clicked();
+                let clicked = ui.button(Message::CmdRename.text(lang)).clicked();
                 if response.lost_focus() || clicked {
                     let name = draft.name.trim();
                     if name.is_empty() {
-                        errors.push("Panel name must not be empty.".to_owned());
+                        errors.push(Message::PanelNameEmpty.text(lang).to_owned());
                     } else if name != panel.name() {
                         actions.push(Action::Rename { panel: panel_id, name: name.to_owned() });
                     }
@@ -191,19 +196,19 @@ impl PanelCard {
             });
         });
 
-        section(ui, "panel.dimensions", "Dimensions", true, |ui| {
-            section(ui, "panel.dimensions.nominal_size", "Nominal size", true, |ui| {
+        section(ui, "panel.dimensions", Message::SectionDimensions.text(lang), true, |ui| {
+            section(ui, "panel.dimensions.nominal_size", Message::SectionNominalSize.text(lang), true, |ui| {
                 if panel.is_contour() {
-                    ui.label("The contour ring sets the length and width.");
+                    ui.label(Message::PanelContourSetsSize.text(lang));
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label("Length");
+                        ui.label(Message::Length.text(lang));
                         let length_response =
                             ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
-                        ui.label("Width");
+                        ui.label(Message::Width.text(lang));
                         let width_response =
                             ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
-                        let clicked = ui.button("Apply size").clicked();
+                        let clicked = ui.button(Message::ApplySize.text(lang)).clicked();
                         if length_response.lost_focus() || width_response.lost_focus() || clicked {
                             match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
                                 (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
@@ -213,33 +218,36 @@ impl PanelCard {
                                     Ok(_) => {}
                                     Err(error) => errors.push(error.to_string()),
                                 },
-                                (Err(error), _) => errors.push(format!("Length: {error}")),
-                                (_, Err(error)) => errors.push(format!("Width: {error}")),
+                                (Err(error), _) => errors
+                                    .push(Message::LengthField.with(lang, [crate::length_error(error).text(lang)])),
+                                (_, Err(error)) => {
+                                    errors.push(Message::WidthField.with(lang, [crate::length_error(error).text(lang)]))
+                                }
                             }
                         }
                     });
                 }
             });
 
-            section(ui, "panel.dimensions.resolved", "Resolved", true, |ui| {
+            section(ui, "panel.dimensions.resolved", Message::SectionResolved.text(lang), true, |ui| {
                 show_resolved(ui, session, panel_id);
             });
         });
 
         ui.separator();
-        section(ui, "panel.material", "Material", true, |ui| {
+        section(ui, "panel.material", Message::SectionMaterial.text(lang), true, |ui| {
             self.show_material(ui, session, panel_id, panel.material(), &mut actions);
         });
         ui.separator();
-        section(ui, "panel.shape", "Shape", true, |ui| {
+        section(ui, "panel.shape", Message::SectionShape.text(lang), true, |ui| {
             contour_request = self.show_shape(ui, panel_id, panel, panel_entry, &mut actions);
         });
         ui.separator();
-        section(ui, "panel.banding", "Banding", true, |ui| {
+        section(ui, "panel.banding", Message::SectionBanding.text(lang), true, |ui| {
             self.show_bands(ui, session, panel_id, panel, &mut actions);
         });
         ui.separator();
-        section(ui, "panel.machining", "Machining", true, |ui| {
+        section(ui, "panel.machining", Message::SectionMachining.text(lang), true, |ui| {
             if let Some(machining) = self.machining.show(
                 ui,
                 panel_id,
@@ -254,7 +262,7 @@ impl PanelCard {
             }
         });
         ui.separator();
-        section(ui, "panel.diagnostics", "Diagnostics", true, |ui| {
+        section(ui, "panel.diagnostics", Message::SectionDiagnostics.text(lang), true, |ui| {
             self.show_diagnostics(ui, &diagnostics);
         });
 
@@ -305,17 +313,18 @@ impl PanelCard {
         current: Option<MaterialId>,
         actions: &mut Vec<Action>,
     ) {
+        let lang = crate::language(ui.ctx());
         if let Some(material) = current
             && session.catalog().panel_material(material).is_none()
         {
-            ui.colored_label(Color32::LIGHT_RED, format!("Panel material {material} is missing from the catalogue."));
+            ui.colored_label(Color32::LIGHT_RED, Message::PanelMaterialMissingCatalogue.with(lang, [material]));
         }
         let selected_text = match current {
             Some(material) => session
                 .catalog()
                 .panel_material(material)
-                .map_or_else(|| format!("Missing material {material}"), |material| material.name().to_owned()),
-            None => "No material".to_owned(),
+                .map_or_else(|| Message::MissingMaterial.with(lang, [material]), |material| material.name().to_owned()),
+            None => Message::NoMaterial.text(lang).to_owned(),
         };
         ComboBox::from_id_salt(("panel_material", panel_id.get())).selected_text(selected_text).show_ui(ui, |ui| {
             for material in session.catalog().panel_materials() {
@@ -339,35 +348,37 @@ impl PanelCard {
         entry: ContourEntry,
         actions: &mut Vec<Action>,
     ) -> PanelAction {
+        let lang = crate::language(ui.ctx());
         let mut request = PanelAction::None;
-        section(ui, "panel.shape.outline", "Outline", true, |ui| {
+        section(ui, "panel.shape.outline", Message::SectionOutline.text(lang), true, |ui| {
             if panel.is_contour() {
                 if let Some(contour) = panel.outline_contour() {
                     let segments = contour.segments().len();
                     let arcs = contour.segments().filter(|segment| segment.is_arc()).count();
-                    ui.label(format!("Contour ring · {segments} segments"));
+                    let counted = Message::counted(
+                        segments,
+                        Message::PanelContourRingOne,
+                        Message::PanelContourRingFew,
+                        Message::PanelContourRingMany,
+                    );
+                    ui.label(counted.text(lang));
                     if arcs > 0 {
-                        ui.label(format!("Arcs  {arcs}"));
+                        ui.label(Message::ArcsCount.with(lang, [arcs]));
                     }
                 }
-                if contour_entry(ui, entry, "Reshapes the ring in the viewport. Undo restores it.") {
+                if contour_entry(ui, entry, Message::ContourReshapeHint) {
                     request = PanelAction::StartContour;
                 }
             } else {
                 self.show_outline(ui, panel_id, panel, actions);
                 ui.add_space(4.0);
-                if contour_entry(
-                    ui,
-                    entry,
-                    "Bakes the outline into a ring. Corners, chamfers and bows become segments; \
-                     undo restores them.",
-                ) {
+                if contour_entry(ui, entry, Message::BakeOutlineHint) {
                     actions.push(Action::ToContour { panel: panel_id });
                 }
             }
         });
         if !panel.is_contour() {
-            section(ui, "panel.shape.bowed_edges", "Bowed edges", true, |ui| {
+            section(ui, "panel.shape.bowed_edges", Message::SectionBowedEdges.text(lang), true, |ui| {
                 self.show_bowed_edges(ui, panel_id, panel, actions);
             });
         }
@@ -375,6 +386,7 @@ impl PanelCard {
     }
 
     fn show_outline(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        let lang = crate::language(ui.ctx());
         for corner in RectCorner::ALL {
             let corner_id = corner.id();
             let current = panel.corner_feature(corner_id);
@@ -383,13 +395,15 @@ impl PanelCard {
                 CornerFeatureKind::Chamfer { .. } => CornerMode::Chamfer,
             });
             ui.horizontal(|ui| {
-                ui.label(format!("Corner {}", corner.label()));
+                ui.label(Message::CornerWith.with(lang, [corner.label()]));
                 let mut selected = mode;
                 ComboBox::from_id_salt(("corner_mode", panel_id.get(), corner_id.get()))
-                    .selected_text(mode.label())
+                    .selected_text(mode.label().text(lang))
                     .show_ui(ui, |ui| {
                         for option in CornerMode::ALL {
-                            if ui.selectable_label(selected == option, option.label()).clicked() && selected != option {
+                            if ui.selectable_label(selected == option, option.label().text(lang)).clicked()
+                                && selected != option
+                            {
                                 selected = option;
                                 if option == CornerMode::None {
                                     if current.is_some() {
@@ -416,9 +430,9 @@ impl PanelCard {
                         }
                     }
                     Some(CornerFeatureKind::Chamfer { incoming, outgoing }) => {
-                        ui.label("in");
+                        ui.label(Message::Inward.text(lang));
                         let (incoming_committed, _) = millimetre_field(ui, incoming, 0.1..=1_000.0);
-                        ui.label("out");
+                        ui.label(Message::Outward.text(lang));
                         let (outgoing_committed, _) = millimetre_field(ui, outgoing, 0.1..=1_000.0);
                         let incoming_value = incoming_committed.and_then(positive_length);
                         let outgoing_value = outgoing_committed.and_then(positive_length);
@@ -443,11 +457,12 @@ impl PanelCard {
     }
 
     fn show_bowed_edges(&self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        let lang = crate::language(ui.ctx());
         for edge in RectEdge::ALL {
             let edge_id = edge.id();
             let current = panel.edge_bow(edge_id);
             ui.horizontal(|ui| {
-                ui.label(edge_label(edge_id.get()));
+                ui.label(edge_label(edge_id.get()).text(lang));
                 let current_sagitta = current.map_or(Length::ZERO, |bow| bow.sagitta());
                 let (committed, _) = millimetre_field(ui, current_sagitta, -1_000.0..=1_000.0);
                 if let Some(sagitta) = committed.and_then(signed_length) {
@@ -459,7 +474,7 @@ impl PanelCard {
                         actions.push(Action::SetBow { panel: panel_id, edge: edge_id, sagitta });
                     }
                 }
-                if current.is_some() && ui.button("Clear").clicked() {
+                if current.is_some() && ui.button(Message::Clear.text(lang)).clicked() {
                     actions.push(Action::ClearBow { panel: panel_id, edge: edge_id });
                 }
             });
@@ -467,9 +482,10 @@ impl PanelCard {
     }
 
     fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+        let lang = crate::language(ui.ctx());
         let listed = listed_band_sources(panel);
         if listed.is_empty() {
-            ui.label("No banding.");
+            ui.label(Message::NoBanding.text(lang));
         }
         for source in &listed {
             match *source {
@@ -495,23 +511,23 @@ impl PanelCard {
         let available = available_band_segments(panel);
         if available.is_empty() {
             if listed.is_empty() {
-                ui.label("Add a chamfer or radius to band a segment.");
+                ui.label(Message::AddChamferOrRadius.text(lang));
             } else {
-                ui.label("All existing segments are banded.");
+                ui.label(Message::AllSegmentsBanded.text(lang));
             }
             return;
         }
         let Some(material) = session.catalog().edge_materials().first() else {
-            ui.label("Add an edge material to the catalogue first.");
+            ui.label(Message::AddEdgeMaterial.text(lang));
             return;
         };
         ui.horizontal(|ui| {
-            ui.label("Add banding");
-            ComboBox::from_id_salt(("add_banding", panel_id.get())).selected_text("Choose a segment").show_ui(
-                ui,
-                |ui| {
+            ui.label(Message::AddBanding.text(lang));
+            ComboBox::from_id_salt(("add_banding", panel_id.get()))
+                .selected_text(Message::ChooseSegment.text(lang))
+                .show_ui(ui, |ui| {
                     for source in &available {
-                        if ui.selectable_label(false, segment_label(panel, *source)).clicked() {
+                        if ui.selectable_label(false, segment_label(panel, *source, lang)).clicked() {
                             match source {
                                 SegmentSource::Edge(edge) => actions.push(Action::SetBand {
                                     panel: panel_id,
@@ -534,44 +550,46 @@ impl PanelCard {
                             }
                         }
                     }
-                },
-            );
+                });
         });
     }
 
     fn show_diagnostics(&self, ui: &mut Ui, diagnostics: &[PanelDiagnostic]) {
+        let lang = crate::language(ui.ctx());
         let mut listed = 0;
         for diagnostic in diagnostics {
             if diagnostic_machining(diagnostic).is_some() {
                 continue;
             }
-            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(diagnostic));
+            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(diagnostic, lang));
             listed += 1;
         }
         let bound = diagnostics.len().saturating_sub(listed);
         if bound > 0 {
-            let suffix = if bound == 1 {
-                "issue is shown with its operation."
-            } else {
-                "issues are shown with their operations."
-            };
-            ui.label(format!("{bound} machining {suffix}"));
+            let counted = Message::counted(
+                bound,
+                Message::MachiningIssueOne,
+                Message::MachiningIssueFew,
+                Message::MachiningIssueMany,
+            );
+            ui.label(counted.text(lang));
         }
         if listed == 0 && bound == 0 {
-            ui.label("No issues.");
+            ui.label(Message::NoIssues.text(lang));
         }
     }
 }
 
 fn show_resolved(ui: &mut Ui, session: &Session, panel_id: Id) {
+    let lang = crate::language(ui.ctx());
     match session.panel_geometry(panel_id) {
         Ok(geometry) => {
-            ui.label(format!("Thickness  {}", geometry.thickness()));
-            ui.label(format!("Core  {} × {}", geometry.core_length(), geometry.core_width()));
-            ui.label(format!("Overall  {} × {}", geometry.overall_length(), geometry.overall_width()));
+            ui.label(Message::ThicknessRow.with(lang, [geometry.thickness()]));
+            ui.label(Message::CoreRow.with(lang, [geometry.core_length(), geometry.core_width()]));
+            ui.label(Message::OverallRow.with(lang, [geometry.overall_length(), geometry.overall_width()]));
         }
         Err(error) => {
-            ui.colored_label(Color32::LIGHT_RED, format!("Geometry: {error}"));
+            ui.colored_label(Color32::LIGHT_RED, Message::GeometryError.with(lang, [error]));
         }
     }
 }
@@ -656,13 +674,13 @@ fn dispatch(session: &mut Session, id: &str, params: &Value) -> Result<(), Strin
     dispatch_command(session, id, params).map(|_| ())
 }
 
-pub(crate) fn edge_label(edge: u32) -> &'static str {
+pub(crate) fn edge_label(edge: u32) -> Message {
     match edge {
-        1 => "Bottom",
-        2 => "Right",
-        3 => "Top",
-        4 => "Left",
-        _ => "Edge",
+        1 => Message::EdgeBottom,
+        2 => Message::EdgeRight,
+        3 => Message::EdgeTop,
+        4 => Message::EdgeLeft,
+        _ => Message::EdgeGeneric,
     }
 }
 
@@ -728,33 +746,32 @@ fn millimetres_to_length(millimetres: f64) -> Option<Length> {
 }
 
 /// Formats one derived panel issue for the card.
-pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic) -> String {
+pub(crate) fn diagnostic_message(diagnostic: &PanelDiagnostic, lang: crate::Lang) -> std::borrow::Cow<'static, str> {
+    use std::borrow::Cow;
     match diagnostic {
-        PanelDiagnostic::NoMaterial => "No panel material is assigned.".to_owned(),
+        PanelDiagnostic::NoMaterial => Cow::Borrowed(Message::DiagNoMaterial.text(lang)),
         PanelDiagnostic::MissingMaterial { material } => {
-            format!("Panel material {material} is missing from the catalogue.")
+            Cow::Owned(Message::DiagPanelMaterialMissing.with(lang, [material]))
         }
         PanelDiagnostic::MissingBandingMaterial { edge, material } => {
-            format!("Edge {edge} uses missing edge material {material}.")
+            Cow::Owned(Message::DiagEdgeMaterialMissing.with(lang, [edge.to_string(), material.to_string()]))
         }
         PanelDiagnostic::MissingCornerBandingMaterial { corner, material } => {
-            format!("Corner {corner} uses missing edge material {material}.")
+            Cow::Owned(Message::DiagCornerMaterialMissing.with(lang, [corner.to_string(), material.to_string()]))
         }
         PanelDiagnostic::MissingRingBandingMaterial { segment, material } => {
-            format!("Segment {segment} uses missing edge material {material}.")
+            Cow::Owned(Message::DiagSegmentMaterialMissing.with(lang, [segment.to_string(), material.to_string()]))
         }
-        PanelDiagnostic::NonPositiveCore => "The panel core is not positive.".to_owned(),
-        PanelDiagnostic::InvalidOutline => {
-            "The panel outline or its edge banding does not form a valid contour.".to_owned()
-        }
+        PanelDiagnostic::NonPositiveCore => Cow::Borrowed(Message::DiagNonPositiveCore.text(lang)),
+        PanelDiagnostic::InvalidOutline => Cow::Borrowed(Message::DiagInvalidOutline.text(lang)),
         PanelDiagnostic::MachiningOutsideCore { machining } => {
-            format!("Machining {machining} lies outside the core.")
+            Cow::Owned(Message::DiagMachiningOutsideCore.with(lang, [machining]))
         }
-        PanelDiagnostic::CoreRemoved => "The cutouts remove the whole panel core.".to_owned(),
-        PanelDiagnostic::CoreDisconnected => "The cutouts split the panel core into disconnected pieces.".to_owned(),
-        PanelDiagnostic::BlindDepthNotLessThanThickness { machining, depth, thickness } => {
-            format!("Machining {machining} blind depth {depth} is not less than thickness {thickness}.")
-        }
+        PanelDiagnostic::CoreRemoved => Cow::Borrowed(Message::DiagCoreRemoved.text(lang)),
+        PanelDiagnostic::CoreDisconnected => Cow::Borrowed(Message::DiagCoreDisconnected.text(lang)),
+        PanelDiagnostic::BlindDepthNotLessThanThickness { machining, depth, thickness } => Cow::Owned(
+            Message::DiagBlindDepth.with(lang, [machining.to_string(), depth.to_string(), thickness.to_string()]),
+        ),
     }
 }
 
@@ -820,30 +837,34 @@ fn available_band_segments(panel: &Panel) -> Vec<SegmentSource> {
     available
 }
 
-fn segment_label(panel: &Panel, source: SegmentSource) -> String {
+fn segment_label(panel: &Panel, source: SegmentSource, lang: crate::Lang) -> String {
     match source {
-        SegmentSource::Edge(edge) => edge_label(edge.get()).to_owned(),
-        SegmentSource::Corner(corner) => corner_segment_label(panel, corner),
+        SegmentSource::Edge(edge) => edge_label(edge.get()).text(lang).to_owned(),
+        SegmentSource::Corner(corner) => corner_segment_label(panel, corner, lang),
         SegmentSource::Ring(segment) => {
             let arc = panel
                 .outline_contour()
                 .and_then(|contour| contour.segment(segment))
                 .is_some_and(|segment| segment.is_arc());
-            if arc { format!("Segment {} (arc)", segment.get()) } else { format!("Segment {}", segment.get()) }
+            if arc {
+                Message::SegmentWithArc.with(lang, [segment.get()])
+            } else {
+                Message::SegmentWith.with(lang, [segment.get()])
+            }
         }
     }
 }
 
-fn corner_segment_label(panel: &Panel, corner: VertexId) -> String {
+fn corner_segment_label(panel: &Panel, corner: VertexId, lang: crate::Lang) -> String {
     let name = RectCorner::ALL
         .iter()
         .find(|candidate| candidate.id() == corner)
-        .map_or("Corner", |candidate| candidate.label());
+        .map_or(Message::CornerGeneric.text(lang), |candidate| candidate.label());
     let shape = panel.corner_feature(corner).map_or("", |feature| match feature.feature() {
-        CornerFeatureKind::Radius { .. } => " (radius)",
-        CornerFeatureKind::Chamfer { .. } => " (chamfer)",
+        CornerFeatureKind::Radius { .. } => Message::CornerRadiusSuffix.text(lang),
+        CornerFeatureKind::Chamfer { .. } => Message::CornerChamferSuffix.text(lang),
     });
-    format!("Corner {name}{shape}")
+    Message::CornerWithShape.with(lang, [name, shape])
 }
 
 fn band_key(source: SegmentSource) -> u64 {
@@ -854,11 +875,11 @@ fn band_key(source: SegmentSource) -> u64 {
     }
 }
 
-fn material_name(session: &Session, material: MaterialId) -> String {
+fn material_name(session: &Session, material: MaterialId, lang: crate::Lang) -> String {
     session
         .catalog()
         .edge_material(material)
-        .map_or_else(|| format!("Missing material {material}"), |material| material.name().to_owned())
+        .map_or_else(|| Message::MissingMaterial.with(lang, [material]), |material| material.name().to_owned())
 }
 
 fn show_edge_band_row(
@@ -869,10 +890,11 @@ fn show_edge_band_row(
     band: &EdgeBanding,
     actions: &mut Vec<Action>,
 ) {
+    let lang = crate::language(ui.ctx());
     ui.horizontal(|ui| {
-        ui.label(edge_label(edge.get()));
+        ui.label(edge_label(edge.get()).text(lang));
         ComboBox::from_id_salt(("band_material", panel_id.get(), band_key(SegmentSource::Edge(edge))))
-            .selected_text(material_name(session, band.material()))
+            .selected_text(material_name(session, band.material(), lang))
             .show_ui(ui, |ui| {
                 for material in session.catalog().edge_materials() {
                     let chosen = band.material() == material.id();
@@ -888,7 +910,7 @@ fn show_edge_band_row(
             });
         let mut included = band.included_in_size();
         let material_known = session.catalog().edge_material(band.material()).is_some();
-        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, Message::Included.text(lang))).changed() {
             actions.push(Action::SetBand {
                 panel: panel_id,
                 edge,
@@ -896,7 +918,7 @@ fn show_edge_band_row(
                 included_in_size: included,
             });
         }
-        if ui.small_button("−").on_hover_text("Remove banding").clicked() {
+        if ui.small_button("−").on_hover_text(Message::RemoveBanding.text(lang)).clicked() {
             actions.push(Action::ClearBand { panel: panel_id, edge });
         }
     });
@@ -911,10 +933,11 @@ fn show_corner_band_row(
     band: &CornerBanding,
     actions: &mut Vec<Action>,
 ) {
+    let lang = crate::language(ui.ctx());
     ui.horizontal(|ui| {
-        ui.label(corner_segment_label(panel, corner));
+        ui.label(corner_segment_label(panel, corner, lang));
         ComboBox::from_id_salt(("band_material", panel_id.get(), band_key(SegmentSource::Corner(corner))))
-            .selected_text(material_name(session, band.material()))
+            .selected_text(material_name(session, band.material(), lang))
             .show_ui(ui, |ui| {
                 for material in session.catalog().edge_materials() {
                     let chosen = band.material() == material.id();
@@ -930,7 +953,7 @@ fn show_corner_band_row(
             });
         let mut included = band.included_in_size();
         let material_known = session.catalog().edge_material(band.material()).is_some();
-        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, Message::Included.text(lang))).changed() {
             actions.push(Action::SetCornerBand {
                 panel: panel_id,
                 corner,
@@ -938,7 +961,7 @@ fn show_corner_band_row(
                 included_in_size: included,
             });
         }
-        if ui.small_button("−").on_hover_text("Remove banding").clicked() {
+        if ui.small_button("−").on_hover_text(Message::RemoveBanding.text(lang)).clicked() {
             actions.push(Action::ClearCornerBand { panel: panel_id, corner });
         }
     });
@@ -953,10 +976,11 @@ fn show_ring_band_row(
     band: &RingBanding,
     actions: &mut Vec<Action>,
 ) {
+    let lang = crate::language(ui.ctx());
     ui.horizontal(|ui| {
-        ui.label(segment_label(panel, SegmentSource::Ring(segment)));
+        ui.label(segment_label(panel, SegmentSource::Ring(segment), lang));
         ComboBox::from_id_salt(("band_material", panel_id.get(), band_key(SegmentSource::Ring(segment))))
-            .selected_text(material_name(session, band.material()))
+            .selected_text(material_name(session, band.material(), lang))
             .show_ui(ui, |ui| {
                 for material in session.catalog().edge_materials() {
                     let chosen = band.material() == material.id();
@@ -972,7 +996,7 @@ fn show_ring_band_row(
             });
         let mut included = band.included_in_size();
         let material_known = session.catalog().edge_material(band.material()).is_some();
-        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, "Included")).changed() {
+        if ui.add_enabled(material_known, egui::Checkbox::new(&mut included, Message::Included.text(lang))).changed() {
             actions.push(Action::SetRingBand {
                 panel: panel_id,
                 segment,
@@ -980,7 +1004,7 @@ fn show_ring_band_row(
                 included_in_size: included,
             });
         }
-        if ui.small_button("−").on_hover_text("Remove banding").clicked() {
+        if ui.small_button("−").on_hover_text(Message::RemoveBanding.text(lang)).clicked() {
             actions.push(Action::ClearRingBand { panel: panel_id, segment });
         }
     });
@@ -1017,50 +1041,56 @@ mod tests {
         panel.outline_contour().expect("ring").entries().iter().map(|entry| SegmentSource::Ring(entry.id())).collect()
     }
 
+    fn diagnostic_message_en(diagnostic: &PanelDiagnostic) -> String {
+        diagnostic_message(diagnostic, crate::Lang::En).into_owned()
+    }
+
     #[test]
     fn diagnostics_have_readable_messages() {
-        assert_eq!(diagnostic_message(&PanelDiagnostic::NoMaterial), "No panel material is assigned.");
+        assert_eq!(diagnostic_message_en(&PanelDiagnostic::NoMaterial), "No panel material is assigned.");
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MissingMaterial { material: material(7) }),
+            diagnostic_message_en(&PanelDiagnostic::MissingMaterial { material: material(7) }),
             "Panel material 7 is missing from the catalogue."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MissingBandingMaterial {
+            diagnostic_message_en(&PanelDiagnostic::MissingBandingMaterial {
                 edge: EdgeId::new(2).expect("edge"),
                 material: material(101),
             }),
             "Edge 2 uses missing edge material 101."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MissingCornerBandingMaterial {
+            diagnostic_message_en(&PanelDiagnostic::MissingCornerBandingMaterial {
                 corner: RectCorner::BottomRight.id(),
                 material: material(101),
             }),
             "Corner 2 uses missing edge material 101."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MissingRingBandingMaterial {
+            diagnostic_message_en(&PanelDiagnostic::MissingRingBandingMaterial {
                 segment: ContourSegmentId::new(3).expect("segment"),
                 material: material(101),
             }),
             "Segment 3 uses missing edge material 101."
         );
-        assert_eq!(diagnostic_message(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
+        assert_eq!(diagnostic_message_en(&PanelDiagnostic::NonPositiveCore), "The panel core is not positive.");
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::InvalidOutline),
+            diagnostic_message_en(&PanelDiagnostic::InvalidOutline),
             "The panel outline or its edge banding does not form a valid contour."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::MachiningOutsideCore { machining: MachiningId::new(9).expect("id") }),
+            diagnostic_message_en(&PanelDiagnostic::MachiningOutsideCore {
+                machining: MachiningId::new(9).expect("id")
+            }),
             "Machining 9 lies outside the core."
         );
-        assert_eq!(diagnostic_message(&PanelDiagnostic::CoreRemoved), "The cutouts remove the whole panel core.");
+        assert_eq!(diagnostic_message_en(&PanelDiagnostic::CoreRemoved), "The cutouts remove the whole panel core.");
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::CoreDisconnected),
+            diagnostic_message_en(&PanelDiagnostic::CoreDisconnected),
             "The cutouts split the panel core into disconnected pieces."
         );
         assert_eq!(
-            diagnostic_message(&PanelDiagnostic::BlindDepthNotLessThanThickness {
+            diagnostic_message_en(&PanelDiagnostic::BlindDepthNotLessThanThickness {
                 machining: MachiningId::new(9).expect("id"),
                 depth: Length::from_millimetres(20).expect("depth"),
                 thickness: Length::from_millimetres(18).expect("thickness"),
@@ -1153,7 +1183,10 @@ mod tests {
 
     #[test]
     fn edge_labels_match_the_documented_numbering() {
-        assert_eq!([edge_label(1), edge_label(2), edge_label(3), edge_label(4)], ["Bottom", "Right", "Top", "Left"]);
+        assert_eq!(
+            [edge_label(1), edge_label(2), edge_label(3), edge_label(4)],
+            [Message::EdgeBottom, Message::EdgeRight, Message::EdgeTop, Message::EdgeLeft]
+        );
     }
 
     #[test]
