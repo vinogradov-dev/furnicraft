@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
-  Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
-   glyphs are a starting point, not a specification. The names, meanings and composition rules
-   are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.
-  Shape: Draw under `assets/icons/contour/`: `trim`, `extend`, `offset`, `fillet`, `chamfer`,
-   `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`,
-   `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`,
-   `boolean-union`, `boolean-subtract`, `boolean-intersect`. Keep the 24 grid, ink inside
-   3..21, 20–45 % coverage and the role inks from U70; add one `Icon` const per file and its
-   README row; re-ink the ten existing contour files to the draw role; one emphasis per icon
-   and no colour as the only signal.
-  Done: Every new file rasterises non-empty at 16, 20 and 22 px, stays inside 3..21 and the
-   coverage band, and contains only role inks; the theme table in `assets/README.md` and the
-   `ALL` list move together; the empty-file fallback test still passes; both themes are
-   reviewed at 22 px on the ribbon built by U68.
-  `files: assets/icons/contour, assets/README.md, crates/ui/src/icons.rs`
-
 - `[ ]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
   Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in
    Эскиз, namespaced ids, planned rows), and `columns()` is hardcoded per tab. The full map,
@@ -179,6 +162,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
+  Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
+   glyphs are a starting point, not a specification. The names, meanings and composition rules
+   are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.
+  Shape: Draw under `assets/icons/contour/`: `trim`, `extend`, `offset`, `fillet`, `chamfer`,
+   `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`,
+   `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`,
+   `boolean-union`, `boolean-subtract`, `boolean-intersect`. Keep the 24 grid, ink inside
+   3..21, 20–45 % coverage and the role inks from U70; add one `Icon` const per file and its
+   README row; re-ink the ten existing contour files to the draw role; one emphasis per icon
+   and no colour as the only signal.
+  Done: Every new file rasterises non-empty at 16, 20 and 22 px, stays inside 3..21 and the
+   coverage band, and contains only role inks; the theme table in `assets/README.md` and the
+   `ALL` list move together; the empty-file fallback test still passes; both themes are
+   reviewed at 22 px on the ribbon built by U68.
+  `files: assets/icons/contour, assets/README.md, crates/ui/src/icons.rs` — `9a5a3d0`
 
 - `[x]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
   Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U69 state=doing base=87487c7 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U68 state=idle base=9a5a3d0 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U69 is next: the approved sketch map needs sixteen tools with no artwork — trim, extend, offset,
-fillet, chamfer, break, the four construction tools, three dimensions and three booleans — and the
-ten existing contour icons already carry the draw role ink U70 landed.
+U68 is next: the ribbon's three `match` tables become one const spec — tabs Эскиз, Модель, Мебель,
+Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — rendered by one loop
+with the L3 metrics; the sixteen sketch icons U69 drew are wired and reviewed at 22 px here.
 
 ## Index
 
