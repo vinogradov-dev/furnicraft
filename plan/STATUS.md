@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U48 state=idle base=71a636f updated=2026-11-11
+STATE: milestone=M7 phase=A task=U46 state=idle base=6b5c502 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U48 is next: every row of the scene tree gains an eye and a padlock — session state keyed by node
-`Id`, a hidden node gone from the frame and from picking, a locked node that selects but refuses a
-drag and a delete, and an *Isolate* / *Show all* pair in the row context menu (ADR 0065).
+U46 is next: the icon set catches up with the surfaces the interface grew — the header, the ribbon
+groups, the viewport bar and the split layout — and the four tree toggles U48 draws as captions get
+their eye, eye-off, padlock and padlock-open files, so no chrome surface is left as a text fallback.
 
 ## Index
 

@@ -187,3 +187,7 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   the step list and `task set --field now` writes the label into the `plan/BACKLOG.md` entry instead
   (`label_of` does not know it). Either `task start <ID> --reset` or a `task note --now` verb belongs
   beside `step`, so the resume hint a dead session leaves behind can stay true (U45).
+- `[perf]` A hidden branch is released from the evaluation cache like a deleted node, because
+  `EvaluationCache::finish` drops every entry the pass did not touch. Hiding a large assembly and
+  showing it again rebuilds every mesh in it; keeping the entries while the flag is set means the
+  cache has to know the hidden set instead of only the revision (U48).
