@@ -26,6 +26,10 @@ pub(crate) enum FileAction {
     Open(PathBuf),
     /// Write the current scene to this path.
     Save(PathBuf),
+    /// Close the active tab, asking first when its scene has unsaved changes.
+    Close,
+    /// Quit the application, asking once when any open scene has unsaved changes.
+    Quit,
 }
 
 /// What a File menu entry means before it becomes an action or a dialog.
@@ -35,6 +39,8 @@ enum MenuCommand {
     Open,
     Save,
     SaveAs,
+    Close,
+    Quit,
 }
 
 /// Which operation the path dialog performs.
@@ -67,13 +73,31 @@ pub(crate) enum CloseAnswer {
 /// document it names, and switching tabs must not lose it.
 #[derive(Clone, Debug)]
 pub(crate) struct ConfirmClose {
+    /// The question, already built from what it is about.
     title: String,
+    /// One sentence naming what is lost.
+    body: String,
+    /// The label of the button that discards.
+    discard: String,
 }
 
 impl ConfirmClose {
     /// Asks about the scene `title` names, the way the tab row shows it.
-    pub(crate) fn new(title: impl Into<String>) -> Self {
-        Self { title: title.into() }
+    pub(crate) fn tab(title: impl Into<String>) -> Self {
+        Self {
+            title: format!("Close \u{201c}{}\u{201d}?", title.into()),
+            body: "This scene has unsaved changes. Closing the tab discards them.".to_owned(),
+            discard: "Discard and close".to_owned(),
+        }
+    }
+
+    /// Asks about the whole window, when `unsaved` open scenes would go with it.
+    pub(crate) fn quit(unsaved: usize) -> Self {
+        let body = match unsaved {
+            1 => "One open scene has unsaved changes. Quitting discards them.".to_owned(),
+            count => format!("{count} open scenes have unsaved changes. Quitting discards them."),
+        };
+        Self { title: format!("Quit {}?", crate::theme::PRODUCT_NAME), body, discard: "Discard and quit".to_owned() }
     }
 
     /// Draws the question and returns the answer the user picked, if any.
@@ -81,11 +105,11 @@ impl ConfirmClose {
         let mut answer = None;
         Modal::new(Id::unique("scene-confirm-close")).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.heading(format!("Close \u{201c}{}\u{201d}?", self.title));
-            ui.label("This scene has unsaved changes. Closing the tab discards them.");
+            ui.heading(&self.title);
+            ui.label(&self.body);
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.button("Discard and close").clicked() {
+                if ui.button(&self.discard).clicked() {
                     answer = Some(CloseAnswer::Discard);
                 }
                 if ui.button("Cancel").clicked() {
@@ -141,6 +165,15 @@ impl FileMenu {
             if ui.button("Save As…").clicked() {
                 ui.close();
                 action = self.command(MenuCommand::SaveAs);
+            }
+            ui.separator();
+            if ui.button("Close tab").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::Close);
+            }
+            if ui.button("Exit").clicked() {
+                ui.close();
+                action = self.command(MenuCommand::Quit);
             }
         });
         action.or_else(|| self.show_dialogs(ui.ctx()))
@@ -204,6 +237,10 @@ impl FileMenu {
                 self.save_dialog();
                 None
             }
+            // Both are window operations, not file operations: the shell closes the tab or the
+            // window, and the unsaved-changes question belongs there because it names a tab.
+            MenuCommand::Close => Some(FileAction::Close),
+            MenuCommand::Quit => Some(FileAction::Quit),
         }
     }
 
@@ -369,9 +406,30 @@ mod tests {
     fn the_close_question_names_the_tab_and_offers_both_answers() {
         // The question belongs to the shell, so this test only proves it is the document's name it
         // asks about and that both answers exist; the modal itself needs an egui pass.
-        let question = ConfirmClose::new("cabinet.fcs");
-        assert_eq!(question.title, "cabinet.fcs");
+        let question = ConfirmClose::tab("cabinet.fcs");
+        assert_eq!(question.title, "Close \u{201c}cabinet.fcs\u{201d}?");
+        assert!(question.body.contains("unsaved changes"));
         assert_ne!(CloseAnswer::Discard, CloseAnswer::Cancel, "cancel and discard are different answers");
+    }
+
+    #[test]
+    fn the_quit_question_counts_the_unsaved_scenes() {
+        let one = ConfirmClose::quit(1);
+        assert_eq!(one.title, format!("Quit {}?", crate::theme::PRODUCT_NAME));
+        assert!(one.body.contains("One open scene"), "one scene reads as a sentence, not as `1 scenes`: {}", one.body);
+        let many = ConfirmClose::quit(3);
+        assert!(many.body.contains("3 open scenes"), "and a count reads as one: {}", many.body);
+        assert_eq!(many.discard, "Discard and quit");
+    }
+
+    #[test]
+    fn the_menu_names_close_and_exit_after_the_file_entries() {
+        // *Close tab* and *Exit* are window operations, so the menu reports them as actions the
+        // shell performs rather than opening a dialog of its own (X32).
+        let mut menu = FileMenu::new();
+        assert_eq!(menu.command(MenuCommand::Close), Some(FileAction::Close));
+        assert_eq!(menu.command(MenuCommand::Quit), Some(FileAction::Quit));
+        assert!(menu.dialog.is_none(), "neither of them asks for a path");
     }
 
     #[test]

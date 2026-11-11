@@ -138,9 +138,18 @@ impl Shell {
 /// The question belongs to the window, not to the document it names: it stays up while the scene it
 /// would drop is still open, and an answer drops exactly that tab.
 struct CloseQuestion {
-    /// The tab the answer is about, even if another scene was activated while the question was up.
-    tab: TabId,
+    /// What the answer does: drop one tab, or leave the application.
+    request: CloseRequest,
     title: ConfirmClose,
+}
+
+/// What a confirmed question performs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseRequest {
+    /// Drop this tab, even if another scene was activated while the question was up.
+    Tab(TabId),
+    /// Close the window; every open scene goes with it.
+    Quit,
 }
 
 struct FurniCraftApp {
@@ -164,8 +173,11 @@ struct FurniCraftApp {
     palette: Palette,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
     settings_notice: Option<String>,
-    /// The tab whose unsaved changes are waiting for the close question.
+    /// The tab or the window whose unsaved changes are waiting for the close question.
     pending_close: Option<CloseQuestion>,
+    /// Whether the frame should close the window: the context that sends the command is only at
+    /// hand there, and quitting is a window operation, not a document one.
+    quit_requested: bool,
 }
 
 impl FurniCraftApp {
@@ -195,6 +207,7 @@ impl FurniCraftApp {
             palette: Palette::new(),
             settings_notice: loaded.notice,
             pending_close: None,
+            quit_requested: false,
         })
     }
 
@@ -246,12 +259,21 @@ impl FurniCraftApp {
         self.tabs.active_mut().last_error = None;
         let recorded = match &action {
             FileAction::Open(path) | FileAction::Save(path) => Some(path.clone()),
-            FileAction::New => None,
+            FileAction::New | FileAction::Close | FileAction::Quit => None,
         };
         let result = match action {
             FileAction::New => self.new_tab(),
             FileAction::Open(path) => self.open_tab(&path),
             FileAction::Save(path) => self.tabs.active_mut().save(&path),
+            FileAction::Close => {
+                let active = self.tabs.active_id();
+                self.close_tab(active);
+                Ok(())
+            }
+            FileAction::Quit => {
+                self.request_quit();
+                Ok(())
+            }
         };
         match result {
             Ok(()) => {
@@ -299,11 +321,27 @@ impl FurniCraftApp {
         match self.tabs.close(id, unsaved) {
             CloseOutcome::NeedsConfirmation(id) => {
                 let title = self.tabs.document(id).map(Document::file_name).unwrap_or_default();
-                self.pending_close = Some(CloseQuestion { tab: id, title: ConfirmClose::new(title) });
+                self.pending_close =
+                    Some(CloseQuestion { request: CloseRequest::Tab(id), title: ConfirmClose::tab(title) });
             }
             CloseOutcome::Closed(document) => self.forget(document),
             CloseOutcome::LastTab(id) => self.empty_tab(id),
             CloseOutcome::Missing(_) => {}
+        }
+    }
+
+    /// Asks to quit when any open scene has unsaved changes, and quits at once when none has.
+    ///
+    /// One question covers the window: a quit is one gesture, and asking per tab would leave the
+    /// user to answer the same question several times for one decision.
+    fn request_quit(&mut self) {
+        let unsaved = self.tabs.iter().filter(|(_, document)| document.is_dirty()).count();
+        match unsaved {
+            0 => self.quit_requested = true,
+            count => {
+                self.pending_close =
+                    Some(CloseQuestion { request: CloseRequest::Quit, title: ConfirmClose::quit(count) });
+            }
         }
     }
 
@@ -321,9 +359,12 @@ impl FurniCraftApp {
         let Some(question) = self.pending_close.take() else {
             return;
         };
-        match answer {
-            CloseAnswer::Cancel => {}
-            CloseAnswer::Discard => match self.tabs.discard(question.tab) {
+        if answer == CloseAnswer::Cancel {
+            return;
+        }
+        match question.request {
+            CloseRequest::Quit => self.quit_requested = true,
+            CloseRequest::Tab(tab) => match self.tabs.discard(tab) {
                 CloseOutcome::Closed(document) => self.forget(document),
                 CloseOutcome::LastTab(id) => self.empty_tab(id),
                 CloseOutcome::NeedsConfirmation(_) | CloseOutcome::Missing(_) => {}
@@ -593,6 +634,12 @@ impl eframe::App for FurniCraftApp {
         self.command_palette(ui);
         self.settings_window(ui.ctx());
         self.home_surface(ui.ctx());
+        // The close command needs the context, which only the frame has: everything else a quit
+        // touches — the questions, the settings write — has already happened by now.
+        if self.quit_requested {
+            self.quit_requested = false;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     fn on_exit(&mut self) {
