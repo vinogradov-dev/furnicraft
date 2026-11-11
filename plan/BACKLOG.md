@@ -25,31 +25,16 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S18** `ui/lib.rs`'s `Editor` gives up the document rules it holds — rules: C7, D1, B1, H2.
-  Why: three document rules live inside the UI's edit session (F2): `placement_in_parent` repeats the
-  model's frame composition, `NEW_PANEL_LENGTH_MM`/`NEW_PANEL_WIDTH_MM` (600 x 400) are a document
-  default held in the UI, and `resolve_viewport_pick`, `creation_target` and `child_containing` are the
-  picking and creation-target rules (C7: the UI never holds a document default).
-  Shape: `placement_in_parent` becomes `Project::placement_in_parent` beside `world_placement` in
-  `crates/model/src/project/query.rs`; `default_panel_size` becomes
-  `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds/panel.rs` and the UI asks it; the
-  pick and target helpers move to `crates/ui/src/target.rs` (~90); `ui/lib.rs` 1159 -> ~1090, still
-  over the ceiling, so S19 follows.
-  Done: a model test for a rotated parent and for the root's identity frame; a created panel is still
-  600 x 400; suite unchanged; the palette builds the same params.
-  Commits: one move.
-  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds/panel.rs`
-
 - `[ ]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
   B1, B3, B4, B5, B8.
-  Why: 1090 production lines with `impl Editor` at 966, 18 fields and 60 public methods: four pointer
-  modes, ribbon state and eight cards in one impl (F2, B4, B5).
-  Shape: the `Editor` type and its state move to `crates/ui/src/editor/mod.rs`; the methods split by
-  what they own — `selection.rs` (select, enter and exit a level, `retain_open`), `mesh.rs` (the mesh
-  edit mode), `contour.rs` (the contour edit mode and its grips), `drawing.rs` (the draft and its
-  commit), `creation.rs` (armed container, primitives, panels, assemblies, cameras, lights) and
-  `cards.rs` (`show_scene_tree`, `show_card`, `run_action`); `lib.rs` 1090 -> ~150 and holds `mod` and
-  `pub use` only (B3).
+  Why: 1085 production lines with `impl Editor` at 966, 18 fields and 60 public methods: four
+   pointer modes, ribbon state and eight cards in one impl (F2, B4, B5).
+  Shape: the `Editor` type and its state move to `crates/ui/src/editor/mod.rs`; the methods
+   split by what they own — `selection.rs` (select, enter and exit a level, `retain_open`),
+   `mesh.rs` (the mesh edit mode), `contour.rs` (the contour edit mode and its grips),
+   `drawing.rs` (the draft and its commit), `creation.rs` (armed container, primitives, panels,
+   assemblies, cameras, lights) and `cards.rs` (`show_scene_tree`, `show_card`, `run_action`);
+   `lib.rs` 1085 -> ~150 and holds `mod` and `pub use` only (B3).
   Done: suite unchanged apart from paths and `use` lines (T1); the crate header still states the layer
   and that the UI dispatches and never writes the document; every new header names its mode and
   `//! Changes when:`; no module over 600 lines.
@@ -290,6 +275,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S18** `ui/lib.rs`'s `Editor` gives up the document rules it holds — rules: C7, D1, B1, H2.
+  Why: three document rules live inside the UI's edit session (F2): `placement_in_parent` repeats the
+  model's frame composition, `NEW_PANEL_LENGTH_MM`/`NEW_PANEL_WIDTH_MM` (600 x 400) are a document
+  default held in the UI, and `resolve_viewport_pick`, `creation_target` and `child_containing` are the
+  picking and creation-target rules (C7: the UI never holds a document default).
+  Shape: `placement_in_parent` becomes `Project::placement_in_parent` beside `world_placement`
+   in `crates/model/src/project/query.rs`; `default_panel_size` becomes
+   `PanelCreate::default_nominal_size` in `crates/engine/src/panel_cmds/panel.rs` and the UI
+   asks it; the pick and target helpers move to `crates/ui/src/target.rs`. Measured:
+   `ui/lib.rs` 1158 -> 1085 production lines, `target.rs` 75, `impl Editor` still 966, so S19
+   follows.
+  Done: a model test for a rotated parent and for the root's identity frame; a created panel is still
+  600 x 400; suite unchanged; the palette builds the same params.
+  Commits: one move.
+  `files: crates/ui/src/lib.rs, crates/model/src/project/query.rs, crates/engine/src/panel_cmds/panel.rs` — `cbc253e`
 
 - `[x]` **S17** `render/lib.rs` gives up the vertex builders — rules: B1, B4, B8.
   Why: after S16 the file was 1136 production lines (`2c183d4`) and still held the CPU-side

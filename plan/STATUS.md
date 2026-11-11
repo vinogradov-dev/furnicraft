@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S18 state=idle base=1f361e1 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S19 state=idle base=cbc253e updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -22,7 +22,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   and `geom/boolean.rs` (ADR 0043 amended); S12 the segment maths back to `geom/segment.rs` (X31);
   S13 the figure frames into `contour_frames.rs`; S14 `engine/panel_cmds` into `panel`, `machining`
   and `banding`; S15 `scene`'s camera and ray, S16 `render`'s pipelines and buffers, S17 the vertex
-  builders; F4 waits in `plan/questions.md`.
+  builders, S18 the document rules out of `ui/lib.rs`; F4 waits in `plan/questions.md`.
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
   machining is one ordered list of anchored records driving staged effects and the cards (ADRs
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S18 is next: the three document rules `ui/lib.rs`'s `Editor` holds — the frame composition, the
-600 x 400 panel default and the picking and creation-target rules — move down to `model` and
-`engine`; S19–S22 follow.
+S19 is next: `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode —
+selection, mesh, contour, drawing, creation and cards — because the split left 1085 production lines
+and one 966-line `impl`; S20–S22 follow.
 
 ## Index
 
