@@ -25,29 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
-  Why: `theme.rs` holds one dark and one light `Palette`, and the settings store only keeps the
-   accent, so a second look means a second palette file and a second code path. The owner wants
-   three switchable looks and one Appearance page that also hosts the panel opacity (92 %
-   default) and the icon-colour mode the icon pipeline (U70) reads. The shared design —
-   palettes, tokens, metrics and behaviour — is in `plan/notes/U71.md`.
-  Shape: Add `ThemePreset { GraphiteCopper, InkAzure, SlateMint }` with a display name and a
-   dark and a light ramp; `apply_with` picks the preset's ramp for the active variant and
-   leaves the accent override in place. Derive hover, pressed, line and disabled from the base
-   tokens with `mix` so six ramps stay small and a new token costs one field per ramp. Store
-   `appearance.palette` with `#[serde(default)]`; an unknown preset loads P1 and reports one
-   notice in the status bar, never a panic. The Settings window gains an Appearance page: three
-   preset cards with swatches, the accent picker, a panel-opacity slider (55–100, default 92),
-   the icon-colour mode (auto/always/never, consumed by U70) and a Reset. No per-preset icon or
-   asset files.
-  Done: A test loops every preset × dark/light and asserts contrast: text/panel ≥ 4.5:1, dim ≥
-   3:1, accent/surface ≥ 3:1, and each icon role hue against panel and ribbon ≥ 3:1. Switching
-   a preset redraws the open window without restart or texture reload; the settings round-trip
-   keeps preset, accent and opacity; an unknown preset and a corrupt settings file load P1 and
-   report one notice; both themes of all three presets are checked by eye on the ribbon, the
-   panels and the viewport chrome.
-  `files: crates/ui/src/theme.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
-
 - `[ ]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
   Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
    normative, so a coloured set is impossible without superseding them. The set must not grow a
@@ -224,6 +201,29 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
+  Why: `theme.rs` holds one dark and one light `Palette`, and the settings store only keeps the
+   accent, so a second look means a second palette file and a second code path. The owner wants
+   three switchable looks and one Appearance page that also hosts the panel opacity (92 %
+   default) and the icon-colour mode the icon pipeline (U70) reads. The shared design —
+   palettes, tokens, metrics and behaviour — is in `plan/notes/U71.md`.
+  Shape: Add `ThemePreset { GraphiteCopper, InkAzure, SlateMint }` with a display name and a
+   dark and a light ramp; `apply_with` picks the preset's ramp for the active variant and
+   leaves the accent override in place. Derive hover, pressed, line and disabled from the base
+   tokens with `mix` so six ramps stay small and a new token costs one field per ramp. Store
+   `appearance.palette` with `#[serde(default)]`; an unknown preset loads P1 and reports one
+   notice in the status bar, never a panic. The Settings window gains an Appearance page: three
+   preset cards with swatches, the accent picker, a panel-opacity slider (55–100, default 92),
+   the icon-colour mode (auto/always/never, consumed by U70) and a Reset. No per-preset icon or
+   asset files.
+  Done: A test loops every preset × dark/light and asserts contrast: text/panel ≥ 4.5:1, dim ≥
+   3:1, accent/surface ≥ 3:1, and each icon role hue against panel and ribbon ≥ 3:1. Switching
+   a preset redraws the open window without restart or texture reload; the settings round-trip
+   keeps preset, accent and opacity; an unknown preset and a corrupt settings file load P1 and
+   report one notice; both themes of all three presets are checked by eye on the ribbon, the
+   panels and the viewport chrome.
+  `files: crates/ui/src/theme.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs` — `c0d6edc`
 
 - `[x]` **P11** the plan tool cannot take a bug: a session that fixes an entry in `## Bugs` has no verb that moves it into `## Now`, so it edits `plan/BACKLOG.md` by hand, which ADR 0085 forbids. Add `cargo xtask task take <ID> [--at top|end]` (default end): move an open `## Bugs` entry into `## Now` at the chosen place, keeping its text, fields and `files:` hint, in one validated write. Refuse a done task, an unknown id, a task already in `## Now`, and `--at top` while another task is in progress. Into an occupied `## Now` it changes no `STATE`; into an empty one it sets `STATE: task=` to the taken task, rewrites `## Next` and leaves `state=idle`. Tests: a bug moves with every line intact, taking it into an occupied `## Now` leaves `STATE` alone, taking it into an empty one makes it `STATE`, and a done or unknown task is refused.
   `files: state-contract/src/cli/write.rs, state-contract/src/edit.rs, state-contract/src/cli/mod.rs` — `9d63579`

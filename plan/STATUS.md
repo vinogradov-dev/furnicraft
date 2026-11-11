@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U71 state=idle base=9d63579 updated=2026-11-11
+STATE: milestone=M7 phase=A task=U70 state=idle base=c0d6edc updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U71 is next: three palettes (P1/P2/P4, dark and light) as settings data, an Appearance page and
-contrast tests; the shared design spec is `plan/notes/U71.md`.
+U70 is next: icons take their hue from the semantic family — draw, modify, model, scene, view,
+danger — with a light-theme remap and a monochrome fallback below a 20 px raster; the page's
+icon-colour mode (auto/always/never) is the setting it reads.
 
 ## Index
 
