@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X22 state=idle base=c250d09 updated=2026-11-11
+STATE: milestone=M7 phase=A task=X31 state=idle base=8275ae9 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-X22 is next: a 1 mm corner drag on a shallow arc still turns it into a near-full circle because the
-rebuild picks its direction from the side of the old midpoint against the new chord instead of from
-the sweep the arc had.
+X31 is next: a corner dragged along a sub-millimetre segment panics in `f64::clamp` because the
+clamp margin becomes a parameter fraction larger than the upper bound; the move must refuse or clamp
+instead of aborting the editor.
 
 ## Index
 
