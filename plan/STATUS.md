@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U45 state=idle base=e538760 updated=2026-11-11
+STATE: milestone=M7 phase=A task=U48 state=idle base=c6d3836 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -14,49 +14,49 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
-  0083), and S6 proves it once in `crates/model/src/project/frame_contract.rs`.
+  0083), S6 proves it once in `frame_contract.rs`, and cameras and lights are scene objects (0036).
 - S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (geom, model, engine, scene,
   render, then `Editor` and the shell; `main.rs` and `ui/lib.rs` before U45): S8–S13 split `geom` and
   gave the shared test fixtures one definition (ADR 0084), S14 `engine/panel_cmds` into `panel`,
   `machining` and `banding`, S15–S17 `scene`'s camera and ray and `render`'s pipelines, buffers and
   vertex builders, then S18–S19 the document rules and the whole `Editor` out of `ui/lib.rs`, 50
   lines, S20 the drawing draft out of `contour_edit.rs` and S22 the shell's chrome out of `main.rs`
-  (2608 -> 2037 production lines). S21 was delivered before it was filed (`plan/notes/S21.md`);
-  F4 waits in `plan/questions.md`.
+  (2608 -> 2037). U45 took the scene itself out of the shell: `Document` per tab, `main.rs` 2037 ->
+  455 (ADR 0081). S21 was delivered before it was filed (`plan/notes/S21.md`); F4 waits in
+  `plan/questions.md`.
+- U45 opens several scenes at once: one tab per open file in the header, with its dirty marker and
+  its cross. *New* and *Open* open a tab (a path already open activates that tab), *Save*, *Undo* and
+  *Redo* act on the active tab only, a close with unsaved changes asks and the last close leaves an
+  empty *Untitled* scene; history, selection, camera and split layout travel with the tab (ADR 0081).
 - S2, S3, G1, G2, D4–D7 and S4 are complete: `crates/param` compiles one domain-free solid plan and
   one planar conversion (ADRs 0041, 0043), every panel outline resolves to one `geom::Region`, and
-  machining is one ordered list of anchored records driving staged effects and the cards (ADRs
-  0044–0046, schema 16). `crates/mesh` caches by derivation inputs, so a rebuild reuses every
-  untouched node and a collapsed object keeps its shape (ADR 0053).
-- Cameras and lights are scene objects (ADR 0036); one authored sun plus eight point lights (0039).
-- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view and draw/pick/snap
-  for a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061): the projection button
-  draws its view, a creation lands at the scene root unless a container is armed, the armed tool
-  draws pressed, the pole views look down their plane, a drawing's frame is set at creation, every
-  contour kind edits as one draft.
-- X20 gives a pole view a canonical up (ADR 0057) and U59 names the six views; X1, X2 and X7 are fixed
-  — a ring past the cap follows the shape (ADR 0062), a ribbon tool is one measured cell (ADR 0067).
-  U27 caches icons per `(uri, px, colour)`; 47 placeholders sit in `plan/debt.md` (ADR 0055).
+  machining is one ordered list of anchored records driving staged effects and the cards (0044–0046,
+  schema 16). `crates/mesh` caches by derivation inputs, so a rebuild reuses every untouched node and
+  a collapsed object keeps its shape (ADR 0053).
+- The UI plan (U1–U26) is shipped: SVG icons, a work plane from the ortho view and draw/pick/snap for
+  a `Path` (ADRs 0047–0052). X3–X6 and U30–U37 are fixed (ADRs 0056–0061), X20 gives a pole view a
+  canonical up (0057) and U59 names the six views; X1, X2 and X7 are fixed too — a ring past the cap
+  follows the shape (0062), a ribbon tool is one measured cell (0067). U27 caches icons per `(uri,
+  px, colour)`; 47 placeholders sit in `plan/debt.md` (0055), the header's new-tab plus until U46.
 - U38–U42 and the X-fixes landed the visual pass: `theme.rs` owns two palettes and the type scale
-  (ADRs 0063, 0069), `header.rs` returns a `HeaderAction` (ADR 0064), U39 the ribbon (ADR 0066), U40
-  the folded side panels and the bottom-centre cluster, U41 *Settings*, `settings.json` and *Home*
-  (ADR 0068), U47 the `Ctrl+K` palette, U42 the one/two/four-view split with an orientation widget,
-  U60 a tree, cameras and active view per layout (ADR 0079), U61/U62/U51 framing, expand and the
-  floating ribbon (ADR 0080). U43/U63 gave each view its display style (ADR 0070), X10 made the edges
-  mean the form, U44 gave every floor-standing object a contact shadow (ADR 0071), X11 fixed a ring
-  closed by an arc (ADR 0072), X12 makes a tool switch replace the draft and X23 every *Close* commit.
+  (ADRs 0063, 0069), `header.rs` returns a `HeaderAction` (0064), U39 the ribbon (0066), U40 the
+  folded side panels and the bottom-centre cluster, U41 *Settings*, `settings.json` and *Home* (0068),
+  U47 the `Ctrl+K` palette, U42 the one/two/four-view split with an orientation widget, U60 a tree,
+  cameras and active view per layout (0079), U61/U62/U51 framing, expand and the floating ribbon
+  (0080). U43/U63 gave each view its display style (0070), X10 made the edges mean the form, U44 a
+  shadow under every floor-standing object (0071), X11 a ring closed by an arc (0072), X12 a tool
+  switch replaces the draft and X23 makes every *Close* commit.
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
-  (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8). P10 completed the write
-  surface (`--repair`, `task add --at top`, `state where`, `file`) and the gate now follows every
+  (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8), and the gate follows every
   `files:` hint, a closed entry's ADR, the `STATE:` keys, the reference files and a stale `base`.
   Gate: `cargo xtask ci`, green; `dev` → `main` with `--no-ff`.
 
 ## Next
 
-U45 is next: the shell opens several scenes at once — one `Document` per tab with its own session,
-undo history, selection, camera and renderer target, a saved `viewport` moved onto it and a tab row
-in the header.
+U48 is next: every row of the scene tree gains an eye and a padlock — session state keyed by node
+`Id`, a hidden node gone from the frame and from picking, a locked node that selects but refuses a
+drag and a delete, and an *Isolate* / *Show all* pair in the row context menu (ADR 0065).
 
 ## Index
 

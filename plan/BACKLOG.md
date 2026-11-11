@@ -25,34 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
-  each with its own session, undo history, selection, camera and dirty marker, and activating a tab
-  swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
-  the last one leaves an empty *Untitled* scene, and *Save*, *Undo* and *Redo* in the header act on
-  the active tab only. This is the one task in the set that changes an architecture boundary rather
-  than a look: `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo state must move from
-  fields of the application into one `Document` per tab with its own renderer target, so it gets a
-  plan of its own and lands last. Tests: a tab keeps its own undo stack and dirty flag; switching
-  tabs restores the selection and the camera; a close with unsaved changes asks and a discard drops only that tab.
-  Plan (approved by the owner 2026-11-09; not started): `apps/furnicraft/src/tabs.rs` is the pure
-  policy — `TabId`, `Tabs` with the order, the active tab, `activate`, and `close` returning
-  `CloseOutcome { Closed, NeedsConfirmation, LastTab }` — testable without a window or a GPU like
-  `view_layout`. `apps/furnicraft/src/document.rs` holds the scene-bound payload: `Session`, `Editor`,
-  `TruckKernel`, `EvaluationCache`, `SceneFrame`, `scene_revision`, `Layout` (its cameras),
-  `home_camera`, `renderer`, `texture_id`, `FileMenu`, `PreservedSections`, the gizmos, `highlighted`,
-  `selected_chains`, `uploaded_preview`, `node_count` and `last_error`; `sync_scene`, `upload_scene`,
-  `viewport` and the `apply_*` handlers move onto it. `FurniCraftApp` stays the shell: the tabs, the
-  settings and store, Settings/Home, the palette, the panel folds, the viewport cluster, the transform
-  mode and the pointer. Every tab registers its own `TextureId` from its own `TextureView` and a close
-  calls `Renderer::free_texture` for that id; the last close leaves one empty *Untitled*, never zero.
-  `header.rs` gains the tab row and the `ActivateTab` / `NewTab` / `CloseTab` actions, and the dirty
-  close reuses the `FileMenu` confirm dialog. Owner decisions: *Open* and *New* open a new tab and
-  re-opening a path already open activates that tab instead of a second copy; the split layout travels
-  with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
-  behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
-  close and per-tab textures; (4) ADR 0081, the map row, the plan close and the gate.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs`
-
 - `[ ]` **U48** the tree gains the eye and the padlock: every row of the scene tree carries a
   visibility toggle and a lock toggle, drawn at 16 pt and revealed on hover or when the flag is set,
   and both are session state keyed by node `Id` — no command, no schema, no undo entry (ADR 0065).
@@ -222,6 +194,34 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U45** several scenes open at once: the tab row in the header holds one tab per open file,
+  each with its own session, undo history, selection, camera and dirty marker, and activating a tab
+  swaps the whole workspace without touching any `.fcs`. Closing an unsaved tab asks first, closing
+  the last one leaves an empty *Untitled* scene, and *Save*, *Undo* and *Redo* in the header act on
+  the active tab only. This is the one task in the set that changes an architecture boundary rather
+  than a look: `Session`, `Editor`, `EvaluationCache`, `FileMenu` and the gizmo state must move from
+  fields of the application into one `Document` per tab with its own renderer target, so it gets a
+  plan of its own and lands last. Tests: a tab keeps its own undo stack and dirty flag; switching
+  tabs restores the selection and the camera; a close with unsaved changes asks and a discard drops only that tab.
+  Plan (approved by the owner 2026-11-09; not started): `apps/furnicraft/src/tabs.rs` is the pure
+  policy — `TabId`, `Tabs` with the order, the active tab, `activate`, and `close` returning
+  `CloseOutcome { Closed, NeedsConfirmation, LastTab }` — testable without a window or a GPU like
+  `view_layout`. `apps/furnicraft/src/document.rs` holds the scene-bound payload: `Session`, `Editor`,
+  `TruckKernel`, `EvaluationCache`, `SceneFrame`, `scene_revision`, `Layout` (its cameras),
+  `home_camera`, `renderer`, `texture_id`, `FileMenu`, `PreservedSections`, the gizmos, `highlighted`,
+  `selected_chains`, `uploaded_preview`, `node_count` and `last_error`; `sync_scene`, `upload_scene`,
+  `viewport` and the `apply_*` handlers move onto it. `FurniCraftApp` stays the shell: the tabs, the
+  settings and store, Settings/Home, the palette, the panel folds, the viewport cluster, the transform
+  mode and the pointer. Every tab registers its own `TextureId` from its own `TextureView` and a close
+  calls `Renderer::free_texture` for that id; the last close leaves one empty *Untitled*, never zero.
+  `header.rs` gains the tab row and the `ActivateTab` / `NewTab` / `CloseTab` actions, and the dirty
+  close reuses the `FileMenu` confirm dialog. Owner decisions: *Open* and *New* open a new tab and
+  re-opening a path already open activates that tab instead of a second copy; the split layout travels
+  with the tab because it already owns the cameras. Four commits: (1) `tabs.rs` and its tests with no
+  behaviour change; (2) extract `Document` at one tab, all tests green; (3) the tab row, activation,
+  close and per-tab textures; (4) ADR 0081, the map row, the plan close and the gate.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/file_menu.rs` — `c6d3836`
 
 - `[x]` **S22** `main.rs` keeps the frame loop and gives up its chrome — rules: B1, B4, B8, H5.
   Why: after S21 the file is ~1980 lines, and four chrome pieces each have their own reason to change:

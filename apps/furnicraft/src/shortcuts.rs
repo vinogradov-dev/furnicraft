@@ -18,6 +18,10 @@ use furnicraft_ui::Editor;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Shortcuts {
     pub(crate) save: bool,
+    /// Open an empty scene in a new tab.
+    pub(crate) new_tab: bool,
+    /// Close the active tab, asking first when it has unsaved changes.
+    pub(crate) close_tab: bool,
     pub(crate) undo: bool,
     pub(crate) redo: bool,
     pub(crate) frame: bool,
@@ -52,6 +56,8 @@ pub(crate) const fn drawing_key(escape: bool, enter: bool) -> Option<DraftKey> {
 pub(crate) fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
     ctx.input_mut(|input| Shortcuts {
         save: input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
+        new_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::N),
+        close_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::W),
         undo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Z),
         redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
         frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),

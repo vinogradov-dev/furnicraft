@@ -13,9 +13,9 @@ use eframe::egui;
 use furnicraft_ui::{DrawTool, MeshElement, theme};
 use furnicraft_units::Length;
 
-use crate::FurniCraftApp;
-use crate::TransformMode;
+use crate::document::Document;
 use crate::view_cluster::NavigationMode;
+use crate::{FurniCraftApp, TransformMode};
 
 /// The status text and controls, read once per frame so both sides of the bar draw from data.
 struct StatusInfo {
@@ -200,9 +200,11 @@ impl FurniCraftApp {
     /// View controls no longer live here: they float over the viewport in
     /// [`crate::view_cluster::ViewCluster`], so the scene starts at the model instead of at a wall of
     /// labels. The bar is chrome and carries no document state; everything it shows is read from the
-    /// session or the editor.
+    /// active tab, and the two things that belong to the window — the transform mode and the armed
+    /// navigation gesture — are applied here rather than in the document.
     pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {
-        let info = self.status_info();
+        let notice = self.settings_notice.clone();
+        let info = self.tabs.active().status_info(notice.as_deref(), self.shell.mode, self.shell.cluster.navigation);
         let mut out = StatusOut::default();
         egui::Panel::bottom("status_bar").show(ui, |ui| {
             ui.set_height(theme::STATUS_HEIGHT);
@@ -211,15 +213,28 @@ impl FurniCraftApp {
                 (out.state, out.mode) = status_state_ui(ui, &info);
             });
         });
-        self.apply_status(out);
+        if let Some(mode) = out.mode {
+            self.shell.mode = mode;
+        }
+        match out.state {
+            // The window's two: the rest belong to the scene the bar reports on.
+            Some(StatusAction::EndNavigation) => self.shell.cluster.navigation = None,
+            Some(action) => self.tabs.active_mut().apply_status(action),
+            None => {}
+        }
     }
+}
 
-    /// Everything the bar reads from the session, the editor and the view camera.
-    fn status_info(&self) -> StatusInfo {
+impl Document {
+    /// Everything the bar reads from this document.
+    ///
+    /// The mode and the armed navigation gesture are the window's, so they are handed in instead of
+    /// read here; everything else belongs to the scene the tab holds.
+    fn status_info(&self, notice: Option<&str>, mode: TransformMode, navigation: Option<NavigationMode>) -> StatusInfo {
         StatusInfo {
             error: self.last_error.clone(),
-            notice: self.settings_notice.clone(),
-            mode: self.mode,
+            notice: notice.map(str::to_owned),
+            mode,
             contour: self
                 .editor
                 .contour_edit()
@@ -239,48 +254,47 @@ impl FurniCraftApp {
                 };
                 (edit.element(), count)
             }),
-            navigation: self.cluster.navigation,
+            navigation,
             creation_parent: self.editor.creation_parent_name(self.session.project()).map(str::to_owned),
         }
     }
 
-    /// Runs the one action each side of the bar asked for.
-    fn apply_status(&mut self, out: StatusOut) {
-        if let Some(mode) = out.mode {
-            self.mode = mode;
-        }
-        match out.state {
-            Some(StatusAction::ApplyContour) => {
+    /// Runs the one document-side action the bar asked for.
+    ///
+    /// The armed navigation gesture is the window's, so the shell clears that one itself; every arm
+    /// here acts on the scene this tab holds.
+    fn apply_status(&mut self, action: StatusAction) {
+        match action {
+            StatusAction::ApplyContour => {
                 if let Err(error) = self.apply_contour_edit() {
                     self.last_error = Some(error);
                 }
             }
-            Some(StatusAction::CancelContour) => self.cancel_contour_edit(),
-            Some(StatusAction::ToggleContourAlong) => self.contour_gizmo.toggle_along(),
-            Some(StatusAction::ToggleGrid) => self.draw_gizmo.toggle_grid(),
-            Some(StatusAction::CloseDraft) => {
+            StatusAction::CancelContour => self.cancel_contour_edit(),
+            StatusAction::ToggleContourAlong => self.contour_gizmo.toggle_along(),
+            StatusAction::ToggleGrid => self.draw_gizmo.toggle_grid(),
+            StatusAction::CloseDraft => {
                 if let Err(error) = self.close_draft() {
                     self.last_error = Some(error);
                 }
             }
-            Some(StatusAction::FinishDraft) => {
+            StatusAction::FinishDraft => {
                 if let Err(error) = self.commit_drawing() {
                     self.last_error = Some(error);
                 }
             }
-            Some(StatusAction::CancelDraft) => self.cancel_drawing(),
-            Some(StatusAction::FinishExtrude) => {
+            StatusAction::CancelDraft => self.cancel_drawing(),
+            StatusAction::FinishExtrude => {
                 if let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
                     && let Err(error) = self.finish_extrude(object, height)
                 {
                     self.last_error = Some(error);
                 }
             }
-            Some(StatusAction::CancelExtrude) => self.extrude_gizmo.cancel(),
-            Some(StatusAction::CancelPrimitive) => self.editor.cancel_primitive(),
-            Some(StatusAction::ClearCreationParent) => self.editor.clear_creation_parent(),
-            Some(StatusAction::EndNavigation) => self.cluster.navigation = None,
-            None => {}
+            StatusAction::CancelExtrude => self.extrude_gizmo.cancel(),
+            StatusAction::CancelPrimitive => self.editor.cancel_primitive(),
+            StatusAction::ClearCreationParent => self.editor.clear_creation_parent(),
+            StatusAction::EndNavigation => {}
         }
     }
 }
