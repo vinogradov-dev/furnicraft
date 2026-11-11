@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=R1 state=idle base=9d63579 updated=2026-11-11
+STATE: milestone=M7 phase=A task=U71 state=idle base=9d63579 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-R1 is next: the pre-release rename — one home for the identity, the 13 crates to bare names, the
-four registers that must agree, then the envelope `format` string and the eight goldens;
-`plan/rename.md` holds the measured steps.
+U71 is next: three palettes (P1/P2/P4, dark and light) as settings data, an Appearance page and
+contrast tests; the shared design spec is `plan/notes/U71.md`.
 
 ## Index
 

@@ -25,6 +25,180 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
+  Why: `theme.rs` holds one dark and one light `Palette`, and the settings store only keeps the
+   accent, so a second look means a second palette file and a second code path. The owner wants
+   three switchable looks and one Appearance page that also hosts the panel opacity (92 %
+   default) and the icon-colour mode the icon pipeline (U70) reads. The shared design —
+   palettes, tokens, metrics and behaviour — is in `plan/notes/U71.md`.
+  Shape: Add `ThemePreset { GraphiteCopper, InkAzure, SlateMint }` with a display name and a
+   dark and a light ramp; `apply_with` picks the preset's ramp for the active variant and
+   leaves the accent override in place. Derive hover, pressed, line and disabled from the base
+   tokens with `mix` so six ramps stay small and a new token costs one field per ramp. Store
+   `appearance.palette` with `#[serde(default)]`; an unknown preset loads P1 and reports one
+   notice in the status bar, never a panic. The Settings window gains an Appearance page: three
+   preset cards with swatches, the accent picker, a panel-opacity slider (55–100, default 92),
+   the icon-colour mode (auto/always/never, consumed by U70) and a Reset. No per-preset icon or
+   asset files.
+  Done: A test loops every preset × dark/light and asserts contrast: text/panel ≥ 4.5:1, dim ≥
+   3:1, accent/surface ≥ 3:1, and each icon role hue against panel and ribbon ≥ 3:1. Switching
+   a preset redraws the open window without restart or texture reload; the settings round-trip
+   keeps preset, accent and opacity; an unknown preset and a corrupt settings file load P1 and
+   report one notice; both themes of all three presets are checked by eye on the ribbon, the
+   panels and the viewport chrome.
+  `files: crates/ui/src/theme.rs, crates/ui/src/settings.rs, apps/furnicraft/src/main.rs`
+
+- `[ ]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
+  Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
+   normative, so a coloured set is impossible without superseding them. The set must not grow a
+   second file per theme: the master carries role inks and the rasteriser maps them to the
+   active theme's ramp. The role table, the threshold and the settings field are in
+   `plan/notes/U70.md`.
+  Shape: Allow up to three role inks per file from a fixed table of literal hex values
+   (validated by a test); tag each icon with its family; `icons.rs` maps each role hex through
+   a `RoleRamp` for the active theme (dark or light), preserves the alpha silhouette and bakes
+   the result into the texture. Add `appearance.icon_color { Auto, Always, Never }` from U71.
+   At a raster under 20 px, or when the mode is `Never`, rasterise the alpha and tint it with
+   the theme icon colour — today's path — so the same master serves both. Cache by `(uri, px,
+   theme, mode)`. Disabled stays an alpha multiply; hover and press are one lighten step, not a
+   second colour.
+  Done: Tests assert the expected role colour is present in the uploaded pixels for every
+   preset × theme; the alpha silhouette is byte-identical between dark and light; the mono
+   fallback at 16 px equals today's tint path; no file carries a colour outside the role table;
+   each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
+   §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
+   are re-inked.
+  `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md`
+
+- `[ ]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
+  Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
+   glyphs are a starting point, not a specification. The names, meanings and composition rules
+   are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.
+  Shape: Draw under `assets/icons/contour/`: `trim`, `extend`, `offset`, `fillet`, `chamfer`,
+   `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`,
+   `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`,
+   `boolean-union`, `boolean-subtract`, `boolean-intersect`. Keep the 24 grid, ink inside
+   3..21, 20–45 % coverage and the role inks from U70; add one `Icon` const per file and its
+   README row; re-ink the ten existing contour files to the draw role; one emphasis per icon
+   and no colour as the only signal.
+  Done: Every new file rasterises non-empty at 16, 20 and 22 px, stays inside 3..21 and the
+   coverage band, and contains only role inks; the theme table in `assets/README.md` and the
+   `ALL` list move together; the empty-file fallback test still passes; both themes are
+   reviewed at 22 px on the ribbon built by U68.
+  `files: assets/icons/contour, assets/README.md, crates/ui/src/icons.rs`
+
+- `[ ]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
+  Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in
+   Эскиз, namespaced ids, planned rows), and `columns()` is hardcoded per tab. The full map,
+   the id convention and the metrics are in `plan/notes/U68.md`; the shared design is
+   `plan/notes/U71.md`.
+  Shape: Add `TabSpec { id, label, groups }`, `GroupSpec { id, label, tools }`, `ToolSpec { id,
+   label, icon, family, shortcut, variants, state }` and `VariantSpec` in one `ribbon` module;
+   stable namespaced ids (`sketch.create.line`). The renderer iterates the spec and measures
+   the cell from the widest tab instead of a constant. Availability stays code
+   (`enabled(context)`), the table holds order and labels; a `Planned` tool (no command yet) is
+   skipped, so a tab with no live tool is not drawn. Adopt the metrics: 28 px tab row, 30 px
+   tool row, 12 px caption band, 34×30 cells, 72 px open / 29 px collapsed; persist the open
+   state; labels and hints go through `furnicraft-text`. This task keeps one cell per tool —
+   variants come in U67.
+  Done: The five tabs draw the live tools of the map; every implemented `ToolAction` sits in
+   exactly one tool; a planned row is skipped and an empty tab is not drawn; ids are unique and
+   stable across runs; the cell width is computed from the spec; the body is 72 px open and 29
+   collapsed; tests cover the map (every action once, unique ids, computed columns, empty tabs,
+   height) and the open state round-trips; the old `RibbonTab`/`ToolGroup` matches and their
+   tests are gone.
+  `files: crates/ui/src/toolbars.rs, apps/furnicraft/src/main.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
+
+- `[ ]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
+  Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
+   «Круг» once and keep its input methods; the owner approved the F1 list (not the shelf, not
+   repeat-last). The variant tables and the list anatomy are in `plan/notes/U67.md`, the
+   metrics in `plan/notes/U71.md`.
+  Shape: Add `variants` to `ToolSpec`; draw a caret when it is non-empty. Hold `open_tool:
+   Option<ToolId>` in `Toolbars` — view state, not the document. Draw the list as an
+   `egui::Popup`/`Area` at `Order::Foreground`, anchored to the cell and flipped to
+   right-aligned at the window edge: 298 px, 30 px rows, header with the tool name and
+   shortcut, optional section captions, rows with icon, label, shortcut and pin, no footer.
+   Keyboard up/down/Enter, Esc closes; outside click and a tab change close. The pin writes
+   `settings.ribbon.pinned_variants` (global `BTreeMap<ToolId, VariantId>`, default first); an
+   unknown id falls back to the first. A plain click runs the pinned variant; the shortcut runs
+   it without opening.
+  Done: Tests: opening the list writes no document revision; Esc, an outside click and a tab
+   change close it; Enter runs the highlighted variant; a plain click runs the pinned variant;
+   an unknown pinned id falls back to the first; the list never leaves the window rect (both
+   edge cases); the master shortcut runs the pinned variant with the list closed; the list has
+   no footer. The existing draw tools are migrated to variants (line/polyline stay separate
+   tools) and the old per-variant ribbon cells are gone.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/settings.rs, crates/ui/src/icons.rs`
+
+- `[ ]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
+  Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons
+   are ambiguous and there is no way to clear the chrome. M2 is the most invasive part of the
+   accepted combo: the viewport must render under the panels and picking must ignore the
+   covered rects. Geometry, contracts and tests are in `plan/notes/U66.md`; metrics in
+   `plan/notes/U71.md`.
+  Shape: Turn both side panels into `Area`s at `Order::Middle` over a full-width viewport, with
+   a `panel` fill at the shared opacity; pass the covered rectangles to the shell so the scene
+   gizmo, the selection rectangle and the split-view layout ignore them. The top inset follows
+   the ribbon band plus 8 px; animate the ribbon height (150 ms) so the panels move smoothly on
+   a fold. Add the three tab-row buttons: collapse all (both to 34 px strips, remembering the
+   prior state), hide all (both hidden, remembering), fold ribbon. Replace the chevrons with
+   the neutral `panel-left`/`panel-right` glyphs pointing to the collapse edge, mirrored in the
+   strip; add tooltips and shortcuts `Ctrl+0` (hide all) and `Ctrl+Shift+0` (collapse all)
+   after checking for conflicts. Persist `appearance.panel_opacity` (55–100, default 92) and
+   the per-panel visible state.
+  Done: Tests: a click inside a covered rect never reaches the viewport (scene gizmo and
+   selection rectangle); hide-all then restore returns the exact prior state of both panels;
+   collapse-all and a single fold both round-trip; the opacity setting round-trips and repaints
+   all three surfaces; the panel tops stay aligned with the ribbon during the animation (a
+   frame test or a golden of the inset function); the split-view layout tiles only the
+   uncovered area; no document write. Both themes and 55/92/100 % are checked by eye.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/view_layout.rs, crates/ui/src/settings.rs`
+
+- `[ ]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
+  Why: A unit inside the field is selected with the number and reads as data; Apply adds a
+   click to every change; typing «120» rebuilds three times. The field inventory, the commit
+   policy and the undo rules are in `plan/notes/U65.md`.
+  Shape: Keep `scrub.rs` as the drag source and add a per-field commit policy: `Live` (scrub,
+   every frame), `Debounced(150 ms)` (typed text and the numeric preset fields) and `OnEnter`
+   (the rare value that must not rebuild while typing). Typed text commits on Enter or blur;
+   invalid text keeps the old value and shows an inline error; one edit session per value
+   coalesces the keystrokes and the drag into one undo entry. Units leave the editable string:
+   they go to the section header («Размеры, мм», «Поворот, °»); fields are 76×22,
+   right-aligned, tabular. The cards keep scrolling and folding. For operations with a preview
+   (extrude, boolean), add a command bar with one ✓/✕ pair and Enter/Esc; no per-field Apply
+   remains. A slow rebuild shows «Перестроение…» in the status bar and keeps the last good
+   geometry; Esc cancels.
+  Done: Tests: an invalid entry leaves the value and the revision untouched and shows the
+   error; typing 1-2-0 commits once after the debounce; a drag commits one undo entry and
+   Escape during the drag restores the value; Enter and blur commit; no unit glyph is part of
+   the editable string; the command bar applies exactly once (a double click on ✓ is
+   idempotent) and Esc restores; a simulated slow rebuild reports busy and the window stays
+   responsive; every inspector card is checked for the new field width and headers.
+  `files: crates/ui/src/scrub.rs, crates/ui/src/panel_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/ui/src/settings.rs`
+
+- `[ ]` **U64** the status bar shows the tool and counts; the owner wants the selection context in the centre — name, kind, size, material, edge banding, warnings — and the three display sliders renamed and moved to Settings → View.
+  Why: The card should not carry derived context, and the display names are ambiguous: «Сетка»
+   is the floor grid, not the 10 mm snap; «Рёбра» collides with furniture edge banding. The
+   zones, the summary fields, the slider mapping and the reset values are in
+   `plan/notes/U64.md`.
+  Shape: Build one `StatusSummary` per frame from the already-resolved selection (no document
+   scan): kind, name, count, size, material, edge banding and a warning slot; draw it as the
+   centre zone of the status bar with chips and an ellipsis, the command prompt on the left and
+   snap/projection/state on the right. Rename the cluster sliders: «Сетка пола» (grid
+   brightness), «Контуры» (form outline strength), «Контактная тень» (contact shadow strength);
+   keep on/off toggles in the cluster plus a «Настроить…» link; move the three strengths and a
+   «Сброс» (60/70/40) to Settings → View; move «все рёбра треугольников» under «Дополнительно»
+   as a diagnostic. Label the snap toggle «Привязка 10 мм», not «Сетка». Future parameters are
+   new fields on the summary, not a new row.
+  Done: Tests: the summary is derived from the selection without a second scan; a single
+   selection shows name, kind, size and material; a multi-selection shows the count; a long
+   line elides and keeps a tooltip; the status bar reports «Перестроение…» while a rebuild
+   runs; the settings round-trip keeps the three strengths and the reset restores 60/70/40; the
+   cluster no longer draws the triangle diagnostic; the status bar reads «Привязка 10 мм». Both
+   themes and a narrow window are checked by eye.
+  `files: apps/furnicraft/src/status_bar.rs, apps/furnicraft/src/view_cluster.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs`
+
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
   later choice of name is one constant and no refactor. The work is measured and scripted in
   `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
