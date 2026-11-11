@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S20 state=idle base=bc3b179 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S21 state=idle base=ecf924f updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -52,9 +52,10 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S20 is next: `crates/ui/src/contour_edit.rs` gives the drawing draft its own module — `DrawTool` and
-`DrawDraft` move to a `draw.rs` beside it, because one file still covers two operations, reshaping
-an existing contour and drawing a new one; S21 and S22 then take the shell.
+S21 is next: `home_surface` is one 632-line function inside `FurniCraftApp`, so the shell's start
+surface moves to `apps/furnicraft/src/home.rs` as a free function over the state it reads, called
+from `ui()`; S22 then leaves `main.rs` its frame loop and takes the chrome, and U45's tab row lands
+last, once the shell is small enough to split.
 
 ## Index
 

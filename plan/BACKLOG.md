@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
-  Why: 1112 production lines in one file cover two operations: editing an existing contour
-   (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one
-   (`DrawTool`, `DrawDraft`, 425-1112) — a new draw tool and a new grip rule reopen one file,
-   which is the crossing the audit measured beyond the filed findings.
-  Shape: `DrawTool` and `DrawDraft` with their impls move to `crates/ui/src/draw.rs` (~690);
-  `contour_edit.rs` 1112 -> ~425; `lib.rs` re-exports `DrawTool` and `DrawDraft` so the shell changes
-  at most one `use`.
-  Done: the draft tests move unchanged; both headers cite the decisions they implement (ADR 0048,
-  0052, 0076, 0077) and state `//! Changes when:`.
-  Commits: one move.
-  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs`
-
 - `[ ]` **S21** the shell's Home surface moves out of `main.rs` — rules: B4, B8, H2, H5.
   Why: `home_surface` is one 632-line function inside `impl FurniCraftApp` (1620 lines, 40 fields),
   four times B4's 150-line function ceiling (F1).
@@ -259,6 +246,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S20** `ui/contour_edit.rs` gives the drawing draft its own module — rules: B1, B4, B8.
+  Why: 1112 production lines in one file cover two operations: editing an existing contour
+   (`ContourEdit`, `ContourTarget`, `ContourDraft`, `ContourEntry`) and drawing a new one
+   (`DrawTool`, `DrawDraft`, 425-1112) — a new draw tool and a new grip rule reopen one file,
+   which is the crossing the audit measured beyond the filed findings.
+  Shape: `DrawTool` and `DrawDraft` with their impls move to `crates/ui/src/draw.rs` (~690);
+  `contour_edit.rs` 1112 -> ~425; `lib.rs` re-exports `DrawTool` and `DrawDraft` so the shell changes
+  at most one `use`.
+  Done: the draft tests move unchanged; both headers cite the decisions they implement (ADR 0048,
+  0052, 0076, 0077) and state `//! Changes when:`.
+  Commits: one move.
+  `files: crates/ui/src/contour_edit.rs, crates/ui/src/lib.rs` — `ecf924f`
 
 - `[x]` **S19** `crates/ui/src/lib.rs` becomes a re-export surface and `Editor` splits by mode — rules:
   B1, B3, B4, B5, B8.
