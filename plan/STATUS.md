@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U68 state=doing base=9a5a3d0 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U67 state=idle base=2e71b9c updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -43,9 +43,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   cameras and active view per layout (0079), U61/U62/U51 framing, expand and the floating ribbon
   (0080). U43/U63 gave each view its display style (0070), X10 made the edges mean the form, U44 a
   shadow under every floor-standing object (0071), X11 a ring closed by an arc (0072), X12 a tool
-  switch replaces the draft and X23 makes every *Close* commit. U52 made the UI scale a
-  scrubbing field with six presets, and every numeric field of the UI reads the drag's horizontal
-  delta with the pointer hidden and clamps what is typed.
+  switch replaces the draft and X23 makes every *Close* commit. U52 made the UI scale a scrubbing
+  field, and every numeric field reads the drag's delta and clamps what is typed. U68 drew the
+  ribbon from one const map: five noun tabs, a 29/72 pt strip and a fold kept in settings (0091).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
   (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8), and the gate follows every
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U68 is next: the ribbon's three `match` tables become one const spec — tabs Эскиз, Модель, Мебель,
-Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — rendered by one loop
-with the L3 metrics; the sixteen sketch icons U69 drew are wired and reviewed at 22 px here.
+U67 is next: the variants U68 filed in the map become a dropdown under the tool — circle by centre
+and radius, two points, three points, tangent. A click always opens the list, it closes on Esc, an
+outside click and a tab change, and the pinned variant is a global setting.
 
 ## Index
 

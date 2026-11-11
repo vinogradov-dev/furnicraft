@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
-  Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in
-   Эскиз, namespaced ids, planned rows), and `columns()` is hardcoded per tab. The full map,
-   the id convention and the metrics are in `plan/notes/U68.md`; the shared design is
-   `plan/notes/U71.md`.
-  Shape: Add `TabSpec { id, label, groups }`, `GroupSpec { id, label, tools }`, `ToolSpec { id,
-   label, icon, family, shortcut, variants, state }` and `VariantSpec` in one `ribbon` module;
-   stable namespaced ids (`sketch.create.line`). The renderer iterates the spec and measures
-   the cell from the widest tab instead of a constant. Availability stays code
-   (`enabled(context)`), the table holds order and labels; a `Planned` tool (no command yet) is
-   skipped, so a tab with no live tool is not drawn. Adopt the metrics: 28 px tab row, 30 px
-   tool row, 12 px caption band, 34×30 cells, 72 px open / 29 px collapsed; persist the open
-   state; labels and hints go through `furnicraft-text`. This task keeps one cell per tool —
-   variants come in U67.
-  Done: The five tabs draw the live tools of the map; every implemented `ToolAction` sits in
-   exactly one tool; a planned row is skipped and an empty tab is not drawn; ids are unique and
-   stable across runs; the cell width is computed from the spec; the body is 72 px open and 29
-   collapsed; tests cover the map (every action once, unique ids, computed columns, empty tabs,
-   height) and the open state round-trips; the old `RibbonTab`/`ToolGroup` matches and their
-   tests are gone.
-  `files: crates/ui/src/toolbars.rs, apps/furnicraft/src/main.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
-
 - `[ ]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
   Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
    «Круг» once and keep its input methods; the owner approved the F1 list (not the shelf, not
@@ -162,6 +140,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
+  Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in
+   Эскиз, namespaced ids, planned rows), and `columns()` is hardcoded per tab. The full map,
+   the id convention and the metrics are in `plan/notes/U68.md`; the shared design is
+   `plan/notes/U71.md`.
+  Shape: Add `TabSpec { id, label, groups }`, `GroupSpec { id, label, tools }`, `ToolSpec { id,
+   label, icon, family, shortcut, variants, state }` and `VariantSpec` in one `ribbon` module;
+   stable namespaced ids (`sketch.create.line`). The renderer iterates the spec and measures
+   the cell from the widest tab instead of a constant. Availability stays code
+   (`enabled(context)`), the table holds order and labels; a `Planned` tool (no command yet) is
+   skipped, so a tab with no live tool is not drawn. Adopt the metrics: 28 px tab row, 30 px
+   tool row, 12 px caption band, 34×30 cells, 72 px open / 29 px collapsed; persist the open
+   state; labels and hints go through `furnicraft-text`. This task keeps one cell per tool —
+   variants come in U67.
+  Done: The five tabs draw the live tools of the map; every implemented `ToolAction` sits in
+   exactly one tool; a planned row is skipped and an empty tab is not drawn; ids are unique and
+   stable across runs; the cell width is computed from the spec; the body is 72 px open and 29
+   collapsed; tests cover the map (every action once, unique ids, computed columns, empty tabs,
+   height) and the open state round-trips; the old `RibbonTab`/`ToolGroup` matches and their
+   tests are gone.
+  `files: crates/ui/src/toolbars.rs, apps/furnicraft/src/main.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs` — `2e71b9c`
 
 - `[x]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
   Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
