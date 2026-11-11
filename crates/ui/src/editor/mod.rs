@@ -19,7 +19,8 @@ use furnicraft_model::Id;
 
 use crate::camera_card::CameraCard;
 use crate::container_card::ContainerCard;
-use crate::contour_edit::{ContourEdit, DrawDraft};
+use crate::contour_edit::ContourEdit;
+use crate::draw::DrawDraft;
 use crate::light_card::LightCard;
 use crate::mesh_edit::MeshEdit;
 use crate::object_card::ObjectCard;

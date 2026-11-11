@@ -16,7 +16,7 @@ use furnicraft_engine::PrimitiveKind;
 use furnicraft_model::Id;
 use furnicraft_units::Length;
 
-use crate::contour_edit::{DEFAULT_POLYGON_SIDES, DrawTool};
+use crate::draw::{DEFAULT_POLYGON_SIDES, DrawTool};
 use crate::icons::{self, Icon, Theme, tool_hint};
 
 /// Edge length of a new cube, in millimetres; also the value the field starts with.
