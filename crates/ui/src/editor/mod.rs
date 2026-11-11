@@ -3,8 +3,8 @@
 //! `Editor` holds no document data. Every entry point reads a `Project` or a `Session` and
 //! dispatches a command for anything that changes the scene; the struct itself is the one place
 //! where the modes meet. Each mode keeps its state and the methods that enter, feed and leave it in
-//! its own module: `selection.rs` (the selection and the open set), `mesh.rs` (sub-object editing),
-//! `contour.rs` (the contour working copy), `drawing.rs` (the drawing draft and its commit),
+//! its own module: `selection.rs` (the selection and the open set), `visibility.rs` (the hidden
+//! and locked nodes), `mesh.rs` (sub-object editing), `contour.rs` (the contour working copy), `drawing.rs` (the drawing draft and its commit),
 //! `creation.rs` (the armed container and the `create` commands), `ribbon.rs` (the ribbon and the
 //! extrusion it offers) and `cards.rs` (the scene tree and the inspector).
 //!
@@ -30,6 +30,7 @@ use crate::placement_card::PlacementCard;
 use crate::properties_card::PropertiesCard;
 use crate::scene_tree::Selection;
 use crate::toolbars;
+use crate::view_flags::ViewFlags;
 
 use self::creation::PendingPrimitive;
 
@@ -40,6 +41,7 @@ mod drawing;
 mod mesh;
 mod ribbon;
 mod selection;
+mod visibility;
 
 #[cfg(test)]
 mod tests;
@@ -52,6 +54,9 @@ mod tests;
 pub struct Editor {
     selection: Selection,
     open: HashSet<Id>,
+    /// Hidden and locked nodes of this session; the scene builder, picking and the gizmos read
+    /// them, and neither flag ever reaches the document (ADR 0065).
+    flags: ViewFlags,
     mesh_edit: Option<MeshEdit>,
     contour_edit: Option<ContourEdit>,
     drawing: Option<DrawDraft>,

@@ -581,7 +581,7 @@ pub fn draw_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: 
 }
 
 /// Paints `icon` inside `rect` at `point_size`, tinted with `color`.
-fn paint_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
+pub(crate) fn paint_icon(ui: &Ui, icon: Icon, rect: egui::Rect, point_size: f32, color: Color32) {
     let px = pixel_size(point_size, ui.pixels_per_point());
     if let Some(texture) = icon_texture(ui.ctx(), icon, px, color) {
         let uv = egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));

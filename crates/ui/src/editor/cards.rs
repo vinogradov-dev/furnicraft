@@ -31,6 +31,7 @@ impl Editor {
     pub fn show_scene_tree(&mut self, ui: &mut Ui, session: &mut Session) {
         self.selection.retain_existing(session.project());
         self.retain_open(session.project());
+        self.retain_flags(session.project());
         self.retain_creation_parent(session.project());
         if !self.initialized {
             self.selection.select_first_panel(session.project());
@@ -40,7 +41,7 @@ impl Editor {
             ui.colored_label(Color32::LIGHT_RED, error);
             ui.separator();
         }
-        let actions = scene_tree::show(ui, session, &mut self.selection);
+        let actions = scene_tree::show(ui, session, &mut self.selection, &mut self.flags);
         if actions.is_empty() {
             return;
         }
@@ -118,6 +119,21 @@ impl Editor {
     }
 
     pub(super) fn run_action(&mut self, session: &mut Session, action: TreeAction) -> Result<(), String> {
+        // A locked node refuses every edit that removes or restructures it. The guard is checked
+        // before the dispatch, because it is a guard on a gesture and not a document rule
+        // (ADR 0065).
+        let targets: &[Id] = match &action {
+            TreeAction::Delete { node } | TreeAction::Ungroup { node } | TreeAction::ConvertToGroup { node } => {
+                std::slice::from_ref(node)
+            }
+            TreeAction::Group { nodes } => nodes,
+            _ => &[],
+        };
+        for node in targets {
+            if let Some(refusal) = self.locked_refusal(session.project(), *node) {
+                return Err(refusal);
+            }
+        }
         match action {
             TreeAction::AddChild { parent } => {
                 self.arm_creation(session.project(), parent);
@@ -154,6 +170,16 @@ impl Editor {
                 dispatch(session, NODE_COMPONENT_CONVERT_TO_GROUP_ID, &params)?;
                 self.after_node_removed(session, parent);
             }
+            TreeAction::SetHidden { node, hidden } => {
+                self.flags.set_hidden(node, hidden);
+            }
+            TreeAction::SetLocked { node, locked } => {
+                self.flags.set_locked(node, locked);
+            }
+            TreeAction::Isolate { node } => {
+                self.flags.isolate(session.project(), node);
+            }
+            TreeAction::ShowAll => self.flags.show_all(),
         }
         Ok(())
     }
@@ -161,6 +187,7 @@ impl Editor {
     fn after_node_removed(&mut self, session: &Session, parent: Option<Id>) {
         self.selection.retain_existing(session.project());
         self.retain_open(session.project());
+        self.retain_flags(session.project());
         self.retain_creation_parent(session.project());
         if self.selection.primary().is_none()
             && let Some(parent) = parent

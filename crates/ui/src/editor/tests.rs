@@ -1364,3 +1364,100 @@ fn a_created_camera_and_light_stay_selected_on_the_next_frame() {
     editor.selection.retain_existing(session.project());
     assert_eq!(editor.selected_node(), Some(light));
 }
+
+#[test]
+fn a_locked_node_still_selects_and_refuses_a_destructive_command() {
+    let (project, panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    editor.select_node(Some(panel));
+    editor.set_locked(panel, true);
+
+    assert!(editor.is_locked(panel));
+    assert_eq!(editor.selected_node(), Some(panel), "a lock never takes the selection away");
+    assert_eq!(editor.locked_selection(session.project()), Some(panel), "the viewport sees the refusal");
+    assert!(editor.locked_refusal(session.project(), panel).is_some_and(|refusal| refusal.contains("locked")));
+
+    let revision = session.project().revision();
+    let refusal = editor
+        .run_action(&mut session, TreeAction::Delete { node: panel })
+        .expect_err("a locked node refuses the delete");
+    assert!(refusal.contains("locked"), "the refusal says why: {refusal}");
+    assert_eq!(session.project().revision(), revision, "a refusal dispatches nothing");
+    assert!(!session.can_undo(), "and leaves no undo entry");
+
+    editor.set_locked(panel, false);
+    assert_eq!(editor.locked_selection(session.project()), None, "unlocking ends the refusal");
+    editor.run_action(&mut session, TreeAction::Delete { node: panel }).expect("the unlocked delete runs");
+    assert!(!session.project().contains_node(panel));
+}
+
+#[test]
+fn a_locked_container_refuses_a_group_and_an_ungroup() {
+    let (project, _panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let root = session.project().root().id();
+    let first = create_assembly_under(&mut session, root, "First");
+    let second = create_assembly_under(&mut session, root, "Second");
+    let mut editor = Editor::new();
+    editor.set_locked(first, true);
+
+    let revision = session.project().revision();
+    assert!(
+        editor.run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }).is_err(),
+        "grouping a locked node would restructure it"
+    );
+    assert_eq!(session.project().revision(), revision);
+
+    editor.set_locked(first, false);
+    editor.set_locked(second, true);
+    assert!(
+        editor.run_action(&mut session, TreeAction::Group { nodes: vec![first, second] }).is_err(),
+        "one locked node in the selection is enough"
+    );
+    assert_eq!(session.project().revision(), revision);
+}
+
+#[test]
+fn a_deleted_node_drops_its_flags_and_an_undo_starts_clean() {
+    let (project, panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    editor.select_node(Some(panel));
+    editor.set_hidden(panel, true);
+    editor.set_locked(panel, true);
+    // The delete goes through the editor, so the lock has to be lifted first; hiding is the flag
+    // this test watches vanish with the node.
+    editor.set_locked(panel, false);
+
+    editor.run_action(&mut session, TreeAction::Delete { node: panel }).expect("delete the panel");
+    assert!(!editor.flags().is_hidden(panel), "the flag goes with the node");
+    assert!(!editor.flags().is_locked(panel));
+
+    undo(&mut session, &mut editor);
+    assert!(session.project().contains_node(panel), "the undo brings the node back");
+    assert!(!editor.flags().is_hidden(panel), "an undone deletion starts visible");
+    assert!(!editor.flags().is_locked(panel), "and unlocked");
+}
+
+#[test]
+fn the_flags_survive_a_selection_change_and_die_with_the_editor() {
+    let (project, panel) = contour_panel_project();
+    let mut editor = Editor::new();
+    editor.set_hidden(panel, true);
+    editor.set_locked(panel, true);
+
+    editor.select_node(Some(Id::new(1).expect("root")));
+    assert!(editor.flags().is_hidden(panel), "a selection change is not a reset");
+    assert!(editor.is_locked(panel));
+
+    editor.show_all();
+    assert!(!editor.flags().is_hidden(panel), "Show all clears the hidden set");
+    assert!(editor.is_locked(panel), "and leaves the locks alone");
+
+    // A new editor is a new session: no flag is carried over from the one that closed.
+    let fresh = Editor::new();
+    assert!(!fresh.flags().is_hidden(panel));
+    assert!(!fresh.is_locked(panel));
+    assert!(project.contains_node(panel));
+}

@@ -473,6 +473,12 @@ impl FurniCraftApp {
         let Some(id) = palette.show(ui.ctx(), &tabs.active().session, &context) else {
             return;
         };
+        // A locked node refuses a destructive command here, before the dispatch: the lock is a
+        // guard on a gesture, so it never becomes a document rule (ADR 0065).
+        if let Some(refusal) = tabs.active().locked_command_refusal(&id) {
+            tabs.active_mut().last_error = Some(refusal);
+            return;
+        }
         match palette.activate(&mut tabs.active_mut().session, &context, &id) {
             Ok(outcome) => {
                 if let Some(created) = outcome.created_id() {
