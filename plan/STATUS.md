@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U70 state=doing base=c0d6edc updated=2026-11-12
+STATE: milestone=M7 phase=A task=U69 state=idle base=87487c7 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U70 is next: icons take their hue from the semantic family — draw, modify, model, scene, view,
-danger — with a light-theme remap and a monochrome fallback below a 20 px raster; the page's
-icon-colour mode (auto/always/never) is the setting it reads.
+U69 is next: the approved sketch map needs sixteen tools with no artwork — trim, extend, offset,
+fillet, chamfer, break, the four construction tools, three dimensions and three booleans — and the
+ten existing contour icons already carry the draw role ink U70 landed.
 
 ## Index
 

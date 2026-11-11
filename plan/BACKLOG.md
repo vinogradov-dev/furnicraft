@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
-  Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
-   normative, so a coloured set is impossible without superseding them. The set must not grow a
-   second file per theme: the master carries role inks and the rasteriser maps them to the
-   active theme's ramp. The role table, the threshold and the settings field are in
-   `plan/notes/U70.md`.
-  Shape: Allow up to three role inks per file from a fixed table of literal hex values
-   (validated by a test); tag each icon with its family; `icons.rs` maps each role hex through
-   a `RoleRamp` for the active theme (dark or light), preserves the alpha silhouette and bakes
-   the result into the texture. Add `appearance.icon_color { Auto, Always, Never }` from U71.
-   At a raster under 20 px, or when the mode is `Never`, rasterise the alpha and tint it with
-   the theme icon colour — today's path — so the same master serves both. Cache by `(uri, px,
-   theme, mode)`. Disabled stays an alpha multiply; hover and press are one lighten step, not a
-   second colour.
-  Done: Tests assert the expected role colour is present in the uploaded pixels for every
-   preset × theme; the alpha silhouette is byte-identical between dark and light; the mono
-   fallback at 16 px equals today's tint path; no file carries a colour outside the role table;
-   each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
-   §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
-   are re-inked.
-  `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md`
-
 - `[ ]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
   Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
    glyphs are a starting point, not a specification. The names, meanings and composition rules
@@ -201,6 +179,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
+  Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
+   normative, so a coloured set is impossible without superseding them. The set must not grow a
+   second file per theme: the master carries role inks and the rasteriser maps them to the
+   active theme's ramp. The role table, the threshold and the settings field are in
+   `plan/notes/U70.md`.
+  Shape: Allow up to three role inks per file from a fixed table of literal hex values
+   (validated by a test); tag each icon with its family; `icons.rs` maps each role hex through
+   a `RoleRamp` for the active theme (dark or light), preserves the alpha silhouette and bakes
+   the result into the texture. Add `appearance.icon_color { Auto, Always, Never }` from U71.
+   At a raster under 20 px, or when the mode is `Never`, rasterise the alpha and tint it with
+   the theme icon colour — today's path — so the same master serves both. Cache by `(uri, px,
+   theme, mode)`. Disabled stays an alpha multiply; hover and press are one lighten step, not a
+   second colour.
+  Done: Tests assert the expected role colour is present in the uploaded pixels for every
+   preset × theme; the alpha silhouette is byte-identical between dark and light; the mono
+   fallback at 16 px equals today's tint path; no file carries a colour outside the role table;
+   each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
+   §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
+   are re-inked.
+  `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md` — `87487c7`
 
 - `[x]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
   Why: `theme.rs` holds one dark and one light `Palette`, and the settings store only keeps the
