@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U70 state=idle base=c0d6edc updated=2026-11-12
+STATE: milestone=M7 phase=A task=U68 state=idle base=9a5a3d0 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U70 is next: icons take their hue from the semantic family — draw, modify, model, scene, view,
-danger — with a light-theme remap and a monochrome fallback below a 20 px raster; the page's
-icon-colour mode (auto/always/never) is the setting it reads.
+U68 is next: the ribbon's three `match` tables become one const spec — tabs Эскиз, Модель, Мебель,
+Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — rendered by one loop
+with the L3 metrics; the sixteen sketch icons U69 drew are wired and reviewed at 22 px here.
 
 ## Index
 

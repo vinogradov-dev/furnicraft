@@ -1,6 +1,6 @@
 # 0047. Icons are one ink on a 24 grid, in three families
 
-- Status: Accepted
+- Status: Accepted; rasterisation and tonal emphasis refined by 0055; the one-ink clause is superseded by 0090.
 - Date: 2026-11-04
 
 ## Context

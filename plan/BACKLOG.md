@@ -25,45 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
-  Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
-   normative, so a coloured set is impossible without superseding them. The set must not grow a
-   second file per theme: the master carries role inks and the rasteriser maps them to the
-   active theme's ramp. The role table, the threshold and the settings field are in
-   `plan/notes/U70.md`.
-  Shape: Allow up to three role inks per file from a fixed table of literal hex values
-   (validated by a test); tag each icon with its family; `icons.rs` maps each role hex through
-   a `RoleRamp` for the active theme (dark or light), preserves the alpha silhouette and bakes
-   the result into the texture. Add `appearance.icon_color { Auto, Always, Never }` from U71.
-   At a raster under 20 px, or when the mode is `Never`, rasterise the alpha and tint it with
-   the theme icon colour — today's path — so the same master serves both. Cache by `(uri, px,
-   theme, mode)`. Disabled stays an alpha multiply; hover and press are one lighten step, not a
-   second colour.
-  Done: Tests assert the expected role colour is present in the uploaded pixels for every
-   preset × theme; the alpha silhouette is byte-identical between dark and light; the mono
-   fallback at 16 px equals today's tint path; no file carries a colour outside the role table;
-   each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
-   §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
-   are re-inked.
-  `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md`
-
-- `[ ]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
-  Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
-   glyphs are a starting point, not a specification. The names, meanings and composition rules
-   are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.
-  Shape: Draw under `assets/icons/contour/`: `trim`, `extend`, `offset`, `fillet`, `chamfer`,
-   `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`,
-   `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`,
-   `boolean-union`, `boolean-subtract`, `boolean-intersect`. Keep the 24 grid, ink inside
-   3..21, 20–45 % coverage and the role inks from U70; add one `Icon` const per file and its
-   README row; re-ink the ten existing contour files to the draw role; one emphasis per icon
-   and no colour as the only signal.
-  Done: Every new file rasterises non-empty at 16, 20 and 22 px, stays inside 3..21 and the
-   coverage band, and contains only role inks; the theme table in `assets/README.md` and the
-   `ALL` list move together; the empty-file fallback test still passes; both themes are
-   reviewed at 22 px on the ribbon built by U68.
-  `files: assets/icons/contour, assets/README.md, crates/ui/src/icons.rs`
-
 - `[ ]` **U68** the ribbon is three `match` tables; the approved map — tabs Эскиз, Модель, Мебель, Сцена, Вид and groups such as Создать, Изменить, Опорные, Размеры, Булевы — becomes one const spec rendered by one loop with the L3 metrics.
   Why: Adding a tool means a new arm in three matches; the map cannot be expressed (22 tools in
    Эскиз, namespaced ids, planned rows), and `columns()` is hardcoded per tab. The full map,
@@ -201,6 +162,47 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U69** the approved sketch map needs sixteen tools with no artwork — trim, extend, offset, fillet, chamfer, break, four construction tools, three dimensions and three booleans — and the ten existing contour icons must be re-inked in the draw role.
+  Why: A zero-byte asset draws its label, so the ribbon at 22 px would read as text; the mock's
+   glyphs are a starting point, not a specification. The names, meanings and composition rules
+   are in `plan/notes/U69.md`, the role palette in `plan/notes/U70.md`.
+  Shape: Draw under `assets/icons/contour/`: `trim`, `extend`, `offset`, `fillet`, `chamfer`,
+   `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`,
+   `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`,
+   `boolean-union`, `boolean-subtract`, `boolean-intersect`. Keep the 24 grid, ink inside
+   3..21, 20–45 % coverage and the role inks from U70; add one `Icon` const per file and its
+   README row; re-ink the ten existing contour files to the draw role; one emphasis per icon
+   and no colour as the only signal.
+  Done: Every new file rasterises non-empty at 16, 20 and 22 px, stays inside 3..21 and the
+   coverage band, and contains only role inks; the theme table in `assets/README.md` and the
+   `ALL` list move together; the empty-file fallback test still passes; both themes are
+   reviewed at 22 px on the ribbon built by U68.
+  `files: assets/icons/contour, assets/README.md, crates/ui/src/icons.rs` — `9a5a3d0`
+
+- `[x]` **U70** icons are one white ink; the owner approved colour by semantic family — draw, modify, model, scene, view, danger — with a light-theme remap and a monochrome fallback below a 20 px raster.
+  Why: ADR 0047 and ADR 0055, `assets/README.md` and `STYLE_GUIDE.md` §5 make one ink
+   normative, so a coloured set is impossible without superseding them. The set must not grow a
+   second file per theme: the master carries role inks and the rasteriser maps them to the
+   active theme's ramp. The role table, the threshold and the settings field are in
+   `plan/notes/U70.md`.
+  Shape: Allow up to three role inks per file from a fixed table of literal hex values
+   (validated by a test); tag each icon with its family; `icons.rs` maps each role hex through
+   a `RoleRamp` for the active theme (dark or light), preserves the alpha silhouette and bakes
+   the result into the texture. Add `appearance.icon_color { Auto, Always, Never }` from U71.
+   At a raster under 20 px, or when the mode is `Never`, rasterise the alpha and tint it with
+   the theme icon colour — today's path — so the same master serves both. Cache by `(uri, px,
+   theme, mode)`. Disabled stays an alpha multiply; hover and press are one lighten step, not a
+   second colour.
+  Done: Tests assert the expected role colour is present in the uploaded pixels for every
+   preset × theme; the alpha silhouette is byte-identical between dark and light; the mono
+   fallback at 16 px equals today's tint path; no file carries a colour outside the role table;
+   each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
+   §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
+   are re-inked.
+  Decisions: ADR 0090 records the role inks and supersedes the one-ink clause of ADR 0047 and
+   ADR 0055; the rasteriser and the tonal emphasis of 0055 stand.
+  `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md` — `87487c7`
 
 - `[x]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
   Why: `theme.rs` holds one dark and one light `Palette`, and the settings store only keeps the

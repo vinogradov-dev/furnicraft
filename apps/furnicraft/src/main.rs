@@ -531,6 +531,7 @@ impl FurniCraftApp {
             theme::install_with(ctx, preference, preset, accent);
             ctx.set_zoom_factor(ui_scale::factor(self.settings.appearance.ui_scale));
             furnicraft_ui::set_language(ctx, self.settings.appearance.language.lang());
+            furnicraft_ui::set_icon_color(ctx, self.settings.appearance.icon_color);
         }
         // The active variant is read after the install, so a theme switch in this very window
         // repaints the viewport now instead of on the next frame.
@@ -569,8 +570,10 @@ impl FurniCraftApp {
 impl eframe::App for FurniCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // The language is workspace settings, published once per frame so every surface draws the
-        // same words without threading a `Lang` through every signature (U49).
+        // same words without threading a `Lang` through every signature (U49); the icon-colour mode
+        // is published the same way, so the rasteriser never needs the settings threaded to it.
         furnicraft_ui::set_language(ui.ctx(), self.settings.appearance.language.lang());
+        furnicraft_ui::set_icon_color(ui.ctx(), self.settings.appearance.icon_color);
         // The theme variant is the window's, and `System` can follow the OS while the window is
         // open, so the shell re-reads it every frame instead of trusting the last settings change.
         self.shell.colors = theme::scene_colors(ui.ctx().theme());

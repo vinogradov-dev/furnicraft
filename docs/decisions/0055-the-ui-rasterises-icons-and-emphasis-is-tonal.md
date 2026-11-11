@@ -1,6 +1,6 @@
 # 0055. The UI rasterises icons itself, and emphasis is tonal
 
-- Status: Accepted
+- Status: Accepted; the one-ink clause is superseded by 0090 (the rasteriser and the tonal emphasis stand).
 - Date: 2026-11-04
 
 ## Context
