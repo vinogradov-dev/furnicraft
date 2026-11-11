@@ -63,8 +63,9 @@ impl Project {
     /// the parametric primitive payload, a shape and its parameters whose mesh is derived; a version
     /// 17 file contains only baked meshes. Version 19 adds the shape tag a closed path carries, so a
     /// figure the user drew keeps the constraint set its grips apply; a version 18 path loads with no
-    /// tag.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 19;
+    /// tag. Version 20 renames the stored pivot field to `pivot_local`; a version 19 file loads
+    /// through a serde alias and no world point moves.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 20;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;

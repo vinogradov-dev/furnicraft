@@ -22,6 +22,7 @@ const V11: &str = include_str!("golden/scene-v11.fcs");
 const V12: &str = include_str!("golden/scene-v12.fcs");
 const V14: &str = include_str!("golden/scene-v14.fcs");
 const V18: &str = include_str!("golden/scene-v18.fcs");
+const V20: &str = include_str!("golden/scene-v20.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -62,6 +63,7 @@ fn every_golden_file_loads_and_round_trips() {
         ("version 12", V12),
         ("version 14", V14),
         ("version 18", V18),
+        ("version 20", V20),
     ] {
         let scene = SceneFile::parse(text).expect(name);
         assert_eq!(
