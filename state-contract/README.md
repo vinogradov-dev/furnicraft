@@ -40,7 +40,7 @@ table, so one help lists everything.
 | `task [<id>]` | one task in full: fields, files with line counts and last commits, map rows, notes, `RELATED`, debt, questions, ADRs, the closing commit |
 | `task list` | one line per task, filtered by `--section`, `--status`, `--phase` and `--grep` |
 | `task --md` / `--paths` | the same task for an agent, or one path per line for a shell loop |
-| `task add\|start\|set\|step\|note\|close\|reopen\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run`; `--repair` lets a write through that removes a violation and adds none |
+| `task add\|start\|set\|step\|note\|close\|reopen\|take\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run`; `--repair` lets a write through that removes a violation and adds none |
 | `state set k=v` / `state next` / `state where` | one field of the `STATE:` line, the `## Next` paragraph, or the `## Where we are` prose; `state next --task <id>` moves the paragraph and the current task in one write |
 | `file <plan/map.md\|…>` | one reference file (`map`, `debt`, `questions`, `refactor`, `rename`, the template) through the same gate and diff |
 | `dashboard [--task <id>]` | the framed overview, optionally with one task expanded |
@@ -104,7 +104,7 @@ The prose under `## Next` is the one part of `plan/STATUS.md` a command has to o
 requires it to name the current task: `edit::set_section` replaces a whole section body, and a close
 that changes the current task takes the new paragraph with it.
 
-`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|drop` and `cargo xtask state
+`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|take|drop` and `cargo xtask state
 set` are the reference host: they take `--dry-run`, print the diff, hold `plan/.lock` while they
 write and land each file through a temp file and a rename.
 
