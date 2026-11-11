@@ -170,9 +170,6 @@ pub(crate) struct Document {
     uploaded_preview: Option<PreviewKey>,
     /// The failure this tab last reported, drawn by the status bar of the window.
     pub(crate) last_error: Option<String>,
-    /// Nodes below the root, cached with the evaluated scene so the tree's count chip costs no
-    /// document scan on the frame path.
-    node_count: usize,
     /// The window's display state, kept so a frame rebuilt outside the viewport draws what the
     /// viewport would.
     display: Display,
@@ -194,7 +191,6 @@ impl Document {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
         let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default())?;
-        let node_count = session.project().query(&NodeQuery::any()).len();
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
         let layout = Layout::new(fit, settings.viewport.opening_view, settings.viewport.style);
@@ -237,7 +233,6 @@ impl Document {
             selected_chains: Vec::new(),
             uploaded_preview: None,
             last_error: None,
-            node_count,
             display,
         })
     }
@@ -302,11 +297,6 @@ impl Document {
     /// The render target this tab draws into, so a close can free it.
     pub(crate) fn texture_id(&self) -> egui::TextureId {
         self.texture_id
-    }
-
-    /// How many nodes the scene tree's count chip shows.
-    pub(crate) fn node_count(&self) -> usize {
-        self.node_count
     }
 
     /// Whether the ribbon of this scene is unfolded.
@@ -459,7 +449,6 @@ impl Document {
         // hidden or locked id out of the frame the user is about to see.
         self.editor.retain_flags(self.session.project());
         let visibility = self.editor.visibility_revision();
-        self.node_count = self.session.project().query(&NodeQuery::any()).len();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags())?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;

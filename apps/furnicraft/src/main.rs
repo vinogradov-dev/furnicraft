@@ -420,13 +420,12 @@ impl FurniCraftApp {
 
     /// The scene tree, as a folding window.
     ///
-    /// The panel owns no heading and no tools of its own: the header row names it, counts its nodes
-    /// and folds it, and the body is only the tree. Grouping survives in the row context menu.
+    /// The panel owns no heading and no tools of its own: the header row names it and folds it, and
+    /// the body is only the tree. Grouping survives in the row context menu.
     fn scene_tree(&mut self, ui: &mut egui::Ui, inset: f32) {
         let Self { shell, tabs, .. } = self;
         let head = PanelHead {
             title: furnicraft_text::Message::PanelScene,
-            count: tabs.active().node_count(),
             icon: icons::scene::ASSEMBLY,
             default_width: 240.0,
             min_width: 180.0,
@@ -443,7 +442,6 @@ impl FurniCraftApp {
         let Self { shell, tabs, .. } = self;
         let head = PanelHead {
             title: furnicraft_text::Message::PanelInspector,
-            count: tabs.active().editor.selected_nodes().len(),
             icon: icons::actions::SETTINGS,
             default_width: 300.0,
             min_width: 260.0,

@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
+- `[~]` **U50** the panel header loses the count and gains a scene-side fold: the digit next to
   *Scene* and *Inspector* disappears — the tree and the card already say what they hold, and the
   number cost a document scan on every rebuild — and the fold chevron moves to the edge facing the
   viewport, so the left panel folds from its right and the right panel from its left. The collapsed
@@ -35,6 +35,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Session notes: `panel_header` and `count_chip` in `apps/furnicraft/src/main.rs` draw the current
   row; `node_count` is cached only for that chip. `PanelSide` already names which edge a panel sits
   on, so the chevron side follows from it.
+  now: committing the finished header and running the gate
   `files: apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
 
 - `[ ]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric

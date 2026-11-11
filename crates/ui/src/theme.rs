@@ -151,8 +151,8 @@ pub const STATUS_HEIGHT: f32 = 28.0;
 
 /// The height of a side panel's header row, in points.
 ///
-/// One control tall, like a header chip, so the title, the count chip and the fold chevron sit on
-/// the same line the header uses for its own buttons.
+/// One control tall, like a header chip, so the title and the fold chevron sit on the same line the
+/// header uses for its own buttons.
 pub const PANEL_HEADER_HEIGHT: f32 = 26.0;
 
 /// The width of a collapsed side panel's strip, in points.
