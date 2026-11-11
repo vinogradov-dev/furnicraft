@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=S15 state=idle base=38a8c75 updated=2026-11-11
+STATE: milestone=M7 phase=A task=S16 state=idle base=7372e80 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-S15 is next: `scene/lib.rs` is 1276 production lines and 82 public items, so `Camera`, `Projection`
-and `FixedBasis` move to `crates/scene/src/camera.rs` and the `ray_*` pickers to
-`crates/scene/src/ray.rs`; then S16 and S17 split `render`, and S18–S22 follow.
+S16 is next: `render/lib.rs` is 1446 production lines, so the eleven pipeline constructors, the
+depth-state builders and the buffer wrappers move to `pipelines.rs` and `gpu.rs`; S17 then takes the
+vertex builders, and S18–S22 follow.
 
 ## Index
 
