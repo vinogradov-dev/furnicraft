@@ -25,27 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
-  arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
-  loop whose visible branch reads as a straight line through the joint and across the viewport.
-  Expectation: a corner drag keeps the arc's class — a shallow arc stays shallow, a deliberate major
-  arc stays major — and the draft never draws outside the figure. Suspected cause:
-  `Arc::with_radius_through` picks the new centre on the side of the old arc's midpoint against the
-  *new* chord and then returns the first direction whose midpoint is on that side. For a shallow arc
-  a 1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
-  test matches the major arc's midpoint and the sweep becomes ~360°. Reproduced with chord 100 mm,
-  sagitta 0.5 mm (R 2500 mm, sweep -2.292°): a 1 mm corner drag yields sweep 357.731° and a sampled
-  chain spanning x -2425..2575, y -4899..101 mm; the joints still meet, so the ring validates and
-  Apply stores it. Introduced by X13 (`64c11d3`); S12 moved the maths, not the defect. Fix: choose
-  the direction by its sweep magnitude against the old arc's — nearest |sweep|, tie broken by the
-  old sign — and pass the old sweep into the rebuild; the centre side stays as it is. Tests: a
-  shallow arc keeps a small sweep and its points stay inside the figure; a major arc stays major;
-  the three existing `a_free_arc_end_*` tests stay green; a grip drag on a shallow arc keeps its
-  class.
-  `files: crates/geom/src/segment.rs, crates/ui/src/contour_grips.rs`
-
-## Bugs
-
 - `[ ]` **X31** an along-contour drag on a sub-millimetre segment panics: dragging a corner along a
   segment shorter than twice the clamp margin (2 µm) aborts the editor instead of clamping or
   refusing. Expectation: the corner stops at the segment's own ends, or the edit is refused with an
@@ -59,6 +38,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   1 µm line and along a 1 µm arc returns `Err` instead of panicking; a drag along a normal segment
   still stops one micrometre short of the far end.
   `files: crates/geom/src/segment.rs, crates/model/src/contour_edit.rs`
+
+## Bugs
 
 ## Next
 
@@ -84,6 +65,41 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
+  arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
+  loop whose visible branch reads as a straight line through the joint and across the viewport.
+  Expectation: a corner drag keeps the arc's class — a shallow arc stays shallow, a deliberate major
+  arc stays major — and the draft never draws outside the figure. Suspected cause:
+  `Arc::with_radius_through` picks the new centre on the side of the old arc's midpoint against the
+  *new* chord and then returns the first direction whose midpoint is on that side. For a shallow arc
+  a 1 mm corner drag rotates the new chord enough to move the old midpoint to the other side, so the
+  test matches the major arc's midpoint and the sweep becomes ~360°. Reproduced with chord 100 mm,
+  sagitta 0.5 mm (R 2500 mm, sweep -2.292°): a 1 mm corner drag yields sweep 357.731° and a sampled
+  chain spanning x -2425..2575, y -4899..101 mm; the joints still meet, so the ring validates and
+  Apply stores it. Introduced by X13 (`64c11d3`); S12 moved the maths, not the defect. Fix: choose
+  the direction by its sweep magnitude against the old arc's — nearest |sweep|, tie broken by the
+  old sign — and pass the old sweep into the rebuild; the centre side stays as it is. Tests: a
+  shallow arc keeps a small sweep and its points stay inside the figure; a major arc stays major;
+  the three existing `a_free_arc_end_*` tests stay green; a grip drag on a shallow arc keeps its
+  class.
+  `files: crates/geom/src/segment.rs, crates/ui/src/contour_grips.rs` — `8275ae9`
+
+- `[x]` **X34** origin and pivot are separate concepts, and the code names, commands, card and schema must say so
+  Why: origin (the local zero, named by Placement::translation) and pivot (the authored local
+   offset, the Pivot field) are still one word in the creation API and in the panel card, so a
+   general rebase can silently move a pivot and a panel's derived base corner is presented as
+   an authored handle.
+  Shape: P0 renames the origin vocabulary, Pivot to PivotLocal and the wire field to
+   pivot_local with a serde alias; P1 makes rebase_origin a general operation that preserves
+   both world vertices and pivot_world and adds origin_local/origin_world; P2 keeps a panel's
+   pivot derived and zero; P3 splits the inspector into Origin and Pivot; P4 bumps the schema
+   without moving the world; P5 writes ADR 0088 and corrects the decisions and domain docs.
+  Done: every creation path names its origin, PivotLocal is the only pivot, rebase_origin
+   preserves world vertices and pivot_world, set_pivot/center_pivot change only pivot_local,
+   placement.world_zero changes only translation, a panel's pivot is read-only zero, old
+   goldens load unchanged through the alias, ADR 0088 exists, cargo xtask ci is green.
+  `files: crates/model/src/frame.rs, crates/model/src/placement.rs, crates/model/src/contour.rs, crates/model/src/project/object_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/wire.rs, crates/model/src/project/frame_contract.rs, crates/engine/src/node_cmds.rs, crates/engine/src/session.rs, crates/ui/src/pivot_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/coords.rs, crates/text/src/messages.rs, docs/decisions/0088-origin-and-pivot-are-different-points.md, docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md, docs/decisions/0082-the-local-zero-is-the-creation-anchor.md, docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md, docs/domain/document.md, docs/domain/geometry.md, docs/domain/panels.md, docs/domain/scene-file.md, crates/project/tests/golden/scene-v20.fcs, PROJECT.md, AGENTS.md, plan/map.md` — `c250d09`
 
 - `[x]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered

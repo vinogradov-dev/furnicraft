@@ -1,6 +1,7 @@
 //! Commands that change the tree: placement, naming, duplication, grouping and removal.
 
 use furnicraft_geom::DVec3;
+use furnicraft_units::Length;
 
 use crate::frame::children_center;
 use crate::tree::{
@@ -14,7 +15,7 @@ impl Project {
     /// The pivot is authored data: changing it never moves the node, and changing the geometry never
     /// moves it. The root defines the world frame and has no pivot to edit, and a panel's pivot is
     /// derived from its base corner (ADR 0083), so both are refused.
-    pub fn set_node_pivot(&mut self, id: Id, pivot: Pivot) -> Result<Revision, ProjectError> {
+    pub fn set_node_pivot(&mut self, id: Id, pivot: PivotLocal) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
         }
@@ -37,6 +38,30 @@ impl Project {
         Ok(next_revision)
     }
 
+    /// Re-bases a node's origin with a frame strategy and bumps the revision once.
+    ///
+    /// The content is moved so the strategy's anchor becomes the node's local zero, the placement
+    /// takes that anchor's parent-frame position, and every local vertex is written around the new
+    /// zero. The world geometry does not move. An authored pivot is carried with the content, so
+    /// `pivot_world` stays fixed: `pivot_local_new = pivot_local_old - anchor`. A path, contour,
+    /// constructive or baked mesh re-bases; a panel, a primitive and a camera or light have no free
+    /// vertex frame to re-base and are refused. A panel's outline edit is its own re-anchoring
+    /// operation.
+    pub fn rebase_origin(&mut self, id: Id, strategy: FrameAnchor) -> Result<Revision, ProjectError> {
+        if id == self.root.id() {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
+        let next_revision = self.next_revision()?;
+        let rebased = rebase_node_origin(node, strategy)?;
+        let Some(current) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        *current = rebased;
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
     /// Sets a node's pivot to the centre of its local bounds and bumps the revision once.
     ///
     /// A container with no panels has no bounds and is centred at its own origin. Returns
@@ -50,7 +75,7 @@ impl Project {
             return Err(ProjectError::PanelPivotIsDerived { panel: id });
         }
         let center = self.bounds_center_local(id).unwrap_or(DVec3::ZERO);
-        let pivot = Pivot::from_local(center).unwrap_or(Pivot::ZERO);
+        let pivot = PivotLocal::from_local(center).unwrap_or(PivotLocal::ZERO);
         self.set_node_pivot(id, pivot)
     }
 
@@ -274,7 +299,7 @@ impl Project {
             parent.children().iter().filter(|child| selected.contains(&child.id().get())).cloned().collect();
         let (placement, moved) = match children_center(&moved) {
             Ok(_) => {
-                let rebased = rebase_at_anchor(moved, Placement::IDENTITY, FrameAnchor::CenterOfBounds)
+                let rebased = rebase_origin_at(moved, Placement::IDENTITY, FrameAnchor::CenterOfBounds)
                     .map_err(|_| ProjectError::CreationFrame { id })?;
                 (rebased.placement, rebased.content)
             }
@@ -362,6 +387,64 @@ impl Project {
         self.revision = next_revision;
         Ok(next_revision)
     }
+}
+
+/// Re-bases one node's content and keeps its pivot world position.
+fn rebase_node_origin(node: Node, strategy: FrameAnchor) -> Result<Node, ProjectError> {
+    let id = node.id();
+    let rebase_error = |_| ProjectError::OriginRebase { id };
+    match node {
+        Node::Object(mut object) => {
+            let pivot = object.pivot_local();
+            match object.geometry() {
+                Geometry::Path(path) => {
+                    let rebased = rebase_origin_at(path.clone(), object.placement(), strategy).map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    *object.geometry_mut() = Geometry::Path(rebased.content);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Constructive(constructive) => {
+                    let rebased = rebase_origin_at(constructive.path().clone(), object.placement(), strategy)
+                        .map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    let mut constructive = constructive.clone();
+                    constructive.set_path(rebased.content).map_err(|_| ProjectError::OriginRebase { id })?;
+                    *object.geometry_mut() = Geometry::Constructive(constructive);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Mesh(mesh) => {
+                    let rebased = rebase_origin_at(mesh.clone(), object.placement(), strategy).map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    *object.geometry_mut() = Geometry::Mesh(rebased.content);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Primitive(_) => Err(ProjectError::OriginRebase { id }),
+            }
+        }
+        Node::Container(mut container) => {
+            let rebased = rebase_origin_at(container.children().to_vec(), container.placement(), strategy)
+                .map_err(rebase_error)?;
+            let pivot = shift_pivot(container.pivot_local(), rebased.anchor, id)?;
+            *container.children_mut() = rebased.content;
+            container.set_placement(rebased.placement);
+            container.set_pivot(pivot);
+            Ok(Node::Container(container))
+        }
+        Node::Panel(_) | Node::Camera(_) | Node::Light(_) => Err(ProjectError::OriginRebase { id }),
+    }
+}
+
+/// Carries a pivot through a re-anchor: `pivot_local_new = pivot_local_old - anchor`.
+fn shift_pivot(pivot: PivotLocal, anchor: [Length; 3], id: Id) -> Result<PivotLocal, ProjectError> {
+    let [x, y, z] = pivot.components();
+    let shift = |value: Length, offset: Length| value.checked_sub(offset).ok_or(ProjectError::OriginRebase { id });
+    Ok(PivotLocal::new(shift(x, anchor[0])?, shift(y, anchor[1])?, shift(z, anchor[2])?))
 }
 
 #[cfg(test)]
@@ -554,7 +637,7 @@ mod tests {
         assert_eq!(group.placement().rotation(), DQuat::IDENTITY);
         let translation = group.placement().translation();
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
-        assert_eq!(project.pivot_local(group_id), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group_id), Some(DVec3::ZERO));
         let pivot_world = project.pivot_world(group_id).expect("world pivot");
         assert!((pivot_world - centre).length() < 1.1e-3, "world pivot was {pivot_world:?}");
         assert_eq!(group.children().len(), 2);
@@ -642,7 +725,7 @@ mod tests {
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
         assert_eq!(container.placement().rotation(), DQuat::IDENTITY);
         assert_eq!(project.parent_of(group), Some(frame));
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_same_frame(project.world_placement(first).expect("first world"), first_world, "first");
         assert_same_frame(project.world_placement(second).expect("second world"), second_world, "second");
         let group_world = project.pivot_world(group).expect("group world pivot");
@@ -680,7 +763,7 @@ mod tests {
 
         let translation = project.container(group).expect("group").placement().translation();
         assert!((translation - centre).length() < 1.1e-3, "translation was {translation:?}, centre {centre:?}");
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_same_frame(project.world_placement(panel).expect("panel world"), panel_world, "panel");
         assert_same_frame(project.world_placement(object).expect("object world"), object_world, "object");
         assert_eq!(project.panel(panel).expect("panel").placement().rotation(), DQuat::from_rotation_x(0.15));
@@ -700,7 +783,7 @@ mod tests {
         // Children without geometry have no centre, so their placements and the parent origin stay.
         let container = project.container(group).expect("group");
         assert_eq!(container.placement(), Placement::IDENTITY);
-        assert_eq!(project.pivot_local(group), Some(DVec3::ZERO));
+        assert_eq!(project.pivot_local_mm(group), Some(DVec3::ZERO));
         assert_eq!(project.container(first).expect("first").placement(), Placement::IDENTITY);
         assert_eq!(project.container(second).expect("second").placement(), second_placement);
         assert_eq!(container.children().len(), 2);
@@ -759,12 +842,12 @@ mod tests {
         let panel = Id::new(2).expect("panel id");
         let revision = project.revision();
         let stored = project.panel(panel).expect("panel").placement();
-        let pivot = Pivot::new(millimetres(1), millimetres(2), millimetres(3));
+        let pivot = PivotLocal::new(millimetres(1), millimetres(2), millimetres(3));
 
         assert_eq!(project.set_node_pivot(panel, pivot), Err(ProjectError::PanelPivotIsDerived { panel }));
         assert_eq!(project.center_node_pivot(panel), Err(ProjectError::PanelPivotIsDerived { panel }));
         assert_eq!(project.revision(), revision, "a refused pivot edit does not bump the revision");
-        assert_eq!(project.pivot(panel), Some(Pivot::ZERO), "a panel's pivot stays at its base corner");
+        assert_eq!(project.pivot_local(panel), Some(PivotLocal::ZERO), "a panel's pivot stays at its base corner");
         assert_eq!(project.panel(panel).expect("panel").placement(), stored, "the refusal changes nothing");
     }
 }

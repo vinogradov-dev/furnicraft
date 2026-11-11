@@ -10,7 +10,9 @@
 
 use std::collections::HashSet;
 
-use furnicraft_model::{Catalog, Id, Pivot, Placement, Project, ProjectError, PropertyChange, PropertyValue};
+use furnicraft_model::{
+    Catalog, FrameAnchor, Id, PivotLocal, Placement, Project, ProjectError, PropertyChange, PropertyValue,
+};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -275,7 +277,7 @@ fn node_placement_set_run(
 pub const NODE_PLACEMENT_WORLD_ZERO_ID: &str = "node.placement.world_zero";
 
 /// User-facing label of the world-zero placement command.
-pub const NODE_PLACEMENT_WORLD_ZERO_LABEL: Message = Message::CmdZeroTranslation;
+pub const NODE_PLACEMENT_WORLD_ZERO_LABEL: Message = Message::CmdPlaceAtWorldZero;
 
 /// Parameters for `node.placement.world_zero`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -398,7 +400,7 @@ pub struct NodePivotSet {
     /// Node whose pivot moves; a panel's pivot is derived and is refused.
     pub node: Id,
     /// The new pivot in the node's own frame, in exact micrometres.
-    pub pivot: Pivot,
+    pub pivot: PivotLocal,
 }
 
 /// The `node.pivot.set` command.
@@ -456,6 +458,48 @@ fn node_pivot_center_run(
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePivotCenter>(params, NODE_PIVOT_CENTER_ID)?;
     project.center_node_pivot(params.node)?;
+    Ok(CommandOutcome::changed())
+}
+
+/// Stable id of the origin re-base command.
+pub const NODE_ORIGIN_REBASE_ID: &str = "node.origin.rebase";
+
+/// User-facing label of the origin re-base command.
+pub const NODE_ORIGIN_REBASE_LABEL: Message = Message::CmdRebaseOrigin;
+
+/// Parameters for `node.origin.rebase`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeOriginRebase {
+    /// Node whose local zero moves; the panel, primitive, camera and light frames are fixed.
+    pub node: Id,
+    /// The content point that becomes the new local zero.
+    pub strategy: FrameAnchor,
+}
+
+/// The `node.origin.rebase` command.
+pub(crate) const NODE_ORIGIN_REBASE: CommandSpec = CommandSpec::new(
+    NODE_ORIGIN_REBASE_ID,
+    NODE_ORIGIN_REBASE_LABEL,
+    node_origin_rebase_enabled,
+    node_origin_rebase_run,
+);
+
+fn node_origin_rebase_enabled(session: &Session, params: &Value) -> bool {
+    let Ok(params) = parse::<NodeOriginRebase>(params, NODE_ORIGIN_REBASE_ID) else {
+        return false;
+    };
+    let project = session.project();
+    params.node != project.root().id() && project.contains_node(params.node)
+}
+
+fn node_origin_rebase_run(
+    project: &mut Project,
+    _catalog: &Catalog,
+    params: &Value,
+) -> Result<CommandOutcome, CommandError> {
+    let params = parse::<NodeOriginRebase>(params, NODE_ORIGIN_REBASE_ID)?;
+    project.rebase_origin(params.node, params.strategy)?;
     Ok(CommandOutcome::changed())
 }
 

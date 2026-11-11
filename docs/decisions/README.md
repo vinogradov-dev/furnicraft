@@ -112,3 +112,4 @@ What it buys, what it costs, and the condition under which it should be revisite
 ```
 
 The code and `AGENTS.md` stay the authority for rules; a record keeps the reason.
+| [0088](0088-origin-and-pivot-are-different-points.md) | Origin and pivot are different points | Accepted; refines 0026 and 0082, settles 0083 |

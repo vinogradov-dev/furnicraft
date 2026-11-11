@@ -55,9 +55,10 @@ impl Project {
     /// Replaces a contour panel's outline and bumps the revision once.
     ///
     /// The new ring is anchored at the panel-local zero corner (ADR 0009). When the edit moves the
-    /// minimum corner, the panel placement, pivot and machining shift by the same offset so the
-    /// world-space shape and every feature stay where the user drew them. A rectangle panel never
-    /// converts; [`Project::validate_panel_outline`] rejects it before anything changes.
+    /// minimum corner, the panel placement (the origin) and machining shift by the same offset so
+    /// the world-space shape and every feature stay where the user drew them; the pivot is derived
+    /// and stays zero (ADR 0083, ADR 0088). A rectangle panel never converts;
+    /// [`Project::validate_panel_outline`] rejects it before anything changes.
     pub fn set_panel_outline(&mut self, id: Id, contour: Contour) -> Result<Revision, ProjectError> {
         self.validate_panel_outline(id, &contour)?;
         let (min, _) = contour.bounds_micrometres();
@@ -87,9 +88,10 @@ impl Project {
     /// Replaces a rectangle panel's outline with the ring it draws, in one revision and one undo.
     ///
     /// The ring is anchored at the panel-local zero corner like any contour panel (ADR 0009), so an
-    /// outward bow that extended the outline moves the frame; the placement, pivot and machining
-    /// follow by the same offset so the world-space shape stays fixed. The corner and bow
-    /// parameters are gone, but undo restores the rectangle with its features.
+    /// outward bow that extended the outline moves the frame; the placement (the origin) and
+    /// machining follow by the same offset so the world-space shape stays fixed, and the derived
+    /// pivot stays zero (ADR 0083, ADR 0088). The corner and bow parameters are gone, but undo
+    /// restores the rectangle with its features.
     pub fn convert_panel_to_contour(&mut self, id: Id) -> Result<Revision, ProjectError> {
         let candidate = self.converted_panel(id)?;
         let next_revision = self.next_revision()?;
@@ -563,7 +565,7 @@ impl Project {
         }
         let next_revision = self.next_revision()?;
         let id = self.allocate_id()?;
-        let rebased = rebase_at_anchor(contour.clone(), placement, FrameAnchor::BASE_CORNER)
+        let rebased = rebase_origin_at(contour.clone(), placement, FrameAnchor::BASE_CORNER)
             .map_err(|_| ProjectError::CreationFrame { id })?;
         let panel = Panel::new_contour(id, name, rebased.content, material, last_known_thickness, rebased.placement)?;
         let Some((_depth, children)) = find_container_mut(&mut self.root, parent, 1) else {
@@ -800,7 +802,7 @@ mod tests {
             .expect("panel at the parent origin");
         let panel = project.panel(at_origin).expect("panel");
         assert_eq!(panel.placement().translation(), DVec3::ZERO, "a new panel is at the parent origin");
-        assert!(panel.pivot().is_zero(), "the base corner is the pivot");
+        assert!(panel.pivot_local().is_zero(), "the base corner is the pivot");
         assert_eq!(
             project.pivot_world(at_origin).expect("world pivot"),
             parent_placement.translation(),
@@ -820,7 +822,7 @@ mod tests {
             world.transform_point(DVec3::ZERO),
             "a turned placement turns about the base corner, not the bounds centre"
         );
-        assert_eq!(project.pivot(turned), Some(Pivot::ZERO));
+        assert_eq!(project.pivot_local(turned), Some(PivotLocal::ZERO));
     }
 
     #[test]
@@ -863,7 +865,7 @@ mod tests {
         let panel = project.panel(panel_id).expect("panel exists");
         assert_eq!(panel.nominal_size(), nominal);
         assert_eq!(panel.placement(), placement, "a resize keeps the base corner, so the translation stays");
-        assert_eq!(panel.pivot(), Pivot::ZERO, "a panel's pivot is derived and stays at its base corner");
+        assert_eq!(panel.pivot_local(), PivotLocal::ZERO, "a panel's pivot is derived and stays at its base corner");
 
         let missing = Id::new(999).expect("id");
         assert_eq!(project.set_panel_nominal_size(missing, nominal), Err(ProjectError::PanelNotFound { id: missing }));

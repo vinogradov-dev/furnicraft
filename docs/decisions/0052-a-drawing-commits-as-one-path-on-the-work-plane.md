@@ -1,6 +1,6 @@
 # 0052. A drawing commits as one path on the work plane
 
-- Status: Accepted; parent rule superseded by 0056; coordinate rule superseded by 0082
+- Status: Accepted; parent rule superseded by 0056; coordinate rule superseded by 0082; vocabulary settled by 0088
 - Date: 2026-11-04
 
 ## Context
@@ -42,3 +42,9 @@ user closes it or says so.
   inside it. That is the same rule the scene tree uses for a new node.
 - The auto-commit makes the last click feel like the end of the shape, which matches a CAD line
   tool; the polyline keeps an explicit end because its point count is open.
+
+## Vocabulary note (2026-11-11)
+
+The creation anchor this record calls a pivot is the node's **origin** in the sense of ADR 0088:
+it becomes the local zero and is stored in the translation. The pivot is the separate
+`pivot_local` offset and starts at zero.

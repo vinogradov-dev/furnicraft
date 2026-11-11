@@ -1,6 +1,6 @@
 # 0025. Move and Rotate share one pivot at the first corner of the local bounds
 
-- Status: Superseded by 0026
+- Status: Superseded by 0026 and 0088
 - Date: 2026-10-27
 
 ## Context
@@ -71,3 +71,8 @@ geometry as soon as the object rotates.
   pivot now.
 - `crates/model` (`Project::pivot_local`, `Project::pivot_world`),
   `apps/furnicraft/src/translate_gizmo.rs`, `apps/furnicraft/src/rotate_gizmo.rs`.
+
+## Vocabulary note (2026-11-11)
+
+The shared manipulation point is now `PivotLocal`, an offset from the origin, not the origin itself
+(ADR 0088).

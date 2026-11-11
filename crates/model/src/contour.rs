@@ -22,7 +22,7 @@ use furnicraft_units::{Degrees, Length};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ContourSegmentId, Pivot};
+use crate::ContourSegmentId;
 
 /// One directed segment of a planar contour.
 ///
@@ -967,17 +967,17 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_path_pivots_at_the_centre_of_its_bounds() {
+    fn a_closed_path_is_anchored_at_the_centre_of_its_bounds() {
         let rectangle = Path::rectangle([millimetres(100), millimetres(50)], [millimetres(0), millimetres(0)])
             .expect("a rectangle");
-        assert_eq!(rectangle.creation_pivot(), Ok(Pivot::new(millimetres(50), millimetres(25), Length::ZERO)));
+        assert_eq!(rectangle.creation_origin(), Ok([millimetres(50), millimetres(25), Length::ZERO]));
 
         let circle = Path::circle([millimetres(100), millimetres(50)], millimetres(40)).expect("a circle");
-        assert_eq!(circle.creation_pivot(), Ok(Pivot::new(millimetres(100), millimetres(50), Length::ZERO)));
+        assert_eq!(circle.creation_origin(), Ok([millimetres(100), millimetres(50), Length::ZERO]));
     }
 
     #[test]
-    fn an_open_path_pivots_at_the_start_of_its_first_stored_segment() {
+    fn an_open_path_is_anchored_at_the_start_of_its_first_stored_segment() {
         let polyline = Path::polyline(
             vec![
                 [millimetres(600), millimetres(400)],
@@ -987,7 +987,7 @@ mod tests {
             false,
         )
         .expect("an open chain");
-        assert_eq!(polyline.creation_pivot(), Ok(Pivot::new(millimetres(600), millimetres(400), Length::ZERO)));
+        assert_eq!(polyline.creation_origin(), Ok([millimetres(600), millimetres(400), Length::ZERO]));
 
         let arc = ContourSegment::arc(
             [millimetres(100), Length::ZERO],
@@ -998,13 +998,13 @@ mod tests {
         .expect("an arc");
         let path = Path::new(vec![arc], false).expect("a one-arc path");
         let start = arc.start().expect("the stored start");
-        assert_eq!(path.creation_pivot(), Ok(Pivot::new(start[0], start[1], Length::ZERO)));
+        assert_eq!(path.creation_origin(), Ok([start[0], start[1], Length::ZERO]));
     }
 
     #[test]
-    fn a_ring_pivots_at_the_centre_of_its_bounds() {
+    fn a_ring_is_anchored_at_the_centre_of_its_bounds() {
         let contour = plate_contour();
-        assert_eq!(contour.creation_pivot(), Pivot::new(millimetres(50), millimetres(25), Length::ZERO));
+        assert_eq!(contour.creation_origin(), [millimetres(50), millimetres(25), Length::ZERO]);
     }
 
     #[test]
@@ -1961,13 +1961,13 @@ impl Contour {
         entries_bounds_micrometres(&self.entries)
     }
 
-    /// The pivot a newly created extrusion takes: the centre of the ring's local bounds.
+    /// The origin a newly created extrusion takes: the centre of the ring's local bounds.
     ///
-    /// The ring is flat, so the pivot lies on the base plane (`z = 0`). This runs once at creation;
-    /// a later contour replacement never moves the stored pivot (ADR 0026).
-    pub fn creation_pivot(&self) -> Pivot {
+    /// The ring is flat, so the origin lies on the base plane (`z = 0`). This runs once at creation;
+    /// a later contour replacement never moves the stored origin (ADR 0088).
+    pub fn creation_origin(&self) -> [Length; 3] {
         let (min, max) = self.bounds_micrometres();
-        bounds_center_pivot(min, max)
+        bounds_center_origin(min, max)
     }
 
     /// Twice the signed area of the ring, in square micrometres; positive for counter-clockwise.
@@ -2123,16 +2123,16 @@ fn entries_bounds_micrometres(entries: &[ContourSegmentEntry]) -> ([i64; 2], [i6
     (min, max)
 }
 
-/// The centre of a pair of extents, in micrometres, as a pivot on the drawing plane.
+/// The centre of a pair of extents, in micrometres, as an origin on the drawing plane.
 ///
 /// The midpoint is summed in `i128`, so two extents near the ends of the coordinate range cannot
 /// overflow; the result always lies between them and therefore fits back into `i64`.
-fn bounds_center_pivot(min: [i64; 2], max: [i64; 2]) -> Pivot {
+fn bounds_center_origin(min: [i64; 2], max: [i64; 2]) -> [Length; 3] {
     fn middle(low: i64, high: i64) -> Length {
         let average = (i128::from(low) + i128::from(high)) / 2;
         Length::from_micrometres(i64::try_from(average).unwrap_or(low))
     }
-    Pivot::new(middle(min[0], max[0]), middle(min[1], max[1]), Length::ZERO)
+    [middle(min[0], max[0]), middle(min[1], max[1]), Length::ZERO]
 }
 
 /// A path is one chain of at most this many segments, the ring size it has to fit.
@@ -2740,21 +2740,21 @@ impl Path {
         self.rebuild(entries)
     }
 
-    /// The pivot a newly created drawing takes: the centre of a closed chain, or its first point.
+    /// The origin a newly created drawing takes: the centre of a closed chain, or its first point.
     ///
-    /// A closed chain is grabbed at the middle of its bounds, the same centre `node.pivot.center`
-    /// writes. An open chain is grabbed at the start of its first stored segment, so a line or an
-    /// arc starts where the user drew it; the stored start is the rounded curve start, never the
-    /// raw pointer point. The chain is flat, so the pivot lies on `z = 0`. This runs once at
-    /// creation; a later path replacement never moves the stored pivot (ADR 0026).
-    pub fn creation_pivot(&self) -> Result<Pivot, PathError> {
+    /// A closed chain is anchored at the middle of its bounds. An open chain is anchored at the
+    /// start of its first stored segment, so a line or an arc starts where the user drew it; the
+    /// stored start is the rounded curve start, never the raw pointer point. The chain is flat,
+    /// so the origin lies on `z = 0`. This runs once at creation; a later path replacement never
+    /// moves the stored origin (ADR 0088).
+    pub fn creation_origin(&self) -> Result<[Length; 3], PathError> {
         if self.is_closed() {
             let (min, max) = self.bounds_micrometres();
-            return Ok(bounds_center_pivot(min, max));
+            return Ok(bounds_center_origin(min, max));
         }
         let first = self.entries.first().ok_or(PathError::TooFewSegments { count: 0 })?;
         let start = first.segment().start()?;
-        Ok(Pivot::new(start[0], start[1], Length::ZERO))
+        Ok([start[0], start[1], Length::ZERO])
     }
 
     /// The segment with this id.

@@ -1,4 +1,4 @@
-//! Read-only questions about a project: nodes, panels, places, pivots, properties and queries.
+//! Read-only questions about a project: nodes, panels, origins, pivots, properties and queries.
 //!
 //! A query never mutates the document and never allocates more than the answer needs. The same
 //! lookups feed the UI, reports and commands, so every caller agrees on what a node is.
@@ -180,28 +180,48 @@ impl Project {
         Some(ids)
     }
 
-    /// The stored manipulation pivot of a node, in its own frame.
+    /// The parent-frame position of the node's local zero, the point its content is written around.
     ///
-    /// A panel keeps its local zero, the minimum corner of its nominal rectangle, until the user
-    /// moves the pivot; a container is born at its own origin and a group re-anchors its children
-    /// there (so a group's translation is the centre of their union). The root is not selectable and
-    /// always has a zero pivot. Returns `None` for an unknown id.
-    pub fn pivot(&self, id: Id) -> Option<Pivot> {
+    /// The origin is implicit in [`Placement::translation`]: it is not a separately stored field.
+    /// Moving a node changes this position; re-anchoring the content changes how the vertices are
+    /// written around it (`rebase_origin_at`). The root defines the world frame and returns its own
+    /// placement. Returns `None` for an unknown id.
+    pub fn origin_local(&self, id: Id) -> Option<DVec3> {
         if id == self.root.id() {
-            return Some(self.root.pivot());
+            return Some(self.root.placement().translation());
+        }
+        Some(self.node(id)?.placement().translation())
+    }
+
+    /// The world-space position of the node's local zero, composed from the root.
+    ///
+    /// This is the world point the inspector labels *World origin*. Returns `None` for an unknown id.
+    pub fn origin_world(&self, id: Id) -> Option<DVec3> {
+        Some(self.world_placement(id)?.translation())
+    }
+
+    /// The stored pivot of a node, as an exact offset from its origin.
+    ///
+    /// A panel always returns zero: its pivot is derived from its base corner (ADR 0083). A
+    /// container or an object may author a non-zero offset; a group's translation is the centre of
+    /// its children's union and its offset starts at zero. The root is not selectable and always
+    /// returns zero. Returns `None` for an unknown id.
+    pub fn pivot_local(&self, id: Id) -> Option<PivotLocal> {
+        if id == self.root.id() {
+            return Some(self.root.pivot_local());
         }
         match self.node(id)? {
-            Node::Panel(panel) => Some(panel.pivot()),
-            Node::Container(container) => Some(container.pivot()),
-            Node::Object(object) => Some(object.pivot()),
-            Node::Camera(camera) => Some(camera.pivot()),
-            Node::Light(light) => Some(light.pivot()),
+            Node::Panel(panel) => Some(panel.pivot_local()),
+            Node::Container(container) => Some(container.pivot_local()),
+            Node::Object(object) => Some(object.pivot_local()),
+            Node::Camera(camera) => Some(camera.pivot_local()),
+            Node::Light(light) => Some(light.pivot_local()),
         }
     }
 
-    /// The manipulation pivot in the node's own frame, as millimetres for gizmos.
-    pub fn pivot_local(&self, id: Id) -> Option<DVec3> {
-        Some(self.pivot(id)?.to_local())
+    /// The stored pivot as millimetres from the origin, for gizmos and tests.
+    pub fn pivot_local_mm(&self, id: Id) -> Option<DVec3> {
+        Some(self.pivot_local(id)?.to_local())
     }
 
     /// The manipulation pivot in world space: [`Self::pivot_local`] through the node's world placement.
@@ -209,7 +229,7 @@ impl Project {
     /// Both the translate and the rotate gizmo draw and rotate around this point. Returns `None` for
     /// an unknown id.
     pub fn pivot_world(&self, id: Id) -> Option<DVec3> {
-        let local = self.pivot_local(id)?;
+        let local = self.pivot_local_mm(id)?;
         Some(self.world_placement(id)?.transform_point(local))
     }
 

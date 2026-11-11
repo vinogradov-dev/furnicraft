@@ -35,7 +35,7 @@ Related decisions: [0005](../decisions/0005-material-catalogue.md),
 - id allocator;
 - node tree (containers, panels, geometry objects, camera and light objects);
 - each node's typed properties, including a furniture type;
-- each node's manipulation pivot, in its own frame;
+- each node's pivot as an exact local offset from its origin; the origin itself is implicit in the placement;
 - the active camera, and camera and light parameters;
 - geometry payloads: a baked mesh, the parameters of a primitive, or the features of a constructive object;
 - panels:
@@ -73,7 +73,7 @@ rules live in [Furniture types](furntypes.md).
 
 Every node carries a property bag: an ordered map from a dotted key to a typed value (`Bool`,
 `Integer`, `Length`, `Angle`, `Text`, `Choice`, `Reference`, `FurnType` or `Structured` JSON). Name,
-placement, pivot, panel size and material stay typed fields and are not duplicated in the bag.
+placement, pivot_local, panel size and material stay typed fields and are not duplicated in the bag.
 `component`, `furntype`, `prototype.id`, `prototype.version` and `prototype.parameters` are reserved
 system keys; user properties live in their own namespaces. An unknown user property survives a load
 unchanged. Arrays and nested attributes that belong to a prototype are stored as one `Structured`
@@ -84,23 +84,27 @@ container anchored at the centre of their union bounds: the container's translat
 every child placement moves by `-centre` and the pivot stays at its local zero, so their world
 transforms stay the same; ungrouping an ordinary container composes each child with the removed
 container's placement for the same reason.
-The inspector edits the translation in millimetres in the parent frame and the rotation as intrinsic
-XYZ Euler angles in degrees; the document stores the unit quaternion, so editing one half never
-resets the other. The viewport translate gizmo moves that same translation directly and the rotate
-gizmo turns the node about world X, Y and Z axes; both use one stored pivot, expressed in the node's
-own frame. A panel starts with its pivot at the local zero, any container is born at its own origin,
-and the root always has a zero pivot and cannot be edited. A group is what puts the centre of its
-children's union into the container's translation while its pivot stays at zero. The pivot does not move when the geometry changes;
-`node.pivot.set` and `node.pivot.center` are the only ways to move it, and the inspector exposes
-X/Y/Z and Center. Each drag previews the frame and one `node.placement.set` is dispatched on
-release, so the drag is one undo entry. Move and Rotate are one active gizmo at a time. The root
-container defines the world frame and cannot be deleted, moved, grouped or ungrouped. See
+The inspector edits the origin's translation in millimetres in the parent frame and the rotation as
+intrinsic XYZ Euler angles in degrees; the document stores the unit quaternion, so editing one half
+never resets the other. The translation *is* the origin: it is not a second stored field. The
+viewport translate gizmo moves that translation directly and the rotate gizmo turns the node about
+world X, Y and Z axes; both use one stored `pivot_local`, an exact offset from the origin. A panel
+starts with a zero offset, so it turns about its base corner; any container is born at its own
+origin; a group puts the centre of its children's union into the translation while its pivot offset
+stays zero. The root always has a zero pivot offset and cannot be edited. `node.pivot.set` and
+`node.pivot.center` are the only ways to author the offset, and the inspector exposes X/Y/Z and
+Center. `node.origin.rebase` re-anchors a node with an authored pivot and keeps both the world
+vertices and `pivot_world`; `node.placement.world_zero` clears only the translation. Each drag
+previews the frame and one `node.placement.set` is dispatched on release, so the drag is one undo
+entry. Move and Rotate are one active gizmo at a time. The root container defines the world frame and
+cannot be deleted, moved, grouped or ungrouped. See
 [ADR 0020](../decisions/0020-the-translate-gizmo-previews-and-commits-one-placement.md),
 [ADR 0022](../decisions/0022-closed-containers-pick-as-one-object.md),
 [ADR 0024](../decisions/0024-rotation-is-a-quaternion-shown-as-xyz-euler-angles.md),
 [ADR 0026](../decisions/0026-the-manipulation-pivot-is-stored-node-data.md),
-[ADR 0027](../decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md) and
-[ADR 0034](../decisions/0034-nodes-carry-typed-properties.md).
+[ADR 0027](../decisions/0027-the-rotate-gizmo-uses-world-aligned-rings.md),
+[ADR 0034](../decisions/0034-nodes-carry-typed-properties.md) and
+[ADR 0088](../decisions/0088-origin-and-pivot-are-different-points.md).
 
 ### 2.2. Geometry, camera and light nodes
 
@@ -230,7 +234,7 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
 - Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
 - Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as an ordinary container and every nested assembly keeps its kind (the kinds are unified by schema 7).
-- Version 6 stores the manipulation pivot on every node as three micrometre lengths. A version 5 or older file materializes the version 6 default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero. A container created today is born at zero instead, and the migration is the only place that writes a centre pivot; no later pass re-normalizes a stored one.
+- Version 6 stores the pivot offset on every node as three micrometre lengths. A version 5 or older file materializes the version 6 default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero. A container created today is born at zero instead, and the migration is the only place that writes a centre pivot; no later pass re-normalizes a stored one.
 - Version 9 adds authored `camera` and `light` nodes and the optional `active_camera` document field. A version 8 file loads with no camera and no light, and the viewport falls back to the built-in camera and key light; an `active_camera` that does not name a camera node is a readable load error. Deleting the active camera clears the field.
 - Version 10 adds the constructive geometry payload: a closed contour and an ordered feature history whose mesh is derived. A version 9 object still loads as a baked mesh, and a constructive object is not editable as a mesh until it is collapsed.
 - Version 11 stores a constructive contour as directed line and arc segments instead of a point list, so an object can carry a round corner. A version 10 point list loads as a ring of lines, which is the same shape it described, and is saved back as segments.
@@ -241,7 +245,8 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 - Version 16 replaces the tagged machining enum with one ordered list of records, each carrying a stable id, a face or edge anchor and tagged parameters. A version 15 cutout loads as a face-anchored cutout with the same id.
 - Version 17 adds a flat path payload: an open or closed chain of drawn line and arc segments with stable ids, stored on a geometry object. A version 16 file contains no path and loads unchanged.
 - Version 18 adds the parametric primitive payload: a shape and its parameters whose mesh is derived. A version 17 file contains only baked meshes and constructive objects, and loads unchanged; a collapsed primitive saves as a mesh.
-- Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot, children and panel data are unchanged.
+- Version 20 renames the stored pivot field to `pivot_local`; a version 19 or older file's `pivot` is read through a serde alias and means the same offset. Origin is not a field: it stays implicit in `Placement::translation`. A panel's non-zero stored pivot is still a readable error, and the legacy schema-5 container centre stays a `pivot_local` without moving the world.
+- Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot_local, children and panel data are unchanged.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo

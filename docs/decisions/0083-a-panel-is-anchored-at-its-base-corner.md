@@ -1,6 +1,6 @@
 # 0083. A panel is anchored at its base corner
 
-- Status: Accepted
+- Status: Accepted; confirmed by 0088
 - Date: 2026-11-10
 
 ## Context
@@ -60,3 +60,10 @@ The cost is that panel creation must know the corner in the parent frame, and th
 is not centred on its own bounds. A caller that has only a world frame converts it with
 `Placement::inverse`; a caller that has a source object composes the source's world frame with the
 target parent's inverse.
+
+## Amendment: the panel pivot stays derived (2026-11-11)
+
+[0088](0088-origin-and-pivot-are-different-points.md) confirms variant A: a panel's `pivot_local`
+is always zero, `set_pivot` and `center_pivot` refuse it, and an outline edit re-anchors the origin
+at the new base corner while keeping every world point. The inspector shows *Pivot follows origin
+(offset 0)* read-only. A separate hinge pivot is a later feature with its own field and migration.

@@ -1,6 +1,7 @@
 # 0024. Rotation is a quaternion shown as intrinsic XYZ Euler angles
 
-- Status: Accepted; pivot rule superseded by 0025 and 0026; ring axes and post-multiply superseded by 0027
+- Status: Accepted; pivot rule superseded by 0025 and 0026; ring axes and post-multiply superseded by 0027;
+  pivot vocabulary settled by 0088
 - Date: 2026-10-26
 
 ## Context
@@ -68,3 +69,9 @@ translation instead; [0025](0025-one-manipulation-pivot.md) settles that point.
 - [0003](0003-length-is-integer-micrometres.md) is the same argument for lengths.
 - `crates/model` (`EulerAngles`, `Placement::rotation_euler`), `crates/units` (`Degrees`),
   `crates/ui/src/placement_card.rs`, `apps/furnicraft/src/rotate_gizmo.rs`.
+
+## Pivot note (2026-11-11)
+
+The point the rotation acts about is `pivot_local`, an offset from the node's origin (ADR 0088).
+At a zero offset it is the origin; at a non-zero offset the translation is adjusted so
+`pivot_world` stays fixed.

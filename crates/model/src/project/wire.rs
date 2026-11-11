@@ -52,7 +52,7 @@ impl TryFrom<ProjectWire> for Project {
             // centre; a container created today is born at zero and no pass re-normalizes it.
             migrate_container_pivots(&mut root, 1)?;
         }
-        root.set_pivot(Pivot::ZERO);
+        root.set_pivot(PivotLocal::ZERO);
         let max_id = scan_tree(&root)?;
         let next_id = match wire.next_id {
             Some(next_id) if next_id.get() <= max_id => {
@@ -101,7 +101,7 @@ fn migrate_machining_to_nominal(root: &mut Container, depth: u32) -> Result<(), 
     walk(root.children_mut(), depth.saturating_add(1))
 }
 
-/// Materializes the default pivot on containers saved before schema 6.
+/// Materializes the legacy default pivot offset on containers saved before schema 6.
 ///
 /// Panels keep their zero default from [`PanelWire`]. The walk is bounded by the same depth limit
 /// as the document tree.
@@ -225,17 +225,17 @@ mod tests {
         assert!(!project.is_component(root));
         assert!(project.is_component(drawer));
         assert_eq!(project.parent_of(drawer), Some(root));
-        assert_eq!(project.pivot(root), Some(Pivot::ZERO));
+        assert_eq!(project.pivot_local(root), Some(PivotLocal::ZERO));
         assert_eq!(
-            project.pivot(drawer),
-            Some(Pivot::new(
+            project.pivot_local(drawer),
+            Some(PivotLocal::new(
                 Length::from_micrometres(250_000),
                 Length::from_micrometres(100_000),
                 Length::from_micrometres(9_000),
             )),
             "an older file materializes the centred container default"
         );
-        assert_eq!(project.pivot(Id::new(3).expect("panel id")), Some(Pivot::ZERO));
+        assert_eq!(project.pivot_local(Id::new(3).expect("panel id")), Some(PivotLocal::ZERO));
         assert!(project.validate().is_ok());
     }
 

@@ -185,17 +185,19 @@ pub(crate) fn lengths_from_millimetres(point: DVec3) -> Option<[Length; 3]> {
     Some([to_length(point.x)?, to_length(point.y)?, to_length(point.z)?])
 }
 
-/// The manipulation pivot of a node, in that node's local frame.
+/// A node's manipulation pivot, as an offset from its origin in the node's local frame.
 ///
-/// The pivot is stored document data rather than a value derived from the current geometry: it is
-/// created once with a sensible default, then moves and turns with the node and survives resizing,
-/// adding or removing children, and save/load. Coordinates are integer micrometres like every other
-/// persisted length; [`Pivot::to_local`] is the geometry-boundary view.
+/// The origin is implicit in [`Placement::translation`]; this value is the point both gizmos act
+/// around and the point a paste or a joint would use. It is stored document data rather than a
+/// value derived from the current geometry: it is created at zero and only `set_pivot` or
+/// `center_pivot` moves it, so a geometry edit never changes it. Coordinates are integer
+/// micrometres like every other persisted length; [`PivotLocal::to_local`] is the geometry-boundary
+/// view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Pivot([Length; 3]);
+pub struct PivotLocal([Length; 3]);
 
-impl Pivot {
+impl PivotLocal {
     /// The local origin.
     pub const ZERO: Self = Self([Length::ZERO; 3]);
 

@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::contour::{Contour, ContourError, MAX_CONTOUR_COORDINATE, Path, PathError};
 use crate::mesh::Mesh;
 use crate::primitive::Primitive;
-use crate::{Id, Pivot, Placement, Properties, PropertyError, PropertyValue};
+use crate::{Id, PivotLocal, Placement, Properties, PropertyError, PropertyValue};
 
 /// Largest number of features in a constructive object.
 pub const MAX_OBJECT_FEATURES: usize = 32;
@@ -347,8 +347,8 @@ pub struct Object {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default)]
-    pivot: Pivot,
+    #[serde(default, alias = "pivot")]
+    pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
     geometry: Geometry,
@@ -357,7 +357,14 @@ pub struct Object {
 impl Object {
     /// Creates an object with a zero pivot.
     pub fn new(id: Id, name: impl Into<String>, placement: Placement, geometry: Geometry) -> Self {
-        Self { id, name: name.into(), placement, pivot: Pivot::ZERO, properties: Properties::new(), geometry }
+        Self {
+            id,
+            name: name.into(),
+            placement,
+            pivot_local: PivotLocal::ZERO,
+            properties: Properties::new(),
+            geometry,
+        }
     }
 
     /// The stable object id.
@@ -376,8 +383,8 @@ impl Object {
     }
 
     /// The manipulation pivot in the object's own frame.
-    pub const fn pivot(&self) -> Pivot {
-        self.pivot
+    pub const fn pivot_local(&self) -> PivotLocal {
+        self.pivot_local
     }
 
     /// The geometry payload.
@@ -401,8 +408,8 @@ impl Object {
     }
 
     /// Replaces the stored manipulation pivot.
-    pub(crate) fn set_pivot(&mut self, pivot: Pivot) {
-        self.pivot = pivot;
+    pub(crate) fn set_pivot(&mut self, pivot_local: PivotLocal) {
+        self.pivot_local = pivot_local;
     }
 
     /// Replaces the stable id when a subtree is copied.
@@ -458,7 +465,7 @@ mod tests {
             fields.remove("pivot");
         }
         let loaded: Object = serde_json::from_value(value).expect("load an older object");
-        assert_eq!(loaded.pivot(), Pivot::ZERO);
+        assert_eq!(loaded.pivot_local(), PivotLocal::ZERO);
         assert_eq!(loaded.geometry(), object.geometry(), "the rest of the object is unchanged");
     }
 

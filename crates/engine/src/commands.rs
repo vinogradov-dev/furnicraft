@@ -130,6 +130,7 @@ static COMMANDS: &[CommandSpec] = &[
     node_cmds::NODE_PLACEMENT_SET_MANY,
     node_cmds::NODE_PIVOT_SET,
     node_cmds::NODE_PIVOT_CENTER,
+    node_cmds::NODE_ORIGIN_REBASE,
     node_cmds::NODE_PROPERTY_SET,
     node_cmds::NODE_PROPERTY_SET_MANY,
     node_cmds::NODE_PROPERTY_CLEAR,
@@ -301,7 +302,7 @@ mod tests {
         let placement_world_zero =
             registry.get("node.placement.world_zero").expect("node.placement.world_zero is registered");
         assert_eq!(placement_world_zero.id(), "node.placement.world_zero");
-        assert_eq!(placement_world_zero.label().text(Lang::En), "Zero translation");
+        assert_eq!(placement_world_zero.label().text(Lang::En), "Place at world zero");
         let placement_many = registry.get("node.placement.set_many").expect("node.placement.set_many is registered");
         assert_eq!(placement_many.id(), "node.placement.set_many");
         assert_eq!(placement_many.label().text(Lang::En), "Place selection");
@@ -311,6 +312,9 @@ mod tests {
         let pivot_center = registry.get("node.pivot.center").expect("node.pivot.center is registered");
         assert_eq!(pivot_center.id(), "node.pivot.center");
         assert_eq!(pivot_center.label().text(Lang::En), "Center pivot");
+        let origin_rebase = registry.get("node.origin.rebase").expect("node.origin.rebase is registered");
+        assert_eq!(origin_rebase.id(), "node.origin.rebase");
+        assert_eq!(origin_rebase.label().text(Lang::En), "Rebase origin");
         let property_set = registry.get("node.property.set").expect("node.property.set is registered");
         assert_eq!(property_set.id(), "node.property.set");
         assert_eq!(property_set.label().text(Lang::En), "Set property");
@@ -341,7 +345,7 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label().text(Lang::En), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 51);
+        assert_eq!(registry.specs().len(), 52);
     }
 
     #[test]

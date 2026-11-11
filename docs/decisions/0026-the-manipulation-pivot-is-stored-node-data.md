@@ -1,6 +1,6 @@
 # 0026. The manipulation pivot is stored, editable node data
 
-- Status: Accepted; supersedes 0025
+- Status: Accepted; supersedes 0025; refined by 0088
 - Date: 2026-10-27
 
 ## Context
@@ -80,3 +80,15 @@ creation path.
 - `crates/model` (`Pivot`, `Project::pivot`, `Project::set_node_pivot`,
   `Project::center_node_pivot`), `crates/engine/src/node_cmds.rs`,
   `crates/ui/src/pivot_card.rs`.
+
+## Amendment: origin and pivot are separate (2026-11-11)
+
+[0088](0088-origin-and-pivot-are-different-points.md) settles the vocabulary. The stored value is
+`PivotLocal`, an exact offset from the node's origin; the serialized field is `pivot_local` from
+schema 20 (a schema 19 `pivot` is read through a serde alias). The origin is implicit in
+`Placement::translation`; it is not a second field. A creation writes the anchor into the
+translation and leaves the pivot at zero. A later move or turn never changes `pivot_local`, and a
+general `rebase_origin` carries the pivot with `pivot_local_new = pivot_local_old - anchor` so
+`pivot_world` stays fixed. A panel remains the exception: its pivot is derived and always zero.
+The old schema-6 materialized container centre stays a legacy `pivot_local`; the migration does not
+re-anchor it.

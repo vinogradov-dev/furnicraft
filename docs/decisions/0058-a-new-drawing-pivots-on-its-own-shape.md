@@ -1,6 +1,6 @@
 # 0058. A new drawing pivots on its own shape
 
-- Status: Superseded by 0082
+- Status: Superseded by 0082; vocabulary settled by 0088
 - Date: 2026-11-05
 
 ## Context
@@ -45,3 +45,9 @@ pivot starts at zero. The user-visible grab point is unchanged; what changed is 
 translation names it and the pivot carries no hidden copy of it. Every creation path now passes
 `Pivot::ZERO`, and `Project::add_object_with_pivot` exists only for the frame rule to hand back the
 zero pivot it returns.
+
+## Vocabulary note (2026-11-11)
+
+The point this record stored as a creation pivot is now the node's **origin**, written into the
+translation by ADR 0082, and the offset is `PivotLocal` (ADR 0088). A creation passes a zero pivot;
+the readable creation anchor is the origin.

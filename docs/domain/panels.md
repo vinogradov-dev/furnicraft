@@ -51,8 +51,9 @@ Panel material and edge-banding material are described in [Materials and catalog
   nominal rectangle; for a contour panel it is the minimum corner of the stored ring, and the ring's
   bounds are the nominal size.
 - An outline edit may move a contour ring's minimum corner. The command then re-anchors the ring at
-  the panel zero and moves the placement, pivot and machining by the inverse offset, so the
-  world-space shape and every feature stay where the user drew them.
+  the panel zero and moves the placement (the origin) and machining by the inverse offset, so the
+  world-space shape and every feature stay where the user drew them; the pivot is derived and stays
+  zero ([0088](../decisions/0088-origin-and-pivot-are-different-points.md)).
 - `Placement` anchors this nominal zero. Included bottom and left banding move the core inward, not
   the whole panel outward; non-included banding may extend outside the nominal rectangle, and bounds
   are computed from every part of the group.
@@ -342,8 +343,9 @@ All changes are `engine` commands with stable ids and typed parameters. The UI n
 - `panel.resize` — panel, nominal length, nominal width. A contour panel is refused: its ring sets the
   size.
 - `panel.outline.set` — a contour panel and a new ring. The ring is anchored at the panel zero and its
-  bounds become the nominal size; the placement, pivot and machining move with the frame so the world
-  shape stays fixed, and an edit that drops a banded segment is refused.
+  bounds become the nominal size; the placement (the origin) and machining move with the frame so the
+  world shape stays fixed, the derived pivot stays zero, and an edit that drops a banded segment is
+  refused.
 - `panel.material.set` — panel, material.
 - `panel.machining.add` — panel, anchor and tagged parameters. Allocates a `MachiningId` and appends
   the record. A cutout must use a face anchor.
@@ -423,8 +425,8 @@ At minimum:
 - ring banding has one record per segment, editing it keeps its place, and clearing it returns the
   segment to the add picker;
 - an outline edit that drops a banded segment is refused and leaves the panel unchanged;
-- an outline edit that moves the minimum corner keeps the world shape, the pivot and the machining in
-  place;
+- an outline edit that moves the minimum corner keeps the world shape and the machining in place and
+  leaves the derived pivot at zero;
 - a ring-banding material missing from the catalogue is a diagnostic, not a load error;
 - a rectangle, a shaped panel and a contour ring take the same cutout validation and core trace;
 - a through contour cutout may touch or cross the core edge and open a notch, while a blind contour

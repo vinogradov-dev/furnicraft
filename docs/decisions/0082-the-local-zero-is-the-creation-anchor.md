@@ -1,6 +1,6 @@
 # 0082. The local zero is the creation anchor
 
-- Status: Accepted
+- Status: Accepted; refined by 0088
 - Date: 2026-11-10
 
 ## Context
@@ -50,3 +50,13 @@ so a new content kind cannot invent a fourth answer.
 The cost is that a shell must convert a world placement into the parent's frame before it dispatches
 a creation. That conversion is `Placement::inverse`, applied at the one place the shell owns, and a
 command that receives it can be tested without a window.
+
+## Amendment: the anchor is an origin (2026-11-11)
+
+[0088](0088-origin-and-pivot-are-different-points.md) names the value this record moves. The
+creation anchor is the node's **origin**, implicit in `Placement::translation`; it is not a pivot.
+`FrameAnchor::CreationPivot`, `Path::creation_pivot`, `Contour::creation_pivot` and
+`Project::add_object_with_pivot` became `CreationOrigin`, `creation_origin`,
+`rebase_origin_at` and `add_object`. A creation still leaves `PivotLocal::ZERO`. A later
+`rebase_origin` is the general operation; unlike creation it carries an authored pivot so
+`pivot_world` does not move.
