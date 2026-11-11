@@ -11,6 +11,7 @@ use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::scene_cmds::{CAMERA_PROJECTION_SET_ID, SCENE_ACTIVE_CAMERA_SET_ID};
 use furnicraft_engine::{CameraProjectionSet, NodeRename, SceneActiveCameraSet, Session};
 use furnicraft_model::{CameraProjection, Id};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
@@ -66,17 +67,18 @@ impl CameraCard {
             return;
         };
 
+        let lang = crate::language(ui.ctx());
         let mut rename = None;
         let mut name_error = None;
         ui.separator();
-        section(ui, "camera.name", "Name", true, |ui| {
+        section(ui, "camera.name", Message::SectionName.text(lang), true, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(TextEdit::singleline(&mut draft.name).desired_width(180.0));
-                let clicked = ui.button("Rename").clicked();
+                let clicked = ui.button(Message::CmdRename.text(lang)).clicked();
                 if response.lost_focus() || clicked {
                     let trimmed = draft.name.trim();
                     if trimmed.is_empty() {
-                        name_error = Some("Camera name must not be empty.".to_owned());
+                        name_error = Some(Message::CameraNameEmpty.text(lang).to_owned());
                     } else if trimmed != name {
                         rename = Some(trimmed.to_owned());
                     }
@@ -86,29 +88,32 @@ impl CameraCard {
 
         let mut apply = false;
         ui.separator();
-        section(ui, "camera.projection", "Projection", true, |ui| {
+        section(ui, "camera.projection", Message::SectionProjection.text(lang), true, |ui| {
             ui.horizontal(|ui| {
-                ui.radio_value(&mut draft.perspective, true, "Perspective");
-                ui.radio_value(&mut draft.perspective, false, "Orthographic");
+                ui.radio_value(&mut draft.perspective, true, Message::Perspective.text(lang));
+                ui.radio_value(&mut draft.perspective, false, Message::Orthographic.text(lang));
             });
             if draft.perspective {
                 ui.horizontal(|ui| {
-                    ui.label("Field of view");
+                    ui.label(Message::FieldOfView.text(lang));
                     ui.add(TextEdit::singleline(&mut draft.fov).desired_width(96.0).hint_text("50°"));
                 });
-                ui.label(format!(
-                    "Between {} and {}.",
-                    CameraProjectionBounds::MIN_FOV,
-                    CameraProjectionBounds::MAX_FOV
-                ));
+                ui.label(
+                    Message::BetweenRange
+                        .with(lang, [CameraProjectionBounds::MIN_FOV, CameraProjectionBounds::MAX_FOV]),
+                );
             } else {
                 ui.horizontal(|ui| {
-                    ui.label("Height");
-                    ui.add(TextEdit::singleline(&mut draft.height).desired_width(96.0).hint_text("2000 mm"));
+                    ui.label(Message::FieldHeight.text(lang));
+                    ui.add(
+                        TextEdit::singleline(&mut draft.height)
+                            .desired_width(96.0)
+                            .hint_text(Message::CameraHeightHint.text(lang)),
+                    );
                 });
-                ui.label(format!("Positive and at most {}.", CameraProjectionBounds::MAX_HEIGHT));
+                ui.label(Message::PositiveAtMost.with(lang, [CameraProjectionBounds::MAX_HEIGHT]));
             }
-            if ui.button("Apply projection").clicked() {
+            if ui.button(Message::ApplyProjection.text(lang)).clicked() {
                 apply = true;
             }
         });
@@ -131,7 +136,7 @@ impl CameraCard {
             return;
         }
         if apply {
-            match projection_from_draft(&fields).and_then(|next| apply_projection(session, camera_id, next)) {
+            match projection_from_draft(&fields, lang).and_then(|next| apply_projection(session, camera_id, next)) {
                 Ok(()) => {
                     self.error = None;
                     self.draft = None;
@@ -144,8 +149,8 @@ impl CameraCard {
 
         let mut active = session.project().active_camera() == Some(camera_id);
         ui.separator();
-        section(ui, "camera.active", "Render view", true, |ui| {
-            if ui.checkbox(&mut active, "Render the scene from this camera").changed() {
+        section(ui, "camera.active", Message::SectionRenderView.text(lang), true, |ui| {
+            if ui.checkbox(&mut active, Message::RenderFromCamera.text(lang)).changed() {
                 let request = SceneActiveCameraSet { camera: active.then_some(camera_id) };
                 if let Err(error) = set_active_camera(session, request) {
                     self.error = Some(error);
@@ -166,27 +171,22 @@ impl CameraProjectionBounds {
 }
 
 /// Reads the draft text into a projection, refusing text that is not a number or is outside range.
-fn projection_from_draft(draft: &Draft) -> Result<CameraProjection, String> {
+fn projection_from_draft(draft: &Draft, lang: Lang) -> Result<CameraProjection, String> {
     if draft.perspective {
-        let fov_y = Degrees::parse_degrees(&draft.fov).map_err(|error| format!("Field of view: {error}."))?;
+        let fov_y = Degrees::parse_degrees(&draft.fov)
+            .map_err(|error| Message::FieldOfViewError.with(lang, [crate::degrees_error(error).text(lang)]))?;
         let projection = CameraProjection::Perspective { fov_y };
         if !projection.is_valid() {
-            return Err(format!(
-                "Field of view must be between {} and {}.",
-                CameraProjectionBounds::MIN_FOV,
-                CameraProjectionBounds::MAX_FOV
-            ));
+            return Err(Message::FovMustBeBetween
+                .with(lang, [CameraProjectionBounds::MIN_FOV, CameraProjectionBounds::MAX_FOV]));
         }
         Ok(projection)
     } else {
-        let height =
-            Length::parse_millimetres(&draft.height).map_err(|error| format!("Orthographic height: {error}."))?;
+        let height = Length::parse_millimetres(&draft.height)
+            .map_err(|error| Message::OrthoHeightError.with(lang, [crate::length_error(error).text(lang)]))?;
         let projection = CameraProjection::Orthographic { height };
         if !projection.is_valid() {
-            return Err(format!(
-                "Orthographic height must be positive and at most {}.",
-                CameraProjectionBounds::MAX_HEIGHT
-            ));
+            return Err(Message::OrthoHeightPositiveAtMost.with(lang, [CameraProjectionBounds::MAX_HEIGHT]));
         }
         Ok(projection)
     }
@@ -239,7 +239,7 @@ mod tests {
         let draft = Draft::new(camera, "Camera", CameraProjection::DEFAULT);
         assert!(draft.perspective);
         assert_eq!(draft.fov, "50°");
-        assert_eq!(projection_from_draft(&draft), Ok(CameraProjection::DEFAULT));
+        assert_eq!(projection_from_draft(&draft, Lang::En), Ok(CameraProjection::DEFAULT));
 
         let draft = Draft {
             camera,
@@ -250,7 +250,7 @@ mod tests {
             height: "2000 mm".to_owned(),
         };
         assert_eq!(
-            projection_from_draft(&draft),
+            projection_from_draft(&draft, Lang::En),
             Ok(CameraProjection::Orthographic { height: Length::from_millimetres(2_000).expect("height") })
         );
     }
@@ -267,12 +267,12 @@ mod tests {
             fov: "wide".to_owned(),
             height: String::new(),
         };
-        assert!(projection_from_draft(&bad).is_err());
+        assert!(projection_from_draft(&bad, Lang::En).is_err());
 
         let outside = Draft { fov: "0°".to_owned(), ..bad.clone() };
-        assert!(projection_from_draft(&outside).is_err());
+        assert!(projection_from_draft(&outside, Lang::En).is_err());
         let zero_height = Draft { perspective: false, height: "0 mm".to_owned(), ..bad };
-        assert!(projection_from_draft(&zero_height).is_err());
+        assert!(projection_from_draft(&zero_height, Lang::En).is_err());
         assert_eq!(session.project().revision(), before);
     }
 

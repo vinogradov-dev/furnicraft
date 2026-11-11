@@ -371,7 +371,7 @@ impl ContourGizmo {
                                 action = Some(NumericAction::Restore(entry.grip, start));
                             }
                         } else if enter {
-                            match entry.kind.parse(&entry.text) {
+                            match entry.kind.parse(&entry.text, furnicraft_ui::language(ui.ctx())) {
                                 Ok(value) => {
                                     action = if let Some(motion) = entry.motion {
                                         Some(NumericAction::ApplyAlong(entry.grip, value, motion))

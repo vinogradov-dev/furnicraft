@@ -351,8 +351,8 @@ impl Document {
     }
 
     /// The refusal a destructive palette command gets while the primary selection is locked.
-    pub(crate) fn locked_command_refusal(&self, id: &str) -> Option<String> {
-        locked_command_refusal(&self.editor, self.session.project(), id)
+    pub(crate) fn locked_command_refusal(&self, id: &str, lang: Lang) -> Option<String> {
+        locked_command_refusal(&self.editor, self.session.project(), id, lang)
     }
 
     /// The save the header's button and `Ctrl+S` ask for: the current path, or the path dialog.
@@ -1750,12 +1750,12 @@ fn locked_change<'a>(project: &'a Project, commit: &PlacementCommit, editor: &Ed
 ///
 /// `id` is the stable command id the palette (or a future CLI) would dispatch; anything outside the
 /// destructive set runs untouched.
-fn locked_command_refusal(editor: &Editor, project: &Project, id: &str) -> Option<String> {
+fn locked_command_refusal(editor: &Editor, project: &Project, id: &str, lang: Lang) -> Option<String> {
     if !DESTRUCTIVE_COMMANDS.contains(&id) {
         return None;
     }
     let primary = editor.selected_node()?;
-    editor.locked_refusal(project, primary)
+    editor.locked_refusal(project, primary, lang)
 }
 
 /// Whether the viewport owns its view.

@@ -17,6 +17,7 @@ use furnicraft_engine::node_cmds::{
 };
 use furnicraft_engine::{NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeUngroup, Session};
 use furnicraft_model::Id;
+use furnicraft_text::Message;
 
 use super::Editor;
 use crate::command::{dispatch, json};
@@ -47,7 +48,7 @@ impl Editor {
         }
         self.error = None;
         for action in actions {
-            if let Err(error) = self.run_action(session, action) {
+            if let Err(error) = self.run_action(session, action, crate::language(ui.ctx())) {
                 self.error = Some(error);
                 break;
             }
@@ -60,7 +61,7 @@ impl Editor {
         self.retain_mesh_edit(session.project());
         self.retain_contour_edit(session.project());
         let Some(primary) = self.selection.primary() else {
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(crate::language(ui.ctx())));
             return;
         };
         if session.project().parent_of(primary).is_some() {
@@ -113,12 +114,17 @@ impl Editor {
                 self.arm_creation(session.project(), primary);
             }
         } else {
-            ui.label("Select a node in the scene tree.");
+            ui.label(Message::SelectNodeInTree.text(crate::language(ui.ctx())));
         }
         self.properties_card.show(ui, session, primary);
     }
 
-    pub(super) fn run_action(&mut self, session: &mut Session, action: TreeAction) -> Result<(), String> {
+    pub(super) fn run_action(
+        &mut self,
+        session: &mut Session,
+        action: TreeAction,
+        lang: crate::Lang,
+    ) -> Result<(), String> {
         // A locked node refuses every edit that removes or restructures it. The guard is checked
         // before the dispatch, because it is a guard on a gesture and not a document rule
         // (ADR 0065).
@@ -130,7 +136,7 @@ impl Editor {
             _ => &[],
         };
         for node in targets {
-            if let Some(refusal) = self.locked_refusal(session.project(), *node) {
+            if let Some(refusal) = self.locked_refusal(session.project(), *node, lang) {
                 return Err(refusal);
             }
         }
@@ -152,7 +158,7 @@ impl Editor {
                 self.after_node_removed(session, parent);
             }
             TreeAction::Group { nodes } => {
-                let params = json(&NodeGroup { nodes, name: "Group".to_owned() })?;
+                let params = json(&NodeGroup { nodes, name: Message::GeneratedGroup.text(lang).to_owned() })?;
                 let outcome = dispatch(session, NODE_GROUP_ID, &params)?;
                 if let Some(id) = outcome.created_id() {
                     self.selection.replace(id);

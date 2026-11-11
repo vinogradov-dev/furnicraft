@@ -11,6 +11,7 @@
 //! Changes when: a flag is added, or a surface needs another question answered about it.
 
 use furnicraft_model::{Id, Project};
+use furnicraft_text::{Lang, Message};
 
 use super::Editor;
 use crate::view_flags::ViewFlags;
@@ -60,12 +61,12 @@ impl Editor {
     }
 
     /// The sentence a refused edit says, when the node is locked.
-    pub fn locked_refusal(&self, project: &Project, node: Id) -> Option<String> {
+    pub fn locked_refusal(&self, project: &Project, node: Id, lang: Lang) -> Option<String> {
         if !self.flags.is_locked(node) {
             return None;
         }
-        let name = project.node(node).map(furnicraft_model::Node::name).unwrap_or("The node");
-        Some(format!("{name} is locked. Unlock it in the scene tree to change it."))
+        let name = project.node(node).map(furnicraft_model::Node::name).unwrap_or(Message::TheNode.text(lang));
+        Some(Message::LockedNode.with(lang, [name]))
     }
 
     /// Drops flags for nodes that no longer exist, like the open set.

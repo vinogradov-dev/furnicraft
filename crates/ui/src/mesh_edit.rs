@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 
 use furnicraft_model::{Id, Mesh, Project};
+use furnicraft_text::Message;
 
 /// Which mesh element a sub-object click selects.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,10 +28,10 @@ pub enum MeshElement {
 
 impl MeshElement {
     /// A singular noun for status text.
-    pub const fn noun(self) -> &'static str {
+    pub const fn noun(self) -> Message {
         match self {
-            Self::Vertex => "vertex",
-            Self::Face => "face",
+            Self::Vertex => Message::MeshVertexNoun,
+            Self::Face => Message::MeshFaceNoun,
         }
     }
 }

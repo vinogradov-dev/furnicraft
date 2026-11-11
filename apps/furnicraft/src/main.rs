@@ -475,7 +475,7 @@ impl FurniCraftApp {
         };
         // A locked node refuses a destructive command here, before the dispatch: the lock is a
         // guard on a gesture, so it never becomes a document rule (ADR 0065).
-        if let Some(refusal) = tabs.active().locked_command_refusal(&id) {
+        if let Some(refusal) = tabs.active().locked_command_refusal(&id, furnicraft_ui::language(ui.ctx())) {
             tabs.active_mut().last_error = Some(refusal);
             return;
         }

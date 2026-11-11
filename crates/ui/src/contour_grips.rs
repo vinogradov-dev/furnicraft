@@ -13,6 +13,7 @@ use furnicraft_model::{
     ArcFrame, CircleFrame, ContourEditError, ContourSegment, ContourSegmentId, CornerMove, PathCorner, PathShape,
     PolygonFrame, RectangleFrame,
 };
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::{Degrees, Length, LengthParseError};
 
 use crate::ContourDraft;
@@ -62,14 +63,16 @@ pub enum GripValue {
 
 impl GripNumber {
     /// Parses the typed text as this kind of number.
-    pub fn parse(self, text: &str) -> Result<GripValue, String> {
+    pub fn parse(self, text: &str, lang: Lang) -> Result<GripValue, String> {
         match self {
-            Self::Length => Length::parse_millimetres(text)
-                .map(GripValue::Length)
-                .map_err(|error: LengthParseError| format!("Not a length: {error}")),
-            Self::Angle => {
-                Degrees::parse_degrees(text).map(GripValue::Angle).map_err(|error| format!("Not an angle: {error}"))
+            Self::Length => {
+                Length::parse_millimetres(text).map(GripValue::Length).map_err(|error: LengthParseError| {
+                    Message::NotALength.with(lang, [crate::length_error(error).text(lang)])
+                })
             }
+            Self::Angle => Degrees::parse_degrees(text)
+                .map(GripValue::Angle)
+                .map_err(|error| Message::NotAnAngle.with(lang, [crate::degrees_error(error).text(lang)])),
         }
     }
 }
@@ -680,10 +683,10 @@ mod tests {
         let Some(GripNumber::Length) = draft.grip_number(grip) else {
             panic!("a quadrant takes a length");
         };
-        let parsed = GripNumber::Length.parse("60 mm").expect("a typed radius");
+        let parsed = GripNumber::Length.parse("60 mm", Lang::En).expect("a typed radius");
         draft.set_grip_value(grip, parsed).expect("apply the radius");
         assert_eq!(draft.grip_value(ContourGrip::CircleQuadrant(0)), Some(GripValue::Length(millimetres(60))));
-        assert!(GripNumber::Length.parse("nope").is_err(), "a bad number is refused");
+        assert!(GripNumber::Length.parse("nope", Lang::En).is_err(), "a bad number is refused");
     }
 
     #[test]

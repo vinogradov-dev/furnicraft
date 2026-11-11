@@ -17,6 +17,312 @@ messages! {
 
 
 
+
+
+
+    // ── Machining ───────────────────────────────────────────────────────────
+    NoMachining = ["No machining.", "Обработок нет."],
+    MachiningCutout = ["Cutout", "Вырез"],
+    MachiningCategoryCut = ["Cut", "Вырезание"],
+    ShowHideOperation = ["Show or hide this operation", "Показать или скрыть операцию"],
+    MoveEarlier = ["Move earlier", "Переместить раньше"],
+    MoveLater = ["Move later", "Переместить позже"],
+    RemoveOperation = ["Remove operation", "Удалить операцию"],
+    AddOperation = ["Add operation", "Добавить операцию"],
+    FaceWith = ["Face {}", "Грань {}"],
+    EdgeWith = ["Edge {}", "Кромка {}"],
+    AnchorWith = ["Anchor  {}", "Привязка: {}"],
+    Entry = ["Entry", "Вход"],
+    Through = ["Through", "Насквозь"],
+    Blind = ["Blind", "Глухой"],
+    CutoutReshapeHint = [
+        "Reshapes this ring in the viewport. Undo restores the stored ring.",
+        "Изменяет это кольцо в области просмотра. Отмена вернёт сохранённое кольцо."
+    ],
+    ArcSuffixOne = [" · {} arc", " · {} дуга"],
+    ArcSuffixFew = [" · {} arcs", " · {} дуги"],
+    ArcSuffixMany = [" · {} arcs", " · {} дуг"],
+    Depth = ["Depth", "Глубина"],
+    NotALength = ["Not a length: {}", "Не длина: {}"],
+    NotAnAngle = ["Not an angle: {}", "Не угол: {}"],
+
+    // ── Object card ─────────────────────────────────────────────────────────
+    ObjectNameEmpty = ["Object name must not be empty.", "Имя объекта не должно быть пустым."],
+    SectionGeometry = ["Geometry", "Геометрия"],
+    VerticesCount = ["Vertices  {}", "Вершин: {}"],
+    FacesCount = ["Faces  {}", "Граней: {}"],
+    PrimitiveSourceTruth = [
+        "The parameters are the source of truth; the mesh is derived.",
+        "Параметры — источник истины; сетка выводится из них."
+    ],
+    ContourSegmentsCount = ["Contour segments  {}", "Сегментов контура: {}"],
+    HeightRow = ["Height  {}", "Высота: {}"],
+    ContourSourceTruth = [
+        "The contour and height are the source of truth; the mesh is derived.",
+        "Контур и высота — источник истины; сетка выводится из них."
+    ],
+    PathSegmentsCount = ["Path segments  {}", "Сегментов пути: {}"],
+    ClosedChain = ["Closed chain", "Замкнутая цепь"],
+    OpenChain = ["Open chain", "Разомкнутая цепь"],
+    PathSourceTruth = ["The drawing is the source of truth; it has no mesh yet.", "Чертёж — источник истины; сетки пока нет."],
+    MeshSourceTruth = ["Editable as a mesh; undo is its only history.", "Редактируется как сетка; история — только отмена."],
+    SectionFigure = ["Figure", "Фигура"],
+    FieldRadius = ["Radius", "Радиус"],
+    FieldWidth = ["Width", "Ширина"],
+    FieldEndAngle = ["End angle", "Конечный угол"],
+    ApplyFigure = ["Apply figure", "Применить фигуру"],
+    FigureEditingInViewport = [
+        "Editing the figure in the viewport; finish or cancel it first.",
+        "Фигура редактируется в области просмотра; сначала завершите или отмените."
+    ],
+    SectionParameters = ["Parameters", "Параметры"],
+    PrimitiveEditHint = ["{} — edit the parameters and apply.", "{} — измените параметры и примените."],
+    PrimitiveRefused = ["The primitive was refused: {}", "Примитив отклонён: {}"],
+    FigureRefused = ["The figure was refused: {}", "Фигура отклонена: {}"],
+    FieldEdge = ["Edge", "Ребро"],
+    FieldBands = ["Bands", "Полосы"],
+    SectionMeshEditing = ["Mesh editing", "Редактирование сетки"],
+    CollapseBeforeEditing = [
+        "Collapse the object to a mesh before editing its elements.",
+        "Сверните объект в сетку, прежде чем редактировать элементы."
+    ],
+    PathHasNoMesh = ["A path object has no mesh; its drawing is the source of truth.", "У объекта-пути нет сетки; источник истины — чертёж."],
+    EditMesh = ["Edit mesh", "Редактировать сетку"],
+    VerticesPlural = ["Vertices", "Вершины"],
+    FacesPlural = ["Faces", "Грани"],
+    SelectSingleObjectMesh = ["Select only this object to edit its mesh.", "Выберите только этот объект, чтобы редактировать его сетку."],
+    SelectedVerticesCount = ["Selected vertices  {}", "Выбрано вершин: {}"],
+    MoreCountOne = ["… and {} more", "… и ещё {}"],
+    MoreCountFew = ["… and {} more", "… и ещё {}"],
+    MoreCountMany = ["… and {} more", "… и ещё {}"],
+    ClickVertexHint = [
+        "Click a vertex in the viewport; Shift or Ctrl adds it to the selection.",
+        "Щёлкните вершину в области просмотра; Shift или Ctrl добавит её к выделению."
+    ],
+    SelectedFacesCount = ["Selected faces  {}", "Выбрано граней: {}"],
+    ClickFaceHint = [
+        "Click a face in the viewport; Shift or Ctrl adds it to the selection.",
+        "Щёлкните грань в области просмотра; Shift или Ctrl добавит её к выделению."
+    ],
+    SectionContourEditing = ["Contour editing", "Редактирование контура"],
+    ObjectContourEditingInViewport = [
+        "Editing the contour in the viewport. Apply or cancel in the viewport toolbar.",
+        "Контур редактируется в области просмотра. Примените или отмените на панели инструментов области просмотра."
+    ],
+    SelectSingleObjectContour = ["Select only this object to edit its contour.", "Выберите только этот объект, чтобы редактировать его контур."],
+    DragCornersHint = ["Drag corners in the viewport; double-click a side to split it.", "Перетаскивайте углы в области просмотра; двойной щелчок по стороне делит её."],
+    SectionContour = ["Contour", "Контур"],
+    ContourHasArcs = [
+        "This contour has arcs; corners cannot describe it, so the text editor is off.",
+        "В этом контуре есть дуги; углы не описывают его, поэтому текстовый редактор отключён."
+    ],
+    ContourTextHint = ["{} points; one per line as `X, Y` in millimetres.", "{} точек; по одной в строке в виде `X, Y` в миллиметрах."],
+    ApplyContour = ["Apply contour", "Применить контур"],
+    SectionCollapse = ["Collapse", "Свернуть"],
+    SelectSingleObjectCollapse = ["Select only this object to collapse it.", "Выберите только этот объект, чтобы свернуть его."],
+    CollapseWarning = [
+        "Baking the parameters into a mesh deletes them as parameters. Undo is the only way back.",
+        "Превращение параметров в сетку удаляет их как параметры. Вернуть можно только отменой."
+    ],
+    CollapseToMesh = ["Collapse to mesh", "Свернуть в сетку"],
+    CollapseToMeshEllipsis = ["Collapse to mesh…", "Свернуть в сетку…"],
+    LineExpectedPoint = ["Line {}: expected `X, Y` in millimetres.", "Строка {}: ожидается `X, Y` в миллиметрах."],
+    LineWithError = ["Line {}: {}.", "Строка {}: {}."],
+    SidesWholeNumber = ["The sides must be a whole number", "Число сторон должно быть целым"],
+    SidesRange = ["The sides must be between {} and {}.", "Число сторон должно быть от {} до {}."],
+    CountWholeNumber = ["The {} must be a whole number", "{} должно быть целым числом"],
+    LengthFieldError = ["The {}: {}.", "{}: {}."],
+    EndAngleError = ["The end angle: {}.", "Конечный угол: {}."],
+    PrimitiveBadgeMesh = ["Mesh", "Сетка"],
+    PrimitiveBadgePrimitive = ["Primitive", "Примитив"],
+    PrimitiveBadgeConstructive = ["Constructive", "Конструктив"],
+    PrimitiveBadgePath = ["Path", "Путь"],
+
+    // ── Panel card ──────────────────────────────────────────────────────────
+    PanelEditingInViewport = [
+        "Editing in the viewport. Apply or cancel in the viewport toolbar.",
+        "Редактирование в области просмотра. Примените или отмените на панели инструментов области просмотра."
+    ],
+    PanelFinishContour = [
+        "Finish the current contour edit in the viewport first.",
+        "Сначала завершите текущее редактирование контура в области просмотра."
+    ],
+    PanelSelectSingle = [
+        "Select only this panel to edit its contour.",
+        "Выберите только эту панель, чтобы редактировать её контур."
+    ],
+    PanelEditContour = ["Edit contour", "Редактировать контур"],
+    CornerNone = ["None", "Нет"],
+    CornerRadius = ["Radius", "Радиус"],
+    CornerChamfer = ["Chamfer", "Фаска"],
+    PanelNameEmpty = ["Panel name must not be empty.", "Имя панели не должно быть пустым."],
+    SectionDimensions = ["Dimensions", "Размеры"],
+    SectionNominalSize = ["Nominal size", "Номинальный размер"],
+    PanelContourSetsSize = [
+        "The contour ring sets the length and width.",
+        "Длину и ширину задаёт контурное кольцо."
+    ],
+    Length = ["Length", "Длина"],
+    Width = ["Width", "Ширина"],
+    ApplySize = ["Apply size", "Применить размер"],
+    LengthField = ["Length: {}", "Длина: {}"],
+    WidthField = ["Width: {}", "Ширина: {}"],
+    SectionResolved = ["Resolved", "Расчётные"],
+    SectionMaterial = ["Material", "Материал"],
+    SectionShape = ["Shape", "Форма"],
+    SectionBanding = ["Banding", "Кромка"],
+    SectionMachining = ["Machining", "Обработка"],
+    SectionDiagnostics = ["Diagnostics", "Диагностика"],
+    PanelMaterialMissingCatalogue = [
+        "Panel material {} is missing from the catalogue.",
+        "Материал панели {} отсутствует в каталоге."
+    ],
+    MissingMaterial = ["Missing material {}", "Материал {} отсутствует"],
+    NoMaterial = ["No material", "Нет материала"],
+    SectionOutline = ["Outline", "Контур"],
+    PanelContourRingOne = ["Contour ring · {} segment", "Контурное кольцо · {} сегмент"],
+    PanelContourRingFew = ["Contour ring · {} segments", "Контурное кольцо · {} сегмента"],
+    PanelContourRingMany = ["Contour ring · {} segments", "Контурное кольцо · {} сегментов"],
+    ArcsCount = ["Arcs  {}", "Дуги: {}"],
+    BakeOutlineHint = [
+        "Bakes the outline into a ring. Corners, chamfers and bows become segments; undo restores them.",
+        "Преобразует контур в кольцо. Углы, фаски и прогибы становятся сегментами; отмена вернёт их."
+    ],
+    ContourReshapeHint = [
+        "Reshapes the ring in the viewport. Undo restores it.",
+        "Изменяет кольцо в области просмотра. Отмена вернёт прежнее."
+    ],
+    SectionBowedEdges = ["Bowed edges", "Изогнутые кромки"],
+    CornerWith = ["Corner {}", "Угол {}"],
+    Inward = ["in", "внутрь"],
+    Outward = ["out", "наружу"],
+    Clear = ["Clear", "Очистить"],
+    NoBanding = ["No banding.", "Кромок нет."],
+    AddChamferOrRadius = [
+        "Add a chamfer or radius to band a segment.",
+        "Добавьте фаску или радиус, чтобы оклеить сегмент."
+    ],
+    AllSegmentsBanded = ["All existing segments are banded.", "Все существующие сегменты оклеены."],
+    AddEdgeMaterial = [
+        "Add an edge material to the catalogue first.",
+        "Сначала добавьте материал кромки в каталог."
+    ],
+    AddBanding = ["Add banding", "Добавить кромку"],
+    ChooseSegment = ["Choose a segment", "Выберите сегмент"],
+    MachiningIssueOne = ["1 machining issue is shown with its operation.", "1 замечание по обработке показано у операции."],
+    MachiningIssueFew = ["{} machining issues are shown with their operations.", "{} замечания по обработке показаны у операций."],
+    MachiningIssueMany = ["{} machining issues are shown with their operations.", "{} замечаний по обработке показаны у операций."],
+    NoIssues = ["No issues.", "Замечаний нет."],
+    ThicknessRow = ["Thickness  {}", "Толщина: {}"],
+    CoreRow = ["Core  {} × {}", "Сердцевина: {} × {}"],
+    OverallRow = ["Overall  {} × {}", "Габарит: {} × {}"],
+    GeometryError = ["Geometry: {}", "Геометрия: {}"],
+    EdgeBottom = ["Bottom", "Нижняя"],
+    EdgeRight = ["Right", "Правая"],
+    EdgeTop = ["Top", "Верхняя"],
+    EdgeLeft = ["Left", "Левая"],
+    EdgeGeneric = ["Edge", "Кромка"],
+    DiagNoMaterial = ["No panel material is assigned.", "Материал панели не назначен."],
+    DiagPanelMaterialMissing = [
+        "Panel material {} is missing from the catalogue.",
+        "Материал панели {} отсутствует в каталоге."
+    ],
+    DiagEdgeMaterialMissing = [
+        "Edge {} uses missing edge material {}.",
+        "Кромка {} использует отсутствующий материал {}."
+    ],
+    DiagCornerMaterialMissing = [
+        "Corner {} uses missing edge material {}.",
+        "Угол {} использует отсутствующий материал {}."
+    ],
+    DiagSegmentMaterialMissing = [
+        "Segment {} uses missing edge material {}.",
+        "Сегмент {} использует отсутствующий материал {}."
+    ],
+    DiagNonPositiveCore = ["The panel core is not positive.", "Сердцевина панели не положительна."],
+    DiagInvalidOutline = [
+        "The panel outline or its edge banding does not form a valid contour.",
+        "Контур панели или его кромка не образуют допустимый контур."
+    ],
+    DiagMachiningOutsideCore = ["Machining {} lies outside the core.", "Обработка {} выходит за сердцевину."],
+    DiagCoreRemoved = ["The cutouts remove the whole panel core.", "Вырезы удаляют всю сердцевину панели."],
+    DiagCoreDisconnected = [
+        "The cutouts split the panel core into disconnected pieces.",
+        "Вырезы разделяют сердцевину панели на несвязанные части."
+    ],
+    DiagBlindDepth = [
+        "Machining {} blind depth {} is not less than thickness {}.",
+        "Глубина {} обработки {} не меньше толщины {}."
+    ],
+    SegmentWithArc = ["Segment {} (arc)", "Сегмент {} (дуга)"],
+    SegmentWith = ["Segment {}", "Сегмент {}"],
+    CornerGeneric = ["Corner", "Угол"],
+    CornerRadiusSuffix = [" (radius)", " (радиус)"],
+    CornerChamferSuffix = [" (chamfer)", " (фаска)"],
+    CornerWithShape = ["Corner {}{}", "Угол {}{}"],
+    Included = ["Included", "Включено"],
+    RemoveBanding = ["Remove banding", "Убрать кромку"],
+
+    // ── Camera and light cards ──────────────────────────────────────────────
+    SectionProjection = ["Projection", "Проекция"],
+    Perspective = ["Perspective", "Перспективная"],
+    Orthographic = ["Orthographic", "Ортогональная"],
+    FieldOfView = ["Field of view", "Поле зрения"],
+    BetweenRange = ["Between {} and {}.", "От {} до {}."],
+    CameraHeightHint = ["2000 mm", "2000 мм"],
+    PositiveAtMost = ["Positive and at most {}.", "Положительное и не больше {}."],
+    ApplyProjection = ["Apply projection", "Применить проекцию"],
+    SectionRenderView = ["Render view", "Вид рендера"],
+    RenderFromCamera = ["Render the scene from this camera", "Рендерить сцену с этой камеры"],
+    CameraNameEmpty = ["Camera name must not be empty.", "Имя камеры не должно быть пустым."],
+    FieldOfViewError = ["Field of view: {}.", "Поле зрения: {}."],
+    FovMustBeBetween = ["Field of view must be between {} and {}.", "Поле зрения должно быть от {} до {}."],
+    OrthoHeightError = ["Orthographic height: {}.", "Ортогональная высота: {}."],
+    OrthoHeightPositiveAtMost = [
+        "Orthographic height must be positive and at most {}.",
+        "Ортогональная высота должна быть положительной и не больше {}."
+    ],
+    LightNameEmpty = ["Light name must not be empty.", "Имя источника света не должно быть пустым."],
+    SectionLight = ["Light", "Свет"],
+    Sun = ["Sun", "Солнце"],
+    Point = ["Point", "Точечный"],
+    Colour = ["Colour", "Цвет"],
+    PowerWatts = ["Power (W)", "Мощность (Вт)"],
+    Intensity = ["Intensity", "Интенсивность"],
+    Power = ["Power", "Мощность"],
+    ApplyLight = ["Apply light", "Применить свет"],
+    ColourComponents = ["Colour components must be between 0 and 1.", "Компоненты цвета должны быть от 0 до 1."],
+    IntensityRange = ["{} must be between 0 and {}.", "{}: допустимо от 0 до {}."],
+
+    // ── Properties card ─────────────────────────────────────────────────────
+    PropertiesTitle = ["Properties", "Свойства"],
+    NoProperties = ["No properties.", "Нет свойств."],
+    KeyHint = ["key", "ключ"],
+    Add = ["Add", "Добавить"],
+    Unclassified = ["unclassified", "без классификации"],
+    TypeWith = ["type {}", "тип {}"],
+    PropertyKindText = ["Text", "Текст"],
+    PropertyKindInteger = ["Integer", "Целое"],
+    PropertyKindBool = ["Bool", "Логическое"],
+    PropertyKindLength = ["Length", "Длина"],
+    PropertyKindAngle = ["Angle", "Угол"],
+    PropertyKindFurnitureType = ["Furniture type", "Мебельный тип"],
+
+    // ── Small shared strings ────────────────────────────────────────────────
+    MeshVertexNoun = ["vertex", "вершина"],
+    MeshFaceNoun = ["face", "грань"],
+    UiScale = ["UI scale", "Масштаб интерфейса"],
+    UiScaleHint = [
+        "Icons are rasterised at the new pixel size instead of stretched",
+        "Значки растрируются в новом размере пикселя, а не растягиваются"
+    ],
+    ExtrudeRefused = ["The selected path cannot be extruded: {}", "Выбранный путь нельзя выдавить: {}"],
+    LockedNode = [
+        "{} is locked. Unlock it in the scene tree to change it.",
+        "{} заблокирован. Снимите блокировку в дереве сцены, чтобы изменить его."
+    ],
+    TheNode = ["The node", "Узел"],
+
     // ── Scene tree ──────────────────────────────────────────────────────────
     TreeBadgeComponent = ["component", "компонент"],
     TreeBadgeCamera = ["camera", "камера"],
