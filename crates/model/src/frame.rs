@@ -8,6 +8,7 @@
 
 use furnicraft_geom::DVec3;
 use furnicraft_units::Length;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::placement::lengths_from_millimetres;
@@ -17,7 +18,8 @@ use crate::{Contour, ContourError, Node, Path, PathError, Placement, PlacementEr
 /// The content point a newly created node puts at its local zero.
 ///
 /// A frame is chosen only at creation: an edit, a move or a turn never recomputes it (ADR 0082).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FrameAnchor {
     /// The content's own creation origin: an open chain's first point, a closed ring's bounds centre.
     CreationOrigin,
@@ -67,6 +69,8 @@ pub struct Rebased<T> {
     pub content: T,
     /// The placement of the new origin in the parent frame, with the rotation it already had.
     pub placement: Placement,
+    /// The content point that became the local zero, in the content's old frame.
+    pub anchor: [Length; 3],
 }
 
 /// Moves `content` so `strategy`'s anchor becomes the node's local zero.
@@ -84,7 +88,7 @@ pub fn rebase_origin_at<T: Anchored>(
     let translation = placement.transform_point(anchor_millimetres(anchor));
     let placement = Placement::new(translation, placement.rotation())?;
     let content = content.shifted(negated(anchor)?)?;
-    Ok(Rebased { content, placement })
+    Ok(Rebased { content, placement, anchor })
 }
 
 /// A micrometre point as the millimetres geometry and placements work in.

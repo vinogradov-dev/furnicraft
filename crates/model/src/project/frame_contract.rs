@@ -81,12 +81,20 @@ fn sample_resized_nominal() -> PanelNominalSize {
 /// The frame every creation leaves: the pivot on the local zero, named by the translation.
 fn assert_created_frame(project: &Project, id: Id, expected_translation: DVec3) {
     assert_eq!(project.pivot_local_mm(id), Some(DVec3::ZERO), "a creation leaves the pivot at the local zero");
-    let world = project.world_placement(id).expect("a world placement");
-    assert_close(world.translation(), expected_translation, "the translation is the anchor's parent-frame position");
+    assert_eq!(
+        project.origin_local(id),
+        Some(expected_translation),
+        "the translation is the origin's parent-frame position"
+    );
+    assert_close(
+        project.origin_world(id).expect("a world origin"),
+        expected_translation,
+        "the world origin is the anchor",
+    );
     assert_close(
         project.pivot_world(id).expect("a world pivot"),
         expected_translation,
-        "the world pivot is the anchor",
+        "the world pivot is the anchor at a zero offset",
     );
 }
 
@@ -224,6 +232,22 @@ fn a_panel_is_born_with_its_base_corner_at_the_local_zero() {
     let stored = project.panel(panel).expect("panel").outline_contour().expect("a contour outline");
     assert_eq!(stored.bounds_micrometres().0, [0, 0], "the base corner is the local zero");
     assert_created_frame(&project, panel, expected_translation);
+}
+
+#[test]
+fn a_panel_resize_keeps_its_world_base_corner_and_its_pivot_at_zero() {
+    let frame = parent_frame();
+    let mut project = sample_project();
+    let root = project.root().id();
+    let panel =
+        project.add_panel(root, "Side", sample_nominal(), None, sample_thickness(), frame).expect("add a panel");
+    let before = project.origin_world(panel).expect("world origin");
+
+    project.set_panel_nominal_size(panel, sample_resized_nominal()).expect("resize the panel");
+
+    assert_eq!(project.pivot_local(panel), Some(PivotLocal::ZERO), "a panel's pivot is always its origin");
+    assert_eq!(project.origin_world(panel), Some(before), "a resize keeps the world base corner");
+    assert_eq!(project.panel(panel).expect("panel").placement(), frame, "a resize keeps the placement");
 }
 
 #[test]
@@ -467,6 +491,112 @@ fn undo_and_redo_restore_the_frame_bit_for_bit() {
     project.restore_from(&after).expect("redo the creation");
     assert!(project.same_content(&after), "redo restores the document bit for bit");
     assert_eq!(frame_of(&project, id), edited);
+}
+
+#[test]
+fn rebasing_an_origin_keeps_every_world_vertex_and_the_pivot_world() {
+    let parent_frame = parent_frame();
+    let local_frame =
+        Placement::new(DVec3::new(20.0, -10.0, 5.0), DQuat::from_rotation_y(0.4)).expect("a turned local frame");
+    let mut project = sample_project();
+    let root = project.root().id();
+    let parent = project.add_component(root, "Parent", parent_frame).expect("add a turned parent");
+    let path = Path::rectangle([millimetres(600), millimetres(400)], [millimetres(700), millimetres(500)])
+        .expect("a rectangle");
+    let rebased = rebase_origin_at(path, local_frame, FrameAnchor::CreationOrigin).expect("rebase at creation");
+    let id = project
+        .add_object(parent, "Drawn", rebased.placement, Geometry::Path(rebased.content))
+        .expect("add the drawing");
+    let pivot = PivotLocal::new(millimetres(12), millimetres(-7), millimetres(3));
+    project.set_node_pivot(id, pivot).expect("author the pivot");
+    let before_path = project.object_path(id).expect("a path").clone();
+    let before_points = path_world_points(&before_path, project.world_placement(id).expect("world placement"));
+    let before_pivot = project.pivot_world(id).expect("world pivot");
+    let before_origin = project.origin_world(id).expect("world origin");
+    let revision = project.revision();
+
+    project.rebase_origin(id, FrameAnchor::BBoxBaseCorner(RectCorner::TopRight)).expect("rebase the origin");
+
+    assert!(project.revision() > revision, "re-basing is one document change");
+    let after_path = project.object_path(id).expect("the rebased path");
+    let after_world = project.world_placement(id).expect("world placement");
+    let after_points = path_world_points(after_path, after_world);
+    for (before, after) in before_points.iter().zip(&after_points) {
+        assert_close(*before, *after, "a rebased origin keeps every world vertex");
+    }
+    let after_pivot = project.pivot_world(id).expect("world pivot");
+    assert_close(after_pivot, before_pivot, "a rebased origin keeps pivot_world fixed");
+    assert_close(
+        after_pivot,
+        after_world.transform_point(project.pivot_local_mm(id).expect("local pivot")),
+        "pivot_world is the new origin plus the rotated pivot offset",
+    );
+    let after_origin = project.origin_world(id).expect("world origin");
+    assert!((after_origin - before_origin).length() > 1.0, "the origin moved to the chosen corner");
+
+    // The owner's formula, checked through the node's world rotation rather than through the
+    // subtraction the implementation uses: pivot_local = R_world^-1 * (pivot_world - origin_world).
+    let world_rotation = project.world_placement(id).expect("world placement").rotation();
+    let expected_local = world_rotation.conjugate() * (before_pivot - after_origin);
+    assert_close(
+        project.pivot_local_mm(id).expect("local pivot"),
+        expected_local,
+        "pivot_local is pivot_world expressed in the new origin frame",
+    );
+}
+
+#[test]
+fn set_pivot_and_center_pivot_move_only_the_pivot() {
+    let frame = parent_frame();
+    let mut project = sample_project();
+    let root = project.root().id();
+    let path = Path::polyline(vec![[millimetres(600), millimetres(400)], [millimetres(700), millimetres(450)]], false)
+        .expect("a line");
+    let rebased = rebase_origin_at(path, frame, FrameAnchor::CreationOrigin).expect("rebase the line");
+    let id =
+        project.add_object(root, "Line", rebased.placement, Geometry::Path(rebased.content)).expect("add the line");
+    let before_origin_local = project.origin_local(id);
+    let before_origin_world = project.origin_world(id);
+    let before_placement = project.object(id).expect("object").placement();
+    let before_points = path_world_points(
+        project.object_path(id).expect("path"),
+        project.world_placement(id).expect("world placement"),
+    );
+    let before_pivot = project.pivot_world(id).expect("world pivot");
+
+    let pivot = PivotLocal::new(millimetres(5), millimetres(-3), millimetres(2));
+    project.set_node_pivot(id, pivot).expect("set the pivot");
+
+    assert_eq!(project.origin_local(id), before_origin_local, "set_pivot leaves the local origin alone");
+    assert_eq!(project.origin_world(id), before_origin_world, "set_pivot leaves the world origin alone");
+    assert_eq!(project.object(id).expect("object").placement(), before_placement, "set_pivot leaves translation alone");
+    let after_points = path_world_points(
+        project.object_path(id).expect("path"),
+        project.world_placement(id).expect("world placement"),
+    );
+    for (before, after) in before_points.iter().zip(&after_points) {
+        assert_close(*before, *after, "set_pivot leaves every world vertex alone");
+    }
+    let moved_pivot = project.pivot_world(id).expect("world pivot");
+    assert!((moved_pivot - before_pivot).length() > 1.0, "set_pivot moves the world pivot");
+    let world = project.world_placement(id).expect("world placement");
+    assert_close(
+        moved_pivot,
+        world.transform_point(project.pivot_local_mm(id).expect("local pivot")),
+        "pivot_world is the origin plus the rotated pivot offset",
+    );
+
+    project.center_node_pivot(id).expect("centre the pivot");
+    assert_eq!(project.origin_local(id), before_origin_local, "center_pivot leaves the local origin alone");
+    assert_eq!(project.origin_world(id), before_origin_world, "center_pivot leaves the world origin alone");
+    assert_eq!(project.object(id).expect("object").placement(), before_placement, "center_pivot keeps translation");
+    let after_center = path_world_points(
+        project.object_path(id).expect("path"),
+        project.world_placement(id).expect("world placement"),
+    );
+    for (before, after) in before_points.iter().zip(&after_center) {
+        assert_close(*before, *after, "center_pivot leaves every world vertex alone");
+    }
 }
 
 #[test]

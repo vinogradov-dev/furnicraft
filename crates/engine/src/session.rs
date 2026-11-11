@@ -139,7 +139,7 @@ mod tests {
 
     use furnicraft_model::{
         Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
-        EdgeBandingMaterial, EdgeId, FaceSide, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
+        EdgeBandingMaterial, EdgeId, FaceSide, FrameAnchor, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
         PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
         Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
     };
@@ -153,9 +153,9 @@ mod tests {
     use furnicraft_units::Length;
 
     use crate::node_cmds::{
-        AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodePivotCenter,
-        NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodePlacementWorldZero, NodeProperty,
-        NodePropertyClear, NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
+        AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeOriginRebase,
+        NodePivotCenter, NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodePlacementWorldZero,
+        NodeProperty, NodePropertyClear, NodePropertySet, NodePropertySetMany, NodeRename, NodeUngroup,
     };
     use crate::panel_cmds::{
         PanelBowClear, PanelBowSet, PanelContourCreate, PanelCornerBandingClear, PanelCornerBandingSet,
@@ -1936,6 +1936,50 @@ mod tests {
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: root })));
 
         assert!(!registry.get("node.group").expect("registered").enabled(&session, &Value::Null));
+    }
+
+    #[test]
+    fn origin_rebase_moves_the_origin_and_keeps_world_geometry_and_pivot() {
+        let mut session = sample_session();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let pivot = PivotLocal::new(
+            Length::from_micrometres(1_500),
+            Length::from_micrometres(-2_500),
+            Length::from_micrometres(3_000),
+        );
+        session
+            .dispatch("node.pivot.set", &json_params(&NodePivotSet { node: drawer, pivot }))
+            .expect("author the pivot");
+        let before_origin = session.project().origin_world(drawer).expect("world origin");
+        let before_pivot = session.project().pivot_world(drawer).expect("world pivot");
+        let before_front = session.project().world_placement(front).expect("front world");
+
+        session
+            .dispatch(
+                "node.origin.rebase",
+                &json_params(&NodeOriginRebase { node: drawer, strategy: FrameAnchor::CenterOfBounds }),
+            )
+            .expect("rebase the drawer origin");
+
+        let after_origin = session.project().origin_world(drawer).expect("world origin");
+        assert!((after_origin - before_origin).length() > 1.0, "the origin moved to the children's centre");
+        assert!(
+            (session.project().pivot_world(drawer).expect("world pivot") - before_pivot).length() < 1.0e-3,
+            "the authored pivot_world is unchanged"
+        );
+        let after_front = session.project().world_placement(front).expect("front world");
+        assert!(
+            (after_front.translation() - before_front.translation()).length() < 1.0e-3
+                && after_front.rotation().dot(before_front.rotation()).abs() > 1.0 - 1.0e-9,
+            "re-basing a container moves no child in world space"
+        );
+
+        session.undo().expect("undo the rebase");
+        assert_eq!(session.project().origin_world(drawer), Some(before_origin));
+        assert_eq!(session.project().pivot_local(drawer), Some(pivot));
+        session.undo().expect("undo the authored pivot");
+        assert!(!session.can_undo(), "each operation is one undo entry");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Commands that change the tree: placement, naming, duplication, grouping and removal.
 
 use furnicraft_geom::DVec3;
+use furnicraft_units::Length;
 
 use crate::frame::children_center;
 use crate::tree::{
@@ -33,6 +34,29 @@ impl Project {
             Node::Camera(camera) => camera.set_pivot(pivot),
             Node::Light(light) => light.set_pivot(pivot),
         }
+        self.revision = next_revision;
+        Ok(next_revision)
+    }
+
+    /// Re-bases a node's origin with a frame strategy and bumps the revision once.
+    ///
+    /// The content is moved so the strategy's anchor becomes the node's local zero, the placement
+    /// takes that anchor's parent-frame position, and every local vertex is written around the new
+    /// zero. The world geometry does not move. An authored pivot is carried with the content, so
+    /// `pivot_world` stays fixed: `pivot_local_new = pivot_local_old - anchor`. A panel, a primitive
+    /// and a camera or light have no free vertex frame to re-base and are refused; a panel's
+    /// outline edit is the panel's own re-anchoring operation.
+    pub fn rebase_origin(&mut self, id: Id, strategy: FrameAnchor) -> Result<Revision, ProjectError> {
+        if id == self.root.id() {
+            return Err(ProjectError::RootImmutable { id });
+        }
+        let node = self.node(id).ok_or(ProjectError::NodeNotFound { id })?.clone();
+        let next_revision = self.next_revision()?;
+        let rebased = rebase_node_origin(node, strategy)?;
+        let Some(current) = find_node_mut(&mut self.root, id) else {
+            return Err(ProjectError::NodeNotFound { id });
+        };
+        *current = rebased;
         self.revision = next_revision;
         Ok(next_revision)
     }
@@ -362,6 +386,56 @@ impl Project {
         self.revision = next_revision;
         Ok(next_revision)
     }
+}
+
+/// Re-bases one node's content and keeps its pivot world position.
+fn rebase_node_origin(node: Node, strategy: FrameAnchor) -> Result<Node, ProjectError> {
+    let id = node.id();
+    let rebase_error = |_| ProjectError::OriginRebase { id };
+    match node {
+        Node::Object(mut object) => {
+            let pivot = object.pivot_local();
+            match object.geometry() {
+                Geometry::Path(path) => {
+                    let rebased = rebase_origin_at(path.clone(), object.placement(), strategy).map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    *object.geometry_mut() = Geometry::Path(rebased.content);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Constructive(constructive) => {
+                    let rebased = rebase_origin_at(constructive.path().clone(), object.placement(), strategy)
+                        .map_err(rebase_error)?;
+                    let pivot = shift_pivot(pivot, rebased.anchor, id)?;
+                    let mut constructive = constructive.clone();
+                    constructive.set_path(rebased.content).map_err(|_| ProjectError::OriginRebase { id })?;
+                    *object.geometry_mut() = Geometry::Constructive(constructive);
+                    object.set_placement(rebased.placement);
+                    object.set_pivot(pivot);
+                    Ok(Node::Object(object))
+                }
+                Geometry::Primitive(_) | Geometry::Mesh(_) => Err(ProjectError::OriginRebase { id }),
+            }
+        }
+        Node::Container(mut container) => {
+            let rebased = rebase_origin_at(container.children().to_vec(), container.placement(), strategy)
+                .map_err(rebase_error)?;
+            let pivot = shift_pivot(container.pivot_local(), rebased.anchor, id)?;
+            *container.children_mut() = rebased.content;
+            container.set_placement(rebased.placement);
+            container.set_pivot(pivot);
+            Ok(Node::Container(container))
+        }
+        Node::Panel(_) | Node::Camera(_) | Node::Light(_) => Err(ProjectError::OriginRebase { id }),
+    }
+}
+
+/// Carries a pivot through a re-anchor: `pivot_local_new = pivot_local_old - anchor`.
+fn shift_pivot(pivot: PivotLocal, anchor: [Length; 3], id: Id) -> Result<PivotLocal, ProjectError> {
+    let [x, y, z] = pivot.components();
+    let shift = |value: Length, offset: Length| value.checked_sub(offset).ok_or(ProjectError::OriginRebase { id });
+    Ok(PivotLocal::new(shift(x, anchor[0])?, shift(y, anchor[1])?, shift(z, anchor[2])?))
 }
 
 #[cfg(test)]

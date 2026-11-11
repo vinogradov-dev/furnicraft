@@ -192,6 +192,12 @@ pub enum ProjectError {
         /// The node whose frame could not be chosen.
         id: Id,
     },
+    /// A node cannot re-base its origin with the requested strategy.
+    #[error("node {id} cannot re-base its origin with that strategy")]
+    OriginRebase {
+        /// The node whose origin was asked to move.
+        id: Id,
+    },
     /// Grouping needs at least two nodes.
     #[error("grouping needs at least {minimum} nodes, got {found}")]
     TooFewNodes {
