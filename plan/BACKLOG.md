@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
+- `[~]` **U52** the UI scale is a scrubbable number with presets: the Settings slider becomes a numeric
   field that changes while the pointer is held and moved left or right, with the cursor hidden for
   the duration and only the horizontal delta read, plus buttons for 75, 100, 125, 150, 175 and 200.
   The same *hide the pointer, read the delta* rule applies to every numeric field that scrubs on a

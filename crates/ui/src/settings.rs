@@ -8,7 +8,7 @@
 //! The data is versioned and repaired on read. A missing, truncated or older file is not an error
 //! the user has to solve: the loader falls back to the defaults and reports the reason in the status
 //! bar. A value outside its range is clamped, so a hand-edited file cannot push the UI scale past
-//! what the slider offers.
+//! what the control offers.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +19,7 @@ use thiserror::Error;
 use furnicraft_text::{Lang, Message};
 
 use crate::display::{OpeningView, ShadingStyle, shading_label};
+use crate::scrub::Scrub;
 use crate::{theme, ui_scale};
 
 /// The settings schema this build writes and reads.
@@ -411,13 +412,9 @@ fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         changed |= ui.color_edit_button_srgb(&mut settings.appearance.accent).changed();
     });
     ui.add_space(theme::STEP);
-    // The control edits `egui`'s zoom factor directly; the stored percentage follows the live value
-    // so the next launch opens at the scale the user sees, not the one the slider started with.
-    if ui_scale::show(ui).changed() {
-        let live = ui_scale::percent(ui.ctx().zoom_factor());
-        changed |= settings.appearance.ui_scale != live;
-        settings.appearance.ui_scale = live;
-    }
+    // The control edits `egui`'s zoom factor and writes back the percentage it applied; the stored
+    // scale follows the live value, so the next launch opens at the scale the user sees.
+    changed |= ui_scale::show(ui, &mut settings.appearance.ui_scale).changed();
     ui.label(egui::RichText::new(Message::ScaleHint.text(lang)).small().color(theme::text_dim(ui)));
     changed
 }
@@ -453,7 +450,7 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         ui.label(Message::RollRingStep.text(lang));
         changed |= ui
             .add(
-                egui::DragValue::new(&mut settings.viewport.roll_step_degrees)
+                Scrub::new(&mut settings.viewport.roll_step_degrees)
                     .range(MIN_ROLL_STEP_DEGREES..=MAX_ROLL_STEP_DEGREES)
                     .suffix(" °")
                     .speed(0.2),
@@ -464,7 +461,7 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
     changed |= ui.checkbox(&mut settings.viewport.grid, Message::ShowFloorGrid.text(lang)).changed();
     changed |= ui
         .add(
-            egui::DragValue::new(&mut settings.viewport.grid_step_mm)
+            Scrub::new(&mut settings.viewport.grid_step_mm)
                 .range(MIN_GRID_STEP_MM..=MAX_GRID_STEP_MM)
                 .suffix(" mm")
                 .speed(5.0),

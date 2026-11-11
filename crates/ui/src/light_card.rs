@@ -7,7 +7,7 @@
 //! [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
 //! [ADR 0039]: ../docs/decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md
 
-use egui::{DragValue, TextEdit, Ui};
+use egui::{TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::scene_cmds::LIGHT_PARAMS_SET_ID;
 use furnicraft_engine::{LightParamsSet, NodeRename, Session};
@@ -15,6 +15,7 @@ use furnicraft_model::{Id, LightKind, LightNode};
 use furnicraft_text::{Lang, Message};
 
 use crate::command::{dispatch, json};
+use crate::scrub::Scrub;
 use crate::section::section;
 
 /// Default point-light power in watts when a sun is switched to a point light.
@@ -99,7 +100,7 @@ impl LightCard {
                 ui.label(Message::Colour.text(lang));
                 for (component, value) in ["R", "G", "B"].into_iter().zip(draft.color.iter_mut()) {
                     ui.label(component);
-                    ui.add(DragValue::new(value).speed(0.01).range(0.0..=1.0).fixed_decimals(3));
+                    ui.add(Scrub::new(value).speed(0.01).range(0.0..=1.0).decimals(3));
                 }
             });
             ui.horizontal(|ui| {
@@ -111,12 +112,7 @@ impl LightCard {
                     (Message::Intensity.text(lang), 0.05)
                 };
                 ui.label(label);
-                ui.add(
-                    DragValue::new(&mut draft.intensity)
-                        .speed(speed)
-                        .range(0.0..=LightNode::MAX_INTENSITY)
-                        .fixed_decimals(2),
-                );
+                ui.add(Scrub::new(&mut draft.intensity).speed(speed).range(0.0..=LightNode::MAX_INTENSITY).decimals(2));
             });
             if ui.button(Message::ApplyLight.text(lang)).clicked() {
                 apply = true;

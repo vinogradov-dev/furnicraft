@@ -25,6 +25,7 @@ use serde_json::Value;
 use crate::command::{dispatch as dispatch_command, json};
 use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
+use crate::scrub::Scrub;
 use crate::section::section;
 
 /// Persistent state of the panel card.
@@ -719,8 +720,7 @@ pub(crate) fn millimetre_field(
     range: std::ops::RangeInclusive<f64>,
 ) -> (Option<f64>, egui::Response) {
     let mut millimetres = value.millimetres_f64();
-    let response = ui
-        .add(egui::DragValue::new(&mut millimetres).speed(0.5).range(range).suffix(" mm").update_while_editing(false));
+    let response = ui.add(Scrub::new(&mut millimetres).speed(0.5).range(range).suffix(" mm"));
     let committed = (response.drag_stopped() || response.lost_focus()).then_some(millimetres);
     (committed, response)
 }

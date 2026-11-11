@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use egui::{Color32, DragValue, RichText, TextEdit, Ui};
+use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_SET_ID};
 use furnicraft_engine::{NodePropertyClear, NodePropertySet, Session};
 use furnicraft_model::{FurnType, Id, PropertyValue};
@@ -16,6 +16,7 @@ use furnicraft_text::Message;
 use furnicraft_units::{Degrees, Length};
 
 use crate::command::{dispatch, json};
+use crate::scrub::Scrub;
 use crate::section::section;
 
 /// The property kinds the card can add without a prototype schema.
@@ -172,7 +173,7 @@ fn edit_row(
             }
             PropertyValue::Integer { value } => {
                 let mut number = *value;
-                if ui.add(DragValue::new(&mut number)).changed() {
+                if ui.add(Scrub::new(&mut number).speed(1.0)).changed() {
                     edits.push(Edit::Set { key: key.to_owned(), value: PropertyValue::integer(number) });
                 }
             }
