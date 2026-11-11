@@ -25,24 +25,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **S16** `render/lib.rs` gives up the pipelines and the GPU buffer helpers — rules: B1, B4, B8, H2.
-  Why: 1446 production lines (F5) mix the renderer with eleven pipeline constructors, the depth-state
-  builders and the buffer wrappers, so a shader change and an upload change reopen one file.
-  Shape: `create_triangle_pipeline`, `create_line_pipeline`, `create_shadow_pipeline`, the
-  `*_depth_state` builders, `face_target`, `vertex_layout`, `FACE_DEPTH_BIAS` and the stencil constants
-  move to `crates/render/src/pipelines.rs` (~300); `GpuMesh`, `GpuLineList`, `GpuTriangles`,
-  `line_list`, `triangle_list` and `clamp_size` move to `crates/render/src/gpu.rs` (~180);
-  `render/lib.rs` 1446 -> ~1000.
-  Done: suite unchanged; `pipelines.rs` states the depth, blend and stencil contract it encodes and
-  `gpu.rs` states that it owns device objects and no frame data (H2, H6).
-  Commits: one move.
-  `files: crates/render/src/lib.rs`
-
 - `[ ]` **S17** `render/lib.rs` gives up the vertex builders — rules: B1, B4, B8.
-  Why: after S16 the file is ~1000 lines and still mixes the renderer with the CPU-side builders
+  Why: after S16 the file is 1124 production lines and still holds the CPU-side builders
   (`edge_geometry`, `shadow_geometry`, `world_vertices`, `flat_vertices`, `grid_vertices`,
-  `polyline_vertices`, `mesh_centre`, `stencil_slot`, `edge_color`, `sort_back_to_front`, 1030-1445).
-  Shape: they move to `crates/render/src/geometry.rs` (~420); `render/lib.rs` 1000 -> ~600 and
+  `polyline_vertices`, `mesh_centre`, `stencil_slot`, `edge_color`, `sort_back_to_front`).
+  Shape: they move to `crates/render/src/geometry.rs` (~400); `render/lib.rs` 1124 -> ~700 and
   `impl ViewportRenderer` (421) stays under B4's target.
   Done: suite unchanged; `geometry.rs` states that a builder reads frame data and writes vertices,
   never a device, and names the units it works in (H1, H2, H6).
@@ -314,6 +301,19 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **S16** `render/lib.rs` gives up the pipelines and the GPU buffer helpers — rules: B1, B4, B8, H2.
+  Why: 1446 production lines (F5) mix the renderer with eleven pipeline constructors, the depth-state
+  builders and the buffer wrappers, so a shader change and an upload change reopen one file.
+  Shape: `create_triangle_pipeline`, `create_line_pipeline`, `create_shadow_pipeline`, the
+  `*_depth_state` builders, `face_target`, `vertex_layout`, `FACE_DEPTH_BIAS` and the stencil constants
+  move to `crates/render/src/pipelines.rs` (~300); `GpuMesh`, `GpuLineList`, `GpuTriangles`,
+  `line_list`, `triangle_list` and `clamp_size` move to `crates/render/src/gpu.rs` (~180);
+  `render/lib.rs` 1446 -> ~1000.
+  Done: suite unchanged; `pipelines.rs` states the depth, blend and stencil contract it encodes and
+  `gpu.rs` states that it owns device objects and no frame data (H2, H6).
+  Commits: one move.
+  `files: crates/render/src/lib.rs` — `2c183d4`
 
 - `[x]` **S15** `scene/lib.rs` gives up the camera and the ray — rules: B1, B4, B6, B8, H2.
   Why: 1277 production lines and 82 public items in one file cover the camera and its projection, the
