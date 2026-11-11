@@ -200,6 +200,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    each role hue clears 3:1 against panel and ribbon. `assets/README.md`, `STYLE_GUIDE.md`
    §5/§7, `AUDIT.md` and the icon skill are updated in the same commit, and the existing files
    are re-inked.
+  Decisions: ADR 0090 records the role inks and supersedes the one-ink clause of ADR 0047 and
+   ADR 0055; the rasteriser and the tonal emphasis of 0055 stand.
   `files: crates/ui/src/icons.rs, assets/README.md, assets/icons/STYLE_GUIDE.md, assets/icons/AUDIT.md` — `87487c7`
 
 - `[x]` **U71** the window draws one palette, and the owner approved three — P1 graphite·copper, P2 ink·azure, P4 slate·mint — each in a dark and a light variant, chosen in Settings with one accent override.
