@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=X34 state=doing base=83d4e3d updated=2026-11-11
+STATE: milestone=M7 phase=A task=X22 state=idle base=c250d09 updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-X34 is reopened: rebase_origin must also carry a baked mesh's vertices, not only a path, contour or
-container.
+X22 is next: a 1 mm corner drag on a shallow arc still turns it into a near-full circle because the
+rebuild picks its direction from the side of the old midpoint against the new chord instead of from
+the sweep the arc had.
 
 ## Index
 

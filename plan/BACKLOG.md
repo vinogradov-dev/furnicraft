@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **X34** origin and pivot are separate concepts, and the code names, commands, card and schema must say so
-  Why: origin (the local zero, named by Placement::translation) and pivot (the authored local
-   offset, the Pivot field) are still one word in the creation API and in the panel card, so a
-   general rebase can silently move a pivot and a panel's derived base corner is presented as
-   an authored handle.
-  Shape: P0 renames the origin vocabulary, Pivot to PivotLocal and the wire field to
-   pivot_local with a serde alias; P1 makes rebase_origin a general operation that preserves
-   both world vertices and pivot_world and adds origin_local/origin_world; P2 keeps a panel's
-   pivot derived and zero; P3 splits the inspector into Origin and Pivot; P4 bumps the schema
-   without moving the world; P5 writes ADR 0088 and corrects the decisions and domain docs.
-  Done: every creation path names its origin, PivotLocal is the only pivot, rebase_origin
-   preserves world vertices and pivot_world, set_pivot/center_pivot change only pivot_local,
-   placement.world_zero changes only translation, a panel's pivot is read-only zero, old
-   goldens load unchanged through the alias, ADR 0088 exists, cargo xtask ci is green.
-  `files: crates/model/src/frame.rs, crates/model/src/placement.rs, crates/model/src/contour.rs, crates/model/src/project/object_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/wire.rs, crates/model/src/project/frame_contract.rs, crates/engine/src/node_cmds.rs, crates/engine/src/session.rs, crates/ui/src/pivot_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/coords.rs, crates/text/src/messages.rs, docs/decisions/0088-origin-and-pivot-are-different-points.md, docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md, docs/decisions/0082-the-local-zero-is-the-creation-anchor.md, docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md, docs/domain/document.md, docs/domain/geometry.md, docs/domain/panels.md, docs/domain/scene-file.md, crates/project/tests/golden/scene-v20.fcs, PROJECT.md, AGENTS.md, plan/map.md`
-
 - `[ ]` **X22** a free corner drag on an arc makes a near-full circle: dragging the corner where an
   arc meets a line in *Free move* turns the arc into the long way round, and the draft draws a huge
   loop whose visible branch reads as a straight line through the joint and across the viewport.
@@ -100,6 +84,22 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **X34** origin and pivot are separate concepts, and the code names, commands, card and schema must say so
+  Why: origin (the local zero, named by Placement::translation) and pivot (the authored local
+   offset, the Pivot field) are still one word in the creation API and in the panel card, so a
+   general rebase can silently move a pivot and a panel's derived base corner is presented as
+   an authored handle.
+  Shape: P0 renames the origin vocabulary, Pivot to PivotLocal and the wire field to
+   pivot_local with a serde alias; P1 makes rebase_origin a general operation that preserves
+   both world vertices and pivot_world and adds origin_local/origin_world; P2 keeps a panel's
+   pivot derived and zero; P3 splits the inspector into Origin and Pivot; P4 bumps the schema
+   without moving the world; P5 writes ADR 0088 and corrects the decisions and domain docs.
+  Done: every creation path names its origin, PivotLocal is the only pivot, rebase_origin
+   preserves world vertices and pivot_world, set_pivot/center_pivot change only pivot_local,
+   placement.world_zero changes only translation, a panel's pivot is read-only zero, old
+   goldens load unchanged through the alias, ADR 0088 exists, cargo xtask ci is green.
+  `files: crates/model/src/frame.rs, crates/model/src/placement.rs, crates/model/src/contour.rs, crates/model/src/project/object_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/wire.rs, crates/model/src/project/frame_contract.rs, crates/engine/src/node_cmds.rs, crates/engine/src/session.rs, crates/ui/src/pivot_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/coords.rs, crates/text/src/messages.rs, docs/decisions/0088-origin-and-pivot-are-different-points.md, docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md, docs/decisions/0082-the-local-zero-is-the-creation-anchor.md, docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md, docs/domain/document.md, docs/domain/geometry.md, docs/domain/panels.md, docs/domain/scene-file.md, crates/project/tests/golden/scene-v20.fcs, PROJECT.md, AGENTS.md, plan/map.md` — `c250d09`
 
 - `[x]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered
