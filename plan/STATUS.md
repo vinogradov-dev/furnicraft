@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U50 state=idle base=c027309 updated=2026-11-11
+STATE: milestone=M7 phase=A task=U52 state=idle base=873515c updated=2026-11-11
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U50 is next: the panel header loses its count and the fold chevron moves to the scene-facing edge,
-so the left panel folds from its right and the right panel from its left.
+U52 is next: the UI scale becomes a scrubbable number with presets, and every numeric field that
+scrubs on a horizontal drag hides the pointer and reads the delta, so a value that resizes its own
+widget no longer chases the cursor.
 
 ## Index
 
