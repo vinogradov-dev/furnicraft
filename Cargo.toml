@@ -35,6 +35,10 @@ egui-wgpu = "0.37"
 egui_extras = { version = "0.37", features = ["svg"] }
 glam = { version = "0.34", features = ["serde"] }
 log = "0.4"
+# Writes the interface shots U81 renders; already in the tree through `epaint`.
+png = "0.18"
+# Runs wgpu's futures on a test thread; already in the tree through `eframe`.
+pollster = "1.0"
 # The interface rules read the UI sources as Rust, not as text: `syn` gives the
 # expression tree and `proc-macro2` keeps the source location of each node.
 proc-macro2 = { version = "1.0", features = ["span-locations"] }

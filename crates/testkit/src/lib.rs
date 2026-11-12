@@ -15,7 +15,8 @@
     clippy::unreachable
 )]
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use furnicraft_model::{Catalog, EdgeBandingMaterial, MaterialId, PanelMaterial, PanelNominalSize, PanelRect};
 use furnicraft_units::Length;
@@ -186,4 +187,88 @@ pub fn sample_notch_cutout_rect() -> PanelRect {
 #[allow(clippy::expect_used)]
 pub fn sample_blind_depth() -> Length {
     Length::from_millimetres(8).expect("8 mm fits a length")
+}
+
+/// The directory the interface shots go to, created if it is not there: `target/ui-shots`.
+///
+/// `CARGO_TARGET_DIR` wins when the environment names one, so a session that builds into another
+/// directory still finds its pictures; otherwise the workspace root is two levels above this
+/// crate. A shot is a picture a person looks at, so the directory is collected under the build
+/// directory rather than in the source tree, and `cargo clean` takes it away with everything else.
+pub fn ui_shots_dir() -> io::Result<PathBuf> {
+    let target = match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(directory) => PathBuf::from(directory),
+        None => Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .map(|root| root.join("target"))
+            .ok_or_else(|| io::Error::other("the testkit directory has no workspace root above it"))?,
+    };
+    let directory = target.join("ui-shots");
+    std::fs::create_dir_all(&directory)?;
+    Ok(directory)
+}
+
+/// Writes tightly packed 8-bit RGBA `pixels` as a PNG at `path`.
+///
+/// The shots are looked at, never compared pixel by pixel, so the encoder is deliberately plain:
+/// one image, eight bits per channel, straight alpha, no interlacing. A buffer that is not
+/// `width × height × 4` bytes is an [`io::ErrorKind::InvalidInput`] instead of a half-written file.
+pub fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> io::Result<()> {
+    let expected = usize::try_from(width)
+        .ok()
+        .and_then(|width| usize::try_from(height).ok().and_then(|height| width.checked_mul(height)))
+        .and_then(|pixels| pixels.checked_mul(4));
+    if expected != Some(pixels.len()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("a {width} × {height} RGBA image needs {} bytes, not {}", expected.unwrap_or(0), pixels.len()),
+        ));
+    }
+    let file = std::fs::File::create(path)?;
+    let mut encoder = png::Encoder::new(io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(io::Error::other)?;
+    writer.write_image_data(pixels).map_err(io::Error::other)?;
+    writer.finish().map_err(io::Error::other)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    /// Four pixels of known colours, so a round trip proves the channel order and the row order.
+    const PIXELS: [u8; 16] = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255];
+
+    #[test]
+    fn a_written_png_reads_back_with_the_pixels_and_the_size_it_was_given() {
+        let path = super::scratch_dir("png-round-trip").join("two-by-two.png");
+        super::write_png(&path, 2, 2, &PIXELS).expect("the shot is written");
+        let file = std::io::BufReader::new(std::fs::File::open(&path).expect("the file is there"));
+        let decoder = png::Decoder::new(file);
+        let mut reader = decoder.read_info().expect("the file is a PNG");
+        let mut buffer = vec![0; reader.output_buffer_size().expect("a bounded image")];
+        let info = reader.next_frame(&mut buffer).expect("the image decodes");
+        assert_eq!((info.width, info.height), (2, 2), "the size the writer was given is the size the file says");
+        assert_eq!(info.color_type, png::ColorType::Rgba, "and the channels it was given");
+        assert_eq!(buffer, PIXELS, "every channel comes back where it was");
+    }
+
+    #[test]
+    fn a_buffer_that_is_not_the_image_size_is_refused_before_the_file_is_touched() {
+        let directory = super::scratch_dir("png-size");
+        let path = directory.join("short.png");
+        let error = super::write_png(&path, 2, 2, &PIXELS[..12]).expect_err("a short buffer is an error");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!path.exists(), "and the refused shot leaves no file behind");
+    }
+
+    #[test]
+    fn the_interface_shots_go_to_a_directory_under_the_build_directory() {
+        let directory = super::ui_shots_dir().expect("the shots directory is created");
+        assert!(directory.is_dir(), "which exists");
+        assert!(directory.ends_with("target/ui-shots"), "and is the one the task names: {}", directory.display());
+    }
 }

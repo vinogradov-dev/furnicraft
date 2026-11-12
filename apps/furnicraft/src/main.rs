@@ -43,6 +43,9 @@ mod tabs;
 #[cfg(test)]
 mod test_support;
 mod translate_gizmo;
+/// The interface rendered offscreen, one PNG per cell of the look matrix (U81).
+#[cfg(test)]
+mod ui_shots;
 mod vertex_gizmo;
 mod view_cluster;
 mod view_layout;
@@ -218,11 +221,27 @@ impl FurniCraftApp {
         settings: Settings,
         session: furnicraft_engine::Session,
     ) -> Result<Self, String> {
+        Self::test_app(ctx, None, settings_path, settings, session)
+    }
+
+    /// Builds the application for a test: no window, and a GPU only when one was handed over.
+    ///
+    /// A headless frame test passes `None` and draws no scene image; a shot passes a device and
+    /// queue with no surface, so the real viewport renders into its target and egui paints the same
+    /// interface a window would show, offscreen (U77, U81).
+    #[cfg(test)]
+    fn test_app(
+        ctx: &egui::Context,
+        render_state: Option<egui_wgpu::RenderState>,
+        settings_path: std::path::PathBuf,
+        settings: Settings,
+        session: furnicraft_engine::Session,
+    ) -> Result<Self, String> {
         let (preference, preset, accent) = settings.install_args();
         theme::install_with(ctx, preference, preset, accent);
         ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
         let loaded = crate::settings_store::Loaded { settings, notice: None };
-        Self::build(ctx, None, SettingsStore::at(settings_path), loaded, session)
+        Self::build(ctx, render_state, SettingsStore::at(settings_path), loaded, session)
     }
 
     /// Composes the shell around one document, one workspace and, when the window has one, its GPU.

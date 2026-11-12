@@ -435,6 +435,14 @@ impl Document {
     /// into it, so a workspace that opens and closes scenes has to hand it back; a headless
     /// document has none to give.
     pub(crate) fn release(mut self) {
+        self.release_target();
+    }
+
+    /// Hands the render target back to the window's renderer, leaving the document alive.
+    ///
+    /// A closed scene gives it back once; a shot drawn offscreen has to give it back after every
+    /// picture, because the window's renderer would otherwise hold one texture per shot (U81).
+    pub(crate) fn release_target(&mut self) {
         if let Some(target) = self.target.take() {
             target.release();
         }
@@ -597,6 +605,18 @@ impl Document {
     /// case and the active view's own otherwise.
     pub(crate) fn camera(&self) -> Camera {
         self.scene.camera
+    }
+
+    /// Zooms the active view by `factor`, the way the wheel does: above one moves out.
+    ///
+    /// A shot composes its picture through the same view state a gesture writes, so the model can
+    /// be put under the floating panels, which is where the translucency check looks for it (U81).
+    #[cfg(test)]
+    pub(crate) fn zoom_active_view(&mut self, factor: f64) {
+        let active = self.layout.active();
+        if let Some(leaf) = self.layout.leaf_mut(active) {
+            leaf.zoom(factor);
+        }
     }
 
     /// The scene rectangle the last drawn frame gave the split views, or `None` before the first

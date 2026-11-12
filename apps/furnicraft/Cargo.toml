@@ -29,3 +29,5 @@ log = { workspace = true }
 
 [dev-dependencies]
 furnicraft-testkit = { workspace = true }
+# A device without a window: the interface is rendered offscreen to PNG shots (U81).
+pollster = { workspace = true }

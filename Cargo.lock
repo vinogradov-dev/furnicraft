@@ -1306,6 +1306,7 @@ dependencies = [
  "furnicraft-ui",
  "furnicraft-units",
  "log",
+ "pollster",
  "serde_json",
 ]
 
@@ -1430,6 +1431,7 @@ version = "0.1.0"
 dependencies = [
  "furnicraft-model",
  "furnicraft-units",
+ "png 0.18.1",
 ]
 
 [[package]]
