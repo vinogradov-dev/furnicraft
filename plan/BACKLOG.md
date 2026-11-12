@@ -94,6 +94,111 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    undo entry; no numeric TextEdit is left in either card; an invalid entry keeps the value and
    marks the box red.
   `files: crates/ui/src/object_card.rs`
+- `[ ]` **U72** the side panels are a true overlay: the scene keeps one rectangle and one camera however a panel folds, and the translucent panel shows the furniture drawn under it
+  Why: U66 gave both panels `Area`s over a full-width viewport, but `Chrome::content` still
+   narrows the rectangle the split views tile by the panel width. Folding the tree therefore
+   changes the camera aspect and pans the image, and at 92 % the panel blends with the clear
+   colour instead of the furniture. The owner wants a continuous scene under the chrome.
+  Shape: Make the scene rectangle depend on the ribbon band only: `Chrome::content` (or a new
+   `Chrome::scene`) returns the area below the ribbon and ignores both panels.
+   `Layout::regions`, the render target, the egui image and the active-view camera aspect read
+   that rectangle, so folding, hiding, collapsing or expanding a panel changes no view rect and
+   no camera. The panels remain `Area`s on `Order::Middle` above the image; `Chrome::covers`
+   still makes a pointer on a panel chrome, never a pick, a border drag or a camera gesture.
+   `frame_all` now fits the view below the ribbon, because the panels no longer narrow it; if
+   that is not wanted, the task records the question rather than reintroducing the shrink.
+   Update ADR 0080 and the U66 note to replace the split-tiles-only-uncovered clause.
+  Done: Tests: `Layout::regions` and the active camera aspect are identical with both panels
+   expanded, folded and hidden, and with the ribbon open and folded; the scene image is painted
+   in the full view rect and a 55 % panel visibly shows it; a click on a panel selects nothing
+   and starts no camera or border drag, while a click just outside selects; two-column and quad
+   layouts still tile the view rect exactly and their dividers stay grabbable outside the
+   panels; no document revision on any fold or hide. Both themes checked by eye with the panels
+   at 55, 92 and 100 %.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/strip.rs, docs/decisions/0080-the-tool-strips-float-over-the-design-space.md`
+- `[ ]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
+  Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so
+   the inspector covers the cube and its home and projection buttons. The widget has no on/off
+   switch, while the owner wants one in the bottom cluster settings.
+  Shape: Add `ViewCluster::show_widget: bool` (default true) and a checkbox in
+   `settings_popover` beside the angle readout, with a `furnicraft-text` label and hint;
+   `Document::viewport` skips `Gizmo::show` when it is false and keeps the gizmo state. Place
+   the widget from the part of the view no chrome covers: start with the view rect, remove the
+   ribbon band at the top, then remove the right panel when its rect overlaps the candidate
+   top-right corner (expanded or folded), then the left panel on the mirrored corner; never
+   return a rect that intersects `PanelRects` or the ribbon. If neither top corner has room,
+   return `None` as today. Keep the function pure and the readout outside the hit rect.
+  Done: Tests: the widget rect never intersects a panel or the ribbon for every panel
+   visible/expanded pair, both layouts and a 1280 and 640 pt window; expanding the right panel
+   moves the widget left of it and folding it leaves the widget clear; hiding the widget draws
+   no cube, home or projection button and consumes no click; the switch does not change the
+   document revision; the label and hint resolve in both languages. Checked by eye in both
+   themes and at 200 % scale.
+  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/side_panels.rs, crates/text/src/messages.rs`
+- `[ ]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
+  Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
+   method needs two clicks and the glyph never says which method a click runs. The pin is a 20
+   x 12 control in the same right-to-left row as the shortcut, so it covers the key label, and
+   pinning leaves the main cell unchanged. The owner wants two independent faces inside one
+   button.
+  Shape: Split the cell into two hit rectangles inside the same 34 x 30 control: a main face
+   that runs `pinned_index` and a caret face of at least 10 x 10 that opens or closes the list.
+   Draw one resting fill and let hover, press and the armed tint apply to the face under the
+   pointer; no gap between the faces. The main face draws the pinned method icon when it has
+   one, otherwise `tool.icon`, and its hint names the pinned method and its shortcut; the caret
+   hint names the list. A main-face click while the list is open runs the pinned method and
+   closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
+   columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
+   never overlaps the shortcut; the pin hint says it becomes the main method. Pinning writes
+   `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
+   new accent.
+  Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
+   opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
+   after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
+   pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
+   intersect on any row in either language; Escape, outside click and tab change still close;
+   opening, caret and pin write no document revision. Both themes and 100 and 200 % scale
+   checked by eye.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
+- `[ ]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
+  Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
+   the tool row, and `theme::band` is `extreme_bg_color`, the darkest chrome, which makes the
+   strip read as a hole. The owner wants a calmer band, slightly darker than the buttons.
+  Shape: Raise `RIBBON_CAPTION_HEIGHT` from 12 to 16 pt so the 9.5 pt capitals have at least 3
+   pt above and below; update `toolbars::height` (open 72 to 76, folded stays 29),
+   `plan/map.md`, the U68 metric note and every golden that names 72. Add
+   `theme::caption_band(ui)` as a small mix of `control(ui)` toward `band(ui)` (about 30 %) and
+   use it for the group caption instead of `theme::band`; keep `text_dim` and the hairline. The
+   tool row stays 30 pt and no tool moves.
+  Done: Tests: the caption is optically centred with at least 3 pt clearance at 9.5 pt;
+   `caption_band` is darker than `control` and lighter than `band` in every preset x variant,
+   and `text_dim` on it clears 3:1; `height(true)` is 76 and `height(false)` is 29, and the
+   drawn strip matches; the tool row still measures 30 pt; both themes checked by eye on all
+   five tabs.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/theme.rs, plan/map.md`
+- `[ ]` **U76** the ribbon holds tools only: the polygon sides, primitive size and extrude height fields leave the tool row and their typed values become session defaults
+  Why: Three `CellSpec::Field` cells take two 34 pt cells each and turn a row of icons into a
+   form; `show_field` draws a `TextEdit`, the state carries three strings, and `FieldRefusal`
+   exists only to explain a bad field. The object card already edits a polygon sides and a
+   primitive parameters, and the extrude pull has its own numeric popup. The owner wants no
+   value fields in the toolbar.
+  Shape: Delete the three `CellSpec::Field` entries, `FieldSpec`, `FieldKind`,
+   `CellSpec::Field`, `show_field`, `FieldSpec::COLUMNS` and `field_text_mut`;
+   `GroupSpec::cells` becomes a tool list (or keeps one tool variant) and `columns()` counts
+   live tools. Keep the three values as typed session defaults on `Toolbars` (`primitive_size:
+   Length`, `extrude_height: Length`, `polygon_sides: u32`) initialized from the existing
+   constants; `Editor::set_extrude_height` updates the typed default instead of a text. `ready`
+   always sees a valid value, so `FieldRefusal` and its messages go. The object card stays the
+   editor for polygon sides and primitive parameters; the extrude pull and its popup stay the
+   editor for a height. If a value loses its only editor, record it in `plan/debt.md` rather
+   than keeping a ribbon field.
+  Done: Tests: no tab draws a `TextEdit` or a numeric cell; `GroupSpec` columns and the tab
+   width count tools only; a polygon is created with the default side count and its sides can
+   be changed in the object card; a primitive is created at the default size and its parameters
+   can be changed in the card; an extrusion uses the default height and the pull still changes
+   it and makes that the next default; no `FieldKind`, `FieldRefusal` or field message remains;
+   `cargo xtask ci` green.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/ribbon.rs, crates/ui/src/object_card.rs, crates/text/src/messages.rs`
 
 ## Bugs
 
