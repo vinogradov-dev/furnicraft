@@ -47,8 +47,8 @@ any plain dispatch close the open scope, so an unrelated command is never folded
   component the field owns — a translation edit keeps the stored quaternion bit for bit.
 - The command bar for a previewing operation can reuse the check/cross pair and the same field, but it
   needs a preview that is not a document revision first (M71); no per-field Apply survives it.
-- The object card's figure and primitive parameters and a typed property are still text edits (M72):
-  they are the same conversion, not a second design.
+- The object card's figure and primitive parameters and a typed property are the same field (M72):
+  a geometry parameter commits on release because it re-cuts geometry, a property number commits live.
 - Revisit if a field ever needs to show a unit inside the box for width reasons; the suffix outside is
   the rule, and a header that names the unit («Размеры, мм») is the alternative the field supports by
   leaving `unit()` empty.

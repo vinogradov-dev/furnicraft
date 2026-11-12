@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=M72 state=idle base=76a5913 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U72 state=idle base=78abf51 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-M72 routes the figure, primitive and typed-property numbers through the shared field, so no card
-draws its own text edit behind an Apply.
+U72 floats both side panels over one scene rectangle, so folding a panel no longer narrows the split
+views and the translucent panel shows the furniture drawn under it.
 
 ## Index
 

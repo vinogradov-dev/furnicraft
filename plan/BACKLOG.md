@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **M72** the figure, primitive and typed-property numbers use the shared field
-  Why: U65 converted the placement, pivot, panel, camera and light cards to the shared 76 px
-   field with the unit outside and a per-field commit policy. The figure and primitive
-   parameter fields still draw their own 100 px text edit with a hint, behind an Apply button,
-   and a typed Length or Angle property is a text edit as well.
-  Shape: Route every number in these cards through Scrub: field of view and height style units
-   outside the box, Live for a value the user feels out, OnRelease for a figure parameter that
-   costs a rebuild. Remove ApplyFigure and the primitive Apply; a property Length or Angle
-   keeps its numeric draft keyed by the property name and commits through the field.
-  Done: Tests: a typed figure parameter commits once after the debounce and one drag is one
-   undo entry; no numeric TextEdit is left in either card; an invalid entry keeps the value and
-   marks the box red.
-  `files: crates/ui/src/object_card.rs`
 - `[ ]` **U72** the side panels are a true overlay: the scene keeps one rectangle and one camera however a panel folds, and the translucent panel shows the furniture drawn under it
   Why: U66 gave both panels `Area`s over a full-width viewport, but `Chrome::content` still
    narrows the rectangle the split views tile by the panel width. Folding the tree therefore
@@ -174,6 +161,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **M72** the figure, primitive and typed-property numbers use the shared field
+  Why: U65 converted the placement, pivot, panel, camera and light cards to the shared 76 px
+   field with the unit outside and a per-field commit policy. The figure and primitive
+   parameter fields still draw their own 100 px text edit with a hint, behind an Apply button,
+   and a typed Length or Angle property is a text edit as well.
+  Shape: Route every number in these cards through Scrub: field of view and height style units
+   outside the box, Live for a value the user feels out, OnRelease for a figure parameter that
+   costs a rebuild. Remove ApplyFigure and the primitive Apply; a property Length or Angle
+   keeps its numeric draft keyed by the property name and commits through the field.
+  Done: Tests: a typed figure parameter commits once after the debounce and one drag is one
+   undo entry; no numeric TextEdit is left in either card; an invalid entry keeps the value and
+   marks the box red.
+  `files: crates/ui/src/object_card.rs, crates/ui/src/properties_card.rs, crates/text/src/messages.rs` — `78abf51`
 
 - `[x]` **M71** a previewing operation gets a command bar with a check and a cross, and a slow rebuild reports busy
   Why: U65 delivered the field anatomy and the commit policy; the previewing half of the
