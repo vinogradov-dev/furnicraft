@@ -4,6 +4,9 @@
 //! as a dim caption *outside* the box. The unit never enters the editable text: a number the user
 //! selects and replaces cannot drag `mm` or `°` along with it, and a pasted number is a number.
 //!
+//! A field owns one edit: its drag or its typing run is one undo entry (ADR 0092), the card dispatches
+//! with the token `Session::edit_scope` minted, and Escape restores the value the edit started from.
+//!
 //! The field changes its value while the primary button is held and the pointer moves left or right,
 //! and it measures that movement in the pointer's own travel, never in where it is on screen: a
 //! widget that grows or shrinks under the pointer, and a window that rescales under it, cannot move

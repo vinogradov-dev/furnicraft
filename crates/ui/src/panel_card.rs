@@ -206,7 +206,7 @@ impl PanelCard {
     ) -> PanelAction {
         let lang = crate::language(ui.ctx());
         // One token per frame for the numeric fields: a field that begins an edit takes it, and the
-        // whole drag or typing run lands in one undo entry (ADR 0086).
+        // whole drag or typing run lands in one undo entry (ADR 0092).
         let fresh = session.edit_scope();
         let Some(panel_id) = selected else {
             self.draft = None;

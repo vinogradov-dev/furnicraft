@@ -14,7 +14,7 @@ use crate::resolve;
 ///
 /// A field commits while the user drags it, so one command runs many times with a new value each
 /// frame. Those dispatches belong to one scope, so undo returns the value the field had before the
-/// hand touched it instead of the frame before the last one.
+/// hand touched it instead of the frame before the last one (ADR 0092).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EditScope(u64);
 
