@@ -24,6 +24,9 @@ mod document;
 mod draw_gizmo;
 mod extrude_gizmo;
 mod file_menu;
+/// The shell's frame, asserted without a window (U78).
+#[cfg(test)]
+mod frame_tests;
 mod gizmo;
 mod gizmo_math;
 mod header;
@@ -482,6 +485,10 @@ impl FurniCraftApp {
             return;
         }
         self.settings.ribbon.open = open;
+        // The measured band belongs to the fold it was drawn with. A remembered measurement would
+        // keep the band of the state before — the strip's own height is a floor, so a folded ribbon
+        // would hold the open band forever — and the fold would give the scene nothing (U78).
+        self.shell.ribbon_rect = None;
         for (_, document) in self.tabs.iter_mut() {
             document.set_ribbon_open(open);
         }
@@ -671,8 +678,10 @@ impl FurniCraftApp {
     /// Everything the window shows happens here: the header, the menus, the ribbon, the floating
     /// panels, the scene, the cluster, the palette, the Settings window and the Home surface. The
     /// eframe trait method delegates to it, so a test drives the real interface with an
-    /// [`egui::Context`] and no window at all (U77).
-    fn frame(&mut self, ui: &mut egui::Ui) {
+    /// [`egui::Context`] and no window at all (U77), and the chrome the frame gave the window comes
+    /// back, so the presses it keeps and the rectangles it hands out are asserted without pixels
+    /// (U78).
+    fn frame(&mut self, ui: &mut egui::Ui) -> Chrome {
         // The language is workspace settings, published once per frame so every surface draws the
         // same words without threading a `Lang` through every signature (U49); the icon-colour mode
         // is published the same way, so the rasteriser never needs the settings threaded to it.
@@ -818,6 +827,7 @@ impl FurniCraftApp {
             self.quit_requested = false;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        chrome
     }
 }
 
@@ -933,59 +943,5 @@ mod tests {
             (shell.ribbon_band(area, false).height() - 91.0).abs() < f32::EPSILON,
             "a measured strip is the band whatever its nominal height was"
         );
-    }
-
-    /// The window a headless frame is drawn into.
-    fn screen() -> egui::Rect {
-        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 840.0))
-    }
-
-    /// A headless application: an [`egui::Context`] stands in for the window, there is no device and
-    /// no adapter, and the workspace file lives in a scratch directory the test owns.
-    fn headless(name: &str) -> (egui::Context, FurniCraftApp, std::path::PathBuf) {
-        let path = furnicraft_testkit::scratch_dir(name).join("settings.json");
-        let ctx = egui::Context::default();
-        let session = crate::scene_build::sample_session().expect("the sample session builds");
-        let app = FurniCraftApp::headless(&ctx, path.clone(), Settings::default(), session)
-            .expect("the application builds with no device, no adapter and no window");
-        (ctx, app, path)
-    }
-
-    /// Runs one real frame of the interface against `app` and returns what it drew.
-    ///
-    /// A window hands the frame's texture deltas to the renderer; a test has none, and epaint
-    /// asserts on drop that a delta was applied, so the frame is closed here (U77).
-    fn frame(ctx: &egui::Context, app: &mut FurniCraftApp) -> egui::FullOutput {
-        let mut output =
-            ctx.run_ui(egui::RawInput { screen_rect: Some(screen()), ..Default::default() }, |ui| app.frame(ui));
-        output.textures_delta.clear();
-        output
-    }
-
-    #[test]
-    fn the_whole_interface_frames_without_a_gpu_and_without_a_window() {
-        let (ctx, mut app, _path) = headless("shell-headless");
-        let revision = app.tabs.active().session.project().revision();
-        let first = frame(&ctx, &mut app);
-        assert!(!first.shapes.is_empty(), "the frame draws the header, the ribbon and the scene");
-        let second = frame(&ctx, &mut app);
-        assert!(!second.shapes.is_empty(), "a second frame draws the same interface again");
-        assert_eq!(app.tabs.active().session.project().revision(), revision, "drawing a frame writes no document");
-        assert_eq!(app.tabs.len(), 1, "and opens no tab");
-        assert!(app.tabs.active().last_error.is_none(), "nothing failed: {:?}", app.tabs.active().last_error);
-    }
-
-    #[test]
-    fn a_headless_run_leaves_the_workspace_file_alone() {
-        // The store the headless application is built with points at a scratch file, never at the
-        // workspace in the OS config directory, and a frame that changes no setting writes nothing.
-        let (ctx, mut app, path) = headless("shell-settings");
-        let before = b"{\"version\": 1}\n";
-        std::fs::write(&path, before).expect("the test writes the workspace file");
-        frame(&ctx, &mut app);
-        frame(&ctx, &mut app);
-        let after = std::fs::read(&path).expect("the file is still there");
-        assert_eq!(after, before, "a headless run leaves the workspace file byte-identical");
-        assert!(!path.with_extension("json.tmp").exists(), "and leaves no temporary sibling behind");
     }
 }

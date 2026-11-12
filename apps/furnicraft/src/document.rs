@@ -270,6 +270,12 @@ pub(crate) struct Document {
     rebuild: Rebuild,
     /// The rectangle the command bar drew last frame, so a press on it is chrome and never a pick.
     command_bar_rect: Option<egui::Rect>,
+    /// The rectangle the last drawn frame gave the split views: the scene under the chrome. The
+    /// floating panels never narrow it (U72). A test-only snapshot: nothing in the product reads it,
+    /// and a frame drawn without a window reports the same rectangle through it, so the shell's
+    /// frame is asserted without a GPU (U78).
+    #[cfg(test)]
+    scene_rect: Option<egui::Rect>,
     /// The window's GPU handles and this tab's render target; `None` in a headless run (U77).
     target: Option<Target>,
     file: FileMenu,
@@ -339,6 +345,8 @@ impl Document {
             scene_preview: session.preview_version(),
             rebuild: Rebuild::default(),
             command_bar_rect: None,
+            #[cfg(test)]
+            scene_rect: None,
             session,
             editor,
             kernel,
@@ -580,7 +588,32 @@ impl Document {
 
     /// The projection the active view is drawing with, for the status bar's readout.
     pub(crate) fn projection(&self) -> Projection {
-        self.scene.camera.projection()
+        self.camera().projection()
+    }
+
+    /// The camera the last drawn frame looked through.
+    ///
+    /// A camera or a light the document owns pins the view, so this is the authored camera in that
+    /// case and the active view's own otherwise.
+    pub(crate) fn camera(&self) -> Camera {
+        self.scene.camera
+    }
+
+    /// The scene rectangle the last drawn frame gave the split views, or `None` before the first
+    /// frame.
+    ///
+    /// It is the part of the viewport below the floating ribbon band; the side panels float over it
+    /// and never narrow it (U72). A frame drawn with no window reports the same rectangle, so the
+    /// frame tests assert the geometry the window really uses (U78).
+    #[cfg(test)]
+    pub(crate) fn scene_rect(&self) -> Option<egui::Rect> {
+        self.scene_rect
+    }
+
+    /// This tab's split views: their cameras, presets and the tree that lays them out.
+    #[cfg(test)]
+    pub(crate) fn layout(&self) -> &Layout {
+        &self.layout
     }
 
     /// Whether the status bar should say «Перестроение…» on this frame.
@@ -1031,6 +1064,10 @@ impl Document {
             chrome.covers(pointer) || self.command_bar_rect.is_some_and(|bar| bar.contains(pointer))
         });
         let content = chrome.content(area);
+        #[cfg(test)]
+        {
+            self.scene_rect = Some(content);
+        }
 
         // The viewport is the whole central area; the layout divides the scene rectangle into
         // views. Every view has its own camera and every border is draggable. A press on a border
@@ -1691,7 +1728,7 @@ impl Document {
     }
 
     /// Divides the workspace into `kind`, keeping the cameras the views already have.
-    fn set_layout(&mut self, kind: LayoutKind) {
+    pub(crate) fn set_layout(&mut self, kind: LayoutKind) {
         self.layout.set_kind(kind);
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }
@@ -1905,10 +1942,11 @@ impl Document {
 
     /// Reads the keys a running tool owns and leaves the rest to the shell.
     ///
-    /// `modals` is the window's answer to "does a dialog or the palette own Escape this frame": a
-    /// modal that is up keeps both keys for itself, exactly as a focused text field does. The armed
-    /// navigation mode and the display popover live on the [`Shell`], so the two that concern them
-    /// are read and written there.
+    /// `modals` is the window's answer to "does a dialog or the palette own the keys this frame": a
+    /// modal that is up keeps the keys for itself, exactly as a focused text field does. That covers
+    /// the tool table as well: starting a tool under the Settings window would hand the next click
+    /// to a tool the user never asked for. The armed navigation mode and the display popover live on
+    /// the [`Shell`], so the two that concern them are read and written there.
     pub(crate) fn handle_keys(&mut self, ui: &egui::Ui, modals: bool, shell: &mut Shell) {
         // An open variant list owns Escape and Enter: the popup closes itself and runs its
         // highlighted method when the ribbon draws later in this frame, and one key must not also
@@ -1995,11 +2033,11 @@ impl Document {
                 }
             }
         }
-        // A drawing shortcut starts its tool from anywhere outside a text field, including while
-        // another draft runs: choosing a tool ends the running draft and starts the new one
-        // (ADR 0076). The table is the one the toolbar hints show, so the key and the tooltip
+        // A drawing shortcut starts its tool from anywhere outside a text field and outside a modal,
+        // including while another draft runs: choosing a tool ends the running draft and starts the
+        // new one (ADR 0076). The table is the one the toolbar hints show, so the key and the tooltip
         // cannot drift apart.
-        if self.editor.contour_edit().is_none() && !ui.ctx().text_edit_focused() {
+        if !modals && self.editor.contour_edit().is_none() && !ui.ctx().text_edit_focused() {
             let sides = self.editor.polygon_sides();
             if take_drawing_shortcut(ui.ctx(), &mut self.editor, sides) {
                 self.draw_gizmo.reset();
