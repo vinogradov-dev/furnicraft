@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
-  Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
-   to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
-   skill load reliably. The move to `.pi/skills` also showed that pi parses frontmatter as
-   strict YAML: an unquoted colon in a description silently loaded no skill at all, and nothing
-   in the gate noticed.
-  Shape: A new `xtask/src/skills.rs` in the shape of the other checks. It reads `AGENTS.md`,
-   `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a sentence when: a path named in
-   backticks or as a markdown link does not exist; a `cargo xtask <name>` is not a command of
-   the tool; a `references/*.md` a skill names is missing; the frontmatter `name` is not the
-   folder name; `description` is missing, empty or unquoted; a `SKILL.md` is over 200 lines or
-   a reference over 150; `AGENTS.md` §1.3 does not name the design skill. Tests use fixture
-   trees, one per refusal, and the real tree must pass. Join `cargo xtask ci` after `docs`.
-  Done: Each refusal has a test that names the offending file; the real tree passes; cargo
-   xtask ci runs the new step and fails when a path in a skill is renamed away.
-  `files: xtask/src/main.rs, AGENTS.md, .pi/skills/ui-design/SKILL.md, .pi/prompts/ui-review.md`
 - `[ ]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
   Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
    it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
@@ -101,6 +85,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
+  Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
+   to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
+   skill load reliably. The move to `.pi/skills` also showed that pi parses frontmatter as
+   strict YAML: an unquoted colon in a description silently loaded no skill at all, and nothing
+   in the gate noticed.
+  Shape: A new `xtask/src/skills.rs` in the shape of the other checks. It reads `AGENTS.md`,
+   `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a sentence when: a path named in
+   backticks or as a markdown link does not exist; a `cargo xtask <name>` is not a command of
+   the tool; a `references/*.md` a skill names is missing; the frontmatter `name` is not the
+   folder name; `description` is missing, empty or unquoted; a `SKILL.md` is over 200 lines or
+   a reference over 150; `AGENTS.md` §1.3 does not name the design skill. Tests use fixture
+   trees, one per refusal, and the real tree must pass. Join `cargo xtask ci` after `docs`.
+  Done: Each refusal has a test that names the offending file; the real tree passes; cargo
+   xtask ci runs the new step and fails when a path in a skill is renamed away.
+  `files: xtask/src/main.rs, AGENTS.md, .pi/skills/ui-design/SKILL.md, .pi/prompts/ui-review.md` — `5ff6bb7`
 
 - `[x]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
   Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a

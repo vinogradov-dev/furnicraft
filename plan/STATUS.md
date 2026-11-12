@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U79 state=idle base=04e6a7d updated=2026-11-12
+STATE: milestone=M7 phase=A task=U80 state=idle base=5ff6bb7 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U79 is next: cargo xtask skills keeps the project skills honest, so every path, command and sibling
-a skill names exists and its frontmatter is what the loader needs.
+U80 makes `cargo xtask ui-rules` fail a literal colour and a raw egui host outside the module that
+owns it, so the theme stays the one place a colour is decided.
 
 ## Index
 
