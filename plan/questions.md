@@ -37,7 +37,3 @@ this file only when a task touches the question.
   (F4 in the S7 audit). One `Project::apply(Change)` value per area would collapse the engine side to
   one module and the UI to one card, at the cost of rewriting every command or keeping the stable ids
   as thin wrappers over the change values. Decide before M8 puts hardware commands on the same pattern.
-- A previewing operation (extrude, boolean) must show its result before it commits. Decide whether
-  the preview is a session overlay above the document — no revision, no undo entry, discarded on
-  cancel (M71) — or a document edit that is undone on cancel; the command bar's check and cross
-  depend on which one the assistant and the CLI can also reach.

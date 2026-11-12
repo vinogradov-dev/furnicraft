@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **M71** a previewing operation gets a command bar with a check and a cross, and a slow rebuild reports busy
-  Why: U65 delivered the field anatomy and the commit policy; the previewing half of the
-   owner's request has no operation to preview: the ribbon's boolean tools are `planned`, and
-   extrude is a shell gizmo with its own Enter/Escape number popup.
-  Shape: Add a session preview: an engine-side overlay of the document that a previewing
-   command fills without a revision or an undo entry, discarded on cancel. Then one command bar
-   at the bottom centre of the viewport — command name, the shared 76 px field with its unit
-   outside, check (Enter) and cross (Escape), idempotent on a double click — starting with
-   extrude and boolean. While a rebuild runs longer than ~250 ms the status bar says
-   «Перестроение…», the last good geometry stays, and Escape cancels the pending command.
-  Done: Tests: the preview changes no revision and no history; the check applies once however
-   often it is clicked; the cross restores the pre-command state; a simulated slow rebuild
-   reports busy and the window stays responsive.
-  `files: apps/furnicraft/src/status_bar.rs`
 - `[ ]` **M72** the figure, primitive and typed-property numbers use the shared field
   Why: U65 converted the placement, pivot, panel, camera and light cards to the shared 76 px
    field with the unit outside and a per-field commit policy. The figure and primitive
@@ -188,6 +174,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **M71** a previewing operation gets a command bar with a check and a cross, and a slow rebuild reports busy
+  Why: U65 delivered the field anatomy and the commit policy; the previewing half of the
+   owner's request has no operation to preview: the ribbon's boolean tools are `planned`, and
+   extrude is a shell gizmo with its own Enter/Escape number popup.
+  Shape: Add a session preview: an engine-side overlay of the document that a previewing
+   command fills without a revision or an undo entry, discarded on cancel. Then one command bar
+   at the bottom centre of the viewport — command name, the shared 76 px field with its unit
+   outside, check (Enter) and cross (Escape), idempotent on a double click — starting with
+   extrude and boolean. While a rebuild runs longer than ~250 ms the status bar says
+   «Перестроение…», the last good geometry stays, and Escape cancels the pending command.
+  Done: Tests: the preview changes no revision and no history; the check applies once however
+   often it is clicked; the cross restores the pre-command state; a simulated slow rebuild
+   reports busy and the window stays responsive.
+  `files: apps/furnicraft/src/status_bar.rs` — `3abe271`
 
 - `[x]` **U64** the status bar shows the tool and counts; the owner wants the selection context in the centre — name, kind, size, material, edge banding, warnings — and the three display sliders renamed and moved to Settings → View.
   Why: The card should not carry derived context, and the display names are ambiguous: «Сетка»

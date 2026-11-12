@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=M71 state=idle base=eb57520 updated=2026-11-12
+STATE: milestone=M7 phase=A task=M72 state=idle base=76a5913 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-M71 is next: a previewing operation gets a command bar with a check and a cross, and a rebuild that
-runs long reports busy in the status bar. The session preview, the bar and the busy state are
-described in the entry.
+M72 routes the figure, primitive and typed-property numbers through the shared field, so no card
+draws its own text edit behind an Apply.
 
 ## Index
 
