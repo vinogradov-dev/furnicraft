@@ -149,16 +149,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    hint names the list. A main-face click while the list is open runs the pinned method and
    closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
    columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
-   never overlaps the shortcut; the pin hint says it becomes the main method. Pinning writes
+   never overlaps the shortcut. The pin is not drawn at rest: it appears on the row under the
+   pointer and on the row the keyboard highlights, while its column stays reserved so the label
+   and shortcut never shift; the pinned row keeps its accent bar and fill as the persistent
+   marker, and the pin hint says it becomes the main method. Pinning writes
    `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
    new accent.
   Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
    opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
    after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
    pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
-   intersect on any row in either language; Escape, outside click and tab change still close;
-   opening, caret and pin write no document revision. Both themes and 100 and 200 % scale
-   checked by eye.
+   intersect on any row in either language; the pin is not drawn on an idle row, appears on
+   hover and on the keyboard-highlighted row, and its reserved column keeps the label and
+   shortcut from moving; the pinned row stays marked when the pin is hidden; Escape, outside
+   click and tab change still close; opening, caret and pin write no document revision. Both
+   themes and 100 and 200 % scale checked by eye.
   `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
 - `[ ]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
   Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
