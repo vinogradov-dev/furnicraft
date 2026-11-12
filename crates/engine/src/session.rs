@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
-use furnicraft_model::{BandingSpec, Catalog, EdgeBanding, Id, PanelGeometry, Project, ProjectError};
+use furnicraft_model::{BandingSpec, Catalog, EdgeBanding, Geometry, Id, PanelGeometry, Project, ProjectError};
 use furnicraft_param::EdgeBandProfile;
 use serde_json::Value;
 
 use crate::commands::{CommandError, CommandOutcome, CommandRegistry};
 use crate::diagnostics::{PanelDiagnostic, diagnose_panel};
+use crate::preview::Preview;
 use crate::resolve;
 
 /// One edit by the user — a drag or a run of keystrokes — as a single undo entry.
@@ -37,6 +38,8 @@ pub struct Session {
     catalog: Arc<Catalog>,
     edit: Option<OpenEdit>,
     next_scope: u64,
+    /// The overlay a previewing operation fills; see [`Preview`].
+    preview: Preview,
 }
 
 impl Session {
@@ -57,12 +60,43 @@ impl Session {
             catalog: Arc::new(catalog),
             edit: None,
             next_scope: 0,
+            preview: Preview::new(),
         }
     }
 
     /// The current document. Commands are the only way to mutate it.
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    /// The overlay a previewing operation fills, drawn instead of the document's geometry.
+    pub fn preview(&self) -> &Preview {
+        &self.preview
+    }
+
+    /// Shows `geometry` for `node` until the overlay is cleared.
+    ///
+    /// This is the one way a previewing operation reaches the viewport: it writes no document field,
+    /// moves no revision and leaves no undo entry, so the single command behind the ✓ is the only
+    /// thing the user can undo.
+    pub fn set_preview_geometry(&mut self, node: Id, geometry: Geometry) {
+        self.preview.set(node, geometry);
+    }
+
+    /// Drops the overlay, so the viewport draws the document again.
+    pub fn clear_preview(&mut self) {
+        self.preview.clear();
+    }
+
+    /// The counter the shell compares with the version its uploaded frame was built from.
+    pub fn preview_version(&self) -> u64 {
+        self.preview.version()
+    }
+
+    /// The geometry the viewport draws for `node`: the preview when the overlay holds one, else the
+    /// document's own.
+    pub fn drawn_geometry(&self, node: Id) -> Option<&Geometry> {
+        self.preview.geometry(node).or_else(|| self.project.object(node).map(|object| object.geometry()))
     }
 
     /// The session-scoped, read-only material catalogue.

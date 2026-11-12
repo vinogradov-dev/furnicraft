@@ -556,10 +556,25 @@ impl EvaluationCache {
     /// viewport draws and the collapse bakes, and a path becomes a line chain. No kernel body is
     /// involved.
     pub fn object(&mut self, revision: Revision, object: &Object) -> Result<NodeGeometry, MeshError> {
-        let id = object.id();
+        self.object_with(revision, object.id(), object.geometry())
+    }
+
+    /// Evaluates one object's geometry, which the caller may have substituted.
+    ///
+    /// A previewing operation draws a node the document does not hold yet — the body at the height
+    /// the pull shows — so the evaluator takes the geometry it is handed rather than reading it off
+    /// the node. The entry is keyed by the node id and compared with the payload it was built from,
+    /// so a preview and the document cannot both be cached under one id: whichever is evaluated
+    /// next re-derives the node once.
+    pub fn object_with(
+        &mut self,
+        revision: Revision,
+        id: Id,
+        geometry: &furnicraft_model::Geometry,
+    ) -> Result<NodeGeometry, MeshError> {
         let pass = self.pass;
         if let Some(entry) = self.nodes.get_mut(&id) {
-            let unchanged = match (&entry.payload, object.geometry()) {
+            let unchanged = match (&entry.payload, geometry) {
                 (Payload::Mesh(cached), furnicraft_model::Geometry::Mesh(current)) => cached == current,
                 (Payload::Constructive(cached), furnicraft_model::Geometry::Constructive(current)) => cached == current,
                 (Payload::Primitive(cached), furnicraft_model::Geometry::Primitive(current)) => cached == current,
@@ -572,7 +587,7 @@ impl EvaluationCache {
             }
         }
 
-        let (payload, geometry) = match object.geometry() {
+        let (payload, evaluated) = match geometry {
             furnicraft_model::Geometry::Mesh(mesh) => {
                 let data = object_mesh(mesh)?;
                 (Payload::Mesh(mesh.clone()), solid_geometry(data))
@@ -593,8 +608,8 @@ impl EvaluationCache {
                 )
             }
         };
-        self.store(id, revision, payload, geometry.clone());
-        Ok(geometry)
+        self.store(id, revision, payload, evaluated.clone());
+        Ok(evaluated)
     }
 
     /// Stores one freshly derived solid and its edge list, tagged with the current pass.
