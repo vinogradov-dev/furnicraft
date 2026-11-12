@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U72** the side panels are a true overlay: the scene keeps one rectangle and one camera however a panel folds, and the translucent panel shows the furniture drawn under it
-  Why: U66 gave both panels `Area`s over a full-width viewport, but `Chrome::content` still
-   narrows the rectangle the split views tile by the panel width. Folding the tree therefore
-   changes the camera aspect and pans the image, and at 92 % the panel blends with the clear
-   colour instead of the furniture. The owner wants a continuous scene under the chrome.
-  Shape: Make the scene rectangle depend on the ribbon band only: `Chrome::content` (or a new
-   `Chrome::scene`) returns the area below the ribbon and ignores both panels.
-   `Layout::regions`, the render target, the egui image and the active-view camera aspect read
-   that rectangle, so folding, hiding, collapsing or expanding a panel changes no view rect and
-   no camera. The panels remain `Area`s on `Order::Middle` above the image; `Chrome::covers`
-   still makes a pointer on a panel chrome, never a pick, a border drag or a camera gesture.
-   `frame_all` now fits the view below the ribbon, because the panels no longer narrow it; if
-   that is not wanted, the task records the question rather than reintroducing the shrink.
-   Update ADR 0080 and the U66 note to replace the split-tiles-only-uncovered clause.
-  Done: Tests: `Layout::regions` and the active camera aspect are identical with both panels
-   expanded, folded and hidden, and with the ribbon open and folded; the scene image is painted
-   in the full view rect and a 55 % panel visibly shows it; a click on a panel selects nothing
-   and starts no camera or border drag, while a click just outside selects; two-column and quad
-   layouts still tile the view rect exactly and their dividers stay grabbable outside the
-   panels; no document revision on any fold or hide. Both themes checked by eye with the panels
-   at 55, 92 and 100 %.
-  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/strip.rs, docs/decisions/0080-the-tool-strips-float-over-the-design-space.md`
 - `[ ]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
   Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so
    the inspector covers the cube and its home and projection buttons. The widget has no on/off
@@ -161,6 +139,29 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U72** the side panels are a true overlay: the scene keeps one rectangle and one camera however a panel folds, and the translucent panel shows the furniture drawn under it
+  Why: U66 gave both panels `Area`s over a full-width viewport, but `Chrome::content` still
+   narrows the rectangle the split views tile by the panel width. Folding the tree therefore
+   changes the camera aspect and pans the image, and at 92 % the panel blends with the clear
+   colour instead of the furniture. The owner wants a continuous scene under the chrome.
+  Shape: Make the scene rectangle depend on the ribbon band only: `Chrome::content` (or a new
+   `Chrome::scene`) returns the area below the ribbon and ignores both panels.
+   `Layout::regions`, the render target, the egui image and the active-view camera aspect read
+   that rectangle, so folding, hiding, collapsing or expanding a panel changes no view rect and
+   no camera. The panels remain `Area`s on `Order::Middle` above the image; `Chrome::covers`
+   still makes a pointer on a panel chrome, never a pick, a border drag or a camera gesture.
+   `frame_all` now fits the view below the ribbon, because the panels no longer narrow it; if
+   that is not wanted, the task records the question rather than reintroducing the shrink.
+   Update ADR 0080 and the U66 note to replace the split-tiles-only-uncovered clause.
+  Done: Tests: `Layout::regions` and the active camera aspect are identical with both panels
+  expanded, folded and hidden, and with the ribbon open and folded; the scene image is painted
+  in the full view rect and a 55 % panel visibly shows it; a click on a panel selects nothing
+  and starts no camera or border drag, while a click just outside selects; two-column and quad
+  layouts still tile the view rect exactly and their dividers stay grabbable outside the
+  panels; no document revision on any fold or hide. Both themes checked by eye with the panels
+  at 55, 92 and 100 %.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/strip.rs, docs/decisions/0080-the-tool-strips-float-over-the-design-space.md` — `c23e14b`
 
 - `[x]` **M72** the figure, primitive and typed-property numbers use the shared field
   Why: U65 converted the placement, pivot, panel, camera and light cards to the shared 76 px
