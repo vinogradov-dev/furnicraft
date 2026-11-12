@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
-  Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so
-   the inspector covers the cube and its home and projection buttons. The widget has no on/off
-   switch, while the owner wants one in the bottom cluster settings.
-  Shape: Add `ViewCluster::show_widget: bool` (default true) and a checkbox in
-   `settings_popover` beside the angle readout, with a `furnicraft-text` label and hint;
-   `Document::viewport` skips `Gizmo::show` when it is false and keeps the gizmo state. Place
-   the widget from the part of the view no chrome covers: start with the view rect, remove the
-   ribbon band at the top, then remove the right panel when its rect overlaps the candidate
-   top-right corner (expanded or folded), then the left panel on the mirrored corner; never
-   return a rect that intersects `PanelRects` or the ribbon. If neither top corner has room,
-   return `None` as today. Keep the function pure and the readout outside the hit rect.
-  Done: Tests: the widget rect never intersects a panel or the ribbon for every panel
-   visible/expanded pair, both layouts and a 1280 and 640 pt window; expanding the right panel
-   moves the widget left of it and folding it leaves the widget clear; hiding the widget draws
-   no cube, home or projection button and consumes no click; the switch does not change the
-   document revision; the label and hint resolve in both languages. Checked by eye in both
-   themes and at 200 % scale.
-  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/side_panels.rs, crates/text/src/messages.rs`
 - `[ ]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
   Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
    method needs two clicks and the glyph never says which method a click runs. The pin is a 20
@@ -139,6 +120,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
+  Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so
+   the inspector covers the cube and its home and projection buttons. The widget has no on/off
+   switch, while the owner wants one in the bottom cluster settings.
+  Shape: Add `ViewCluster::show_widget: bool` (default true) and a checkbox in
+   `settings_popover` beside the angle readout, with a `furnicraft-text` label and hint;
+   `Document::viewport` skips `Gizmo::show` when it is false and keeps the gizmo state. Place
+   the widget from the part of the view no chrome covers: start with the view rect, remove the
+   ribbon band at the top, then remove the right panel when its rect overlaps the candidate
+   top-right corner (expanded or folded), then the left panel on the mirrored corner; never
+   return a rect that intersects `PanelRects` or the ribbon. If neither top corner has room,
+   return `None` as today. Keep the function pure and the readout outside the hit rect.
+  Done: Tests: the widget rect never intersects a panel or the ribbon for every panel
+   visible/expanded pair, both layouts and a 1280 and 640 pt window; expanding the right panel
+   moves the widget left of it and folding it leaves the widget clear; hiding the widget draws
+   no cube, home or projection button and consumes no click; the switch does not change the
+   document revision; the label and hint resolve in both languages. Checked by eye in both
+   themes and at 200 % scale.
+  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/side_panels.rs, crates/text/src/messages.rs` — `45283da`
 
 - `[x]` **U72** the side panels are a true overlay: the scene keeps one rectangle and one camera however a panel folds, and the translucent panel shows the furniture drawn under it
   Why: U66 gave both panels `Area`s over a full-width viewport, but `Chrome::content` still
