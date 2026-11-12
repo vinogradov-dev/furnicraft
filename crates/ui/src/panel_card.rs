@@ -3,7 +3,7 @@
 //! The card renders session state and turns edits into engine commands. Text fields commit on Enter,
 //! on losing focus or through an explicit button; combo boxes and checkboxes dispatch immediately.
 
-use egui::{Color32, ComboBox, TextEdit, Ui};
+use egui::{ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
     BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
     EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, OUTLINE_CONTOUR_ID, RENAME_ID, RESIZE_ID,
@@ -27,6 +27,7 @@ use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// Persistent state of the panel card.
 #[derive(Debug, Default)]
@@ -340,7 +341,7 @@ impl PanelCard {
 
         if let Some(error) = &self.error {
             ui.separator();
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         if !errors.is_empty() {
             self.error = Some(errors.join("\n"));
@@ -389,7 +390,7 @@ impl PanelCard {
         if let Some(material) = current
             && session.catalog().panel_material(material).is_none()
         {
-            ui.colored_label(Color32::LIGHT_RED, Message::PanelMaterialMissingCatalogue.with(lang, [material]));
+            ui.colored_label(theme::danger(ui), Message::PanelMaterialMissingCatalogue.with(lang, [material]));
         }
         let selected_text = match current {
             Some(material) => session
@@ -633,7 +634,7 @@ impl PanelCard {
             if diagnostic_machining(diagnostic).is_some() {
                 continue;
             }
-            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(diagnostic, lang));
+            ui.colored_label(theme::danger(ui), diagnostic_message(diagnostic, lang));
             listed += 1;
         }
         let bound = diagnostics.len().saturating_sub(listed);
@@ -661,7 +662,7 @@ fn show_resolved(ui: &mut Ui, session: &Session, panel_id: Id) {
             ui.label(Message::OverallRow.with(lang, [geometry.overall_length(), geometry.overall_width()]));
         }
         Err(error) => {
-            ui.colored_label(Color32::LIGHT_RED, Message::GeometryError.with(lang, [error]));
+            ui.colored_label(theme::danger(ui), Message::GeometryError.with(lang, [error]));
         }
     }
 }

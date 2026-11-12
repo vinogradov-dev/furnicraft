@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
+- `[~]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
   Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
    it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
    and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
@@ -41,7 +41,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
    a host in a card fails; theme.rs and every owner in the table pass; an alias (use
    egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
-  `files: xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs`
+  `files: xtask/src/ui_rules.rs, xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs`
 - `[ ]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
   Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
    55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the

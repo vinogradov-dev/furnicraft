@@ -19,6 +19,7 @@ use furnicraft_units::{Degrees, Length};
 use crate::command::{dispatch, json};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// The field of view a perspective camera starts from when the draft has no perspective value.
 const DEFAULT_FOV_DEGREES: f64 = 50.0;
@@ -158,10 +159,10 @@ impl CameraCard {
         // Take a snapshot so the document borrow ends before a command runs.
         let next = projection_from_draft(draft, lang);
         if let Some(message) = refused {
-            ui.colored_label(egui::Color32::LIGHT_RED, message.text(lang));
+            ui.colored_label(theme::danger(ui), message.text(lang));
         }
         if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
 
         for scope in cancelled {

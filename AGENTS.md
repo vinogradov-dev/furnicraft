@@ -252,8 +252,8 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan`, `cargo xtask docs` and
-`cargo xtask skills`, in that order, stopping at the first failure. Run the steps individually while
+`cargo test --workspace`, `cargo xtask layers`, `cargo xtask ui-rules`, `cargo xtask plan`,
+`cargo xtask docs` and `cargo xtask skills`, in that order, stopping at the first failure. Run the steps individually while
 iterating (see below); run `cargo fmt --all` to fix formatting, the gate only checks it.
 
 `cargo xtask skills` reads `AGENTS.md`, `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a
@@ -262,6 +262,14 @@ sentence naming the file when a backticked path or a markdown link does not exis
 folder or its `description` is missing, empty or unquoted, when a skill is over 200 lines or a
 reference over 150, and when `AGENTS.md` §1.3 stops naming the design skill. A bare file name, a
 command id and a `<placeholder>` are prose, not a claim, and are not checked.
+
+`cargo xtask ui-rules` reads every shipped file under `crates/ui/src` and `apps/furnicraft/src`
+with `syn`, not as text, and fails with the file and the line when a feature module builds a colour
+literal — `Color32::from_rgb(…)` with literal channels, a named ink, a raw struct literal — outside
+`crates/ui/src/theme.rs` (the icon role inks are the second owner, ADR 0090), or creates an `egui`
+host (`Area`, `Window`, `Modal`, a panel, `Popup`) outside the module whose row in `HOST_OWNERS`
+owns that surface. Test code is not read: a test may drive whatever host it needs. A new surface is
+one row in that table, and it names the surface, so the table is the inventory rather than a waiver.
 
 `cargo xtask plan` fails when the plan files, the notes, the reference files or the `base`
 contradict each other, and it names the mismatch in a sentence you can act on: a missing or

@@ -14,7 +14,7 @@
 
 use std::ops::RangeInclusive;
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use furnicraft_engine::node_cmds::{NODE_PLACEMENT_SET_ID, NODE_PLACEMENT_WORLD_ZERO_ID};
 use furnicraft_engine::{EditScope, NodePlacementSet, NodePlacementWorldZero, Session};
 use furnicraft_model::{EulerAngles, Id, Placement};
@@ -25,6 +25,7 @@ use crate::command::{dispatch, json};
 use crate::coords;
 use crate::scrub::{self, CommitPolicy, Parse, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// Persistent state of the placement card.
 #[derive(Debug, Default)]
@@ -174,7 +175,7 @@ impl PlacementCard {
         };
 
         let Some(draft) = self.draft.as_mut() else {
-            ui.colored_label(Color32::LIGHT_RED, Message::OriginOutOfRange.text(crate::language(ui.ctx())));
+            ui.colored_label(theme::danger(ui), Message::OriginOutOfRange.text(crate::language(ui.ctx())));
             return;
         };
 
@@ -233,7 +234,7 @@ impl PlacementCard {
             );
         });
         if let Some(message) = refused {
-            ui.colored_label(Color32::LIGHT_RED, message.text(lang));
+            ui.colored_label(theme::danger(ui), message.text(lang));
         }
 
         for scope in cancelled {
@@ -253,7 +254,7 @@ impl PlacementCard {
         }
 
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         if edits.is_empty() {
             return;

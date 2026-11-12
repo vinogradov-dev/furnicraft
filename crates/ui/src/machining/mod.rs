@@ -13,7 +13,7 @@ mod cutout;
 
 use std::collections::HashSet;
 
-use egui::{Color32, ComboBox, RichText, Ui};
+use egui::{ComboBox, RichText, Ui};
 use furnicraft_engine::panel_cmds::{MACHINING_ADD_ID, MACHINING_MOVE_ID, MACHINING_REMOVE_ID, MACHINING_UPDATE_ID};
 use furnicraft_engine::{
     PanelDiagnostic, PanelMachiningAdd, PanelMachiningMove, PanelMachiningRemove, PanelMachiningUpdate, Session,
@@ -28,6 +28,7 @@ use furnicraft_units::Length;
 use crate::command::{dispatch, json};
 use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::panel_card::{diagnostic_message, edge_label};
+use crate::theme;
 
 /// One machining edit the card wants to dispatch after the immutable UI borrow ends.
 #[derive(Clone, Debug, PartialEq)]
@@ -174,7 +175,7 @@ impl MachiningSection {
             }
             ui.label(RichText::new(operation_title(record, crate::language(ui.ctx()))).strong());
             if !messages.is_empty() {
-                ui.colored_label(Color32::YELLOW, "⚠").on_hover_text(messages.join("\n"));
+                ui.colored_label(theme::warn(ui), "⚠").on_hover_text(messages.join("\n"));
             }
             if ui
                 .add_enabled(index > 0, egui::Button::new("↑").small())
@@ -244,7 +245,7 @@ impl MachiningSection {
             }
             contour_request = body.edit_contour;
             for message in messages {
-                ui.colored_label(Color32::LIGHT_RED, message);
+                ui.colored_label(theme::danger(ui), message);
             }
         });
 

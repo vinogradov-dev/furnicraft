@@ -1,6 +1,6 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|skills|plan|status|task|next|dashboard|ci>`
+//! Usage: `cargo xtask <layers|ui-rules|skills|plan|status|task|next|dashboard|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
@@ -23,6 +23,7 @@ use std::process::{Command, Stdio};
 use state_contract::{Command as PlanCommand, Config, Global};
 
 mod skills;
+mod ui_rules;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -241,6 +242,12 @@ static HOST: &[PlanCommand] = &[
         run: |global, _, _| run_layers(global),
     },
     PlanCommand {
+        name: "ui-rules",
+        usage: "ui-rules",
+        summary: "check that the interface takes its colours from the theme and draws each overlay host in the module that owns it",
+        run: |global, _, _| run_ui_rules(global),
+    },
+    PlanCommand {
         name: "skills",
         usage: "skills",
         summary: "check that the skills and prompts name existing paths and commands and carry loadable frontmatter",
@@ -249,7 +256,7 @@ static HOST: &[PlanCommand] = &[
     PlanCommand {
         name: "ci",
         usage: "ci",
-        summary: "run the whole gate: fmt, clippy, tests, layers, skills, plan, docs",
+        summary: "run the whole gate: fmt, clippy, tests, layers, ui-rules, plan, docs, skills",
         run: |global, config, _| run_ci(global, config),
     },
 ];
@@ -277,6 +284,23 @@ fn run_layers(_global: &Global) -> Result<(), String> {
                 eprintln!("error: {violation}");
             }
             Err(format!("layers: FAILED ({} violation(s))", violations.len()))
+        }
+    }
+}
+
+/// `ui-rules`: the colour and host ownership rules, read from the interface's own sources.
+fn run_ui_rules(global: &Global) -> Result<(), String> {
+    match ui_rules::check(&global.root) {
+        Ok(count) => {
+            println!("ui-rules: {count} files checked");
+            println!("ui-rules: ok");
+            Ok(())
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            Err(format!("ui-rules: FAILED ({} violation(s))", violations.len()))
         }
     }
 }
@@ -315,6 +339,7 @@ fn run_ci(global: &Global, config: &Config) -> Result<(), String> {
         }
     }
     run_layers(global)?;
+    run_ui_rules(global)?;
     match state_contract::check(&global.root) {
         Ok(summary) => {
             println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
@@ -364,6 +389,7 @@ mod tests {
     fn the_skill_check_is_a_command_of_the_tool() {
         assert!(host_commands().contains(&"skills"), "`cargo xtask skills` must be dispatchable on its own");
         assert!(host_commands().contains(&"layers"));
+        assert!(host_commands().contains(&"ui-rules"), "`cargo xtask ui-rules` must run on its own");
     }
 
     #[test]

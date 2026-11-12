@@ -9,5 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+proc-macro2 = { workspace = true }
 serde_json = { workspace = true }
 state-contract = { path = "../state-contract" }
+syn = { workspace = true }

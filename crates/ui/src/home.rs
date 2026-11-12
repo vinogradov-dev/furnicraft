@@ -34,59 +34,52 @@ pub enum HomeAction {
 /// shell records a path when a scene is actually opened or saved.
 pub fn show(ctx: &Context, recent: &[PathBuf]) -> Option<HomeAction> {
     let mut action = None;
-    let response =
-        Modal::new(Id::unique("home_surface")).backdrop_color(egui::Color32::from_black_alpha(160)).show(ctx, |ui| {
-            ui.set_width(560.0);
-            ui.horizontal(|ui| {
-                ui.heading(theme::PRODUCT_NAME);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(Message::HomeClose.text(crate::language(ctx))).clicked() {
-                        action = Some(HomeAction::Close);
-                    }
-                });
-            });
-            ui.label(RichText::new(Message::HomeStartScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)));
-            ui.add_space(theme::STEP * 2.0);
-            ui.horizontal(|ui| {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(Message::HomeNewScene.text(crate::language(ui.ctx()))).size(14.0),
-                        )
-                        .min_size(egui::vec2(150.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    action = Some(HomeAction::New);
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(Message::HomeOpenScene.text(crate::language(ui.ctx()))).size(14.0),
-                        )
-                        .min_size(egui::vec2(150.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    action = Some(HomeAction::Open);
+    let response = Modal::new(Id::unique("home_surface")).backdrop_color(theme::scrim()).show(ctx, |ui| {
+        ui.set_width(560.0);
+        ui.horizontal(|ui| {
+            ui.heading(theme::PRODUCT_NAME);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button(Message::HomeClose.text(crate::language(ctx))).clicked() {
+                    action = Some(HomeAction::Close);
                 }
             });
-            ui.add_space(theme::STEP * 2.0);
-            template_card(ui, &mut action);
-            ui.add_space(theme::STEP * 2.0);
-            ui.label(RichText::new(Message::HomeRecentFiles.text(crate::language(ui.ctx()))).strong());
-            if recent.is_empty() {
-                ui.label(
-                    RichText::new(Message::HomeNoScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)),
-                );
-            } else {
-                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                    for path in recent {
-                        recent_row(ui, path, &mut action);
-                    }
-                });
+        });
+        ui.label(RichText::new(Message::HomeStartScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)));
+        ui.add_space(theme::STEP * 2.0);
+        ui.horizontal(|ui| {
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(Message::HomeNewScene.text(crate::language(ui.ctx()))).size(14.0))
+                        .min_size(egui::vec2(150.0, 32.0)),
+                )
+                .clicked()
+            {
+                action = Some(HomeAction::New);
+            }
+            if ui
+                .add(
+                    egui::Button::new(RichText::new(Message::HomeOpenScene.text(crate::language(ui.ctx()))).size(14.0))
+                        .min_size(egui::vec2(150.0, 32.0)),
+                )
+                .clicked()
+            {
+                action = Some(HomeAction::Open);
             }
         });
+        ui.add_space(theme::STEP * 2.0);
+        template_card(ui, &mut action);
+        ui.add_space(theme::STEP * 2.0);
+        ui.label(RichText::new(Message::HomeRecentFiles.text(crate::language(ui.ctx()))).strong());
+        if recent.is_empty() {
+            ui.label(RichText::new(Message::HomeNoScene.text(crate::language(ui.ctx()))).color(theme::text_dim(ui)));
+        } else {
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                for path in recent {
+                    recent_row(ui, path, &mut action);
+                }
+            });
+        }
+    });
     if response.should_close() {
         action = Some(HomeAction::Close);
     }

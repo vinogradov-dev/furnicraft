@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use egui::{Color32, RichText, TextEdit, Ui};
+use egui::{RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_SET_ID};
 use furnicraft_engine::{EditScope, NodePropertyClear, NodePropertySet, Session};
 use furnicraft_model::{FurnType, Id, PropertyValue};
@@ -25,6 +25,7 @@ use furnicraft_units::{Degrees, Length};
 use crate::command::{dispatch, json};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// The property kinds the card can add without a prototype schema.
 const NEW_KIND_NAMES: [Message; 6] = [
@@ -204,7 +205,7 @@ impl PropertiesCard {
             self.error = Some(message.text(crate::language(ui.ctx())).to_owned());
         }
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
     }
 }
@@ -346,7 +347,7 @@ fn edit_row(
                             });
                         }
                         Err(_) => {
-                            ui.colored_label(Color32::LIGHT_RED, "GG.TT.VV");
+                            ui.colored_label(theme::danger(ui), "GG.TT.VV");
                         }
                     }
                 }

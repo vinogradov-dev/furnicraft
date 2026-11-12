@@ -732,6 +732,14 @@ const fn mix_channel(a: u8, b: u8, percent: u32) -> u8 {
 /// `Color32` is premultiplied, so the alpha alone is scaled and the colour is rebuilt: a translucent
 /// surface is the same colour with a smaller alpha, not a darker one. The input has to be opaque —
 /// every chrome surface is.
+/// The neutral veil a modal lays over the window.
+///
+/// It is black at about 63 %, the same in both variants: the veil dims what is behind it, it is not
+/// a palette entry, so it has no light-theme value of its own (U80).
+pub fn scrim() -> Color32 {
+    Color32::from_black_alpha(160)
+}
+
 pub fn at_opacity(fill: Color32, percent: u32) -> Color32 {
     let alpha = (u16::from(fill.a()) * u16::from(percent.min(100) as u8) / 100) as u8;
     Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha)
