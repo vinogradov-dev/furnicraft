@@ -23,7 +23,7 @@ assets/icons/<theme>/<name>.svg
 | `bodies` | `extrude`, `revolve`, `sweep` | The ribbon *Model* tab |
 | `scene` | `panel`, `assembly`, `camera`, `light` | The ribbon *Scene* tab |
 | `view` | `orthographic`, `perspective`, `frame-all`, `maximize`, `restore`, `home`, `grid-snap`, `orbit`, `pan`, `zoom`, `layout`, `shaded`, `shaded-edges`, `wireframe`, `xray`, `translucent`, `sliders`, `axon`, `front`, `left`, `top`, `right`, `bottom` | The ribbon *View* tab, the floating viewport cluster, the header |
-| `actions` | `confirm`, `dismiss`, `cancel`, `undo`, `redo`, `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`, `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `command`, `visible`, `hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help`, `pin` | Menus, dialogs, strips, the command palette and the shortcut reference |
+| `actions` | `confirm`, `dismiss`, `cancel`, `undo`, `redo`, `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`, `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `command`, `visible`, `hidden`, `lock`, `unlock`, `expand`, `collapse`, `panel-left`, `panel-right`, `warning`, `error`, `info`, `help`, `pin` | Menus, dialogs, strips, the command palette and the shortcut reference |
 | `window` | `minimize`, `maximize`, `restore`, `close` | The window row of the header; drawn only when the system frame is off |
 
 A theme has no other files: no sprites, no sheets, no per-scale variants. The UI rasterises one file

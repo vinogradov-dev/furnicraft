@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
+- `[~]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
   Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons
    are ambiguous and there is no way to clear the chrome. M2 is the most invasive part of the
    accepted combo: the viewport must render under the panels and picking must ignore the
@@ -47,7 +47,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    all three surfaces; the panel tops stay aligned with the ribbon during the animation (a
    frame test or a golden of the inset function); the split-view layout tiles only the
    uncovered area; no document write. Both themes and 55/92/100 % are checked by eye.
-  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/view_layout.rs, crates/ui/src/settings.rs`
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/header.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/shortcuts.rs, apps/furnicraft/src/strip.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
 
 - `[ ]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
   Why: A unit inside the field is selected with the number and reads as data; Apply adds a

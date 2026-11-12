@@ -1,9 +1,9 @@
 //! The floating tool strip's band and the view rectangles it feeds.
 //!
 //! [`strip_rect`] reserves the band the ribbon covers at the top of the design space,
-//! [`strip_area`] draws the strip into it on the middle layer, [`uncovered`] and [`fit_uncovered`]
-//! keep the framing and the orientation widget out from under it, and [`view_region`] converts one
-//! view's point rectangle into the pixel rectangle the renderer draws that view into.
+//! [`strip_area`] draws the strip into it on the middle layer, [`uncovered`] keeps the orientation
+//! widget out from under it, and [`view_region`] converts one view's point rectangle into the pixel
+//! rectangle the renderer draws that view into.
 //!
 //! The band is in egui points and the region is rounded to whole physical pixels from
 //! `points_per_pixel`, each edge separately, so two views that share an edge in points share exactly
@@ -14,7 +14,6 @@
 //! the render target changes.
 
 use eframe::egui;
-use furnicraft_scene::Camera;
 
 /// The band a floating tool strip covers at the top of `design`.
 ///
@@ -68,28 +67,10 @@ pub(crate) fn strip_area(
 /// The part of `view` the floating strip leaves uncovered: the view below the band `strip` covers.
 ///
 /// A view the strip does not reach — a bottom-row leaf of a split, or a strip that has not been
-/// measured yet — is returned unchanged, so framing only shrinks when the strip really covers it.
+/// measured yet — is returned unchanged, so only an overlay that really covers the view shrinks it.
 pub(crate) fn uncovered(view: egui::Rect, strip: egui::Rect) -> egui::Rect {
     let covered = (strip.bottom() - view.top()).clamp(0.0, view.height());
     egui::Rect::from_min_max(egui::pos2(view.left(), view.top() + covered), view.max)
-}
-
-/// Narrows a fit camera so the scene stays inside the part of the view a floating strip leaves
-/// uncovered.
-///
-/// The camera maps the visible world height to the whole view, so the uncovered band shows a share
-/// of it. Scaling the distance by the reciprocal of that share keeps the same scene inside the band,
-/// and panning the target half the covered height puts the scene's centre in the middle of what the
-/// user can see instead of behind the strip. A strip that covers nothing leaves the fit untouched.
-pub(crate) fn fit_uncovered(fit: Camera, view_height: f32, visible_height: f32) -> Result<Camera, String> {
-    if !(view_height > 0.0 && visible_height > 0.0 && visible_height < view_height) {
-        return Ok(fit);
-    }
-    let distance = (fit.eye() - fit.target()).length();
-    let mut camera = Camera::new(fit.target(), distance * f64::from(view_height / visible_height))
-        .map_err(|error| error.to_string())?;
-    camera.pan_pixels(0.0, f64::from(view_height - visible_height) * 0.5, f64::from(view_height));
-    Ok(camera)
 }
 
 /// The physical pixels one view's rectangle covers inside the workspace.
@@ -116,7 +97,7 @@ pub(crate) fn view_region(area: egui::Rect, view: egui::Rect, points_per_pixel: 
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_geom::DVec3;
+    use furnicraft_scene::Camera;
     use furnicraft_ui::display::{OpeningView, ShadingStyle};
     use furnicraft_ui::theme;
 
@@ -387,17 +368,5 @@ mod tests {
         // A view the strip does not reach keeps its whole height.
         let bottom = egui::Rect::from_min_size(egui::pos2(0.0, 400.0), egui::vec2(800.0, 300.0));
         assert_eq!(uncovered(bottom, strip), bottom);
-
-        let radius = 300.0;
-        let fit = Camera::new(DVec3::ZERO, radius / (furnicraft_scene::DEFAULT_FOV_Y * 0.5).tan() * 1.25)
-            .expect("a fit camera");
-        let narrowed = fit_uncovered(fit, view.height(), visible.height()).expect("a narrowed fit");
-        let shown =
-            narrowed.world_per_point(narrowed.distance(), f64::from(view.height())) * f64::from(visible.height());
-        assert!(
-            shown * 0.5 >= radius,
-            "the uncovered band shows {shown} mm of world against a {} mm radius",
-            radius * 2.0
-        );
     }
 }

@@ -406,6 +406,8 @@ icons!(Actions, "actions", View, actions {
     INFO => "info",
     HELP => "help",
     PIN => "pin",
+    PANEL_LEFT => "panel-left",
+    PANEL_RIGHT => "panel-right",
 });
 
 icons!(Window, "window", View, window {
@@ -1021,7 +1023,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 98);
+        assert_eq!(seen.len(), 100);
     }
 
     #[test]

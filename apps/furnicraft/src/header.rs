@@ -53,6 +53,12 @@ pub enum HeaderAction {
     Settings,
     /// Open a new, empty scene in a new tab.
     NewTab,
+    /// Fold both side panels to strips, or unfold the pair the last press folded.
+    CollapsePanels,
+    /// Hide both side panels, or show the pair the last press put away.
+    HidePanels,
+    /// Fold or unfold the ribbon band.
+    ToggleRibbon,
     /// Show the document of this tab.
     ActivateTab(TabId),
     /// Close this tab; the shell decides whether unsaved changes need a question.
@@ -81,6 +87,12 @@ pub struct HeaderState {
     pub can_undo: bool,
     /// Whether there is a redo entry.
     pub can_redo: bool,
+    /// Whether the ribbon's tool body is unfolded, so its button names the next press.
+    pub ribbon_open: bool,
+    /// Whether both side panels are hidden, so the button offers to bring them back.
+    pub panels_hidden: bool,
+    /// Whether both side panels are folded, so the button offers to unfold them.
+    pub panels_collapsed: bool,
 }
 
 /// Draws the header row and returns the one action it asked for, if any.
@@ -135,6 +147,33 @@ pub fn show(ui: &mut Ui, state: &HeaderState, file_menu: impl FnOnce(&mut Ui)) -
                 let mut action = None;
                 if icon_button(ui, icons::actions::SETTINGS, Message::SettingsTitle.text(lang), true, false).clicked() {
                     action = Some(HeaderAction::Settings);
+                }
+                theme::divider_of_height(ui, theme::HEADER_CONTROL_HEIGHT);
+                let (ribbon_icon, ribbon_hint) = if state.ribbon_open {
+                    (icons::actions::COLLAPSE, Message::FoldRibbon)
+                } else {
+                    (icons::actions::EXPAND, Message::UnfoldRibbon)
+                };
+                if icon_button(ui, ribbon_icon, ribbon_hint.text(lang), true, !state.ribbon_open).clicked() {
+                    action = Some(HeaderAction::ToggleRibbon);
+                }
+                let (hide_icon, hide_hint) = if state.panels_hidden {
+                    (icons::actions::VISIBLE, Message::ShowAllPanels)
+                } else {
+                    (icons::actions::HIDDEN, Message::HideAllPanels)
+                };
+                if icon_button(ui, hide_icon, hide_hint.text(lang), true, state.panels_hidden).clicked() {
+                    action = Some(HeaderAction::HidePanels);
+                }
+                let (collapse_hint, collapse_selected) = if state.panels_collapsed {
+                    (Message::ExpandAllPanels, true)
+                } else {
+                    (Message::CollapseAllPanels, false)
+                };
+                if icon_button(ui, icons::actions::PANEL_LEFT, collapse_hint.text(lang), true, collapse_selected)
+                    .clicked()
+                {
+                    action = Some(HeaderAction::CollapsePanels);
                 }
                 action
             },
@@ -278,7 +317,14 @@ mod tests {
     }
 
     fn state(tabs: Vec<TabView>, can_undo: bool) -> HeaderState {
-        HeaderState { tabs, can_undo, can_redo: false }
+        HeaderState {
+            tabs,
+            can_undo,
+            can_redo: false,
+            ribbon_open: true,
+            panels_hidden: false,
+            panels_collapsed: false,
+        }
     }
 
     /// Runs the header and returns its text shapes.
