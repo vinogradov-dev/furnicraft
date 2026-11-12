@@ -3,8 +3,8 @@
 //! Both panels are `egui` areas on the middle layer, so the rendered scene runs under them and the
 //! shared opacity lets a little of the furniture through. [`Panels`] owns the two states and the
 //! memory that makes *collapse all* and *hide all* return exactly what the user had. [`Chrome`] is
-//! the frame's geometry: the two panel rectangles, the ribbon band and the content rectangle the
-//! split views and every pointer hit use.
+//! the frame's geometry: the two panel rectangles, the ribbon band and the scene rectangle the split
+//! views tile — a rectangle the panels never narrow (U72).
 //!
 //! Changes when: the panel geometry, the header row, the folded strip, the fold and hide gestures or
 //! the opacity of the chrome changes.
@@ -223,17 +223,15 @@ impl Chrome {
         self.ribbon.contains(point) || self.panels.panels().any(|rect| rect.contains(point))
     }
 
-    /// The part of the viewport the scene owns when the panels are drawn over it.
+    /// The part of the viewport the scene owns.
     ///
     /// The split views tile this rectangle, and a border drag or a viewpress inside the panels is
-    /// ignored. The panels are transparent enough to see the scene through, so the content starts
-    /// at their inner edge rather than at the viewport edge; the ribbon band is excluded at the top
-    /// because the scene is never framed or picked under it (U51).
+    /// ignored. It depends on the ribbon band only: the panels float over the scene, so folding,
+    /// hiding, collapsing or restoring one changes no view rectangle and no camera (U72). The band
+    /// is excluded at the top because the scene is never framed or picked under it (U51).
     pub(crate) fn content(&self, viewport: egui::Rect) -> egui::Rect {
-        let left = self.panels.left.map_or(viewport.left(), |panel| (panel.right() + INSET).min(viewport.right()));
-        let right = self.panels.right.map_or(viewport.right(), |panel| (panel.left() - INSET).max(viewport.left()));
         let top = self.ribbon.bottom().clamp(viewport.top(), viewport.bottom());
-        let content = egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, viewport.bottom()));
+        let content = egui::Rect::from_min_max(egui::pos2(viewport.left(), top), viewport.max);
         if content.width() > 0.0 && content.height() > 0.0 { content } else { viewport }
     }
 }
@@ -453,14 +451,34 @@ mod tests {
         egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN)
     }
 
+    /// The frame geometry of `panels` under a ribbon band of `ribbon_height` points.
+    fn chrome_with(ribbon_height: f32, panels: &Panels) -> Chrome {
+        let viewport = viewport();
+        let top = viewport.top() + panel_top(ribbon_height);
+        let ribbon = egui::Rect::from_min_size(viewport.min, egui::vec2(viewport.width(), ribbon_height));
+        let width = |state: PanelState| if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
+        Chrome { panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))), ribbon }
+    }
+
     /// The frame geometry of both panels shown at their expanded width under a 72 pt ribbon.
     fn chrome() -> Chrome {
-        let viewport = viewport();
-        let top = viewport.top() + panel_top(furnicraft_ui::toolbars::height(true));
-        let panels = Panels::default();
-        let ribbon =
-            egui::Rect::from_min_size(viewport.min, egui::vec2(viewport.width(), top - viewport.top() - INSET));
-        Chrome { panels: PanelRects::of(viewport, top, &panels, (EXPANDED_WIDTH, EXPANDED_WIDTH)), ribbon }
+        chrome_with(furnicraft_ui::toolbars::height(true), &Panels::default())
+    }
+
+    /// The pair where both panels are folded to their strips.
+    fn folded() -> Panels {
+        let mut panels = Panels::default();
+        panels.scene.expanded = false;
+        panels.inspector.expanded = false;
+        panels
+    }
+
+    /// The pair where both panels are hidden.
+    fn hidden() -> Panels {
+        let mut panels = Panels::default();
+        panels.scene.visible = false;
+        panels.inspector.visible = false;
+        panels
     }
 
     #[test]
@@ -560,25 +578,61 @@ mod tests {
         assert!(chrome.covers(chrome.ribbon.center()), "the ribbon band is chrome");
         let content = chrome.content(viewport());
         assert!(!chrome.covers(content.center()), "the middle of the scene is not");
-        assert!(content.left() > viewport().left(), "the split views start inside the left panel");
-        assert!(content.right() < viewport().right(), "and end inside the right panel");
-        assert!(content.top() >= chrome.ribbon.bottom(), "and start below the ribbon");
+        assert!((content.left() - viewport().left()).abs() < f32::EPSILON, "the scene keeps the full width");
+        assert!((content.right() - viewport().right()).abs() < f32::EPSILON);
+        assert!(content.top() >= chrome.ribbon.bottom(), "and starts below the ribbon");
     }
 
     #[test]
-    fn the_content_rect_is_the_gap_between_the_panels() {
+    fn the_scene_rect_ignores_the_panels_and_starts_below_the_ribbon() {
+        let viewport = viewport();
         let chrome = chrome();
-        let content = chrome.content(viewport());
-        let left = chrome.panels.left.expect("left panel");
-        let right = chrome.panels.right.expect("right panel");
-        assert!((content.left() - (left.right() + INSET)).abs() < f32::EPSILON);
-        assert!((content.right() - (right.left() - INSET)).abs() < f32::EPSILON);
+        let content = chrome.content(viewport);
+        // The panels float over the scene: neither their state nor their width moves an edge.
+        for panels in [Panels::default(), folded(), hidden()] {
+            let shifted = chrome_with(furnicraft_ui::toolbars::height(true), &panels).content(viewport);
+            assert!((shifted.left() - viewport.left()).abs() < f32::EPSILON, "the scene starts at the left edge");
+            assert!((shifted.right() - viewport.right()).abs() < f32::EPSILON, "and ends at the right one");
+            assert_eq!(shifted, content, "a panel change moves no edge");
+        }
+        // Both ribbon states put the top at the measured band and give the rest to the scene.
+        for open in [true, false] {
+            let band = furnicraft_ui::toolbars::height(open);
+            let banded = chrome_with(band, &Panels::default()).content(viewport);
+            assert!((banded.top() - band).abs() < f32::EPSILON, "the band sets the top (open = {open})");
+            assert!((banded.height() - (viewport.height() - band)).abs() < f32::EPSILON);
+            assert!((banded.width() - viewport.width()).abs() < f32::EPSILON, "a panel never narrows it");
+        }
         assert!(content.width() > 0.0 && content.height() > 0.0, "a half-open window still has a scene");
+    }
 
-        let hidden = Chrome { panels: PanelRects::default(), ribbon: chrome.ribbon };
-        let full = hidden.content(viewport());
-        assert!((full.left() - viewport().left()).abs() < f32::EPSILON, "hidden panels give the width back");
-        assert!((full.right() - viewport().right()).abs() < f32::EPSILON);
+    #[test]
+    fn a_press_on_a_panel_is_chrome_and_a_press_beside_it_reaches_the_scene() {
+        use furnicraft_scene::Camera;
+        use furnicraft_ui::display::{OpeningView, ShadingStyle};
+
+        use crate::view_layout::{Layout, LayoutKind};
+
+        let chrome = chrome();
+        let viewport = viewport();
+        let content = chrome.content(viewport);
+        for panel in chrome.panels.panels() {
+            // One point past the panel's inner edge, towards the middle of the scene.
+            let beside = match panel.center().x < viewport.center().x {
+                true => egui::pos2(panel.right() + 1.0, panel.center().y),
+                false => egui::pos2(panel.left() - 1.0, panel.center().y),
+            };
+            assert!(chrome.covers(panel.center()), "a click on the panel is chrome and starts no gesture");
+            assert!(!chrome.covers(beside), "a click one point past the panel is the scene");
+            assert!(content.contains(beside), "because the panel floats over the scene, it does not shrink it");
+        }
+        // A border stays grabbable from the scene, and the chrome guard never hides it.
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
+        layout.set_kind(LayoutKind::TwoColumns);
+        let divider = layout.dividers(content).into_iter().next().expect("one border");
+        assert!(content.contains(divider.hit_rect().center()), "the border band is inside the scene");
+        assert!(!chrome.covers(divider.hit_rect().center()), "and not under a panel");
+        assert!(layout.press(content, divider.hit_rect().center(), true), "a press there grabs the border");
     }
 
     /// Runs `frames` frames of one panel and returns the last, dropping the earlier ones the way a
@@ -651,12 +705,47 @@ mod tests {
                     "the cluster keeps at least 80 % so it stays readable at {percent} %"
                 );
             }
+            // At 55 % the panel is translucent, so the furniture the image paints under it shows
+            // through instead of the panel blending with the clear colour (U72).
+            let faint = panel_fill(ui, 55).a();
+            assert!(faint > 0 && faint < 255, "a 55 % panel lets the scene through: alpha {faint}");
         });
         output.drop_without_applying_deltas();
     }
 
     #[test]
-    fn the_split_views_tile_the_content_the_panels_leave() {
+    fn folding_or_hiding_a_panel_changes_no_view_rect_and_no_aspect() {
+        use furnicraft_scene::Camera;
+        use furnicraft_ui::display::{OpeningView, ShadingStyle};
+
+        use crate::strip::view_region;
+        use crate::view_layout::{Layout, LayoutKind};
+
+        let band = furnicraft_ui::toolbars::height(true);
+        let reference = chrome().content(viewport());
+        let mut layout = Layout::new(Camera::default(), OpeningView::Axonometric, ShadingStyle::default());
+        for kind in LayoutKind::ALL {
+            layout.set_kind(kind);
+            let expected = layout.regions(reference);
+            for panels in [Panels::default(), folded(), hidden()] {
+                let content = chrome_with(band, &panels).content(viewport());
+                assert_eq!(content, reference, "{kind:?}: the scene rect is the same");
+                let regions = layout.regions(content);
+                assert_eq!(regions, expected, "{kind:?}: no view moves");
+                for (_, rect) in &regions {
+                    // The renderer takes the camera's aspect from the view region, so an unchanged
+                    // point rectangle is an unchanged aspect and an unchanged camera.
+                    let region = view_region(content, *rect, 1.0);
+                    let aspect = f64::from(region.width) / f64::from(region.height);
+                    let expected_aspect = f64::from(rect.width()) / f64::from(rect.height());
+                    assert!((aspect - expected_aspect).abs() < 1.0e-3, "{kind:?}: the camera keeps its aspect");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_split_views_tile_the_scene_rect_exactly() {
         use furnicraft_scene::Camera;
         use furnicraft_ui::display::{OpeningView, ShadingStyle};
 
@@ -670,12 +759,12 @@ mod tests {
             let regions = layout.regions(content);
             assert_eq!(regions.len(), kind.leaves(), "{kind:?} tiles with its own leaves");
             for (_, rect) in &regions {
-                assert!(content.contains_rect(*rect), "{kind:?} tiles only the uncovered content: {rect:?}");
+                assert!(content.contains_rect(*rect), "{kind:?} tiles only the scene rect: {rect:?}");
             }
             let area: f32 = regions.iter().map(|(_, rect)| rect.width() * rect.height()).sum();
-            assert!((area - content.width() * content.height()).abs() < 1.0, "{kind:?} covers the content exactly");
+            assert!((area - content.width() * content.height()).abs() < 1.0, "{kind:?} covers the rect exactly");
         }
-        // A border keeps a hit band inside the content, so a split stays grabbable next to a panel.
+        // A border keeps a hit band inside the scene, so a split stays grabbable next to a panel.
         layout.set_kind(LayoutKind::TwoColumns);
         let divider = layout.dividers(content).into_iter().next().expect("one border");
         assert!(content.contains(divider.hit_rect().center()), "the border band is inside the scene");

@@ -902,7 +902,9 @@ impl Document {
     /// The fit camera is computed from the latest evaluation on every press, so *Frame all* follows
     /// objects created or moved since the file opened. Only the active view moves: its direction
     /// and its projection kind stay as the user left them. The fit targets the part of the view the
-    /// floating ribbon leaves uncovered, so the scene is never framed under the strip (U51).
+    /// scene rectangle covers — everything below the floating ribbon — so the scene is never framed
+    /// under the strip (U51). The side panels float over that rectangle without narrowing it, so a
+    /// fit is unchanged by folding or hiding one (U72).
     pub(crate) fn frame_all(&mut self) {
         let fit = match home_camera(self.scene_bounds) {
             Ok(fit) => fit,
@@ -911,8 +913,8 @@ impl Document {
                 return;
             }
         };
-        // The content rectangle already excludes the ribbon band and both panels, so the fit needs
-        // no further narrowing: the whole scene lands in the part of the view the user can see.
+        // The view rectangle already starts below the ribbon band and the panels never narrow it,
+        // so the fit needs no further narrowing: the whole scene lands below the strip (U72).
         self.layout.active_leaf_mut().frame(fit);
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }
@@ -958,8 +960,9 @@ impl Document {
         }
         // The render target covers the whole central area, including the bands under the floating
         // ribbon and the translucent panels, so the scene image runs under the chrome (M2). The
-        // split views tile the content rectangle the chrome leaves uncovered, and a pointer on the
-        // chrome is never a viewport hit.
+        // split views tile the scene rectangle, which depends on the ribbon band only: the panels
+        // float over it and folding one moves no view and no camera (U72). A pointer on the chrome
+        // is never a viewport hit.
         shell.pointer_position = ui.input(|input| input.pointer.hover_pos());
         let pointer = shell.pointer_position;
         // A press on the command bar is chrome too: the bar floats over the scene, so a click on
@@ -970,7 +973,7 @@ impl Document {
         });
         let content = chrome.content(area);
 
-        // The viewport is the whole central area; the layout divides the uncovered content into
+        // The viewport is the whole central area; the layout divides the scene rectangle into
         // views. Every view has its own camera and every border is draggable. A press on a border
         // resizes without moving the target; a press anywhere else activates that view, whichever
         // button it is, and only the active view is ever manipulated (ADR 0079).
@@ -1018,8 +1021,10 @@ impl Document {
         // both, exactly as it does for a single view (ADR 0049).
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), target_camera);
         let rect = target_rect;
-        // The orientation widget belongs to the part of the view the ribbon and the panels leave
-        // uncovered, so neither hides the cube (U51, U66).
+        // The orientation widget belongs to the part of the view the ribbon band leaves uncovered,
+        // so the strip never hides the cube (U51). A scene rectangle that starts below the band is
+        // returned unchanged; keeping the call keeps a view that does reach the band safe. The
+        // panels float over the view, so U73 places the widget clear of them.
         let visible = uncovered(rect, chrome.ribbon);
         let gizmo_rect = gizmo::widget_rect(visible);
 
