@@ -101,6 +101,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0094](0094-a-class-registry-gives-the-machine-its-semantics.md) | A class registry gives the machine its semantics; the code identifies, the traits decide | Accepted; supersedes the registry role and top-level grouping of 0035 |
 | [0095](0095-the-order-package-is-a-published-snapshot.md) | The order package is a published snapshot, not the internal database | Accepted |
 | [0096](0096-before-the-first-release-the-format-has-no-past.md) | Before the first release the data format has no past | Accepted; amends the compatibility clause of `AGENTS.md` §4.5; retires the migration clauses until 1.0 |
+| [0097](0097-a-product-is-a-container-with-an-authored-envelope.md) | A product is a container with an authored envelope | Accepted; amends the trait list of 0094 |
+| [0098](0098-one-product-is-open-and-parts-are-born-inside-it.md) | One product is open, and furniture parts are born inside it | Accepted |
 
 ## Format
 

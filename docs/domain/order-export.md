@@ -61,6 +61,7 @@ they carry exactly the columns their JSONL table declares.
   "app": "0.1.0",
   "exported_at": "2026-11-12T21:40:00Z",
   "document": { "file": "cabinet.fcs", "revision": 41, "hash": "3f9c…" },
+  "order": { "number": "2026-114", "version": 3 },
   "units": { "length": "um", "angle": "mdeg", "area": "mm2", "rotation_scale": 1000000000 },
   "counts": { "products": 3, "parts": 57, "…": 0 },
   "tables": [
@@ -106,7 +107,8 @@ byte-identical.
 | `name` | the user's name |
 | `class` | the class code, e.g. `30.01.03` |
 | `level` | `Product` |
-| `width_um`, `height_um`, `depth_um` | the overall bounds of the product |
+| `width_um`, `height_um`, `depth_um` | the product's envelope: authored on the container, never derived |
+| `content_width_um`, `content_height_um`, `content_depth_um` | the derived bounds of its parts, so a reader sees whether anything pokes out |
 | `part_count` | nested parts that belong to it |
 | `sheet_area_mm2` | total sheet area of those parts |
 | `banding_um` | total banding length |
@@ -121,8 +123,8 @@ The tree, for drawings and for anything a flat table does not answer:
 ### `parts`
 
 One row per part that is cut, with every number a cutting list or a parts report needs:
-`node_id`, `product_id` (the nearest `Product` ancestor — this is what makes a per-cabinet report a
-`GROUP BY`), `class`, `material_id`, `thickness_um`, `length_um`, `width_um`,
+`node_id`, `product_id` (the nearest product ancestor, computed by one tree walk and never stored — this is what
+makes a per-cabinet report a `GROUP BY`), `class`, `material_id`, `thickness_um`, `length_um`, `width_um`,
 `measured_length_um`, `measured_width_um` (with banding), `area_mm2`, `grain` (`none`, `length`,
 `width`), `nesting` (`member` or `never`, from the class), `banding_total_um`.
 
@@ -131,6 +133,14 @@ One row per part that is cut, with every number a cutting list or a parts report
 One row per banded unit, because banding belongs to a contour segment and a contour part has more than
 four edges: `node_id`, `unit` (edge index or segment id), `material_id`, `thickness_um`, `width_um`,
 `included_in_size` (whether the banding was added to the nominal size).
+
+### `contours`
+
+A panel's outline is stored exactly as segments in micrometres, and the package hands it over without
+recomputation — this is what a drawing, a nesting program and a CNC post need, and it is why no
+floating-point millimetres appear anywhere: `node_id`, `ring` (`outline` or a hole id), `seq`,
+`kind` (`line` or `arc`), `x_um`, `y_um` (the segment start), `x2_um`, `y2_um` (the end, lines),
+`cx_um`, `cy_um` (the arc centre), `clockwise` (arcs).
 
 ### `facades`
 
@@ -158,7 +168,7 @@ The catalogue rows the order uses — this is what makes the package self-contai
 ### `classes`
 
 The registry rows the order uses: `code`, `parent`, `slug`, `label`, `supply`, `measure`, `nesting`,
-`extent`, `level`, `opening`, `operations`, `retired`. A reader decides "worktop goes to linear
+`extent`, `level`, `opening`, `mount`, `fill`, `operations`, `retired`. A reader decides "worktop goes to linear
 purchase and never to nesting" from this table, not from our digits.
 
 ### `properties`

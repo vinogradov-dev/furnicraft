@@ -33,11 +33,15 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
    40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
    reserved. Every type and variant carries its traits (supply, measure, nesting, extent,
-   operations, host, level, opening) and its slug; TT 90..99 stays reserved for local codes.
-   Each row must earn its code by a rule difference or a separate report line, and the hinge
-   example (card versus spring, then overlay/inset/half-overlay) is the worked case.
-   furntypes.md and PROJECT.md point at the new table; the old registry stays only as history.
-  Done: The table covers every family the milestone needs; every row names all eight traits; a
+   operations, host, level, opening, mount, fill) and its slug; TT 90..99 stays reserved for
+   local codes. Product rows get level = Product and a mount, part rows get a fill, and a
+   product class is named by its function (a wall cabinet is 30.01.02), never by a product code
+   range: 0094 removed that axis. Each row must earn its code by a rule difference or a
+   separate report line, and the hinge example (card versus spring, then
+   overlay/inset/half-overlay) is the worked case. furntypes.md and PROJECT.md point at the new
+   table; the old registry stays only as history.
+  Done: The table covers every family the milestone needs; every row names all ten traits it
+   applies to; the product rows carry level = Product and mount, the part rows carry fill; a
    fixture set (cabinet, shelf, side, back, door, spring hinge, runner, worktop, plinth)
    resolves against it and shows the intended report and editor behaviour; the owner has
    approved the rows entry by entry.
@@ -101,35 +105,98 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    fitting never enters nesting, and changing a class row flips the behaviour without touching
    the command; no code path compares a class literal outside a test.
   `files: crates/engine/src/commands.rs, crates/engine/src/node_cmds.rs, apps/furnicraft/src/gizmo_math.rs`
-- `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
-  Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
-   process, possibly in Python, and neither the document JSON nor the internal database is a
-   contract they can rely on (ADR 0095). The package is that contract, and the class traits
-   only pay off when they travel with it.
-  Shape: A new crate crates/export at layer 3, registered in the layer map and PROJECT.md, with
-   one column table as the only source for the manifest, the JSONL writer and the CSV copies.
-   Tables: products, nodes, parts, banding, facades, fittings, machining, materials, classes,
-   properties; integer micrometres, millidegrees, square millimetres and scaled-integer
-   rotation, no floats. The package embeds the catalogue rows the order uses and the class rows
-   it references, so it is self-contained; measured sizes, areas, banding totals and product_id
-   are resolved by the exporter, not by the reader. Ordering by key and no timestamp in the
-   tables make one revision produce byte-identical output.
-  Done: A golden package from the fixture scene; two exports of one revision are identical; the
-   manifest column list equals the writer table and each CSV copy carries exactly those
-   columns; an order with two cabinets groups correctly by product_id; cargo xtask layers and
-   cargo xtask ci are green.
-  `files: Cargo.toml, xtask/src/main.rs, crates/model/src/lib.rs, docs/domain/order-export.md`
-- `[ ]` **K3** the order package is written from a command line, without opening a window
-  Why: A package is useless if producing it needs a window and a person. The report pipeline
-   runs over saved files, and the assistant milestone already needs a headless job over a
-   project, so the exporter has to be reachable from a command line in the same binary.
-  Shape: furnicraft export <scene.fcs> --out <dir> [--format bundle|single] [--no-timestamp]:
-   the subcommand is handled before the window starts, prints one line per written table, and
-   exits non-zero with a readable message on a bad path, an unreadable scene or an unknown
-   format. No second binary, no new dependency.
-  Done: A CLI test writes a package from a fixture and checks its manifest and one table; no
-   window opens; the help text names the flags; cargo xtask ci is green.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
+- `[ ]` **N1** the product entity: a container with a class and an authored envelope, created by a command
+  Why: Reports, the export and the creation guard all need the same answer — which piece is
+   this part in and how big is that piece — and today nothing in the document carries it. ADR
+   0097 settled the shape: a product is an ordinary container with a class of level Product and
+   an authored envelope, not a new node kind.
+  Shape: Container gains an optional Envelope (three micrometre lengths) with validation, and
+   the model refuses the two mismatches: an envelope on a container whose class is not level
+   Product, and a product class without one. node.duplicate copies it,
+   node.component.convert_to_group clears it with the class, and a product is never a
+   descendant of a product. product.create takes parent, name, class, envelope and placement;
+   product.envelope.set edits the box and never a child size. Accessors product_of(id) and
+   products() walk the tree once; parent_id and product_id stay uncomputed in the document. The
+   schema is bumped; ADR 0096 means no migration, only a regenerated golden file.
+  Done: Tests: create a product with an envelope; refuse an envelope without a product class
+   and a product class without an envelope; refuse a product under a product; duplicate copies
+   the envelope; convert_to_group drops both; a bad envelope is a typed error; product_of
+   returns the nearest product for a shelf two levels down; cargo xtask ci is green.
+  `files: crates/model/src/container.rs, crates/model/src/lib.rs, crates/engine/src/node_cmds.rs`
+- `[ ]` **N2** the product frame is drawn as a dashed wireframe that never picks
+  Why: The envelope is useless if nobody can see it: the owner described the product in the
+   scene as a dashed wireframe, and a maker needs to see the space before the first part
+   exists. It also has to be visibly not a body, or it will be picked and grabbed by mistake.
+  Shape: The scene description gains one frame item per product — the envelope in world space,
+   lines only; the renderer draws it as a dashed wireframe with no fill, in the theme neutral
+   line role, after the solid pass, with no depth write. Picking ignores it: a click through
+   the frame selects what is behind it, or nothing. The shell rebuilds the item with the rest
+   of the scene and keeps it out of the solid pipelines.
+  Done: A product with an empty envelope draws a dashed box; the box never appears in a pick
+   result; resizing the envelope through the command moves the box; the transparency and dashes
+   are checked offscreen (U81 mechanism) and the theme role owns the colour; cargo xtask ci is
+   green.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/scene_build.rs`
+- `[ ]` **N3** one product is open at a time, opened by a double click and never written to the file
+  Why: The owner ruled that one product is open at a time and that opening is a double click;
+   without it there is no working area for the empty-space tool and no meaning for the creation
+   guard. ADR 0098 puts the state in the session, not in the file.
+  Shape: Session carries active_product: Option<Id>, opened and closed by view operations,
+   cleared per tab and never serialised; opening another replaces the previous one and opening
+   a non-product does nothing. The shell turns a double click on a product in the viewport into
+   the session operation (the first click still selects), the scene tree marks the active
+   product and reveals its children, and the inspector can show the envelope fields. Nothing
+   here dispatches a document command.
+  Done: Tests: opening A then B leaves B open; closing leaves none; the state is not in the
+   saved file; a double click on a panel or a group does nothing; each tab keeps its own open
+   product; cargo xtask ci is green.
+  `files: crates/engine/src/session.rs, crates/ui/src/scene_tree.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **N4** the creation guard: a furniture part is created only inside the open product
+  Why: The rule "no furniture part outside an open product" is worth nothing if a palette
+   entry, a shortcut or a future assistant can bypass the button that enforces it. ADR 0098
+   therefore puts the guard in the command enabled check, where every dispatch path meets it.
+  Shape: panel.create, facade and fitting creation read session.active_product and the class
+   level: a class of level Part or Fitting is refused when no product is open or when the
+   target parent is not inside it, with one of two messages and no write. Primitives, drawn
+   figures, mesh objects and hardware models stay free. Every fixture and test that created a
+   panel under the root gains a product and an opened session, or asserts the refusal; the
+   testkit fixture grows a product so the mechanical change stays in one place.
+  Done: Tests: refuse with no product open and with a closed product; refuse when the parent is
+   outside the open product; allow when it is inside, including a nested group; a primitive
+   still creates without a product; nothing is written on a refusal and the history is
+   untouched; cargo xtask ci is green.
+  `files: crates/engine/src/commands.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/object_cmds.rs`
+- `[ ]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
+  Why: The current translate tool moves anything anywhere, which is right for geometry and
+   wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
+   other. The mount trait exists for exactly this and today has no consumer.
+  Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
+   the floor plane (the vertical is fixed at zero), Wall stays free. Movement stops at the
+   first contact with the parts of another product, computed from part bounds, not envelopes,
+   so a wall cabinet may still hang in a niche. Snapping to the floor, to a neighbouring face
+   and to the 1 mm grid, with the constraint applied to the preview and one node.placement.set
+   on release, so a drag is one undo entry.
+  Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
+   product can; a drag that would intersect another product stops at contact; snapping lands on
+   the grid and on a face; one undo restores the whole drag. The frame and the class attributes
+   drive the behaviour without a code literal check.
+  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/query.rs`
+- `[ ]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
+  Why: This is the owner entrance to the whole product idea: open a piece, choose a post or a
+   shelf, point at the void and get a part that fits it. Without it the product is a box that
+   reports nicely but does not help build anything.
+  Shape: The document answers the free box at a point inside a product: the ray enters the
+   envelope, and on each axis the box reaches the envelope wall or the nearest part boundary,
+   whichever is closer. The tool is bound to a class whose fill trait says which axis pair it
+   takes (HeightAndDepth for a post, WidthAndDepth for a shelf); the ghost is drawn through the
+   session preview overlay from ADR 0093, moves in 1 mm steps, and a click dispatches one
+   panel.create with exactly the ghost size and placement, so history holds one entry. Version
+   1 handles axis-aligned voids and those two fills only.
+  Done: Tests: the free box shrinks around an existing part on the right axis; the ghost size
+   equals the created panel size; a click is one undo entry; the tool refuses when no product
+   is open; only classes with a fill can be chosen; the result is checked offscreen for the
+   ghost and by a live run for the 1 mm feel.
+  `files: crates/model/src/project/query.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs`
 
 ## Bugs
 
@@ -178,6 +245,39 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
    every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
   `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
+- `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
+  Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
+   process, possibly in Python, and neither the document JSON nor the internal database is a
+   contract they can rely on (ADR 0095). The package is that contract, and the class traits,
+   the product envelope and the exact contours only pay off when they travel with it. It
+   follows the product entity (N1) because its products table is the envelope plus product_id,
+   and the classes snapshot carries mount and fill.
+  Shape: A new crate crates/export at layer 3, registered in the layer map and PROJECT.md, with
+   one column table as the only source for the manifest, the JSONL writer and the CSV copies.
+   Tables: products, nodes, parts, banding, contours, facades, fittings, machining, materials,
+   classes, properties; integer micrometres, millidegrees, square millimetres and
+   scaled-integer rotation, no floats. Products carry the authored envelope plus the derived
+   content bounds; parts carry product_id, measured sizes, area, banding totals; contours hand
+   over the stored segments and arcs without recomputation; the manifest carries the optional
+   order number and version. The package embeds the catalogue rows the order uses and the class
+   rows it references, so it is self-contained. Ordering by key and no timestamp in the tables
+   make one revision produce byte-identical output.
+  Done: A golden package from the fixture scene; two exports of one revision are identical; the
+   manifest column list equals the writer table and each CSV copy carries exactly those
+   columns; an order with two cabinets groups correctly by product_id; cargo xtask layers and
+   cargo xtask ci are green.
+  `files: Cargo.toml, xtask/src/main.rs, crates/model/src/lib.rs, docs/domain/order-export.md`
+- `[ ]` **K3** the order package is written from a command line, without opening a window
+  Why: A package is useless if producing it needs a window and a person. The report pipeline
+   runs over saved files, and the assistant milestone already needs a headless job over a
+   project, so the exporter has to be reachable from a command line in the same binary.
+  Shape: furnicraft export <scene.fcs> --out <dir> [--format bundle|single] [--no-timestamp]:
+   the subcommand is handled before the window starts, prints one line per written table, and
+   exits non-zero with a readable message on a bad path, an unreadable scene or an unknown
+   format. No second binary, no new dependency.
+  Done: A CLI test writes a package from a fixture and checks its manifest and one table; no
+   window opens; the help text names the flags; cargo xtask ci is green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
 

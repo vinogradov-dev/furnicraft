@@ -392,7 +392,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `assets/icons/STYLE_GUIDE.md` — icon visual language; read only when drawing or editing an icon
   (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
-- `docs/domain/classes.md` — the semantic class registry: encoding, traits and lifecycle; `docs/domain/order-export.md` — the published order-package contract other programs read.
+- `docs/domain/classes.md` — the semantic class registry: encoding, traits and lifecycle; `docs/domain/products.md` — the product, its authored envelope and the workspace rules; `docs/domain/order-export.md` — the published order-package contract other programs read.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one entry per task with a stable id, its order, its labelled fields and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.

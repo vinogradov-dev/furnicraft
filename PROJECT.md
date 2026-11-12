@@ -133,6 +133,7 @@ Detailed, normative descriptions live in `docs/domain/`:
 - [`furntypes.md`](docs/domain/furntypes.md) — the previous numeric furniture-type registry; superseded by `classes.md` (ADR 0094).
 - [`classes.md`](docs/domain/classes.md) — the semantic class registry: six-digit identity, the trait set that carries behaviour, and the rules that keep it alive.
 - [`order-export.md`](docs/domain/order-export.md) — the order package: the published, one-way snapshot other programs read for reports, drawings, cutting lists and CNC.
+- [`products.md`](docs/domain/products.md) — the product as the unit of work: the authored envelope, open and closed, the workspace rules and the match to a void.
 
 ## Architectural principles
 
