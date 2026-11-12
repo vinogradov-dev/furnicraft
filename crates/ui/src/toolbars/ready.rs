@@ -63,31 +63,25 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
             Ready { enabled: running, armed: false, hint, action: running.then_some(ToolAction::CancelDrawing) }
         }
         ToolKind::Primitive(primitive) => {
-            let size = state.primitive_size();
             let armed = is_armed(active, ToolKind::Primitive(primitive));
-            // The hint carries the field's refusal, so a bad size disables the tool and says why
-            // instead of leaving the button silently off.
-            let hint = match &size {
-                Ok(_) => Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)]),
-                Err(refusal) => refusal.text(lang),
-            };
-            let action = size.ok().map(|size| ToolAction::CreatePrimitive { kind: primitive, size });
-            Ready { enabled: action.is_some(), armed, hint, action }
+            let hint = Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)]);
+            let action = ToolAction::CreatePrimitive { kind: primitive, size: state.primitive_size() };
+            Ready { enabled: true, armed, hint, action: Some(action) }
         }
         ToolKind::Extrude => {
-            let height = state.extrude_height();
             // Only a closed path encloses a ring, so the button is off for anything else and the
-            // hint names what is missing: a selection, a path, a closed chain, or a usable height.
-            let hint = match &height {
-                Ok(_) => extrude_hint(selected, selected_path).text(lang).to_owned(),
-                Err(refusal) => refusal.text(lang),
-            };
-            let action = match (selected, height) {
-                (Some(object), Ok(height)) => Some(ToolAction::ExtrudePath { object, height }),
+            // hint names what is missing: a selection, a path, or a closed chain. The height is a
+            // typed default, so a valid number is always there.
+            let action = match (selected, selected_path) {
+                (Some(object), Some(true)) => Some(ToolAction::ExtrudePath { object, height: state.extrude_height() }),
                 _ => None,
             };
-            let enabled = matches!((selected, selected_path), (Some(_), Some(true))) && action.is_some();
-            Ready { enabled, armed: false, hint, action }
+            Ready {
+                enabled: action.is_some(),
+                armed: false,
+                hint: extrude_hint(selected, selected_path).text(lang).to_owned(),
+                action,
+            }
         }
         ToolKind::Panel => Ready {
             enabled: has_panel_material,

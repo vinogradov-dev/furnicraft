@@ -1,4 +1,4 @@
-//! The ribbon's map: five tabs, their groups, and the tools and fields inside them.
+//! The ribbon's map: five tabs, their groups, and the tools inside them.
 //!
 //! The map is data (`plan/notes/U68.md` holds the approved one). A tab is a noun that names the
 //! domain — *Sketch, Model, Furniture, Scene, View* — a group is one operation class under it, a tool
@@ -193,65 +193,6 @@ pub fn shortcut_of(kind: ToolKind) -> Option<&'static str> {
     }
 }
 
-/// The state a tool still holds as a field of the row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FieldKind {
-    /// The full extent of a new primitive.
-    PrimitiveSize,
-    /// The height of the next extrusion.
-    ExtrudeHeight,
-    /// The side count of the regular polygon.
-    PolygonSides,
-}
-
-/// A numeric field that sits in a group's row next to the tools it configures.
-///
-/// A field is not a tool: it runs nothing and it is never planned. It takes [`FieldSpec::COLUMNS`]
-/// cells of the row, because a number the user types needs more room than a glyph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FieldSpec {
-    /// The namespaced id, `tab.group.field`.
-    pub id: &'static str,
-    /// The name the hint carries; the row itself has no space for a label.
-    pub label: Message,
-    /// The unit or range drawn as the field's hint text.
-    pub hint: &'static str,
-    /// Which ribbon field this is.
-    pub kind: FieldKind,
-}
-
-impl FieldSpec {
-    /// The number of cells a field takes in a row.
-    pub const COLUMNS: usize = 2;
-}
-
-/// One cell of a group: a tool, or the field that configures it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CellSpec {
-    /// A tool button.
-    Tool(ToolSpec),
-    /// A numeric field.
-    Field(FieldSpec),
-}
-
-impl CellSpec {
-    /// Whether this cell is drawn: a field always is, a tool only once it can run something.
-    pub fn is_live(&self) -> bool {
-        match self {
-            Self::Tool(tool) => tool.is_live(),
-            Self::Field(_) => true,
-        }
-    }
-
-    /// The number of cells this entry takes in the row.
-    pub const fn columns(&self) -> usize {
-        match self {
-            Self::Tool(_) => 1,
-            Self::Field(_) => FieldSpec::COLUMNS,
-        }
-    }
-}
-
 /// One captioned group inside a tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GroupSpec {
@@ -259,27 +200,24 @@ pub struct GroupSpec {
     pub id: &'static str,
     /// The caption under the group's row, drawn in capitals.
     pub label: Message,
-    /// The row's cells in drawing order: the tools, then the fields that configure them.
-    pub cells: &'static [CellSpec],
+    /// The group's tools in drawing order.
+    pub tools: &'static [ToolSpec],
 }
 
 impl GroupSpec {
     /// Whether the group draws anything: a group of only planned tools is not drawn.
     pub fn is_live(&self) -> bool {
-        self.cells.iter().any(CellSpec::is_live)
+        self.tools.iter().any(ToolSpec::is_live)
     }
 
-    /// The number of cells the group's row takes, fields counted by their width.
+    /// The number of cells the group's row takes: one per live tool.
     pub fn columns(&self) -> usize {
-        self.cells.iter().filter(|cell| cell.is_live()).map(CellSpec::columns).sum()
+        self.tools.iter().filter(|tool| tool.is_live()).count()
     }
 
     /// The live tools of the group, in drawing order.
-    pub fn tools(&'static self) -> impl Iterator<Item = &'static ToolSpec> {
-        self.cells.iter().filter_map(|cell| match cell {
-            CellSpec::Tool(tool) if tool.is_live() => Some(tool),
-            _ => None,
-        })
+    pub fn live_tools(&'static self) -> impl Iterator<Item = &'static ToolSpec> {
+        self.tools.iter().filter(|tool| tool.is_live())
     }
 }
 
@@ -340,10 +278,8 @@ pub fn fallback_tab() -> Option<&'static TabSpec> {
 pub fn tool(id: &str) -> Option<&'static ToolSpec> {
     for tab in tabs() {
         for group in tab.groups {
-            for cell in group.cells {
-                if let CellSpec::Tool(tool) = cell
-                    && tool.id == id
-                {
+            for tool in group.tools {
+                if tool.id == id {
                     return Some(tool);
                 }
             }
@@ -358,8 +294,8 @@ const SKETCH: [GroupSpec; 6] = [
     GroupSpec {
         id: "sketch.create",
         label: Message::GroupCreate,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "sketch.create.line",
                 label: Message::ToolLine,
                 icon: Some(icons::contour::LINE),
@@ -373,8 +309,8 @@ const SKETCH: [GroupSpec; 6] = [
                     run: None,
                     section: None,
                 }],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.create.polyline",
                 label: Message::ToolPolyline,
                 icon: Some(icons::contour::POLYLINE),
@@ -382,8 +318,8 @@ const SKETCH: [GroupSpec; 6] = [
                 run: Some(ToolKind::Draw(DrawTool::Polyline)),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.create.rectangle",
                 label: Message::ToolRectangle,
                 icon: Some(icons::contour::RECTANGLE),
@@ -406,8 +342,8 @@ const SKETCH: [GroupSpec; 6] = [
                         section: None,
                     },
                 ],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.create.circle",
                 label: Message::ToolCircle,
                 icon: Some(icons::contour::CIRCLE),
@@ -437,8 +373,8 @@ const SKETCH: [GroupSpec; 6] = [
                         section: Some(Message::SectionTangents),
                     },
                 ],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.create.arc",
                 label: Message::ToolArc,
                 icon: Some(icons::contour::ARC),
@@ -461,8 +397,8 @@ const SKETCH: [GroupSpec; 6] = [
                         section: Some(Message::SectionBuild),
                     },
                 ],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.create.polygon",
                 label: Message::ToolRegularPolygon,
                 icon: Some(icons::contour::POLYGON),
@@ -476,22 +412,16 @@ const SKETCH: [GroupSpec; 6] = [
                     run: None,
                     section: None,
                 }],
-            }),
-            CellSpec::Field(FieldSpec {
-                id: "sketch.create.sides",
-                label: Message::FieldSides,
-                hint: "3–128",
-                kind: FieldKind::PolygonSides,
-            }),
+            },
         ],
     },
     GroupSpec {
         id: "sketch.modify",
         label: Message::GroupModify,
-        cells: &[
+        tools: &[
             planned("sketch.modify.trim", Message::ToolTrim),
             planned("sketch.modify.extend", Message::ToolExtend),
-            CellSpec::Tool(ToolSpec {
+            ToolSpec {
                 id: "sketch.modify.offset",
                 label: Message::ToolOffset,
                 icon: None,
@@ -514,8 +444,8 @@ const SKETCH: [GroupSpec; 6] = [
                         section: None,
                     },
                 ],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.modify.fillet",
                 label: Message::ToolFillet,
                 icon: None,
@@ -538,8 +468,8 @@ const SKETCH: [GroupSpec; 6] = [
                         section: None,
                     },
                 ],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.modify.chamfer",
                 label: Message::ToolChamfer,
                 icon: None,
@@ -562,14 +492,14 @@ const SKETCH: [GroupSpec; 6] = [
                         section: None,
                     },
                 ],
-            }),
+            },
             planned("sketch.modify.break", Message::ToolBreak),
         ],
     },
     GroupSpec {
         id: "sketch.construction",
         label: Message::GroupConstruction,
-        cells: &[
+        tools: &[
             planned("sketch.construction.horizontal", Message::ToolConstructionHorizontal),
             planned("sketch.construction.vertical", Message::ToolConstructionVertical),
             planned("sketch.construction.parallel", Message::ToolConstructionParallel),
@@ -579,10 +509,10 @@ const SKETCH: [GroupSpec; 6] = [
     GroupSpec {
         id: "sketch.dimensions",
         label: Message::GroupDimensions,
-        cells: &[
+        tools: &[
             planned("sketch.dimensions.linear", Message::ToolDimensionLinear),
             planned("sketch.dimensions.angular", Message::ToolDimensionAngular),
-            CellSpec::Tool(ToolSpec {
+            ToolSpec {
                 id: "sketch.dimensions.radius",
                 label: Message::ToolDimensionRadius,
                 icon: None,
@@ -596,13 +526,13 @@ const SKETCH: [GroupSpec; 6] = [
                     run: None,
                     section: None,
                 }],
-            }),
+            },
         ],
     },
     GroupSpec {
         id: "sketch.booleans",
         label: Message::GroupBooleans,
-        cells: &[
+        tools: &[
             planned("sketch.booleans.union", Message::ToolUnion),
             planned("sketch.booleans.subtract", Message::ToolSubtract),
             planned("sketch.booleans.intersect", Message::ToolIntersect),
@@ -611,8 +541,8 @@ const SKETCH: [GroupSpec; 6] = [
     GroupSpec {
         id: "sketch.draft",
         label: Message::GroupDraft,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "sketch.draft.close",
                 label: Message::Close,
                 icon: Some(icons::contour::CLOSE),
@@ -620,8 +550,8 @@ const SKETCH: [GroupSpec; 6] = [
                 run: Some(ToolKind::CloseDraft),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "sketch.draft.cancel",
                 label: Message::Cancel,
                 icon: Some(icons::contour::CANCEL),
@@ -629,7 +559,7 @@ const SKETCH: [GroupSpec; 6] = [
                 run: Some(ToolKind::CancelDraft),
                 method: None,
                 variants: &[],
-            }),
+            },
         ],
     },
 ];
@@ -638,8 +568,8 @@ const MODEL: [GroupSpec; 5] = [
     GroupSpec {
         id: "model.primitives",
         label: Message::GroupPrimitives,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "model.primitives.cube",
                 label: Message::ToolCube,
                 icon: Some(icons::primitives::CUBE),
@@ -647,8 +577,8 @@ const MODEL: [GroupSpec; 5] = [
                 run: Some(ToolKind::Primitive(PrimitiveKind::Cube)),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "model.primitives.cylinder",
                 label: Message::ToolCylinder,
                 icon: Some(icons::primitives::CYLINDER),
@@ -656,8 +586,8 @@ const MODEL: [GroupSpec; 5] = [
                 run: Some(ToolKind::Primitive(PrimitiveKind::Cylinder)),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "model.primitives.sphere",
                 label: Message::ToolSphere,
                 icon: Some(icons::primitives::SPHERE),
@@ -665,22 +595,16 @@ const MODEL: [GroupSpec; 5] = [
                 run: Some(ToolKind::Primitive(PrimitiveKind::Sphere)),
                 method: None,
                 variants: &[],
-            }),
+            },
             planned("model.primitives.cone", Message::ToolCone),
             planned("model.primitives.pyramid", Message::ToolPyramid),
-            CellSpec::Field(FieldSpec {
-                id: "model.primitives.size",
-                label: Message::FieldSize,
-                hint: "mm",
-                kind: FieldKind::PrimitiveSize,
-            }),
         ],
     },
     GroupSpec {
         id: "model.create",
         label: Message::GroupCreate,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "model.create.extrude",
                 label: Message::ToolExtrude,
                 icon: Some(icons::bodies::EXTRUDE),
@@ -688,22 +612,16 @@ const MODEL: [GroupSpec; 5] = [
                 run: Some(ToolKind::Extrude),
                 method: None,
                 variants: &[],
-            }),
+            },
             planned("model.create.revolve", Message::ToolRevolve),
             planned("model.create.loft", Message::ToolLoft),
             planned("model.create.sweep", Message::ToolSweep),
-            CellSpec::Field(FieldSpec {
-                id: "model.create.height",
-                label: Message::FieldHeight,
-                hint: "mm",
-                kind: FieldKind::ExtrudeHeight,
-            }),
         ],
     },
     GroupSpec {
         id: "model.booleans",
         label: Message::GroupBooleans,
-        cells: &[
+        tools: &[
             planned("model.booleans.union", Message::ToolUnion),
             planned("model.booleans.subtract", Message::ToolSubtract),
             planned("model.booleans.intersect", Message::ToolIntersect),
@@ -712,7 +630,7 @@ const MODEL: [GroupSpec; 5] = [
     GroupSpec {
         id: "model.faces",
         label: Message::GroupFaces,
-        cells: &[
+        tools: &[
             planned("model.faces.chamfer", Message::ToolChamfer),
             planned("model.faces.fillet", Message::ToolFillet),
             planned("model.faces.shell", Message::ToolShell),
@@ -723,7 +641,7 @@ const MODEL: [GroupSpec; 5] = [
     GroupSpec {
         id: "model.bodies",
         label: Message::GroupBodies,
-        cells: &[
+        tools: &[
             planned("model.bodies.join", Message::ToolJoin),
             planned("model.bodies.split", Message::ToolSplit),
             planned("model.bodies.scale", Message::ToolScale),
@@ -736,8 +654,8 @@ const FURNITURE: [GroupSpec; 5] = [
     GroupSpec {
         id: "furniture.panels",
         label: Message::GroupPanels,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "furniture.panels.panel",
                 label: Message::ToolPanel,
                 icon: Some(icons::scene::PANEL),
@@ -745,14 +663,14 @@ const FURNITURE: [GroupSpec; 5] = [
                 run: Some(ToolKind::Panel),
                 method: None,
                 variants: &[],
-            }),
+            },
             planned("furniture.panels.contour", Message::ToolContourPanel),
         ],
     },
     GroupSpec {
         id: "furniture.machining",
         label: Message::GroupMachining,
-        cells: &[
+        tools: &[
             planned("furniture.machining.drill", Message::ToolDrill),
             planned("furniture.machining.groove", Message::ToolGroove),
             planned("furniture.machining.edgeband", Message::ToolEdgeband),
@@ -762,7 +680,7 @@ const FURNITURE: [GroupSpec; 5] = [
     GroupSpec {
         id: "furniture.fasteners",
         label: Message::GroupFasteners,
-        cells: &[
+        tools: &[
             planned("furniture.fasteners.confirmat", Message::ToolConfirmat),
             planned("furniture.fasteners.cam", Message::ToolCam),
             planned("furniture.fasteners.dowel", Message::ToolDowel),
@@ -773,7 +691,7 @@ const FURNITURE: [GroupSpec; 5] = [
     GroupSpec {
         id: "furniture.hardware",
         label: Message::GroupHardware,
-        cells: &[
+        tools: &[
             planned("furniture.hardware.hinge", Message::ToolHinge),
             planned("furniture.hardware.runner", Message::ToolRunner),
             planned("furniture.hardware.handle", Message::ToolHandle),
@@ -783,7 +701,7 @@ const FURNITURE: [GroupSpec; 5] = [
     GroupSpec {
         id: "furniture.checks",
         label: Message::GroupChecks,
-        cells: &[
+        tools: &[
             planned("furniture.checks.collisions", Message::ToolCollisions),
             planned("furniture.checks.parts-list", Message::ToolPartsList),
             planned("furniture.checks.cut-list", Message::ToolCutList),
@@ -795,8 +713,8 @@ const SCENE: [GroupSpec; 3] = [
     GroupSpec {
         id: "scene.objects",
         label: Message::GroupObjects,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "scene.objects.camera",
                 label: Message::ToolCamera,
                 icon: Some(icons::scene::CAMERA),
@@ -804,8 +722,8 @@ const SCENE: [GroupSpec; 3] = [
                 run: Some(ToolKind::Camera),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "scene.objects.light",
                 label: Message::ToolLight,
                 icon: Some(icons::scene::LIGHT),
@@ -813,8 +731,8 @@ const SCENE: [GroupSpec; 3] = [
                 run: Some(ToolKind::Light),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "scene.objects.assembly",
                 label: Message::ToolAssembly,
                 icon: Some(icons::scene::ASSEMBLY),
@@ -822,14 +740,14 @@ const SCENE: [GroupSpec; 3] = [
                 run: Some(ToolKind::Assembly),
                 method: None,
                 variants: &[],
-            }),
+            },
             planned("scene.objects.group", Message::ToolGroupNode),
         ],
     },
     GroupSpec {
         id: "scene.views",
         label: Message::GroupViews,
-        cells: &[
+        tools: &[
             planned("scene.views.named", Message::ToolNamedView),
             planned("scene.views.standard", Message::ToolStandardView),
         ],
@@ -837,7 +755,7 @@ const SCENE: [GroupSpec; 3] = [
     GroupSpec {
         id: "scene.materials",
         label: Message::GroupMaterials,
-        cells: &[
+        tools: &[
             planned("scene.materials.catalogue", Message::ToolMaterialCatalogue),
             planned("scene.materials.assign", Message::ToolAssignMaterial),
         ],
@@ -848,8 +766,8 @@ const VIEW: [GroupSpec; 4] = [
     GroupSpec {
         id: "view.projection",
         label: Message::GroupProjection,
-        cells: &[
-            CellSpec::Tool(ToolSpec {
+        tools: &[
+            ToolSpec {
                 id: "view.projection.toggle",
                 label: Message::ToolProjection,
                 icon: Some(icons::view::ORTHOGRAPHIC),
@@ -857,8 +775,8 @@ const VIEW: [GroupSpec; 4] = [
                 run: Some(ToolKind::Projection),
                 method: None,
                 variants: &[],
-            }),
-            CellSpec::Tool(ToolSpec {
+            },
+            ToolSpec {
                 id: "view.projection.frame-all",
                 label: Message::ToolFrameAll,
                 icon: Some(icons::view::FRAME_ALL),
@@ -866,15 +784,15 @@ const VIEW: [GroupSpec; 4] = [
                 run: Some(ToolKind::FrameAll),
                 method: None,
                 variants: &[],
-            }),
+            },
         ],
     },
     GroupSpec {
         id: "view.display",
         label: Message::GroupDisplay,
-        cells: &[
+        tools: &[
             planned("view.display.style", Message::ToolStyle),
-            CellSpec::Tool(ToolSpec {
+            ToolSpec {
                 id: "view.display.grid",
                 label: Message::ToolGridSnap,
                 icon: Some(icons::view::GRID_SNAP),
@@ -882,7 +800,7 @@ const VIEW: [GroupSpec; 4] = [
                 run: Some(ToolKind::GridSnap),
                 method: None,
                 variants: &[],
-            }),
+            },
             planned("view.display.contours", Message::ToolContours),
             planned("view.display.shadows", Message::ToolShadows),
             planned("view.display.section", Message::ToolSection),
@@ -891,7 +809,7 @@ const VIEW: [GroupSpec; 4] = [
     GroupSpec {
         id: "view.layout",
         label: Message::GroupLayout,
-        cells: &[
+        tools: &[
             planned("view.layout.one", Message::ToolLayoutOne),
             planned("view.layout.two", Message::ToolLayoutTwo),
             planned("view.layout.four", Message::ToolLayoutFour),
@@ -901,7 +819,7 @@ const VIEW: [GroupSpec; 4] = [
     GroupSpec {
         id: "view.navigation",
         label: Message::GroupNavigation,
-        cells: &[
+        tools: &[
             planned("view.navigation.orbit", Message::ToolOrbit),
             planned("view.navigation.pan", Message::ToolPan),
             planned("view.navigation.zoom", Message::ToolZoom),
@@ -910,8 +828,8 @@ const VIEW: [GroupSpec; 4] = [
 ];
 
 /// A tool whose command does not exist yet: it holds its place and its name in the map.
-const fn planned(id: &'static str, label: Message) -> CellSpec {
-    CellSpec::Tool(ToolSpec { id, label, icon: None, shortcut: None, run: None, method: None, variants: &[] })
+const fn planned(id: &'static str, label: Message) -> ToolSpec {
+    ToolSpec { id, label, icon: None, shortcut: None, run: None, method: None, variants: &[] }
 }
 
 #[cfg(test)]
@@ -927,10 +845,8 @@ mod tests {
         let mut tools = Vec::new();
         for tab in tabs() {
             for group in tab.groups {
-                for cell in group.cells {
-                    if let CellSpec::Tool(tool) = cell {
-                        tools.push((group, tool));
-                    }
+                for tool in group.tools {
+                    tools.push((group, tool));
                 }
             }
         }
@@ -961,16 +877,12 @@ mod tests {
                     tab.id
                 );
                 assert!(seen.insert(group.id), "{} is declared twice", group.id);
-                for cell in group.cells {
-                    let id = match cell {
-                        CellSpec::Tool(tool) => tool.id,
-                        CellSpec::Field(field) => field.id,
-                    };
+                for tool in group.tools {
+                    let id = tool.id;
                     assert!(id.starts_with(group.id), "{id} does not sit in {}", group.id);
                     assert!(seen.insert(id), "{id} is declared twice");
                 }
-                for cell in group.cells {
-                    let CellSpec::Tool(tool) = cell else { continue };
+                for tool in group.tools {
                     for variant in tool.variants {
                         assert!(variant.id.starts_with(tool.id), "{} does not sit in {}", variant.id, tool.id);
                         assert!(seen.insert(variant.id), "{} is declared twice", variant.id);
@@ -999,7 +911,7 @@ mod tests {
             for group in tab.groups {
                 assert_eq!(group.is_live(), group.columns() > 0, "{} is live exactly when it draws a cell", group.id);
                 if !group.is_live() {
-                    assert_eq!(group.tools().count(), 0, "{} is not live but counts a tool", group.id);
+                    assert_eq!(group.live_tools().count(), 0, "{} is not live but counts a tool", group.id);
                 }
             }
         }
@@ -1018,7 +930,7 @@ mod tests {
         let drawn = |id: &str| tab(id).is_some_and(TabSpec::is_drawn);
         let live = |tab_id: &str| {
             let tab = tab(tab_id).expect("the tab exists");
-            let mut ids = tab.live_groups().flat_map(GroupSpec::tools).map(|tool| tool.id).collect::<Vec<_>>();
+            let mut ids = tab.live_groups().flat_map(GroupSpec::live_tools).map(|tool| tool.id).collect::<Vec<_>>();
             ids.sort_unstable();
             ids
         };
@@ -1093,28 +1005,25 @@ mod tests {
     #[test]
     fn the_row_is_counted_from_the_spec() {
         let sketch = tab("sketch").expect("sketch");
-        // Six creation tools, the side field two cells wide, and the draft pair.
-        assert_eq!(sketch.columns(), 10);
-        // The planned groups draw nothing, so the Model tab is the three primitives, the size field,
-        // the extrusion and its height field.
-        assert_eq!(tab("model").expect("model").columns(), 8);
+        // Six creation tools and the draft pair.
+        assert_eq!(sketch.columns(), 8);
+        // The planned groups draw nothing, so the Model tab is the three primitives and the extrusion.
+        assert_eq!(tab("model").expect("model").columns(), 4);
         assert_eq!(tab("furniture").expect("furniture").columns(), 1);
         assert_eq!(tab("scene").expect("scene").columns(), 3);
         assert_eq!(tab("view").expect("view").columns(), 3);
         let widest = tabs().iter().map(TabSpec::columns).max().unwrap_or(0);
-        assert_eq!(widest, 10, "the sketch tab is the widest row of the map");
+        assert_eq!(widest, 8, "the sketch tab is the widest row of the map");
         for tab in tabs() {
             assert!(tab.columns() <= widest);
         }
     }
 
     #[test]
-    fn a_group_draws_its_tools_before_the_field_that_configures_them() {
-        let model = tab("model").expect("model");
-        let primitives = &model.groups[0];
-        let cells = primitives.cells.iter().filter(|cell| cell.is_live()).collect::<Vec<_>>();
-        let last = cells.last().expect("the group holds cells");
-        assert!(matches!(last, CellSpec::Field(field) if field.kind == FieldKind::PrimitiveSize));
-        assert_eq!(primitives.columns(), 5, "three primitives and a two-cell field");
+    fn a_row_counts_its_live_tools_and_nothing_else() {
+        for group in tabs().iter().flat_map(|tab| tab.groups) {
+            assert_eq!(group.columns(), group.live_tools().count(), "{} counts more than its tools", group.id);
+            assert!(group.columns() <= group.tools.len(), "{} counts a cell it does not hold", group.id);
+        }
     }
 }

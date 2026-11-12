@@ -64,3 +64,25 @@ caption, which is the one place the drawn row is wider than its cells.
 
 Revisited when a tab grows past what one 30 pt row can hold: the answer then is a second row, not a
 wider cell.
+
+## Amendment: the ribbon holds tools only (2026-11-12)
+
+The three `CellSpec::Field` cells — the polygon's side count, a primitive's size and an extrude
+height — took two cells each and turned the tool row into a form: `show_field` drew a `TextEdit`, the
+state carried three strings, and a refusal had to explain a typo inside a tooltip. The owner wants no
+value fields on the ribbon, and the values already have editors elsewhere: the object card edits a
+polygon's sides and a primitive's parameters, and the pull arrow's command bar edits an extrusion's
+height.
+
+`GroupSpec { id, label, tools }` is therefore a list of tools, `CellSpec`, `FieldSpec` and
+`FieldKind` are gone, `columns()` counts live tools, and the three values live as typed session
+defaults on `Toolbars` (`primitive_size: Length`, `extrude_height: Length`, `polygon_sides: u32`),
+initialised from the constants that used to fill the text. A tool therefore always receives a valid
+number, `FieldRefusal` and its five messages are deleted, and `Editor::set_extrude_height` writes the
+typed default instead of a string.
+
+The consequence is deliberate: a default is only editable through the object it created. Creating a
+polygon starts at the default six sides and the card changes them afterwards; a primitive is built at
+the default 200 mm and its card changes the parameter; an extrusion uses the default height, and the
+pull's ✓ makes the height it wrote the next default. The ribbon is one row of glyphs again, and
+`ready` cannot offer a tool whose number is refused.

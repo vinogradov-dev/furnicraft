@@ -822,11 +822,6 @@ messages! {
     ExtrudePathOpen = ["The selected path is open; close it first", "Выбранный путь разомкнут; сначала замкните его"],
     ExtrudeNotPath = ["The selected object is not a path", "Выбранный объект не является путём"],
     PrimitiveClickPlane = ["{}: click the work plane", "{}: щёлкните по рабочей плоскости"],
-    PrimitiveSizeNotLength = ["The primitive size is not a length: {}", "Размер примитива не является длиной: {}"],
-    PrimitiveSizePositive = ["The primitive size must be positive.", "Размер примитива должен быть положительным."],
-    ExtrudeHeightNotLength = ["The extrusion height is not a length: {}", "Высота выдавливания не является длиной: {}"],
-    ExtrudeHeightPositive = ["The extrusion height must be positive.", "Высота выдавливания должна быть положительной."],
-    ExtrudeHeightMax = ["The extrusion height must be at most {} mm.", "Высота выдавливания должна быть не больше {} мм."],
 
     // ── Display names ───────────────────────────────────────────────────────
     Axonometric = ["Axonometric", "Аксонометрия"],
