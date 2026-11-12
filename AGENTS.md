@@ -80,6 +80,15 @@ words, and record an ADR when the decision is not reversible. A UI change is ver
 default (an `egui::Context` driven with `RawInput`); colour, contrast and translucency need an
 offscreen render or a live run, and the task says which one was used.
 
+### 1.4 Planning a future task without writing
+
+A second terminal started as `pi --tools read,find,ls` is the planning instance: no `edit`, no
+`write` and no `bash`, so it reads the plan, the map and the code through `rust-analyzer` and cannot
+touch the tree. `/plan-task <idea>` there returns a duplicate check, a lead, Why, Shape, Done, the
+`files:` hint and the ready `cargo xtask task add` command, plus the ADR question and the open
+questions for the owner. The writing session files the entry — one writer per repository, because
+`STATE:`, `plan/SESSION.md` and the work order hold exactly one live task.
+
 ## 2. Non-negotiable constraints
 
 - **Rust only.** No JS/TS, no scripting runtime, no code generation into other languages.
