@@ -189,7 +189,7 @@ impl PanelRects {
 
 /// The first point a panel may start at: the ribbon band plus the gap.
 ///
-/// Pure, so a golden can pin the two ribbon heights the workspace draws (`72` and `29` points).
+/// Pure, so a golden can pin the two ribbon heights the workspace draws (`76` and `29` points).
 pub(crate) const fn panel_top(ribbon_height: f32) -> f32 {
     ribbon_height + INSET
 }
@@ -468,7 +468,7 @@ mod tests {
         out
     }
 
-    /// A viewport the size of the test window, below a 72 pt ribbon.
+    /// A viewport the size of the test window, below a 76 pt ribbon.
     fn viewport() -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN)
     }
@@ -482,7 +482,7 @@ mod tests {
         Chrome { panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))), ribbon }
     }
 
-    /// The frame geometry of both panels shown at their expanded width under a 72 pt ribbon.
+    /// The frame geometry of both panels shown at their expanded width under a 76 pt ribbon.
     fn chrome() -> Chrome {
         chrome_with(furnicraft_ui::toolbars::height(true), &Panels::default())
     }
@@ -528,17 +528,17 @@ mod tests {
     fn the_panel_top_follows_the_ribbon_band_and_keeps_the_gap() {
         // The two heights the workspace draws, pinned as goldens: the panels never jump when the
         // ribbon folds, because both read the same animated band.
-        for (open, band) in [(true, 72.0), (false, 29.0)] {
+        for (open, band) in [(true, 76.0), (false, 29.0)] {
             assert!((furnicraft_ui::toolbars::height(open) - band).abs() < f32::EPSILON, "the band golden");
             assert!((panel_top(band) - (band + INSET)).abs() < f32::EPSILON);
         }
-        assert!(panel_top(72.0) > panel_top(29.0), "folding the ribbon lifts the panels");
+        assert!(panel_top(76.0) > panel_top(29.0), "folding the ribbon lifts the panels");
     }
 
     #[test]
     fn the_panels_are_inset_from_three_edges_and_hidden_at_zero_width() {
         let viewport = viewport();
-        let top = panel_top(72.0);
+        let top = panel_top(76.0);
         for side in [PanelSide::Left, PanelSide::Right] {
             let expanded = panel_rect(viewport, side, top, PanelState::default(), EXPANDED_WIDTH).expect("shown");
             assert!(expanded.width() >= EXPANDED_WIDTH - f32::EPSILON && expanded.width() <= EXPANDED_WIDTH, "width");
@@ -685,7 +685,7 @@ mod tests {
         for _ in 0..frames.max(1) {
             let next = ctx.run_ui(input(), |_ui| {
                 let width = if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
-                let rect = panel_rect(viewport(), side, panel_top(72.0), state, width).expect("shown");
+                let rect = panel_rect(viewport(), side, panel_top(76.0), state, width).expect("shown");
                 let event = show(ctx, PanelSlot { side, id, rect, state, head: head() }, 92, |ui| {
                     ui.label("BODY-CONTENT");
                 });

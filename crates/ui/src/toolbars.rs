@@ -18,7 +18,7 @@
 //!
 //! A cell is one glyph in a [`RIBBON_CELL_WIDTH`] by [`RIBBON_ROW_HEIGHT`] cell, so a row is one pitch
 //! and no tool sizes itself from its name (ADR 0067, revised by ADR 0091). The group's caption sits in
-//! the darker band under the row, which is what makes the whole body 72 points tall and the folded
+//! the quieter band under the row, which is what makes the whole body 76 points tall and the folded
 //! ribbon its 29-point tab row.
 //!
 //! Every button is the icon-only [`icons::ribbon_cell`]: the ribbon names a tool through its hint and
@@ -319,7 +319,7 @@ pub fn show(ui: &mut Ui, state: &mut Toolbars, context: RibbonContext, actions: 
 /// The ribbon floats over the design space instead of taking height from it (U51), so its height and
 /// the band the shell reserves for it must agree exactly: this constant is the single source the
 /// frame the ribbon draws and [`height`] both read. The vertical margin is zero, because the height
-/// is the approved 29/72 metric itself and every row of it is a control row.
+/// is the approved 29/76 metric itself and every row of it is a control row.
 pub const RIBBON_FRAME_MARGIN: [i8; 2] = [6, 0];
 
 /// The height the ribbon overlay covers over the design space, in points.
@@ -468,7 +468,11 @@ fn show_group(
     });
 }
 
-/// The caption band under one group: the darker strip with the group's name in capitals.
+/// The caption band under one group: the quiet strip with the group's name in capitals.
+///
+/// The band is [`crate::theme::caption_band`], one step from a control toward the chrome: the darkest
+/// surface alone read as a hole under every group (U75). The name is centred in the band, which is
+/// tall enough at [`RIBBON_CAPTION_HEIGHT`] to keep air above and below the capitals.
 fn caption_band(ui: &mut Ui, row_width: f32, caption: &str) {
     let galley = ui.fonts_mut(|fonts| {
         fonts.layout_no_wrap(
@@ -479,9 +483,23 @@ fn caption_band(ui: &mut Ui, row_width: f32, caption: &str) {
     });
     let width = row_width.max(galley.size().x);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, RIBBON_CAPTION_HEIGHT), egui::Sense::hover());
-    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, crate::theme::band(ui));
-    let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, crate::theme::caption_band(ui));
+    let pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - capitals_centre(&galley));
     ui.painter().galley(pos, galley, crate::theme::text_dim(ui));
+}
+
+/// The middle of a caption's capitals, measured from the top of the galley.
+///
+/// The line box of a galley carries the descent, which capitals never use, so centring the box leaves
+/// the name two points high in the band (U75). Centring the block between the tallest glyph and the
+/// baseline puts every caption of the strip on one baseline — a `Д` leg or a `Ц` tail hangs as type
+/// does — instead of lifting the words that have one. A layout with no glyph falls back to the box.
+fn capitals_centre(galley: &egui::Galley) -> f32 {
+    let baseline = galley.rows.first().and_then(|row| row.row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y));
+    match baseline {
+        Some(baseline) => (galley.mesh_bounds.top() + baseline) / 2.0,
+        None => galley.size().y / 2.0,
+    }
 }
 
 /// One tool cell: its glyph, and the action a click asks the editor to run.
@@ -851,8 +869,8 @@ mod tests {
 
     #[test]
     fn the_body_is_one_tool_row_and_one_caption_band() {
-        // The approved body is the 30 pt tool row and the 12 pt caption band: a row that grows an
-        // extra field band is a regression (U68).
+        // The approved body is the 30 pt tool row and the 16 pt caption band: a row that grows an
+        // extra field band is a regression (U68, revised by U75).
         let mut state = Toolbars::new();
         state.set_tab(tab("model"));
         let ctx = egui::Context::default();
@@ -864,7 +882,70 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         assert!((drawn - self::height(true)).abs() < 0.01, "the open ribbon draws {drawn} pt");
-        assert!((drawn - 72.0).abs() < 0.01, "the approved open ribbon is 72 pt, not {drawn}");
+        assert!((drawn - 76.0).abs() < 0.01, "the approved open ribbon is 76 pt, not {drawn}");
+    }
+
+    #[test]
+    fn every_group_caption_sits_centred_with_air_above_and_below() {
+        // U75: at 12 pt a 9.5 pt line of capitals touched the tool row above it and the rule below.
+        // The band is 16 pt now, painted a step off the control tone instead of the darkest chrome,
+        // and every caption of every drawn tab keeps its air on both sides in both languages.
+        for lang in [Lang::En, Lang::Ru] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            crate::set_language(&ctx, lang);
+            let mut checked = 0;
+            for spec in spec::tabs().iter().filter(|tab| tab.is_drawn()) {
+                let mut state = Toolbars::new();
+                state.set_tab(spec);
+                let mut fill = egui::Color32::TRANSPARENT;
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    show(ui, &mut state, full_context(), &mut Vec::new());
+                    fill = crate::theme::caption_band(ui);
+                });
+                let band = band_of(&output.shapes, fill);
+                let band = band.unwrap_or_else(|| panic!("the {} tab captions no group", spec.id));
+                assert!(
+                    (band.height() - RIBBON_CAPTION_HEIGHT).abs() < 0.01,
+                    "the {} band is {:.2} pt tall",
+                    spec.id,
+                    band.height()
+                );
+                let mut baseline: Option<f32> = None;
+                for group in spec.live_groups() {
+                    let name = group.label.text(lang).to_uppercase();
+                    let caps = text_cap_line(&output.shapes, &name);
+                    let (top, line) = caps.unwrap_or_else(|| panic!("{} is not captioned", group.id));
+                    let ink = text_ink(&output.shapes, &name).expect("a drawn caption has glyphs");
+                    let above = top - band.top();
+                    let below = band.bottom() - line;
+                    assert!(
+                        ((top + line) / 2.0 - band.center().y).abs() < 0.5,
+                        "{}: the capitals are not centred: {above:.2} pt above, {below:.2} pt below",
+                        group.id
+                    );
+                    assert!(above >= 3.0, "{}: the capitals keep {above:.2} pt above them", group.id);
+                    assert!(below >= 3.0, "{}: the capitals keep {below:.2} pt below them", group.id);
+                    assert!(
+                        ink.top() >= band.top() && ink.bottom() <= band.bottom(),
+                        "{}: the glyphs leave the band: {ink:?} in {band:?}",
+                        group.id
+                    );
+                    match baseline {
+                        Some(first) => assert!(
+                            (line - first).abs() < 0.01,
+                            "{}: its baseline is {:.2} pt off the group beside it",
+                            group.id,
+                            line - first
+                        ),
+                        None => baseline = Some(line),
+                    }
+                    checked += 1;
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert!(checked >= 5, "every drawn tab was read, not {checked} captions");
+        }
     }
 
     #[test]
@@ -890,7 +971,7 @@ mod tests {
             );
         }
         assert_eq!(height(false), 29.0, "the folded ribbon is its tab row and one hairline");
-        assert_eq!(height(true), 72.0, "the open ribbon is the tab row, the tool row and the band");
+        assert_eq!(height(true), 76.0, "the open ribbon is the tab row, the tool row and the band");
     }
 
     #[test]
@@ -1641,6 +1722,92 @@ mod tests {
         let mut out = Vec::new();
         for clipped in shapes {
             walk(&clipped.shape, row, &mut out);
+        }
+        out
+    }
+
+    /// The ink of one drawn text: the tight box around its glyphs, or `None` when it is not drawn.
+    ///
+    /// The line box of a galley is taller than its capitals, so a clearance measured from
+    /// [`text_rect`] would be the air around the line, not around the name.
+    fn text_ink(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Rect> {
+        fn walk(shape: &egui::Shape, text: &str, out: &mut Option<egui::Rect>) {
+            match shape {
+                egui::Shape::Text(drawn) if drawn.galley.text() == text => {
+                    *out = Some(drawn.galley.mesh_bounds.translate(drawn.pos.to_vec2()));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, text, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = None;
+        for clipped in shapes {
+            walk(&clipped.shape, text, &mut out);
+        }
+        out
+    }
+
+    /// The top of one drawn text's capitals and its baseline, in frame coordinates.
+    ///
+    /// A caption is centred on this block, not on its line box or its whole ink: the box carries the
+    /// descent and the ink may carry a `Д` leg or a `Ц` tail, and both would move the name off the
+    /// baseline its neighbours share (U75).
+    fn text_cap_line(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<(f32, f32)> {
+        fn walk(shape: &egui::Shape, text: &str, out: &mut Option<(f32, f32)>) {
+            match shape {
+                egui::Shape::Text(drawn) if drawn.galley.text() == text => {
+                    let baseline = drawn
+                        .galley
+                        .rows
+                        .first()
+                        .and_then(|row| row.row.glyphs.first().map(|glyph| row.pos.y + glyph.pos.y));
+                    if let Some(baseline) = baseline {
+                        *out = Some((drawn.pos.y + drawn.galley.mesh_bounds.top(), drawn.pos.y + baseline));
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, text, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = None;
+        for clipped in shapes {
+            walk(&clipped.shape, text, &mut out);
+        }
+        out
+    }
+
+    /// The tallest rect painted with `fill`, which for a caption is its band.
+    fn band_of(shapes: &[egui::epaint::ClippedShape], fill: egui::Color32) -> Option<egui::Rect> {
+        fn walk(shape: &egui::Shape, fill: egui::Color32, out: &mut Option<egui::Rect>) {
+            match shape {
+                egui::Shape::Rect(painted) if painted.fill == fill => {
+                    let taller = out.is_none_or(|rect: egui::Rect| painted.rect.height() > rect.height());
+                    if taller {
+                        *out = Some(painted.rect);
+                    }
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, fill, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = None;
+        for clipped in shapes {
+            walk(&clipped.shape, fill, &mut out);
         }
         out
     }

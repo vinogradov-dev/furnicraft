@@ -538,6 +538,12 @@ mod tests {
     use crate::side_panels::{EXPANDED_WIDTH, PanelRects, Panels, STRIP_WIDTH, panel_top};
     use furnicraft_ui::settings::PanelState;
 
+    /// The open ribbon band the widget keeps clear of, read from the one source of truth instead of
+    /// a literal that would drift when the strip's metrics move (U75).
+    fn band() -> f32 {
+        furnicraft_ui::toolbars::height(true)
+    }
+
     /// The frame geometry of a view with no ribbon band and no side panel.
     fn plain(viewport: Rect) -> Chrome {
         Chrome {
@@ -581,7 +587,7 @@ mod tests {
         for size in [Vec2::new(1280.0, 800.0), Vec2::new(640.0, 480.0)] {
             let viewport = Rect::from_min_size(egui::Pos2::ZERO, size);
             for layout in 0..2 {
-                let content = Rect::from_min_max(egui::pos2(viewport.left(), viewport.top() + 72.0), viewport.max);
+                let content = Rect::from_min_max(egui::pos2(viewport.left(), viewport.top() + band()), viewport.max);
                 let views: Vec<Rect> = match layout {
                     0 => vec![content],
                     _ => vec![
@@ -604,7 +610,7 @@ mod tests {
                         let mut panels = Panels::default();
                         panels.scene = scene;
                         panels.inspector = inspector;
-                        let chrome = chrome_of(viewport, 72.0, &panels);
+                        let chrome = chrome_of(viewport, band(), &panels);
                         for view in &views {
                             let Some(rect) = widget_rect(*view, &chrome) else { continue };
                             assert!(
@@ -636,19 +642,19 @@ mod tests {
     fn the_inspector_pushes_the_widget_to_its_left_and_a_fold_lets_it_return() {
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 700.0));
         let mut panels = Panels::default();
-        let expanded = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room beside the panel");
-        let inspector = chrome_of(viewport, 72.0, &panels).panels.right.expect("the inspector is shown");
+        let expanded = widget_rect(viewport, &chrome_of(viewport, band(), &panels)).expect("room beside the panel");
+        let inspector = chrome_of(viewport, band(), &panels).panels.right.expect("the inspector is shown");
         assert!(expanded.right() <= inspector.left() - MARGIN + 1.0e-6, "the widget rests left of the inspector");
         assert!(expanded.right() < viewport.right() - EXPANDED_WIDTH);
 
         panels.inspector.expanded = false;
-        let folded = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room here too");
+        let folded = widget_rect(viewport, &chrome_of(viewport, band(), &panels)).expect("room here too");
         assert!(folded.right() > expanded.right(), "folding the inspector lets the widget return toward the corner");
-        let strip = chrome_of(viewport, 72.0, &panels).panels.right.expect("the strip is shown");
+        let strip = chrome_of(viewport, band(), &panels).panels.right.expect("the strip is shown");
         assert!(folded.right() <= strip.left() - MARGIN + 1.0e-6, "a folded panel keeps the widget clear too");
 
         panels.inspector.visible = false;
-        let gone = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room here too");
+        let gone = widget_rect(viewport, &chrome_of(viewport, band(), &panels)).expect("room here too");
         assert!(
             (gone.right() - (viewport.right() - MARGIN)).abs() < 1.0e-6,
             "a hidden inspector frees the corner margin"
@@ -661,7 +667,7 @@ mod tests {
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(640.0, 480.0));
         let mut panels = Panels::default();
         panels.inspector = PanelState { visible: false, expanded: true };
-        let chrome = chrome_of(viewport, 72.0, &panels);
+        let chrome = chrome_of(viewport, band(), &panels);
         let rect = widget_rect(viewport, &chrome).expect("the left corner is free");
         let tree = chrome.panels.left.expect("the tree is shown");
         assert!(rect.left() >= tree.right() + MARGIN - 1.0e-6, "the widget sits right of the tree");

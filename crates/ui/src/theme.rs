@@ -111,15 +111,16 @@ pub const RIBBON_TAB_HEIGHT: f32 = 28.0;
 
 /// The height of the caption band under a ribbon group, in points.
 ///
-/// The band is the darker strip under the tool row and carries the 9.5 pt group name in capitals; it
-/// is type-derived, so it is not a multiple of [`STEP`]: a caption is a line of small type, not a
-/// control.
-pub const RIBBON_CAPTION_HEIGHT: f32 = 12.0;
+/// The band is the strip under the tool row and carries the 9.5 pt group name in capitals; at 16
+/// points the capitals keep at least three points of air above and below, so the name touches
+/// neither the tool row nor the closing rule (U75). It is type-derived, so it is not a multiple of
+/// [`STEP`]: a caption is a line of small type, not a control.
+pub const RIBBON_CAPTION_HEIGHT: f32 = 16.0;
 
 /// The thickness of the hairline that closes a chrome surface, in points.
 ///
 /// The ribbon draws one under its tab row and one under its caption band, which is what makes
-/// [`super::toolbars::height`] the 29 and 72 points of the approved metrics.
+/// [`super::toolbars::height`] the 29 and 76 points of the approved metrics.
 pub const RIBBON_RULE: f32 = 1.0;
 
 /// The height of the viewport bar at the bottom of the window, in points.
@@ -482,6 +483,15 @@ pub fn band(ui: &egui::Ui) -> Color32 {
     chrome(ui)
 }
 
+/// The fill of a ribbon group's caption band: the control tone one quiet step toward [`band`].
+///
+/// The chrome itself is the darkest surface of the window, and a strip of it under every group read
+/// as a hole cut through the ribbon. Mixing the control tone a third of the way to the chrome keeps
+/// the band below the buttons it captions without taking it out of the strip (U75).
+pub fn caption_band(ui: &egui::Ui) -> Color32 {
+    mix(control(ui), band(ui), 30)
+}
+
 /// The panel fill of the active theme.
 pub fn panel(ui: &egui::Ui) -> Color32 {
     ui.visuals().panel_fill
@@ -826,6 +836,46 @@ mod tests {
         }
     }
 
+    /// The caption band and its neighbours, read inside one frame of `preset` in one variant.
+    ///
+    /// The accessors read the installed [`egui::Visuals`], so a test that names a preset has to run
+    /// a frame instead of asking the ramp: that is the same path the ribbon takes.
+    fn caption_fills(preset: ThemePreset, dark: bool) -> (Color32, Color32, Color32, Color32) {
+        let ctx = egui::Context::default();
+        let preference = if dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light };
+        install_with(&ctx, preference, preset, None);
+        let mut fills = (Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::TRANSPARENT, Color32::TRANSPARENT);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            fills = (control(ui), band(ui), caption_band(ui), text_dim(ui));
+        });
+        output.drop_without_applying_deltas();
+        fills
+    }
+
+    #[test]
+    fn the_caption_band_is_one_step_off_the_control_toward_the_chrome() {
+        // U75: the band was the darkest chrome, which cut a hole under every ribbon group. It now
+        // sits a third of the way from a control to the chrome, between the two in both variants.
+        // On dark that means darker than a button and lighter than the chrome; on paper the chrome
+        // is the lighter of the two, so the same mix reads the other way round — either way the band
+        // is neither the button nor the hole.
+        for preset in ThemePreset::ALL {
+            for dark in [true, false] {
+                let (control, band, caption, dim) = caption_fills(preset, dark);
+                let (low, high) = if relative_luminance(control) < relative_luminance(band) {
+                    (control, band)
+                } else {
+                    (band, control)
+                };
+                let measured = relative_luminance(caption);
+                assert!(measured > relative_luminance(low), "{preset:?} {dark}: the band fell into the chrome");
+                assert!(measured < relative_luminance(high), "{preset:?} {dark}: the band climbed onto a control");
+                let ratio = contrast_ratio(dim, caption);
+                assert!(ratio >= 3.0, "{preset:?} {dark}: the caption is {ratio:.2}:1 on its band, under 3:1");
+            }
+        }
+    }
+
     #[test]
     fn a_preset_tints_the_chrome_but_never_colours_it() {
         for (name, palette) in every_palette() {
@@ -970,13 +1020,14 @@ mod tests {
         assert_eq!(HEADER_CONTROL_HEIGHT % STEP, 2.0, "a header control is half a step off, so it centres");
         const { assert!(HEADER_CONTROL_HEIGHT < HEADER_HEIGHT) };
         assert_eq!(STATUS_HEIGHT % STEP, 0.0, "the viewport bar sits on the grid");
-        assert_eq!(RIBBON_CAPTION_HEIGHT, 12.0, "the caption band is one line of small type");
-        // The ribbon's metrics are the owner's approved ones (`plan/notes/U71.md`): a 28 pt tab row,
-        // a 30 pt tool row, a 12 pt caption band, a 34 x 30 cell and a 22 pt glyph inside it.
+        assert_eq!(RIBBON_CAPTION_HEIGHT, 16.0, "the caption band holds the capitals with air above and below");
+        // The ribbon's metrics are the owner's approved ones (`plan/notes/U71.md`, revised by U75): a
+        // 28 pt tab row, a 30 pt tool row, a 16 pt caption band, a 34 x 30 cell and a 22 pt glyph.
         assert_eq!(RIBBON_CELL_WIDTH % STEP, 2.0, "a cell is a step and a half wide, so the glyph breathes");
         const { assert!(RIBBON_CELL_WIDTH > crate::icons::RIBBON_ICON_POINT_SIZE) };
         const { assert!(RIBBON_CELL_WIDTH - crate::icons::RIBBON_ICON_POINT_SIZE >= 2.0 * STEP) };
         const { assert!(RIBBON_ROW_HEIGHT > crate::icons::RIBBON_ICON_POINT_SIZE) };
+        assert_eq!(RIBBON_ROW_HEIGHT, 30.0, "the tool row is one 30 pt glyph cell, and U75 left it alone");
         // The chrome rows keep one order: the header is the tallest because it carries the window
         // buttons, the tool row follows because it carries a glyph, then the tab row, the status bar
         // and the caption band.
@@ -990,6 +1041,6 @@ mod tests {
         const FOLDED: f32 = RIBBON_TAB_HEIGHT + RIBBON_RULE;
         const OPEN: f32 = FOLDED + RIBBON_ROW_HEIGHT + RIBBON_CAPTION_HEIGHT + RIBBON_RULE;
         assert_eq!(FOLDED, 29.0, "the folded ribbon is its tab row and one hairline");
-        assert_eq!(OPEN, 72.0, "the open ribbon is 72 points tall");
+        assert_eq!(OPEN, 76.0, "the open ribbon is 76 points tall");
     }
 }
