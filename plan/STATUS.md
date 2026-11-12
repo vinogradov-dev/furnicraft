@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U64 state=idle base=c9c587c updated=2026-11-12
+STATE: milestone=M7 phase=A task=R1 state=idle base=7703a06 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U64 is next: the status bar shows the tool and counts, and the owner wants the selection context in
-its centre — name, kind, size, material, edge banding and warnings — with the three display sliders
-renamed and moved to Settings → View. The zones, fields and reset values are in plan/notes/U64.md.
+R1 is next: the pre-release rename gives the product name one home — `theme::PRODUCT_NAME`, an
+`APP_ID` and `project::FORMAT`/`EXTENSION` — then renames the 13 crates, moves the app to `app/` and
+updates the four registers and the path hints. `plan/rename.md` holds the measured procedure.
 
 ## Index
 

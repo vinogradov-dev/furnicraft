@@ -38,6 +38,18 @@ pub const MIN_ROLL_STEP_DEGREES: u32 = 1;
 /// The largest hand-turn step of the roll ring, in degrees.
 pub const MAX_ROLL_STEP_DEGREES: u32 = 15;
 
+/// The largest display strength the settings offer, in percent.
+pub const MAX_DISPLAY_STRENGTH: u32 = 100;
+
+/// The floor-grid brightness a fresh workspace opens with, in percent.
+pub const DEFAULT_GRID_STRENGTH: u32 = 60;
+
+/// The form-outline strength a fresh workspace opens with, in percent.
+pub const DEFAULT_EDGE_STRENGTH: u32 = 70;
+
+/// The contact-shadow strength a fresh workspace opens with, in percent.
+pub const DEFAULT_SHADOW_STRENGTH: u32 = 40;
+
 /// How many recent files the workspace remembers.
 pub const MAX_RECENT: usize = 10;
 
@@ -232,6 +244,12 @@ pub struct ViewportSettings {
     pub grid: bool,
     /// The minor grid spacing, in millimetres.
     pub grid_step_mm: u32,
+    /// The brightness of the work-plane floor grid, in percent; 0 hides it.
+    pub grid_strength: u32,
+    /// The strength of the form-outline pass, in percent; 0 leaves the fill only.
+    pub edge_strength: u32,
+    /// The strength of the contact shadow under the objects, in percent.
+    pub shadow_strength: u32,
     /// Whether the edge pass draws every triangle edge, diagonals included.
     pub all_edges: bool,
     /// The direction a viewport opens from.
@@ -246,6 +264,9 @@ impl Default for ViewportSettings {
             style: ShadingStyle::default(),
             grid: true,
             grid_step_mm: 100,
+            grid_strength: DEFAULT_GRID_STRENGTH,
+            edge_strength: DEFAULT_EDGE_STRENGTH,
+            shadow_strength: DEFAULT_SHADOW_STRENGTH,
             all_edges: false,
             opening_view: OpeningView::default(),
             roll_step_degrees: 1,
@@ -418,6 +439,9 @@ impl Settings {
         self.appearance.ui_scale = self.appearance.ui_scale.clamp(ui_scale::MIN_PERCENT, ui_scale::MAX_PERCENT);
         self.appearance.panel_opacity = self.appearance.panel_opacity.clamp(MIN_PANEL_OPACITY, MAX_PANEL_OPACITY);
         self.viewport.grid_step_mm = self.viewport.grid_step_mm.clamp(MIN_GRID_STEP_MM, MAX_GRID_STEP_MM);
+        self.viewport.grid_strength = self.viewport.grid_strength.min(MAX_DISPLAY_STRENGTH);
+        self.viewport.edge_strength = self.viewport.edge_strength.min(MAX_DISPLAY_STRENGTH);
+        self.viewport.shadow_strength = self.viewport.shadow_strength.min(MAX_DISPLAY_STRENGTH);
         self.viewport.roll_step_degrees =
             self.viewport.roll_step_degrees.clamp(MIN_ROLL_STEP_DEGREES, MAX_ROLL_STEP_DEGREES);
         let mut seen = Vec::new();
@@ -755,10 +779,38 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
                 .speed(5.0),
         )
         .changed();
-    changed |= ui
-        .checkbox(&mut settings.viewport.all_edges, Message::ShowEveryTriangleEdge.text(lang))
-        .on_hover_text(Message::AllEdgesHint.text(lang))
-        .changed();
+    ui.separator();
+    // The strengths the floating cluster used to draw: they describe how a view is painted, so
+    // they live with the other display defaults and the cluster keeps only its switches (U64).
+    ui.label(egui::RichText::new(Message::DisplayHeading.text(lang)).strong());
+    for (value, label, hint) in [
+        (&mut settings.viewport.grid_strength, Message::GridStrength, Message::GridStrengthHint),
+        (&mut settings.viewport.edge_strength, Message::EdgesStrength, Message::EdgesStrengthHint),
+        (&mut settings.viewport.shadow_strength, Message::ShadowStrength, Message::ShadowStrengthHint),
+    ] {
+        changed |= ui
+            .add(egui::Slider::new(value, 0..=MAX_DISPLAY_STRENGTH).text(label.text(lang)))
+            .on_hover_text(hint.text(lang))
+            .changed();
+    }
+    ui.horizontal(|ui| {
+        if ui.button(Message::ResetDisplay.text(lang)).on_hover_text(Message::ResetDisplayHint.text(lang)).clicked() {
+            settings.viewport.grid_strength = DEFAULT_GRID_STRENGTH;
+            settings.viewport.edge_strength = DEFAULT_EDGE_STRENGTH;
+            settings.viewport.shadow_strength = DEFAULT_SHADOW_STRENGTH;
+            changed = true;
+        }
+        ui.label(egui::RichText::new(Message::ResetDisplayHint.text(lang)).small().color(theme::text_dim(ui)));
+    });
+    ui.separator();
+    // A diagnostic, not a user setting: it draws the triangulation diagonals the form-edge view
+    // hides, so it sits behind the one fold a user has to open (U64).
+    egui::CollapsingHeader::new(Message::SectionAdditional.text(lang)).default_open(false).show(ui, |ui| {
+        changed |= ui
+            .checkbox(&mut settings.viewport.all_edges, Message::ShowEveryTriangleEdge.text(lang))
+            .on_hover_text(Message::AllEdgesHint.text(lang))
+            .changed();
+    });
     ui.label(egui::RichText::new(Message::ViewportDefaultsHint.text(lang)).small().color(theme::text_dim(ui)));
     changed
 }
@@ -838,6 +890,9 @@ mod tests {
                 style: ShadingStyle::Wireframe,
                 grid: false,
                 grid_step_mm: 25,
+                grid_strength: 30,
+                edge_strength: 80,
+                shadow_strength: 55,
                 all_edges: true,
                 opening_view: OpeningView::Top,
                 roll_step_degrees: 5,
@@ -889,12 +944,43 @@ mod tests {
 
     #[test]
     fn a_value_outside_its_range_is_clamped_on_read() {
-        let json = r#"{"version":1,"appearance":{"ui_scale":900,"panel_opacity":5},"viewport":{"grid_step_mm":0,"roll_step_degrees":0}}"#;
+        let json = r#"{"version":1,"appearance":{"ui_scale":900,"panel_opacity":5},"viewport":{"grid_step_mm":0,"roll_step_degrees":0,"grid_strength":900,"edge_strength":900,"shadow_strength":900}}"#;
         let settings = Settings::from_json(json).expect("parse and repair");
         assert_eq!(settings.appearance.ui_scale, ui_scale::MAX_PERCENT);
         assert_eq!(settings.appearance.panel_opacity, MIN_PANEL_OPACITY);
         assert_eq!(settings.viewport.grid_step_mm, MIN_GRID_STEP_MM);
         assert_eq!(settings.viewport.roll_step_degrees, MIN_ROLL_STEP_DEGREES);
+        assert_eq!(settings.viewport.grid_strength, MAX_DISPLAY_STRENGTH);
+        assert_eq!(settings.viewport.edge_strength, MAX_DISPLAY_STRENGTH);
+        assert_eq!(settings.viewport.shadow_strength, MAX_DISPLAY_STRENGTH);
+    }
+
+    #[test]
+    fn the_display_strengths_round_trip_and_reset_to_their_defaults() {
+        let defaults = ViewportSettings::default();
+        assert_eq!(
+            (defaults.grid_strength, defaults.edge_strength, defaults.shadow_strength),
+            (60, 70, 40),
+            "a fresh workspace draws the owner's default display"
+        );
+        let mut settings = Settings::default();
+        settings.viewport.grid_strength = 0;
+        settings.viewport.edge_strength = 50;
+        settings.viewport.shadow_strength = 100;
+        let json = settings.to_json().expect("serialise");
+        let read = Settings::from_json(&json).expect("parse");
+        assert_eq!(read.viewport.grid_strength, 0);
+        assert_eq!(read.viewport.edge_strength, 50);
+        assert_eq!(read.viewport.shadow_strength, 100);
+        assert_eq!(read, settings, "the workspace file keeps all three strengths");
+
+        // A file written before the strengths moved out of the view cluster has no key for them.
+        let json = r#"{"version":1,"viewport":{"grid":true}}"#;
+        let settings = Settings::from_json(json).expect("load");
+        assert_eq!(
+            (settings.viewport.grid_strength, settings.viewport.edge_strength, settings.viewport.shadow_strength),
+            (DEFAULT_GRID_STRENGTH, DEFAULT_EDGE_STRENGTH, DEFAULT_SHADOW_STRENGTH)
+        );
     }
 
     #[test]

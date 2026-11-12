@@ -95,6 +95,12 @@ messages! {
 
     // ── Status bar ──────────────────────────────────────────────────────────
     LockedStatus = ["Locked · {}", "Заблокировано · {}"],
+    StatusSelectionCount = ["Selected: {}", "Выбрано: {}"],
+    StatusSize = ["{} × {} × {}", "{} × {} × {}"],
+    StatusBanding = ["edge {}", "кромка {}"],
+    StatusReady = ["Ready", "Готово"],
+    StatusRebuilding = ["Rebuilding…", "Перестроение…"],
+    StatusScale = ["{} %", "{} %"],
     UnlockHint = [
         "Unlock it in the scene tree to move or delete it",
         "Снимите блокировку в дереве сцены, чтобы переместить или удалить"
@@ -121,7 +127,7 @@ messages! {
     PointsSuffixMany = [" · {} points", " · {} точек"],
     DrawArcSuffix = [" · arc", " · дуга"],
     DrawLineSuffix = [" · line", " · линия"],
-    GridTenMillimetres = ["Grid 10 mm  (G)", "Сетка 10 мм  (G)"],
+    SnapTenMillimetres = ["Snap 10 mm  (G)", "Привязка 10 мм  (G)"],
     FinishEnter = ["Finish  (Enter)", "Завершить  (Enter)"],
     CancelEsc = ["Cancel  (Esc)", "Отмена  (Esc)"],
     DrawHint = [
@@ -198,9 +204,32 @@ messages! {
         "A soft shadow under every object that rests on the floor.",
         "Мягкая тень под каждым объектом, стоящим на полу."
     ],
-    GridStrength = ["Grid", "Сетка"],
-    EdgesStrength = ["Edges", "Рёбра"],
-    ShadowStrength = ["Shadow", "Тень"],
+    GridStrength = ["Floor grid", "Сетка пола"],
+    EdgesStrength = ["Outlines", "Контуры"],
+    ShadowStrength = ["Contact shadow", "Контактная тень"],
+    GridStrengthHint = [
+        "Brightness of the work-plane floor grid; 0 hides it.",
+        "Яркость сетки пола; 0 скрывает её."
+    ],
+    EdgesStrengthHint = [
+        "Strength of the form-outline pass; 0 leaves the fill only.",
+        "Сила контурной обводки; 0 оставляет только заливку."
+    ],
+    ShadowStrengthHint = [
+        "Strength of the soft shadow under the objects that rest on the floor.",
+        "Сила мягкой тени под объектами, стоящими на полу."
+    ],
+    DisplayConfigure = ["Configure…", "Настроить…"],
+    DisplayConfigureHint = [
+        "Opens Settings › View for the display strengths.",
+        "Открывает «Настройки › Вид» для силы отображения."
+    ],
+    ResetDisplay = ["Reset display", "Сбросить отображение"],
+    ResetDisplayHint = [
+        "Restores the floor grid, outline and contact shadow strengths to 60 / 70 / 40.",
+        "Возвращает силу сетки пола, контуров и контактной тени: 60 / 70 / 40."
+    ],
+    SectionAdditional = ["Additional", "Дополнительно"],
     WorkPlane = ["Work plane · {}", "Рабочая плоскость · {}"],
     PerspectiveViewHint = [
         "Perspective view; switch to orthographic  (O)",

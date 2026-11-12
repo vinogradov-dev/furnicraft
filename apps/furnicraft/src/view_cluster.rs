@@ -69,10 +69,11 @@ impl NavigationMode {
 
 /// The cluster's view state.
 ///
-/// The three strengths are the display-settings sliders. They are view state: the grid, edge and
-/// contact-shadow passes read them as those passes land (U43 and U44), and no value ever reaches the
-/// scene file. The display style is not here: it belongs to the active leaf, so two views can differ
-/// (U63).
+/// The cluster keeps the switches that change what the view draws from one frame to the next; the
+/// strengths of the floor grid, the outlines and the contact shadow are workspace defaults and live
+/// in `furnicraft_ui::settings::ViewportSettings`, which the cluster links to instead of drawing
+/// three sliders over the scene (U64). The display style is not here either: it belongs to the
+/// active leaf, so two views can differ (U63).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewCluster {
     /// The navigation gesture armed for the next primary-button drag, or `None`.
@@ -83,34 +84,13 @@ pub(crate) struct ViewCluster {
     pub(crate) layout_open: bool,
     /// Whether the orientation widget draws the pitch/yaw/roll and projection readout (U42).
     pub(crate) show_angles: bool,
-    /// Whether the edge pass draws every triangle edge instead of only the form edges.
-    ///
-    /// A diagnostic view state beside the style: it changes which cached edge list the renderer
-    /// reads, so a switch re-uploads the edge buffer but never touches the document.
-    pub(crate) all_edges: bool,
-    /// Grid strength, 0–100.
-    pub(crate) grid_strength: f32,
-    /// Edge strength, 0–100.
-    pub(crate) edge_strength: f32,
-    /// Contact-shadow strength, 0–100.
-    pub(crate) shadow_strength: f32,
     /// Whether the contact-shadow pass draws (U44).
     pub(crate) contact_shadows: bool,
 }
 
 impl Default for ViewCluster {
     fn default() -> Self {
-        Self {
-            navigation: None,
-            settings_open: false,
-            layout_open: false,
-            show_angles: false,
-            all_edges: false,
-            grid_strength: 60.0,
-            edge_strength: 70.0,
-            shadow_strength: 40.0,
-            contact_shadows: true,
-        }
+        Self { navigation: None, settings_open: false, layout_open: false, show_angles: false, contact_shadows: true }
     }
 }
 
@@ -120,13 +100,15 @@ impl ViewCluster {
         self.show_angles
     }
 
-    /// The frame's contact-shadow settings from the cluster's view state.
+    /// The frame's contact-shadow settings from the cluster's switch and the workspace strength.
     ///
     /// A change is read at draw time, so the switch and the strength never re-upload geometry.
-    pub(crate) fn shadow_settings(&self) -> furnicraft_scene::ContactShadows {
+    pub(crate) fn shadow_settings(&self, strength_percent: u32) -> furnicraft_scene::ContactShadows {
         furnicraft_scene::ContactShadows {
             visible: self.contact_shadows,
-            strength: (self.shadow_strength / 100.0).clamp(0.0, 1.0),
+            // A percentage read through an integer keeps the domain free of floats; the clamp
+            // guards a hand-edited settings file that skipped `sanitize`.
+            strength: (strength_percent.min(100) as f32 / 100.0).clamp(0.0, 1.0),
             ..furnicraft_scene::ContactShadows::default()
         }
     }
@@ -168,6 +150,8 @@ pub(crate) enum ClusterAction {
     SetPreset(OpeningView),
     /// Draw the target view with this display style.
     SetStyle(ShadingStyle),
+    /// Open Settings on the *View* page, where the display strengths live.
+    OpenSettings,
 }
 
 /// The point the cluster's bottom centre is pinned to: the bottom centre of `viewport`, raised by
@@ -469,8 +453,8 @@ fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool, lang: furnicraft_t
     response.clicked()
 }
 
-/// The display-settings popover above the cluster: the angle switch, the projection and three
-/// strengths.
+/// The display-settings popover above the cluster: the angle switch, the projection, the contact
+/// shadow and the link to the page that owns the strengths.
 fn settings_popover(
     ui: &mut egui::Ui,
     viewport: egui::Rect,
@@ -530,26 +514,22 @@ fn settings_popover(
                     action = Some(ClusterAction::ToggleProjection);
                 }
                 ui.checkbox(
-                    &mut state.all_edges,
-                    furnicraft_text::Message::ShowEveryTriangleEdge.text(furnicraft_ui::language(ui.ctx())),
-                )
-                .on_hover_text(furnicraft_text::Message::AllEdgesHint.text(furnicraft_ui::language(ui.ctx())));
-                ui.separator();
-                ui.checkbox(
                     &mut state.contact_shadows,
                     furnicraft_text::Message::ContactShadows.text(furnicraft_ui::language(ui.ctx())),
                 )
                 .on_hover_text(furnicraft_text::Message::ContactShadowsHint.text(furnicraft_ui::language(ui.ctx())));
-                for (value, label) in [
-                    (&mut state.grid_strength, furnicraft_text::Message::GridStrength),
-                    (&mut state.edge_strength, furnicraft_text::Message::EdgesStrength),
-                    (&mut state.shadow_strength, furnicraft_text::Message::ShadowStrength),
-                ] {
-                    ui.add(
-                        egui::Slider::new(value, 0.0..=100.0)
-                            .text(label.text(furnicraft_ui::language(ui.ctx())))
-                            .fixed_decimals(0),
-                    );
+                ui.separator();
+                // The strengths are workspace defaults, not a scene opinion: the popover links to the
+                // one page that edits them instead of drawing three sliders over the model (U64).
+                if ui
+                    .button(furnicraft_text::Message::DisplayConfigure.text(furnicraft_ui::language(ui.ctx())))
+                    .on_hover_text(
+                        furnicraft_text::Message::DisplayConfigureHint.text(furnicraft_ui::language(ui.ctx())),
+                    )
+                    .clicked()
+                {
+                    state.settings_open = false;
+                    action = Some(ClusterAction::OpenSettings);
                 }
                 ui.separator();
                 ui.label(
@@ -578,6 +558,7 @@ pub(crate) fn projection_button(projection: Projection) -> (icons::Icon, furnicr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::drawn_text;
 
     #[test]
     fn every_view_preset_has_its_own_drawn_glyph() {
@@ -588,5 +569,51 @@ mod tests {
             assert!(seen.insert(icon.uri()), "{view:?} shares its glyph with another preset");
         }
         assert_eq!(seen.len(), OpeningView::ALL.len(), "the six presets own six glyphs");
+    }
+
+    #[test]
+    fn the_display_popover_keeps_the_switches_and_links_to_the_settings_page() {
+        // The strengths moved to Settings › View, so the popover keeps its switches and offers the
+        // one link that reaches them; the triangle diagnostic left the cluster with the sliders (U64).
+        let ctx = egui::Context::default();
+        furnicraft_ui::theme::install(&ctx);
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        let mut state = ViewCluster { settings_open: true, ..ViewCluster::default() };
+        let view = ClusterView {
+            owns_view: true,
+            projection: Projection::Perspective { fov_y: 0.9 },
+            work_plane: "XY",
+            layout: LayoutKind::Single,
+            maximized: false,
+            preset: None,
+            style: ShadingStyle::default(),
+        };
+        // An area is drawn invisibly on its sizing pass, so the second frame is the one that shows it.
+        for _ in 0..2 {
+            let output = ctx.run_ui(input.clone(), |ui| {
+                show(ui, viewport, &mut state, view, 92);
+            });
+            output.drop_without_applying_deltas();
+        }
+        let output = ctx.run_ui(input.clone(), |ui| {
+            show(ui, viewport, &mut state, view, 92);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        assert!(
+            texts.iter().any(|text| text.contains("Configure…")),
+            "the popover links to the settings page: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("triangle edge")),
+            "the diagnostic left the cluster with the strength sliders: {texts:?}"
+        );
+        for switch in ["Show projection and angles", "Contact shadows"] {
+            assert!(texts.iter().any(|text| text.contains(switch)), "the switch stays: {switch} in {texts:?}");
+        }
     }
 }
