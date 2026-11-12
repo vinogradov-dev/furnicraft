@@ -1,7 +1,8 @@
 # 0100. A frame is created, opened and drawn: the lifecycle
 
 - Status: Accepted; amends 0097 (the frame picks) and 0098 (creation opens; the card and the default
-  class)
+  class); its creation flow is extended by 0101, where the frame
+  also draws its base and pulls its height with the shared box tool
 - Date: 2026-11-13
 
 ## Context

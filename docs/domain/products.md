@@ -45,6 +45,13 @@ the product's own frame.
   space is useful: the maker cuts to it.
 - **It is a box.** Sloped or otherwise shaped envelopes are out of scope; the field is three lengths
   and a shape would be a new field and a new decision.
+- **It anchors at its base min corner.** The local zero is the corner of the base rectangle, as a
+  panel's zero is its base corner (0083), so the reserved space is `[0..W] × [0..D] × [0..H]` in the
+  frame and nothing needs an offset. Dragging a max face changes the size; dragging a min face changes
+  the size and translates the placement so the opposite face stays put in the world (0082, 0088).
+- **It is edited like a box**, through the shared box tool (0101): a corner grip changes two sizes, a
+  face grip one, and the card three numbers. Each gesture is one undo entry. The grips show whenever
+  the frame is selected, even when its dashed lines are hidden by the closed-with-parts state (0100).
 
 ## 3. Place in the tree
 
@@ -80,9 +87,11 @@ free section is a trapezoid, extruded along the depth, and a shelf there must ta
 Version 2 builds the outline from the probed faces; version 3 would be arbitrary regions and is not
 planned. Nothing in the document changes between the stages.
 
-**Probes stop at parts, not at other envelopes.** Another product's parts are obstacles; its empty
-interior is not. That is what allows a niche to hold a wall cabinet inside a run of base units, and it
-is the rule the furniture move tool uses too.
+**A probe stops at the first surface of a furniture entity and never passes through it** (0102): a
+panel face, a hardware body or another product's shell. A piece standing inside another's reserved
+space therefore reduces the niche of the outer piece exactly as a panel would, which is what makes the
+niche "bounded by the envelope and by panels and other furniture products" true in the program and not
+only in the sentence.
 
 **A niche is a question, not a resource.** Nothing reserves it; two parts may claim the same empty
 space, and the overlap is a diagnostic, not a refused edit. The shop does not work by reservation,
@@ -97,6 +106,10 @@ so its voids are not offered as targets.
 steps, and a type field listing product classes. Without a choice the frame is «изделие общего
 назначения» / “general product”, the editor's placeholder class, so the envelope invariant holds and
 the type is a later edit rather than a prerequisite.
+
+**The card and the box gesture reach the same command.** Once the shared box tool exists (0101) the
+frame can also be drawn: base rectangle on the work plane, then the height pulled from a wireframe
+preview. Both paths dispatch `product.create`, and nothing else may create a product.
 
 **Placement is deterministic.** An empty scene puts the frame at the origin, on the floor. Otherwise
 it goes beside the nearest product, on the floor, clear of every other envelope, and becomes selected.
@@ -138,9 +151,10 @@ The existing move tool stays the tool for geometry. Furniture gets its own:
 
 - A **floor-standing** product (`mount = Floor`) moves only in the floor plane.
 - A **wall-hung** product (`mount = Wall`) moves freely, including the vertical.
-- Products do not interpenetrate: movement stops on contact instead of passing through. The collision
-  is between the parts of the products, not between their envelopes — otherwise a wall cabinet could
-  never sit under a worktop and the niche of §3 could not exist.
+- Products do not interpenetrate, and a furniture entity is a surface (0102): a **body** stops at
+  contact with another body, and a **shell** stops at contact with another shell, so no product is
+  half inside another's envelope. A shell may still *contain* another shell — a wall cabinet under a
+  worktop, a piece in a niche — because containment is not crossing.
 - **Snapping** to the floor, to the frame's virtual faces, to the faces of neighbouring parts and to
   the 1 mm grid.
 - A drag is one undo operation, committed once on release.
@@ -152,6 +166,10 @@ The existing move tool stays the tool for geometry. Furniture gets its own:
 | Open | envelope lines in the active line colour |
 | Closed, no parts | envelope lines in the inactive line colour |
 | Closed, with parts | no envelope lines |
+
+Selecting a frame shows its grips — eight corners and six faces — which edit the envelope through the
+shared box tool (0101): a corner changes two sizes, a face one, the card three numbers, and each drag is
+one undo entry.
 
 The frame is picked **by its envelope**, not only by its lines: a single click inside the piece, on
 empty space or on a line, selects the frame; a click on a part selects the part. Solids win a tie, so
@@ -193,18 +211,22 @@ volume asks the program for it when such a report exists.
 - **What a closed product refuses?** Creation only, in version 1.
 - **Which parts can fill a niche?** A post and a shelf first; a drawer, a back panel and a facade
   later.
+- **What the placeholder class is called?** «Изделие общего назначения» / “general product”, a
+  `level = Product` row that is never offered for a part.
+- **How a new frame is placed?** Beside the nearest product, on the floor, clear of every envelope,
+  and selected; the origin in an empty scene.
+- **Where a probe stops?** At the first surface of a furniture entity; it never passes through one
+  (0102).
+- **How the envelope changes after creation?** By a corner grip (two sizes), a face grip (one size) and
+  the card's three fields, through the shared box tool (0101).
 
 ## 13. Open questions
 
-- **Resizing the envelope after creation.** The requirements define it at creation and never say how
-  it changes. The command exists (`product.envelope.set`); the gesture does not. Options: numeric
-  fields in the card, draggable faces of the frame, or both. Shrinking below the parts is a
-  diagnostic, not a refusal.
-- **Placing a new frame.** Beside the nearest product and selected, or immediately in the move tool?
-  The first is the recommendation, the second is the owner's alternative.
-- **The niche's exact boundary rule.** Shells and slanted parts are answered by the shaped niche of
-  §4; whether a probe should stop at a part that merely touches the ray, or must be blocked by its
-  volume, is a detail for the tool's tests.
+- **Shrinking the envelope below the parts.** It is a diagnostic, not a refusal, but the frame's grips
+  make it easy to do by accident; whether the tool warns at the drag or only after the drop is open.
+- **Moving a product into another's reserved space.** The shell rule (0102) allows it and the mover
+  must stop at walls, not at envelopes; the snapping of a shell face to another shell face needs one
+  confirming test.
 - **What “open” looks like beyond the colour.** Whether the active product is emphasised, and what
   happens to the parts of a closed one, is a UI decision.
 - **A part of another product inside this one's niche** — the niche case — is legal spatially, but the

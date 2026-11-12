@@ -161,7 +161,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    classes defaulting to the placeholder. Placement is deterministic: the origin in an empty
    scene, otherwise beside the nearest product on the floor, clear of every envelope, and
    selected. The double click in the viewport and the click on the tree both open; nothing here
-   dispatches a document command.
+   dispatches a document command. The card is the numeric path; the drawn gesture (rect then
+   height) reaches the same command and arrives with the box tool (V3), so this task does not
+   wait for it.
   Done: Tests: adding a frame opens it and the next panel lands inside; in an empty scene the
    frame is at the origin, otherwise beside the nearest product and clear of every envelope;
    opening A then B leaves B open; closing leaves none; the state is not in the saved file; a
@@ -188,12 +190,12 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
    other. The mount trait exists for exactly this and today has no consumer.
   Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
-   the floor plane (the vertical is fixed at zero), Wall stays free. Movement stops at the
-   first contact with the parts of another product, computed from part bounds, not envelopes,
-   so a wall cabinet may still hang in a niche. Snapping to the floor, to the frame virtual
-   faces of the product and its neighbours, to a neighbouring part face and to the 1 mm grid,
-   with the constraint applied to the preview and one node.placement.set on release, so a drag
-   is one undo entry.
+   the floor plane (the vertical is fixed at zero), Wall stays free. Collision follows ADR
+   0102: a body stops at contact with another body and a shell stops at contact with another
+   shell, so no product is half inside another envelope while containment stays legal. Snapping
+   to the floor, to the frame virtual faces of the product and its neighbours, to a
+   neighbouring part face and to the 1 mm grid, with the constraint applied to the preview and
+   one node.placement.set on release, so a drag is one undo entry.
   Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
    product can; a drag that would intersect another product stops at contact; snapping lands on
    the grid and on a face; one undo restores the whole drag. The frame and the class attributes
@@ -205,13 +207,14 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
    drawing and a later report must agree on what the void is, and because a shelf crossing the
    piece must split one niche into two without anything being stored.
-  Shape: The document answers the niche at a point inside a product (ADR 0099): six probes
-   along the axes stop at the first part of any product or at the envelope virtual face, and
-   the six distances give an axis-aligned box, derived and never stored. The tool is bound to a
-   class whose fill trait says which axis pair it takes — HeightAndDepth for a post,
-   WidthAndDepth for a shelf — and draws the ghost through the session preview overlay (ADR
-   0093); it moves in 1 mm steps and a click dispatches one panel.create with exactly the ghost
-   size and placement, so history holds one entry. Only the open product offers niches; a
+  Shape: The document answers the niche at a point inside a product (ADR 0099, corrected by
+   0102): six probes along the axes stop at the first surface of any furniture entity — a panel
+   face, a hardware body or another product shell — and at the envelope virtual face, never
+   passing through. The six distances give an axis-aligned box, derived and never stored. The
+   tool is bound to a class whose fill trait says which axis pair it takes — HeightAndDepth for
+   a post, WidthAndDepth for a shelf — and draws the ghost through the session preview overlay
+   (ADR 0093); it moves in 1 mm steps and a click dispatches one panel.create with exactly the
+   ghost size and placement, so history holds one entry. Only the open product offers niches; a
    closed one offers none.
   Done: Tests: the niche shrinks around an existing part on the right axis and stops at the
    envelope face; a shelf at full width splits the piece into two niches and the query at a
@@ -237,6 +240,43 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    the rectangle through the same path; an unrepresentable section is a readable refusal; the
    preview and the created panel agree; cargo xtask ci is green.
   `files: crates/model/src/project/query.rs, crates/geom/src/lib.rs, apps/furnicraft/src/gizmo.rs`
+- `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
+  Why: The only solid primitive is a cube with one size for three edges, which nothing in
+   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
+   height, created the way the extrusion tool already works: draw the base, then pull the
+   height. ADR 0101 makes it the shared box the product frame will use too.
+  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
+   height, each validated by the existing primitive bounds, and the mesh builder derives the
+   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
+   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
+   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
+   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
+   drag on a max face changes one size while a min face changes it and compensates the
+   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
+   golden file in the same change; the schema is bumped with no migration (0096).
+  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
+   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
+   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
+   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
+   messages no longer mention a cube; cargo xtask ci is green.
+  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs`
+- `[ ]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
+  Why: The owner wants the frame created and edited exactly like the box, not with a separate
+   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
+   is card-only while the box has grips, and the two owners of a box disagree.
+  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
+   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
+   and a face one, the card keeping the three numbers and the type. Dragging a min face
+   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
+   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
+   reach the same command. The grips show whenever the frame is selected, including the
+   closed-with-parts state where its dashed lines are hidden (0100).
+  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
+   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
+   exactly the ghost size with the placeholder class; the card and the gesture produce the same
+   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
+   green.
+  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs, crates/engine/src/node_cmds.rs`
 
 ## Bugs
 

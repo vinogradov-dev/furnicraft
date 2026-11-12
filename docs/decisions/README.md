@@ -105,6 +105,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0098](0098-one-product-is-open-and-parts-are-born-inside-it.md) | One product is open, and furniture parts are born inside it | Accepted |
 | [0099](0099-a-niche-is-the-space-a-frame-reserves.md) | A niche is the space a frame reserves | Accepted; refines 0097 |
 | [0100](0100-a-frame-is-created-opened-and-drawn.md) | A frame is created, opened and drawn: the lifecycle | Accepted; amends 0097 and 0098 |
+| [0101](0101-a-frame-and-a-box-are-one-tool.md) | A frame and a box are one tool: draw the base, pull the height | Accepted; retires the cube primitive |
+| [0102](0102-a-furniture-entity-is-a-surface.md) | A furniture entity is a surface; a frame is a shell | Accepted; amends the probe and collision clauses of 0099 and 0097 |
 
 ## Format
 
