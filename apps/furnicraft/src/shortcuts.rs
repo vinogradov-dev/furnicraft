@@ -58,20 +58,26 @@ pub(crate) const fn drawing_key(escape: bool, enter: bool) -> Option<DraftKey> {
 }
 
 pub(crate) fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
-    ctx.input_mut(|input| Shortcuts {
-        save: input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
-        new_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::N),
-        close_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::W),
-        undo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Z),
-        redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
-        frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),
-        projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
-        maximize: input.consume_key(egui::Modifiers::ALT, egui::Key::W),
-        palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
-        // The panel pair: Ctrl+Shift+0 folds both, Ctrl+0 hides them. Neither pair is taken by the
-        // viewport, the ribbon or the drawing tools.
-        hide_panels: input.consume_key(egui::Modifiers::CTRL, egui::Key::Num0),
-        collapse_panels: input.consume_key(egui::Modifiers { shift: true, ..egui::Modifiers::CTRL }, egui::Key::Num0),
+    ctx.input_mut(|input| {
+        // The two panel pairs are read with the more specific one first: a pattern without `Shift`
+        // matches a press that carries it, so reading the plain pair first would swallow
+        // `Ctrl+Shift+0` and the fold would never run (U78).
+        let collapse_panels =
+            input.consume_key(egui::Modifiers { shift: true, ..egui::Modifiers::CTRL }, egui::Key::Num0);
+        let hide_panels = input.consume_key(egui::Modifiers::CTRL, egui::Key::Num0);
+        Shortcuts {
+            save: input.consume_key(egui::Modifiers::CTRL, egui::Key::S),
+            new_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::N),
+            close_tab: input.consume_key(egui::Modifiers::CTRL, egui::Key::W),
+            undo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Z),
+            redo: input.consume_key(egui::Modifiers::CTRL, egui::Key::Y),
+            frame: input.consume_key(egui::Modifiers::NONE, egui::Key::F),
+            projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
+            maximize: input.consume_key(egui::Modifiers::ALT, egui::Key::W),
+            palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
+            hide_panels,
+            collapse_panels,
+        }
     })
 }
 
@@ -82,15 +88,24 @@ pub(crate) fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
 /// replaced, because of ADR 0076: the old draft wrote nothing and the new tool owns the next click.
 /// A key that names a tool's own method runs the method the workspace pinned for it, without opening
 /// the variant list (U67).
+///
+/// The shifted keys are read first: a pattern without `Shift` matches a press that carries it, so a
+/// plain key read first would swallow its own `Shift` variant and `Shift+R` would start the plain
+/// rectangle instead of the pinned method (U78).
 pub(crate) fn take_drawing_shortcut(ctx: &egui::Context, editor: &mut Editor, sides: u32) -> bool {
-    for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
-        let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
-            continue;
-        };
-        let modifiers = if shortcut.shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
-        if ctx.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
-            editor.start_shortcut(tool, sides);
-            return true;
+    for shift in [true, false] {
+        for tool in furnicraft_ui::toolbars::CONTOUR_TOOLS {
+            let Some(shortcut) = furnicraft_ui::toolbars::shortcut(tool) else {
+                continue;
+            };
+            if shortcut.shift != shift {
+                continue;
+            }
+            let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+            if ctx.input_mut(|input| input.consume_key(modifiers, shortcut.key)) {
+                editor.start_shortcut(tool, sides);
+                return true;
+            }
         }
     }
     false
@@ -197,6 +212,58 @@ mod tests {
         });
         output.drop_without_applying_deltas();
         assert_eq!(read, Shortcuts { palette: true, ..Shortcuts::default() });
+    }
+
+    #[test]
+    fn the_shifted_panel_pair_is_not_swallowed_by_the_plain_one() {
+        // `consume_key` ignores an extra `Shift`, so the fold has to be read before the hide, or
+        // `Ctrl+Shift+0` would hide both panels and the fold shortcut would never run (U78).
+        let ctx = egui::Context::default();
+        let mut read = Shortcuts::default();
+        let output =
+            ctx.run_ui(key_input(egui::Key::Num0, egui::Modifiers { shift: true, ..egui::Modifiers::CTRL }), |ui| {
+                read = take_shortcuts(ui.ctx());
+            });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { collapse_panels: true, ..Shortcuts::default() });
+
+        let output = ctx.run_ui(key_input(egui::Key::Num0, egui::Modifiers::CTRL), |ui| {
+            read = take_shortcuts(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(read, Shortcuts { hide_panels: true, ..Shortcuts::default() });
+    }
+
+    #[test]
+    fn a_shifted_key_starts_its_own_variant_and_never_its_plain_tool() {
+        // The table advertises `Shift+R` for the rectangle from its centre; reading the plain keys
+        // first would take the Shift press for the plain rectangle (U78).
+        let ctx = egui::Context::default();
+        for (key, modifiers, expected) in [
+            (egui::Key::R, egui::Modifiers::SHIFT, DrawTool::RectangleFromCenter),
+            (egui::Key::R, egui::Modifiers::NONE, DrawTool::Rectangle),
+            (egui::Key::A, egui::Modifiers::SHIFT, DrawTool::ArcFromCenter),
+            (egui::Key::C, egui::Modifiers::SHIFT, DrawTool::CircleThreePoints),
+        ] {
+            let mut editor = Editor::new();
+            let output = ctx.run_ui(key_input(key, modifiers), |ui| {
+                assert!(take_drawing_shortcut(ui.ctx(), &mut editor, 6), "{key:?} with {modifiers:?} starts a tool");
+            });
+            output.drop_without_applying_deltas();
+            assert_eq!(editor.drawing().map(DrawDraft::tool), Some(expected), "{key:?} with {modifiers:?}");
+        }
+    }
+
+    #[test]
+    fn a_modified_key_never_starts_a_tool() {
+        // `Ctrl+N` opens a tab; it must not reach the tool table as the polygon key.
+        let ctx = egui::Context::default();
+        let mut editor = Editor::new();
+        let output = ctx.run_ui(key_input(egui::Key::N, egui::Modifiers::CTRL), |ui| {
+            assert!(!take_drawing_shortcut(ui.ctx(), &mut editor, 6), "a Ctrl pair belongs to the shell");
+        });
+        output.drop_without_applying_deltas();
+        assert!(editor.drawing().is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U77 state=idle base=81f9e6b updated=2026-11-12
+STATE: milestone=M7 phase=A task=U79 state=idle base=04e6a7d updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U77 is next: the shell's one frame is callable without a window. `FurniCraftApp::frame` takes the
-frame eframe delegates to, the GPU handle becomes optional so a test builds the app with no device,
-and `SettingsStore` takes an explicit path — so a session can drive the real interface silently.
+U79 is next: cargo xtask skills keeps the project skills honest, so every path, command and sibling
+a skill names exists and its frontmatter is what the loader needs.
 
 ## Index
 

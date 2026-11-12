@@ -24,6 +24,9 @@ mod document;
 mod draw_gizmo;
 mod extrude_gizmo;
 mod file_menu;
+/// The shell's frame, asserted without a window (U78).
+#[cfg(test)]
+mod frame_tests;
 mod gizmo;
 mod gizmo_math;
 mod header;
@@ -165,8 +168,9 @@ enum CloseRequest {
 struct FurniCraftApp {
     /// The open scenes, in the order the tab row draws them. Never empty.
     tabs: Tabs<Document>,
-    /// The wgpu handles the window and every tab draw with.
-    render_state: egui_wgpu::RenderState,
+    /// The wgpu handles the window and every tab draw with; `None` in a headless run, where a test
+    /// drives the same frame with no device, no adapter and no window (U77).
+    render_state: Option<egui_wgpu::RenderState>,
     /// The window's own view state, shared by every tab.
     shell: Shell,
     /// The workspace remembered between runs: chrome, viewport defaults and recent files.
@@ -192,21 +196,53 @@ struct FurniCraftApp {
 
 impl FurniCraftApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, String> {
-        let settings_store = SettingsStore::for_workspace();
-        let loaded = settings_store.load();
-        let settings = loaded.settings;
-        let (preference, preset, accent) = settings.install_args();
-        theme::install_with(&cc.egui_ctx, preference, preset, accent);
-        cc.egui_ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
         let render_state =
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
+        let settings_store = SettingsStore::for_workspace();
+        let loaded = settings_store.load();
+        let (preference, preset, accent) = loaded.settings.install_args();
+        theme::install_with(&cc.egui_ctx, preference, preset, accent);
+        cc.egui_ctx.set_zoom_factor(ui_scale::factor(loaded.settings.appearance.ui_scale));
+        Self::build(&cc.egui_ctx, Some(render_state), settings_store, loaded, sample_session()?)
+    }
+
+    /// Builds the application without a window and without a GPU.
+    ///
+    /// A test's [`egui::Context`] stands in for the window and `settings_path` for the workspace
+    /// file, so the real frame runs against the real interface while nothing is drawn into and no
+    /// file in the user's config directory is read or written (U77).
+    #[cfg(test)]
+    fn headless(
+        ctx: &egui::Context,
+        settings_path: std::path::PathBuf,
+        settings: Settings,
+        session: furnicraft_engine::Session,
+    ) -> Result<Self, String> {
+        let (preference, preset, accent) = settings.install_args();
+        theme::install_with(ctx, preference, preset, accent);
+        ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
+        let loaded = crate::settings_store::Loaded { settings, notice: None };
+        Self::build(ctx, None, SettingsStore::at(settings_path), loaded, session)
+    }
+
+    /// Composes the shell around one document, one workspace and, when the window has one, its GPU.
+    ///
+    /// This is the one place the window and a headless test part ways: everything below it — the
+    /// frame, the chrome, the keys, the documents — runs the same code (U77).
+    fn build(
+        ctx: &egui::Context,
+        render_state: Option<egui_wgpu::RenderState>,
+        settings_store: SettingsStore,
+        loaded: crate::settings_store::Loaded,
+        session: furnicraft_engine::Session,
+    ) -> Result<Self, String> {
+        let settings = loaded.settings;
         let shell = Shell {
             panels: Panels::from_settings(&settings.panels),
-            colors: theme::scene_colors(cc.egui_ctx.theme()),
+            colors: theme::scene_colors(ctx.theme()),
             ..Shell::default()
         };
-        let session = sample_session()?;
-        let document = Document::new(&render_state, &settings, &shell, session, PreservedSections::new())?;
+        let document = Document::new(render_state.as_ref(), &settings, &shell, session, PreservedSections::new())?;
         Ok(Self {
             tabs: Tabs::new(document),
             render_state,
@@ -316,7 +352,7 @@ impl FurniCraftApp {
             return Ok(());
         }
         let catalog = self.tabs.active().session.catalog().clone();
-        let document = Document::open(&self.render_state, &self.settings, &self.shell, path, &catalog)?;
+        let document = Document::open(self.render_state.as_ref(), &self.settings, &self.shell, path, &catalog)?;
         self.tabs.add(document);
         Ok(())
     }
@@ -326,7 +362,7 @@ impl FurniCraftApp {
         let session = empty_session()?;
         let settings = &self.settings;
         let shell = &self.shell;
-        let document = Document::new(&self.render_state, settings, shell, session, PreservedSections::new())?;
+        let document = Document::new(self.render_state.as_ref(), settings, shell, session, PreservedSections::new())?;
         self.tabs.add(document);
         Ok(())
     }
@@ -397,14 +433,13 @@ impl FurniCraftApp {
     /// into it, so a workspace that opens and closes scenes has to hand it back; the document then
     /// drops with its own render pass, buffers and cache.
     fn forget(&mut self, document: Document) {
-        let texture = document.texture_id();
-        self.render_state.renderer.write().free_texture(&texture);
+        document.release();
     }
 
     /// Replaces the last tab with an empty *Untitled* scene.
     fn empty_tab(&mut self, id: TabId) {
         let built = empty_session().and_then(|session| {
-            Document::new(&self.render_state, &self.settings, &self.shell, session, PreservedSections::new())
+            Document::new(self.render_state.as_ref(), &self.settings, &self.shell, session, PreservedSections::new())
         });
         match built {
             Ok(document) => {
@@ -450,6 +485,10 @@ impl FurniCraftApp {
             return;
         }
         self.settings.ribbon.open = open;
+        // The measured band belongs to the fold it was drawn with. A remembered measurement would
+        // keep the band of the state before — the strip's own height is a floor, so a folded ribbon
+        // would hold the open band forever — and the fold would give the scene nothing (U78).
+        self.shell.ribbon_rect = None;
         for (_, document) in self.tabs.iter_mut() {
             document.set_ribbon_open(open);
         }
@@ -633,10 +672,16 @@ impl FurniCraftApp {
             furnicraft_ui::home::HomeAction::Close => {}
         }
     }
-}
 
-impl eframe::App for FurniCraftApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Draws one frame of the whole interface and performs what the user asked for.
+    ///
+    /// Everything the window shows happens here: the header, the menus, the ribbon, the floating
+    /// panels, the scene, the cluster, the palette, the Settings window and the Home surface. The
+    /// eframe trait method delegates to it, so a test drives the real interface with an
+    /// [`egui::Context`] and no window at all (U77), and the chrome the frame gave the window comes
+    /// back, so the presses it keeps and the rectangles it hands out are asserted without pixels
+    /// (U78).
+    fn frame(&mut self, ui: &mut egui::Ui) -> Chrome {
         // The language is workspace settings, published once per frame so every surface draws the
         // same words without threading a `Lang` through every signature (U49); the icon-colour mode
         // is published the same way, so the rasteriser never needs the settings threaded to it.
@@ -782,6 +827,13 @@ impl eframe::App for FurniCraftApp {
             self.quit_requested = false;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        chrome
+    }
+}
+
+impl eframe::App for FurniCraftApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.frame(ui);
     }
 
     fn on_exit(&mut self) {

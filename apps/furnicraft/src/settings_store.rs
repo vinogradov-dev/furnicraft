@@ -184,16 +184,14 @@ mod tests {
 
     use std::path::PathBuf;
 
+    use furnicraft_testkit::scratch_dir;
     use furnicraft_ui::settings::{SETTINGS_VERSION, ThemeChoice};
 
     use super::*;
 
-    /// A unique scratch directory under the session temp root.
+    /// A scratch directory this test owns.
     fn scratch(name: &str) -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("furnicraft-settings-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).expect("create scratch");
-        directory
+        scratch_dir(&format!("settings-{name}"))
     }
 
     fn custom() -> Settings {

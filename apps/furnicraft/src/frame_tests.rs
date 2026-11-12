@@ -1,0 +1,420 @@
+//! The shell's one frame, asserted without a window.
+//!
+//! `FurniCraftApp::frame` is the whole interface: the header, the ribbon, the floating panels, the
+//! scene, the cluster and the modals. These tests drive it with an [`egui::Context`] and
+//! [`egui::RawInput`] — no window, no device, no adapter — and assert what a live session used to
+//! check by eye: the scene rectangle and its camera aspect in every panel and ribbon state, the fact
+//! that the chrome keeps the presses it covers, that the split views tile the scene and their
+//! borders stay grabbable, that a modal keeps the keys, and that no chrome gesture writes a revision
+//! (U78).
+//!
+//! Changes when: the frame's order, a chrome gesture, a split layout or the shell's key handling
+//! changes.
+
+#![allow(clippy::expect_used)]
+
+use eframe::egui;
+use furnicraft_model::Id;
+use furnicraft_scene::Camera;
+use furnicraft_text::{Lang, Message};
+
+use super::*;
+
+/// The window a headless frame is drawn into: the default launch size (M2).
+fn screen() -> egui::Rect {
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 840.0))
+}
+
+/// Ctrl+Shift, the modifier pair the panel fold takes.
+fn ctrl_shift() -> egui::Modifiers {
+    egui::Modifiers { shift: true, ..egui::Modifiers::CTRL }
+}
+
+/// A headless application, the context that stands in for its window, and the workspace file it
+/// would write to.
+///
+/// Everything below it is the real interface: [`FurniCraftApp::headless`] composes the same shell the
+/// window composes, and [`Harness::run`] draws the same frame `eframe::App::ui` draws (U77).
+struct Harness {
+    ctx: egui::Context,
+    app: FurniCraftApp,
+    /// Where the workspace would be written; the tests never write it, but a headless run must not
+    /// be able to reach the file in the OS config directory.
+    path: std::path::PathBuf,
+    /// The text the last frame drew, so a test reads what the user would see.
+    drawn: Vec<String>,
+    /// The scene rectangle the frame before the last one gave the split views, so [`Harness::settle`]
+    /// can tell a settled frame from one whose layout is still moving.
+    last_scene: Option<egui::Rect>,
+}
+
+impl Harness {
+    fn new(name: &str) -> Self {
+        let path = furnicraft_testkit::scratch_dir(name).join("settings.json");
+        let ctx = egui::Context::default();
+        let session = crate::scene_build::sample_session().expect("the sample session builds");
+        let app = FurniCraftApp::headless(&ctx, path.clone(), Settings::default(), session)
+            .expect("the application builds with no device, no adapter and no window");
+        Self { ctx, app, path, drawn: Vec::new(), last_scene: None }
+    }
+
+    /// Runs one real frame with `events` and returns the chrome it gave the window.
+    ///
+    /// A window hands the frame's texture deltas to the renderer; a test has none, and epaint asserts
+    /// on drop that a delta was applied, so the frame is closed here.
+    fn run(&mut self, events: Vec<egui::Event>) -> Chrome {
+        let mut chrome = None;
+        let mut output =
+            self.ctx.run_ui(egui::RawInput { screen_rect: Some(screen()), events, ..Default::default() }, |ui| {
+                chrome = Some(self.app.frame(ui));
+            });
+        self.drawn = crate::test_support::drawn_text(&output.shapes);
+        self.last_scene = self.app.tabs.active().scene_rect();
+        output.textures_delta.clear();
+        chrome.expect("the frame drew the interface")
+    }
+
+    /// Runs one idle frame, with no input at all.
+    fn frame(&mut self) -> Chrome {
+        self.run(Vec::new())
+    }
+
+    /// Draws idle frames until the scene rectangle stops moving.
+    ///
+    /// A gesture leaves work for the frame after it: the side panels narrow over
+    /// [`ANIMATION_SECONDS`], and the status bar grows for the one frame that announces a rebuild.
+    /// The measurement is read after both have settled, so a test compares the layout and not the
+    /// middle of an animation.
+    fn settle(&mut self) -> Chrome {
+        let mut chrome = self.frame();
+        let mut stable = 0;
+        for _ in 0..12 {
+            let previous = self.last_scene;
+            chrome = self.frame();
+            stable = if self.last_scene == previous { stable + 1 } else { 0 };
+            if stable >= 2 {
+                return chrome;
+            }
+        }
+        chrome
+    }
+
+    /// Moves the pointer to `pos` and presses `button` there, without releasing it.
+    fn press_at(&mut self, pos: egui::Pos2, button: egui::PointerButton) {
+        self.run(vec![egui::Event::PointerMoved(pos)]);
+        self.run(vec![Self::button(pos, button, true)]);
+    }
+
+    /// Releases `button` at `pos`.
+    fn release_at(&mut self, pos: egui::Pos2, button: egui::PointerButton) {
+        self.run(vec![Self::button(pos, button, false)]);
+    }
+
+    fn button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// Clicks `pos` with `button`: the pointer arrives, the button goes down and comes back up.
+    ///
+    /// The first frame lets egui lay the area or the widget out, so the press lands on the rectangle
+    /// the user is looking at instead of on last frame's.
+    fn click(&mut self, pos: egui::Pos2, button: egui::PointerButton) -> Chrome {
+        self.run(vec![egui::Event::PointerMoved(pos)]);
+        self.press_at(pos, button);
+        self.release_at(pos, button);
+        self.settle()
+    }
+
+    /// Drags `button` from `from` by `delta`, one frame per step.
+    fn drag(&mut self, from: egui::Pos2, delta: egui::Vec2, button: egui::PointerButton) -> Chrome {
+        self.press_at(from, button);
+        self.run(vec![egui::Event::PointerMoved(from + delta)]);
+        self.release_at(from + delta, button);
+        self.settle()
+    }
+
+    /// Presses and releases `key`, the way a window reports one shortcut.
+    fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) -> Chrome {
+        let event = |pressed: bool| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        self.run(vec![event(true)]);
+        self.run(vec![event(false)]);
+        self.settle()
+    }
+
+    /// The scene rectangle the last frame gave the split views.
+    fn scene(&self) -> egui::Rect {
+        self.app.tabs.active().scene_rect().expect("a drawn frame gives the scene a rectangle")
+    }
+
+    /// The camera the last frame looked through.
+    fn camera(&self) -> Camera {
+        self.app.tabs.active().camera()
+    }
+
+    /// The document revision the active scene is at.
+    fn revision(&self) -> furnicraft_model::Revision {
+        self.app.tabs.active().session.project().revision()
+    }
+
+    /// The nodes the viewport selection holds.
+    fn selected(&self) -> Vec<Id> {
+        self.app.tabs.active().editor.selected_nodes().to_vec()
+    }
+
+    /// Whether the last frame drew `text`.
+    fn drew(&self, text: &str) -> bool {
+        self.drawn.iter().any(|line| line.contains(text))
+    }
+}
+
+/// The aspect ratio the renderer derives from a rectangle: each view's own, not the target's.
+fn aspect(rect: egui::Rect) -> f64 {
+    f64::from(rect.width()) / f64::from(rect.height())
+}
+
+#[test]
+fn the_whole_interface_frames_without_a_gpu_and_without_a_window() {
+    let mut harness = Harness::new("frame-headless");
+    let revision = harness.revision();
+    let chrome = harness.frame();
+    assert!(chrome.ribbon.height() > 0.0, "the frame gives the ribbon a band");
+    assert!(chrome.panels.left.is_some() && chrome.panels.right.is_some(), "and both panels a rectangle");
+    assert!(!harness.drawn.is_empty(), "the frame draws the header, the ribbon and the scene");
+    harness.frame();
+    assert!(!harness.drawn.is_empty(), "a second frame draws the same interface again");
+    assert_eq!(harness.revision(), revision, "drawing a frame writes no document");
+    assert_eq!(harness.app.tabs.len(), 1, "and opens no tab");
+    assert!(harness.app.tabs.active().last_error.is_none(), "nothing failed");
+}
+
+#[test]
+fn a_headless_run_leaves_the_workspace_file_alone() {
+    // The store the headless application is built with points at a scratch file, never at the
+    // workspace in the OS config directory, and a frame that changes no setting writes nothing.
+    let mut harness = Harness::new("frame-settings");
+    let before = b"{\"version\": 1}\n";
+    std::fs::write(&harness.path, before).expect("the test writes the workspace file");
+    harness.frame();
+    harness.frame();
+    let after = std::fs::read(&harness.path).expect("the file is still there");
+    assert_eq!(after, before, "a headless run leaves the workspace file byte-identical");
+    assert!(!harness.path.with_extension("json.tmp").exists(), "and leaves no temporary sibling behind");
+}
+
+#[test]
+fn the_scene_rectangle_and_its_camera_hold_in_every_panel_and_ribbon_state() {
+    // The regression U72 fixed: a fold, a hide or a restore moved the scene rectangle and therefore
+    // the camera aspect, so the model panned when a panel was folded. Only the frame can prove it:
+    // the rectangle the viewport really used, and the camera it really drew with.
+    let mut harness = Harness::new("frame-scene-rect");
+    harness.frame();
+    let mut scenes = Vec::new();
+    for ribbon_open in [true, false] {
+        if !ribbon_open {
+            harness.app.handle_header_action(HeaderAction::ToggleRibbon, Lang::En);
+            harness.settle();
+        }
+        let chrome = harness.settle();
+        let reference = harness.scene();
+        let camera = harness.camera();
+        assert!((reference.top() - chrome.ribbon.bottom()).abs() < f32::EPSILON, "the band sets the scene's top");
+        assert!(chrome.panels.left.is_some() && chrome.panels.right.is_some(), "both panels are up");
+        // The panels float over the scene, so it runs under them: their rectangles sit inside its
+        // horizontal span. That is what makes a fold unable to widen or narrow it.
+        let left = chrome.panels.left.expect("the scene tree is up");
+        let right = chrome.panels.right.expect("the inspector is up");
+        assert!(
+            reference.left() <= left.left() && reference.right() >= right.right(),
+            "the scene runs under both panels"
+        );
+        scenes.push(reference);
+
+        // Both panels folded, then both hidden, then back: the cycle the header buttons and the
+        // shortcuts run. Every state keeps the rectangle and the camera the ribbon fold fixes.
+        for (state, keys) in [
+            ("folded", (egui::Key::Num0, ctrl_shift())),
+            ("hidden", (egui::Key::Num0, egui::Modifiers::CTRL)),
+            ("restored", (egui::Key::Num0, egui::Modifiers::CTRL)),
+            ("unfolded", (egui::Key::Num0, ctrl_shift())),
+        ] {
+            let geometry = harness.press(keys.0, keys.1);
+            let scene = harness.scene();
+            let context = format!("{state}, ribbon open = {ribbon_open}");
+            assert_eq!(geometry.ribbon, chrome.ribbon, "{context}: the band does not move");
+            assert_eq!(scene, reference, "{context}: no edge of the scene moves");
+            assert!((aspect(scene) - aspect(reference)).abs() < f64::EPSILON, "{context}: the aspect is the same");
+            assert_eq!(harness.camera(), camera, "{context}: and the camera is the same");
+            let panels = harness.app.shell.panels;
+            let (hidden, collapsed) = (!panels.any_visible(), panels.all_collapsed());
+            match state {
+                "folded" => assert!(collapsed && !hidden, "{context}: the fold shortcut folds both panels"),
+                "hidden" => assert!(hidden, "{context}: the hide shortcut hides both panels"),
+                "restored" => assert!(!hidden && collapsed, "{context}: a second press brings the folded pair back"),
+                _ => assert!(!hidden && !collapsed, "{context}: the fold shortcut unfolds them again"),
+            }
+        }
+    }
+    // The ribbon's own fold is the one thing that may move the scene: it gives the band back.
+    let (open, folded) = (scenes[0], scenes[1]);
+    assert!(folded.height() > open.height(), "a folded ribbon gives the scene its band");
+    assert!((folded.width() - open.width()).abs() < f32::EPSILON, "and never a column of it");
+}
+
+#[test]
+fn a_press_on_a_panel_is_chrome_and_a_press_beside_it_reaches_the_scene() {
+    // U66 and U72 were accepted with "a click on a panel selects nothing"; this is that sentence as
+    // an assertion on the real frame, with a navigation mode armed so a camera gesture would show.
+    let mut harness = Harness::new("frame-chrome-press");
+    let chrome = harness.settle();
+    let tree = chrome.panels.left.expect("the scene tree is up");
+    // A point in the empty body below the tree's rows: the panel's chrome, not a row and not the
+    // header's fold button.
+    let on_panel = egui::pos2(tree.center().x, tree.bottom() - 12.0);
+    assert!(chrome.covers(on_panel), "the whole panel is chrome");
+
+    let selected = harness.selected();
+    let camera = harness.camera();
+    harness.click(on_panel, egui::PointerButton::Primary);
+    assert_eq!(harness.selected(), selected, "a click on a panel is chrome and starts no pick");
+    assert!(!harness.app.shell.divider_dragging, "and grabs no border");
+    assert_eq!(harness.camera(), camera, "and starts no camera gesture");
+
+    // A drag across the same panel is chrome too, and being chrome is what stops the orbit.
+    harness.app.shell.cluster.navigation = Some(crate::view_cluster::NavigationMode::Orbit);
+    harness.drag(on_panel, egui::vec2(60.0, 40.0), egui::PointerButton::Primary);
+    assert_eq!(harness.camera(), camera, "a drag on a panel orbits nothing");
+
+    // The scene keeps the presses the panels do not cover: one point past the panel's inner edge.
+    let beside = egui::pos2(tree.right() + 2.0, tree.center().y);
+    assert!(!chrome.covers(beside), "one point past the panel is the scene");
+    assert!(harness.scene().contains(beside), "and inside the scene rectangle");
+    harness.drag(beside, egui::vec2(60.0, 40.0), egui::PointerButton::Primary);
+    assert_ne!(harness.camera(), camera, "the same drag there orbits the view");
+
+    // And a press there selects whatever is under it, so the guard above cannot pass by refusing
+    // every pick in the workspace.
+    harness.app.shell.cluster.navigation = None;
+    let selected = harness.selected();
+    harness.click(harness.scene().center(), egui::PointerButton::Primary);
+    let after = harness.selected();
+    assert!(!after.is_empty() && after != selected, "a click in the middle of the scene selects the model there");
+}
+
+#[test]
+fn two_columns_and_quad_tile_the_scene_rect_and_their_borders_stay_grabbable() {
+    use crate::view_layout::LayoutKind;
+
+    let mut harness = Harness::new("frame-layout");
+    harness.settle();
+    for kind in [LayoutKind::TwoColumns, LayoutKind::TwoRows, LayoutKind::Quad] {
+        harness.app.tabs.active_mut().set_layout(kind);
+        let chrome = harness.settle();
+        let scene = harness.scene();
+        let layout = harness.app.tabs.active().layout();
+        let regions = layout.regions(scene);
+        assert_eq!(regions.len(), kind.leaves(), "{kind:?} draws one view per leaf");
+        let mut tiled = 0.0;
+        for (_, view) in &regions {
+            assert!(scene.contains_rect(*view), "{kind:?}: every view stays inside the scene: {view:?}");
+            assert!(view.width() > 0.0 && view.height() > 0.0, "{kind:?}: a view has an area");
+            tiled += view.width() * view.height();
+        }
+        assert!(
+            (tiled - scene.width() * scene.height()).abs() < 1.0,
+            "{kind:?} tiles the scene rect exactly: {tiled} against {}",
+            scene.width() * scene.height()
+        );
+
+        // A border is inside the scene, outside the chrome, and a press there grabs it.
+        let divider = harness.app.tabs.active().layout().dividers(scene).into_iter().next().expect("a border");
+        let handle = divider.hit_rect().center();
+        assert!(scene.contains(handle), "{kind:?}: the border band is inside the scene");
+        assert!(!chrome.covers(handle), "{kind:?}: and not under a panel");
+        let selected = harness.selected();
+        harness.press_at(handle, egui::PointerButton::Primary);
+        assert!(harness.app.shell.divider_dragging, "{kind:?}: a press there grabs the border");
+        assert_eq!(harness.selected(), selected, "{kind:?}: and selects nothing");
+        harness.release_at(handle, egui::PointerButton::Primary);
+        harness.settle();
+        assert!(!harness.app.shell.divider_dragging, "{kind:?}: and the release ends the drag");
+    }
+}
+
+#[test]
+fn a_modal_owns_the_keys() {
+    // The sentence ADR 0076 makes: a modal keeps the keys for the frame it is up. Before U78 this was
+    // re-verified by hand, and the drawing-tool table was not gated at all.
+    let mut harness = Harness::new("frame-modal");
+    harness.settle();
+    let revision = harness.revision();
+
+    // One real edit, through the keyboard and the pointer, so undo and redo have something to do:
+    // the rectangle tool and two corners of the work plane.
+    harness.press(egui::Key::R, egui::Modifiers::NONE);
+    assert!(harness.app.tabs.active().editor.drawing().is_some(), "R starts the rectangle tool");
+    let scene = harness.scene();
+    harness.click(scene.center() - egui::vec2(120.0, 90.0), egui::PointerButton::Primary);
+    harness.click(scene.center() + egui::vec2(120.0, 90.0), egui::PointerButton::Primary);
+    let edited = harness.revision();
+    assert_ne!(edited, revision, "the two clicks commit one path");
+    assert!(harness.app.tabs.active().editor.drawing().is_none(), "and the tool ends with the figure");
+    assert!(harness.app.tabs.active().can_undo(), "the edit is undoable");
+    // A committed drawing hands over to the corner grips; leave them, so a tool key has room to run.
+    harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(harness.app.tabs.active().editor.contour_edit().is_none(), "Escape leaves the contour edit");
+
+    // A camera the fit would change, so a reframe under the modal would show.
+    let resting = harness.camera();
+    harness.drag(harness.scene().center(), egui::vec2(50.0, 0.0), egui::PointerButton::Middle);
+    let orbited = harness.camera();
+    assert_ne!(orbited, resting, "a middle drag orbits the view");
+
+    harness.app.handle_header_action(HeaderAction::Settings, Lang::En);
+    harness.settle();
+    assert!(harness.drew(Message::SettingsTitle.text(Lang::En)), "the Settings window is up: {:?}", harness.drawn);
+
+    harness.press(egui::Key::Z, egui::Modifiers::CTRL);
+    assert_eq!(harness.revision(), edited, "Ctrl+Z under a modal undoes nothing");
+    assert!(harness.app.tabs.active().can_undo(), "the edit is still there to undo");
+    harness.press(egui::Key::F, egui::Modifiers::NONE);
+    assert_eq!(harness.camera(), orbited, "F under a modal does not reframe");
+    harness.press(egui::Key::R, egui::Modifiers::NONE);
+    assert!(harness.app.tabs.active().editor.drawing().is_none(), "and no tool starts under it");
+    harness.press(egui::Key::S, egui::Modifiers::CTRL);
+    assert!(
+        !harness.drew(Message::SaveSceneAsTitle.text(Lang::En)),
+        "Ctrl+S under a modal opens no save dialog: {:?}",
+        harness.drawn
+    );
+
+    // The gate is the modal and not a dead key: with it closed, the same press undoes the edit.
+    harness.app.settings_open = false;
+    harness.settle();
+    harness.press(egui::Key::Z, egui::Modifiers::CTRL);
+    assert!(!harness.app.tabs.active().can_undo(), "the undo ran once the modal was gone");
+    assert!(harness.app.tabs.active().can_redo(), "and one edit was one undo entry");
+}
+
+#[test]
+fn no_chrome_gesture_writes_a_revision() {
+    // A fold, a hide, a ribbon fold and a camera move are view state: the document must not gain an
+    // undo entry, a dirty marker or a rebuild from any of them.
+    let mut harness = Harness::new("frame-view-state");
+    harness.settle();
+    let revision = harness.revision();
+    let camera = harness.camera();
+
+    harness.press(egui::Key::Num0, ctrl_shift());
+    assert!(harness.app.shell.panels.all_collapsed(), "the fold shortcut folded both panels");
+    harness.press(egui::Key::Num0, egui::Modifiers::CTRL);
+    assert!(!harness.app.shell.panels.any_visible(), "the hide shortcut hid both panels");
+    harness.app.handle_header_action(HeaderAction::ToggleRibbon, Lang::En);
+    harness.settle();
+    assert!(!harness.app.tabs.active().ribbon_open(), "the ribbon folded");
+    harness.drag(harness.scene().center(), egui::vec2(40.0, 0.0), egui::PointerButton::Middle);
+    assert_ne!(harness.camera(), camera, "the drag orbited the view");
+
+    assert_eq!(harness.revision(), revision, "no chrome gesture writes the document");
+    assert!(!harness.app.tabs.active().is_dirty(), "and none of them marks the scene unsaved");
+    assert!(!harness.app.tabs.active().can_undo(), "and none of them adds an undo entry");
+}
