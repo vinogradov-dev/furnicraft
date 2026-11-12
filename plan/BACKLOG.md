@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U64** the status bar shows the tool and counts; the owner wants the selection context in the centre — name, kind, size, material, edge banding, warnings — and the three display sliders renamed and moved to Settings → View.
-  Why: The card should not carry derived context, and the display names are ambiguous: «Сетка»
-   is the floor grid, not the 10 mm snap; «Рёбра» collides with furniture edge banding. The
-   zones, the summary fields, the slider mapping and the reset values are in
-   `plan/notes/U64.md`.
-  Shape: Build one `StatusSummary` per frame from the already-resolved selection (no document
-   scan): kind, name, count, size, material, edge banding and a warning slot; draw it as the
-   centre zone of the status bar with chips and an ellipsis, the command prompt on the left and
-   snap/projection/state on the right. Rename the cluster sliders: «Сетка пола» (grid
-   brightness), «Контуры» (form outline strength), «Контактная тень» (contact shadow strength);
-   keep on/off toggles in the cluster plus a «Настроить…» link; move the three strengths and a
-   «Сброс» (60/70/40) to Settings → View; move «все рёбра треугольников» under «Дополнительно»
-   as a diagnostic. Label the snap toggle «Привязка 10 мм», not «Сетка». Future parameters are
-   new fields on the summary, not a new row.
-  Done: Tests: the summary is derived from the selection without a second scan; a single
-   selection shows name, kind, size and material; a multi-selection shows the count; a long
-   line elides and keeps a tooltip; the status bar reports «Перестроение…» while a rebuild
-   runs; the settings round-trip keeps the three strengths and the reset restores 60/70/40; the
-   cluster no longer draws the triangle diagnostic; the status bar reads «Привязка 10 мм». Both
-   themes and a narrow window are checked by eye.
-  `files: apps/furnicraft/src/status_bar.rs, apps/furnicraft/src/view_cluster.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs`
-
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
   later choice of name is one constant and no refactor. The work is measured and scripted in
   `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
@@ -210,6 +188,28 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U64** the status bar shows the tool and counts; the owner wants the selection context in the centre — name, kind, size, material, edge banding, warnings — and the three display sliders renamed and moved to Settings → View.
+  Why: The card should not carry derived context, and the display names are ambiguous: «Сетка»
+   is the floor grid, not the 10 mm snap; «Рёбра» collides with furniture edge banding. The
+   zones, the summary fields, the slider mapping and the reset values are in
+   `plan/notes/U64.md`.
+  Shape: Build one `StatusSummary` per frame from the already-resolved selection (no document
+   scan): kind, name, count, size, material, edge banding and a warning slot; draw it as the
+   centre zone of the status bar with chips and an ellipsis, the command prompt on the left and
+   snap/projection/state on the right. Rename the cluster sliders: «Сетка пола» (grid
+   brightness), «Контуры» (form outline strength), «Контактная тень» (contact shadow strength);
+   keep on/off toggles in the cluster plus a «Настроить…» link; move the three strengths and a
+   «Сброс» (60/70/40) to Settings → View; move «все рёбра треугольников» under «Дополнительно»
+   as a diagnostic. Label the snap toggle «Привязка 10 мм», not «Сетка». Future parameters are
+   new fields on the summary, not a new row.
+  Done: Tests: the summary is derived from the selection without a second scan; a single
+   selection shows name, kind, size and material; a multi-selection shows the count; a long
+   line elides and keeps a tooltip; the status bar reports «Перестроение…» while a rebuild
+   runs; the settings round-trip keeps the three strengths and the reset restores 60/70/40; the
+   cluster no longer draws the triangle diagnostic; the status bar reads «Привязка 10 мм». Both
+   themes and a narrow window are checked by eye.
+  `files: apps/furnicraft/src/status_bar.rs, apps/furnicraft/src/view_cluster.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs` — `7703a06`
 
 - `[x]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
   Why: A unit inside the field is selected with the number and reads as data; Apply adds a
