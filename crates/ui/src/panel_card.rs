@@ -10,9 +10,9 @@ use furnicraft_engine::panel_cmds::{
     RING_BANDING_CLEAR_ID, RING_BANDING_SET_ID,
 };
 use furnicraft_engine::{
-    PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear, PanelCornerSet,
-    PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet, PanelOutlineToContour, PanelRename,
-    PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
+    EditScope, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
+    PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
+    PanelOutlineToContour, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
     ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MachiningId,
@@ -25,7 +25,7 @@ use serde_json::Value;
 use crate::command::{dispatch as dispatch_command, json};
 use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
-use crate::scrub::Scrub;
+use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
 
 /// Persistent state of the panel card.
@@ -36,13 +36,16 @@ pub(crate) struct PanelCard {
     machining: MachiningSection,
 }
 
-/// Editable text that survives frames until the user commits it.
+/// What the card edits, kept between frames until the user commits it.
+///
+/// The nominal size is in millimetres because that is what a field scrubs; the document stores a
+/// [`Length`], and the card converts at the command boundary.
 #[derive(Clone, Debug)]
 struct Draft {
     panel: Id,
     name: String,
-    length: String,
-    width: String,
+    length: f64,
+    width: f64,
 }
 
 impl Draft {
@@ -51,8 +54,8 @@ impl Draft {
         Self {
             panel: panel.id(),
             name: panel.name().to_owned(),
-            length: nominal.length().to_string(),
-            width: nominal.width().to_string(),
+            length: nominal.length().millimetres_f64(),
+            width: nominal.width().millimetres_f64(),
         }
     }
 }
@@ -60,20 +63,72 @@ impl Draft {
 /// One command the card wants to dispatch after the immutable UI borrow ends.
 #[derive(Clone, Debug)]
 enum Action {
-    Rename { panel: Id, name: String },
-    Resize { panel: Id, nominal_size: PanelNominalSize },
-    SetMaterial { panel: Id, material: MaterialId },
-    SetBand { panel: Id, edge: EdgeId, material: MaterialId, included_in_size: bool },
-    ClearBand { panel: Id, edge: EdgeId },
-    SetCornerBand { panel: Id, corner: VertexId, material: MaterialId, included_in_size: bool },
-    ClearCornerBand { panel: Id, corner: VertexId },
-    SetRingBand { panel: Id, segment: ContourSegmentId, material: MaterialId, included_in_size: bool },
-    ClearRingBand { panel: Id, segment: ContourSegmentId },
-    SetCorner { panel: Id, corner: VertexId, feature: CornerFeatureKind },
-    ClearCorner { panel: Id, corner: VertexId },
-    SetBow { panel: Id, edge: EdgeId, sagitta: Length },
-    ClearBow { panel: Id, edge: EdgeId },
-    ToContour { panel: Id },
+    Rename {
+        panel: Id,
+        name: String,
+    },
+    Resize {
+        panel: Id,
+        nominal_size: PanelNominalSize,
+        scope: EditScope,
+    },
+    SetMaterial {
+        panel: Id,
+        material: MaterialId,
+    },
+    SetBand {
+        panel: Id,
+        edge: EdgeId,
+        material: MaterialId,
+        included_in_size: bool,
+    },
+    ClearBand {
+        panel: Id,
+        edge: EdgeId,
+    },
+    SetCornerBand {
+        panel: Id,
+        corner: VertexId,
+        material: MaterialId,
+        included_in_size: bool,
+    },
+    ClearCornerBand {
+        panel: Id,
+        corner: VertexId,
+    },
+    SetRingBand {
+        panel: Id,
+        segment: ContourSegmentId,
+        material: MaterialId,
+        included_in_size: bool,
+    },
+    ClearRingBand {
+        panel: Id,
+        segment: ContourSegmentId,
+    },
+    SetCorner {
+        panel: Id,
+        corner: VertexId,
+        feature: CornerFeatureKind,
+    },
+    ClearCorner {
+        panel: Id,
+        corner: VertexId,
+    },
+    SetBow {
+        panel: Id,
+        edge: EdgeId,
+        sagitta: Length,
+    },
+    ClearBow {
+        panel: Id,
+        edge: EdgeId,
+    },
+    ToContour {
+        panel: Id,
+    },
+    /// Escape during a drag: put the document back and leave no undo entry.
+    CancelEdit(EditScope),
 }
 
 /// What the panel card asks the editor to do with the contour edit mode.
@@ -150,6 +205,9 @@ impl PanelCard {
         single_selection: bool,
     ) -> PanelAction {
         let lang = crate::language(ui.ctx());
+        // One token per frame for the numeric fields: a field that begins an edit takes it, and the
+        // whole drag or typing run lands in one undo entry (ADR 0086).
+        let fresh = session.edit_scope();
         let Some(panel_id) = selected else {
             self.draft = None;
             self.error = None;
@@ -202,31 +260,44 @@ impl PanelCard {
                 if panel.is_contour() {
                     ui.label(Message::PanelContourSetsSize.text(lang));
                 } else {
-                    ui.horizontal(|ui| {
-                        ui.label(Message::Length.text(lang));
-                        let length_response =
-                            ui.add(TextEdit::singleline(&mut draft.length).desired_width(80.0).hint_text("mm"));
-                        ui.label(Message::Width.text(lang));
-                        let width_response =
-                            ui.add(TextEdit::singleline(&mut draft.width).desired_width(80.0).hint_text("mm"));
-                        let clicked = ui.button(Message::ApplySize.text(lang)).clicked();
-                        if length_response.lost_focus() || width_response.lost_focus() || clicked {
-                            match (Length::parse_millimetres(&draft.length), Length::parse_millimetres(&draft.width)) {
-                                (Ok(length), Ok(width)) => match PanelNominalSize::new(length, width) {
-                                    Ok(nominal_size) if nominal_size != panel.nominal_size() => {
-                                        actions.push(Action::Resize { panel: panel_id, nominal_size });
-                                    }
-                                    Ok(_) => {}
-                                    Err(error) => errors.push(error.to_string()),
-                                },
-                                (Err(error), _) => errors
-                                    .push(Message::LengthField.with(lang, [crate::length_error(error).text(lang)])),
-                                (_, Err(error)) => {
-                                    errors.push(Message::WidthField.with(lang, [crate::length_error(error).text(lang)]))
-                                }
+                    let mut commit = None;
+                    for (label, value) in
+                        [(Message::Length.text(lang), &mut draft.length), (Message::Width.text(lang), &mut draft.width)]
+                    {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            let outcome = Scrub::new(value)
+                                .speed(0.5)
+                                .range(1.0..=10_000.0)
+                                .decimals(3)
+                                .unit("mm")
+                                .parse(scrub::parse_millimetres)
+                                .policy(CommitPolicy::Live)
+                                .edit(fresh)
+                                .show(ui);
+                            if let Some(message) = outcome.error {
+                                errors.push(message.text(lang).to_owned());
                             }
+                            if let Some(scope) = outcome.cancelled {
+                                actions.push(Action::CancelEdit(scope));
+                            }
+                            if outcome.commit {
+                                commit = outcome.scope;
+                            }
+                        });
+                    }
+                    if let Some(scope) = commit {
+                        match (scrub::millimetres(draft.length), scrub::millimetres(draft.width)) {
+                            (Some(length), Some(width)) => match PanelNominalSize::new(length, width) {
+                                Ok(nominal_size) if nominal_size != panel.nominal_size() => {
+                                    actions.push(Action::Resize { panel: panel_id, nominal_size, scope });
+                                }
+                                Ok(_) => {}
+                                Err(error) => errors.push(error.to_string()),
+                            },
+                            _ => errors.push(Message::LengthErrorOutOfRange.text(lang).to_owned()),
                         }
-                    });
+                    }
                 }
             });
 
@@ -601,9 +672,9 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
             let params = json(&PanelRename { panel: *panel, name: name.clone() })?;
             dispatch(session, RENAME_ID, &params)
         }
-        Action::Resize { panel, nominal_size } => {
+        Action::Resize { panel, nominal_size, scope } => {
             let params = json(&PanelResize { panel: *panel, nominal_size: *nominal_size })?;
-            dispatch(session, RESIZE_ID, &params)
+            dispatch_in(session, *scope, RESIZE_ID, &params)
         }
         Action::SetMaterial { panel, material } => {
             let params = json(&PanelMaterialSet { panel: *panel, material: *material })?;
@@ -668,11 +739,21 @@ fn run_action(session: &mut Session, action: &Action) -> Result<(), String> {
             let params = json(&PanelOutlineToContour { panel: *panel })?;
             dispatch(session, OUTLINE_CONTOUR_ID, &params)
         }
+        Action::CancelEdit(scope) => {
+            session.cancel_edit(*scope);
+            Ok(())
+        }
     }
 }
 
 fn dispatch(session: &mut Session, id: &str, params: &Value) -> Result<(), String> {
     dispatch_command(session, id, params).map(|_| ())
+}
+
+/// Dispatches one step of an edit, so a field that commits every frame of a drag stays one undo
+/// entry.
+fn dispatch_in(session: &mut Session, scope: EditScope, id: &str, params: &Value) -> Result<(), String> {
+    session.dispatch_in(scope, id, params).map(|_| ()).map_err(|error| error.to_string())
 }
 
 pub(crate) fn edge_label(edge: u32) -> Message {
@@ -711,38 +792,34 @@ fn default_feature_length() -> Length {
 
 /// A millimetre value that lives in the document.
 ///
-/// The widget keeps the text the user types until the edit ends: Enter, losing focus or the end of
-/// a drag. The value is read back from the document on every frame, so updating it on each
-/// keystroke would replace the typed text with the document value while the user is still typing.
+/// The field shows the number alone and keeps the text the user types until the edit ends: Enter,
+/// losing focus or the end of a drag. The value is read back from the document every frame, so a
+/// cutout or a chamfer does not rebuild while the user is still typing; a drag shows its running
+/// number and hands it over once, at the release.
 pub(crate) fn millimetre_field(
     ui: &mut Ui,
     value: Length,
     range: std::ops::RangeInclusive<f64>,
 ) -> (Option<f64>, egui::Response) {
     let mut millimetres = value.millimetres_f64();
-    let response = ui.add(Scrub::new(&mut millimetres).speed(0.5).range(range).suffix(" mm"));
-    let committed = (response.drag_stopped() || response.lost_focus()).then_some(millimetres);
-    (committed, response)
+    let outcome = Scrub::new(&mut millimetres)
+        .speed(0.5)
+        .range(range)
+        .decimals(3)
+        .unit("mm")
+        .parse(scrub::parse_millimetres)
+        .policy(CommitPolicy::OnRelease)
+        .show(ui);
+    (outcome.commit.then_some(millimetres), outcome.response)
 }
 
 pub(crate) fn positive_length(millimetres: f64) -> Option<Length> {
-    let value = millimetres_to_length(millimetres)?;
+    let value = scrub::millimetres(millimetres)?;
     value.is_positive().then_some(value)
 }
 
 pub(crate) fn signed_length(millimetres: f64) -> Option<Length> {
-    millimetres_to_length(millimetres)
-}
-
-fn millimetres_to_length(millimetres: f64) -> Option<Length> {
-    if !millimetres.is_finite() || millimetres.abs() > 1_000_000.0 {
-        return None;
-    }
-    let micrometres = (millimetres * 1000.0).round();
-    if !micrometres.is_finite() {
-        return None;
-    }
-    Some(Length::from_micrometres(micrometres as i64))
+    scrub::millimetres(millimetres)
 }
 
 /// Formats one derived panel issue for the card.

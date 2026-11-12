@@ -589,6 +589,7 @@ messages! {
         "не больше трёх знаков после запятой в градусах"
     ],
     DegreesErrorOutOfRange = ["angle is outside the supported range", "угол выходит за поддерживаемый диапазон"],
+    NumberInvalid = ["enter a number", "введите число"],
     Pivot = ["Pivot", "Пивот"],
     PivotLocalOffset = ["Pivot (local offset)", "Пивот (локальное смещение)"],
     PanelPivotFollowsOrigin = ["Pivot follows origin (offset 0)", "Пивот следует за началом (смещение 0)"],

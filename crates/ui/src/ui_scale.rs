@@ -66,7 +66,7 @@ pub fn show(ui: &mut Ui, percent: &mut u32) -> Response {
     let mut response = ui
         .horizontal(|ui| {
             ui.label(Message::UiScale.text(lang));
-            ui.add(Scrub::new(&mut chosen).speed(0.5).range(MIN_PERCENT..=MAX_PERCENT).suffix(" %"))
+            ui.add(Scrub::new(&mut chosen).speed(0.5).range(MIN_PERCENT..=MAX_PERCENT).unit("%"))
         })
         .inner;
     ui.horizontal(|ui| {

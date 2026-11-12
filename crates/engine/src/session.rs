@@ -124,10 +124,18 @@ impl Session {
     /// history of another. The scope closes on [`Session::end_edit`], on any plain dispatch and on
     /// undo or redo.
     pub fn begin_edit(&mut self) -> EditScope {
-        self.next_scope = self.next_scope.wrapping_add(1);
-        let scope = EditScope(self.next_scope);
+        let scope = self.edit_scope();
         self.edit = Some(OpenEdit { scope, snapshot_pushed: false });
         scope
+    }
+
+    /// A fresh scope token, for a caller that dispatches later through [`Session::dispatch_in`].
+    ///
+    /// The token alone groups nothing: the history starts at the first dispatch that carries it, so
+    /// a card can mint one before it borrows the document and only use it if the user edits.
+    pub fn edit_scope(&mut self) -> EditScope {
+        self.next_scope = self.next_scope.wrapping_add(1);
+        EditScope(self.next_scope)
     }
 
     /// Closes the open edit scope, keeping its single undo entry.
@@ -721,6 +729,29 @@ mod tests {
         session.undo().expect("undo the whole edit");
         assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
         assert!(!session.can_undo(), "a drag is one undo entry, not one per frame");
+    }
+
+    #[test]
+    fn a_minted_scope_groups_the_dispatches_that_carry_it() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").nominal_size();
+
+        // A card mints a token before it borrows the document; the history starts at the first
+        // dispatch that carries it, so no `begin_edit` is needed.
+        let scope = session.edit_scope();
+        for width in [720, 740] {
+            let size = furnicraft_model::PanelNominalSize::new(
+                Length::from_millimetres(700).expect("length"),
+                Length::from_millimetres(width).expect("width"),
+            )
+            .expect("a size");
+            let params = json_params(&PanelResize { panel: panel_id, nominal_size: size });
+            session.dispatch_in(scope, "panel.resize", &params).expect("resize inside the edit");
+        }
+        session.undo().expect("undo the edit");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
+        assert!(!session.can_undo());
     }
 
     #[test]
