@@ -8,8 +8,17 @@
 //! ([ADR 0037]). A path object shows its flat drawing: it has no mesh and no feature height until
 //! it becomes a contour or is extruded.
 //!
+//! Every number in the card is the shared field ([ADR 0092]): a figure dimension, a primitive
+//! parameter or a typed property is the same 76 px box with its unit outside and no Apply button.
+//! A figure or primitive parameter re-cuts geometry and rebuilds a mesh, so its field hands the
+//! number over at the release (or after the typing debounce, or on Enter) rather than on every frame
+//! of a drag; one gesture is still one undo entry through the session edit scope.
+//!
 //! [ADR 0037]: ../docs/decisions/0037-a-geometry-object-is-a-mesh-or-a-feature-history.md
 //! [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
+//! [ADR 0092]: ../docs/decisions/0092-a-field-is-a-number-with-its-unit-outside.md
+
+use core::ops::RangeInclusive;
 
 use egui::{Color32, RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
@@ -17,17 +26,19 @@ use furnicraft_engine::object_cmds::{
     OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_REPLACE_ID, OBJECT_PRIMITIVE_REPLACE_ID,
 };
 use furnicraft_engine::{
-    NodeRename, ObjectCollapse, ObjectContourReplace, ObjectPathReplace, ObjectPrimitiveReplace, Session,
+    EditScope, NodeRename, ObjectCollapse, ObjectContourReplace, ObjectPathReplace, ObjectPrimitiveReplace, Session,
 };
 use furnicraft_model::{
-    Contour, ContourSegment, ContourSegmentId, Geometry, Id, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathShape,
+    Contour, ContourEditError, ContourSegment, ContourSegmentId, Geometry, Id, MAX_BANDS, MAX_POLYGON_SIDES,
+    MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS, MIN_POLYGON_SIDES, MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Path, PathShape,
     Primitive, Project,
 };
 use furnicraft_text::{Lang, Message};
-use furnicraft_units::{Degrees, Length};
+use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
 use crate::mesh_edit::{MeshEdit, MeshElement};
+use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
 
 /// What the object card asks the editor to do.
@@ -80,42 +91,44 @@ impl ContourDraft {
     }
 }
 
-/// The editable text of one primitive parameter and the primitive it was read from.
+/// The numbers of one primitive parameter and the primitive they were read from.
 ///
 /// `base` plays the same role as in [`ContourDraft`]: an edit made elsewhere — by undo, or by a
-/// gizmo — re-reads the document instead of leaving stale text in the field.
+/// gizmo — re-reads the document instead of leaving a stale number in the field.
 #[derive(Clone, Debug)]
 struct PrimitiveDraft {
     object: Id,
     base: Primitive,
     fields: PrimitiveFields,
-    error: Option<String>,
 }
 
-/// The parameter fields as typed text, one per editable dimension.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The parameter fields as the numbers the shared field edits, one per editable dimension.
+///
+/// The lengths are millimetres and the counts whole numbers, because that is what a scrub moves;
+/// the document keeps [`Length`], and the card converts at the command edge.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct PrimitiveFields {
-    edge: String,
-    radius: String,
-    height: String,
-    segments: String,
-    bands: String,
+    edge: f64,
+    radius: f64,
+    height: f64,
+    segments: u32,
+    bands: u32,
 }
 
 impl PrimitiveFields {
     fn read(primitive: &Primitive) -> Self {
         let mut fields = Self::default();
         match primitive {
-            Primitive::Cube(cube) => fields.edge = cube.edge().to_string(),
+            Primitive::Cube(cube) => fields.edge = cube.edge().millimetres_f64(),
             Primitive::Cylinder(cylinder) => {
-                fields.radius = cylinder.radius().to_string();
-                fields.height = cylinder.height().to_string();
-                fields.segments = cylinder.segments().to_string();
+                fields.radius = cylinder.radius().millimetres_f64();
+                fields.height = cylinder.height().millimetres_f64();
+                fields.segments = cylinder.segments();
             }
             Primitive::Sphere(sphere) => {
-                fields.radius = sphere.radius().to_string();
-                fields.segments = sphere.segments().to_string();
-                fields.bands = sphere.bands().to_string();
+                fields.radius = sphere.radius().millimetres_f64();
+                fields.segments = sphere.segments();
+                fields.bands = sphere.bands();
             }
         }
         fields
@@ -124,7 +137,7 @@ impl PrimitiveFields {
 
 impl PrimitiveDraft {
     fn new(object: Id, primitive: &Primitive) -> Self {
-        Self { object, base: primitive.clone(), fields: PrimitiveFields::read(primitive), error: None }
+        Self { object, base: primitive.clone(), fields: PrimitiveFields::read(primitive) }
     }
 
     /// The primitive the fields describe, or a readable reason they do not.
@@ -132,32 +145,21 @@ impl PrimitiveDraft {
     /// The shape comes from `base`, so a field that belongs to another shape is never invented: a
     /// cube has only an edge and a sphere has no height.
     fn parse(&self, lang: Lang) -> Result<Primitive, String> {
-        let segments =
-            || parse_count(&self.fields.segments, Message::FieldSides, lang).map_err(|error| format!("{error}."));
-        let bands = || parse_count(&self.fields.bands, Message::FieldBands, lang).map_err(|error| format!("{error}."));
+        let length = |value: f64| {
+            scrub::millimetres(value)
+                .ok_or_else(|| Message::PrimitiveRefused.with(lang, [Message::LengthErrorOutOfRange.text(lang)]))
+        };
         let primitive = match &self.base {
-            Primitive::Cube(_) => Primitive::cube(parse_length(&self.fields.edge, Message::FieldEdge, lang)?),
-            Primitive::Cylinder(_) => Primitive::cylinder(
-                parse_length(&self.fields.radius, Message::FieldRadius, lang)?,
-                parse_length(&self.fields.height, Message::FieldHeight, lang)?,
-                segments()?,
-            ),
+            Primitive::Cube(_) => Primitive::cube(length(self.fields.edge)?),
+            Primitive::Cylinder(_) => {
+                Primitive::cylinder(length(self.fields.radius)?, length(self.fields.height)?, self.fields.segments)
+            }
             Primitive::Sphere(_) => {
-                Primitive::sphere(parse_length(&self.fields.radius, Message::FieldRadius, lang)?, segments()?, bands()?)
+                Primitive::sphere(length(self.fields.radius)?, self.fields.segments, self.fields.bands)
             }
         };
         primitive.map_err(|error| Message::PrimitiveRefused.with(lang, [error.to_string()]))
     }
-}
-
-fn parse_length(text: &str, field: Message, lang: Lang) -> Result<Length, String> {
-    Length::parse_millimetres(text.trim()).map_err(|error| {
-        Message::LengthFieldError.with(lang, [field.text(lang), crate::length_error(error).text(lang)])
-    })
-}
-
-fn parse_count(text: &str, field: Message, lang: Lang) -> Result<u32, String> {
-    text.trim().parse::<u32>().map_err(|_| Message::CountWholeNumber.with(lang, [field.text(lang)]))
 }
 
 /// The figure a path was drawn as, and the fields the card exposes for it.
@@ -195,27 +197,30 @@ impl FigureKind {
     }
 }
 
-/// The editable text of one figure and the path it was read from.
+/// The numbers of one figure and the path they were read from.
 ///
 /// `base` plays the same role as in [`PrimitiveDraft`]: an edit made elsewhere — by undo, or by the
-/// viewport — re-reads the document instead of leaving stale text in the field.
+/// viewport — re-reads the document instead of leaving a stale number in the field.
 #[derive(Clone, Debug)]
 struct FigureDraft {
     object: Id,
     base: Path,
     kind: FigureKind,
     fields: FigureFields,
-    error: Option<String>,
 }
 
-/// The figure fields as typed text, one per dimension the figure has.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The figure fields as the numbers the shared field edits, one per dimension the figure has.
+///
+/// The lengths are millimetres and the angle is degrees, because that is what a scrub moves; the
+/// document keeps [`Length`] and [`furnicraft_units::Degrees`], and the card converts once, when a
+/// field hands its number over.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct FigureFields {
-    radius: String,
-    width: String,
-    height: String,
-    sides: String,
-    end_angle: String,
+    radius: f64,
+    width: f64,
+    height: f64,
+    sides: u32,
+    end_angle: f64,
 }
 
 impl FigureFields {
@@ -224,22 +229,24 @@ impl FigureFields {
         let mut fields = Self::default();
         match kind {
             FigureKind::Circle => {
-                fields.radius = path.circle_frame().map_err(|error| figure_error(error, Lang::En))?.radius.to_string()
+                fields.radius =
+                    path.circle_frame().map_err(|error| figure_error(error, Lang::En))?.radius.millimetres_f64()
             }
             FigureKind::Rectangle => {
                 let frame = path.rectangle_frame().map_err(|error| figure_error(error, Lang::En))?;
-                fields.width = frame.width.to_string();
-                fields.height = frame.height.to_string();
+                fields.width = frame.width.millimetres_f64();
+                fields.height = frame.height.millimetres_f64();
             }
             FigureKind::Polygon => {
                 let frame = path.polygon_frame().map_err(|error| figure_error(error, Lang::En))?;
-                fields.sides = frame.corners.len().to_string();
-                fields.radius = frame.radius.to_string();
+                fields.sides = u32::try_from(frame.corners.len())
+                    .map_err(|_| figure_error(ContourEditError::InvalidValue, Lang::En))?;
+                fields.radius = frame.radius.millimetres_f64();
             }
             FigureKind::Arc(segment) => {
                 let frame = path.arc_frame(segment).map_err(|error| figure_error(error, Lang::En))?;
-                fields.radius = frame.radius.to_string();
-                fields.end_angle = frame.end_angle().map_err(|error| figure_error(error, Lang::En))?.to_string();
+                fields.radius = frame.radius.millimetres_f64();
+                fields.end_angle = frame.end_angle().map_err(|error| figure_error(error, Lang::En))?.degrees_f64();
             }
         }
         Ok(fields)
@@ -248,25 +255,28 @@ impl FigureFields {
 
 impl FigureDraft {
     fn new(object: Id, path: &Path, kind: FigureKind) -> Result<Self, String> {
-        Ok(Self { object, base: path.clone(), kind, fields: FigureFields::read(kind, path)?, error: None })
+        Ok(Self { object, base: path.clone(), kind, fields: FigureFields::read(kind, path)? })
     }
 
     /// The path the fields describe, or a readable reason they do not.
     ///
     /// Each setter keeps the shape tag and the ids of the segments it does not re-cut, so applying
-    /// one field leaves the figure what it was.
+    /// one field leaves the figure what it was. The card converts the field's millimetres and
+    /// degrees to document units here, once, at the command edge.
     fn parse(&self, lang: Lang) -> Result<Path, String> {
         let mut path = self.base.clone();
+        let length =
+            |value: f64| scrub::millimetres(value).ok_or_else(|| figure_error(ContourEditError::InvalidValue, lang));
         match self.kind {
             FigureKind::Circle => {
-                let radius = parse_length(&self.fields.radius, Message::FieldRadius, lang)?;
+                let radius = length(self.fields.radius)?;
                 if radius != path.circle_frame().map_err(|error| figure_error(error, Lang::En))?.radius {
                     path = path.set_circle_radius(radius).map_err(|error| figure_error(error, Lang::En))?;
                 }
             }
             FigureKind::Rectangle => {
-                let width = parse_length(&self.fields.width, Message::FieldWidth, lang)?;
-                let height = parse_length(&self.fields.height, Message::FieldHeight, lang)?;
+                let width = length(self.fields.width)?;
+                let height = length(self.fields.height)?;
                 let frame = path.rectangle_frame().map_err(|error| figure_error(error, Lang::En))?;
                 if width != frame.width {
                     path = path.set_rectangle_width(width).map_err(|error| figure_error(error, Lang::En))?;
@@ -276,8 +286,8 @@ impl FigureDraft {
                 }
             }
             FigureKind::Polygon => {
-                let sides = parse_sides(&self.fields.sides, lang)?;
-                let radius = parse_length(&self.fields.radius, Message::FieldRadius, lang)?;
+                let sides = self.fields.sides;
+                let radius = length(self.fields.radius)?;
                 let frame = path.polygon_frame().map_err(|error| figure_error(error, Lang::En))?;
                 if usize::try_from(sides).ok() != Some(frame.corners.len()) {
                     path = path.set_polygon_sides(sides).map_err(|error| figure_error(error, Lang::En))?;
@@ -288,9 +298,9 @@ impl FigureDraft {
                 }
             }
             FigureKind::Arc(segment) => {
-                let radius = parse_length(&self.fields.radius, Message::FieldRadius, lang)?;
-                let angle = Degrees::parse_degrees(self.fields.end_angle.trim())
-                    .map_err(|error| Message::EndAngleError.with(lang, [crate::degrees_error(error).text(lang)]))?;
+                let radius = length(self.fields.radius)?;
+                let angle = scrub::degrees(self.fields.end_angle)
+                    .ok_or_else(|| figure_error(ContourEditError::InvalidValue, lang))?;
                 let frame = path.arc_frame(segment).map_err(|error| figure_error(error, Lang::En))?;
                 if radius != frame.radius {
                     path = path.set_arc_radius(segment, radius).map_err(|error| figure_error(error, Lang::En))?;
@@ -309,33 +319,8 @@ impl FigureDraft {
     }
 }
 
-fn figure_error(error: furnicraft_model::ContourEditError, lang: Lang) -> String {
+fn figure_error(error: ContourEditError, lang: Lang) -> String {
     Message::FigureRefused.with(lang, [error.to_string()])
-}
-
-fn parse_sides(text: &str, lang: Lang) -> Result<u32, String> {
-    let sides = text.trim().parse::<u32>().map_err(|_| Message::SidesWholeNumber.text(lang).to_owned())?;
-    if (MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES).contains(&sides) {
-        Ok(sides)
-    } else {
-        Err(Message::SidesRange.with(lang, [MIN_POLYGON_SIDES, MAX_POLYGON_SIDES]))
-    }
-}
-
-/// The path the figure fields describe, or `None` when there is nothing to apply.
-///
-/// A card edit is refused while the viewport owns the working copy: dispatching it would make that
-/// copy stale and lose the drag the user is still making.
-fn figure_replacement(
-    draft: Option<&FigureDraft>,
-    apply: bool,
-    contour_editing: bool,
-    lang: Lang,
-) -> Option<Result<Path, String>> {
-    if !apply || contour_editing {
-        return None;
-    }
-    draft.map(|draft| draft.parse(lang))
 }
 
 /// What the card reports about one object, owned so no document borrow outlives the frame.
@@ -443,6 +428,8 @@ impl ObjectCard {
             ui.label(Message::SelectNodeInTree.text(lang));
             return ObjectAction::None;
         };
+        // One token per frame for the number fields: the edit that takes it is one undo entry.
+        let fresh = session.edit_scope();
         if self.draft.as_ref().is_none_or(|draft| draft.object != object_id) {
             self.error = None;
             self.confirm_collapse = false;
@@ -472,14 +459,14 @@ impl ObjectCard {
 
         let (rename, name_error) = self.name_section(ui, &summary);
         self.geometry_section(ui, &summary);
-        let figure_result = self.figure_section(ui, &summary, contour_editing);
+        let (figure_result, figure_report) = self.figure_section(ui, &summary, contour_editing, fresh);
         let mut action = self.mesh_section(ui, session, object_id, &summary, mesh_edit, single_selection);
         if self.contour_edit_section(ui, &summary, contour_editing, single_selection) {
             action = ObjectAction::StartContour;
         }
-        // The viewport owns the working copy while the mode is live; a text replacement or a
+        // The viewport owns the working copy while the mode is live; a number replacement or a
         // collapse would silently make that copy stale.
-        let primitive_result = self.primitive_section(ui, &summary);
+        let (primitive_result, primitive_report) = self.primitive_section(ui, &summary, fresh);
         let contour_result =
             if contour_editing || self.figure_draft.is_some() { None } else { self.contour_section(ui, &summary) };
         let (collapse, cancel) = if (!is_constructive && summary.primitive.is_none()) || contour_editing {
@@ -488,6 +475,13 @@ impl ObjectCard {
             self.collapse_section(ui, single_selection)
         };
 
+        // A field that refused its typed text kept its number: the box is red, the card says why.
+        if let Some(message) = figure_report.refused.or(primitive_report.refused) {
+            self.error = Some(message.text(lang).to_owned());
+        }
+        for scope in figure_report.cancelled.iter().chain(primitive_report.cancelled.iter()) {
+            session.cancel_edit(*scope);
+        }
         if let Some(error) = name_error {
             self.error = Some(error);
         }
@@ -503,23 +497,24 @@ impl ObjectCard {
             return action;
         }
         if let Some(result) = figure_result {
-            match result.and_then(|path| replace_path(session, object_id, path)) {
-                Ok(()) => {
-                    self.error = None;
+            match result.and_then(|path| replace_path(session, object_id, path, figure_report.scope)) {
+                Ok(()) => self.error = None,
+                Err(error) => {
+                    self.error = Some(error);
                     self.figure_draft = None;
                 }
-                Err(error) => self.error = Some(error),
             }
             ui.ctx().request_repaint();
             return action;
         }
         if let Some(result) = primitive_result {
-            match result.and_then(|primitive| replace_primitive(session, object_id, primitive)) {
-                Ok(()) => {
-                    self.error = None;
+            match result.and_then(|primitive| replace_primitive(session, object_id, primitive, primitive_report.scope))
+            {
+                Ok(()) => self.error = None,
+                Err(error) => {
+                    self.error = Some(error);
                     self.primitive_draft = None;
                 }
-                Err(error) => self.error = Some(error),
             }
             ui.ctx().request_repaint();
             return action;
@@ -638,101 +633,118 @@ impl ObjectCard {
         }
     }
 
-    /// Draws the figure's own dimensions; returns the parsed path when Apply was pressed.
+    /// Draws the figure's own dimensions; returns the parsed path when a field handed its number over.
     ///
     /// Only the fields the figure has are shown: a circle a radius, a rectangle its width and
     /// height, a polygon its sides and radius, one arc its radius and end angle. While the viewport
-    /// owns the working copy the fields are drawn disabled and the edit is refused.
+    /// owns the working copy the fields are drawn disabled, so a card edit cannot make that copy
+    /// stale and lose the drag the user is still making.
     fn figure_section(
         &mut self,
         ui: &mut Ui,
         summary: &ObjectSummary,
         contour_editing: bool,
-    ) -> Option<Result<Path, String>> {
-        summary.path.as_ref()?;
+        fresh: EditScope,
+    ) -> (Option<Result<Path, String>>, FieldReport) {
+        let mut report = FieldReport::default();
+        if summary.path.is_none() {
+            return (None, report);
+        }
         let lang = crate::language(ui.ctx());
-        let draft = self.figure_draft.as_mut()?;
-        let mut apply = false;
+        let Some(draft) = self.figure_draft.as_mut() else {
+            return (None, report);
+        };
         ui.separator();
         section(ui, "object.figure", Message::SectionFigure.text(lang), true, |ui| {
-            ui.add_enabled_ui(!contour_editing, |ui| {
-                match draft.kind {
-                    FigureKind::Circle => length_field(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius),
-                    FigureKind::Rectangle => {
-                        length_field(ui, Message::FieldWidth.text(lang), &mut draft.fields.width);
-                        length_field(ui, Message::FieldHeight.text(lang), &mut draft.fields.height);
-                    }
-                    FigureKind::Polygon => {
-                        count_field(ui, Message::FieldSides.text(lang), &mut draft.fields.sides);
-                        length_field(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius);
-                    }
-                    FigureKind::Arc(_) => {
-                        length_field(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius);
-                        angle_field(ui, Message::FieldEndAngle.text(lang), &mut draft.fields.end_angle);
-                    }
+            ui.add_enabled_ui(!contour_editing, |ui| match draft.kind {
+                FigureKind::Circle => {
+                    report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
                 }
-                if let Some(error) = &draft.error {
-                    ui.colored_label(Color32::LIGHT_RED, error);
+                FigureKind::Rectangle => {
+                    report.absorb(length_row(ui, Message::FieldWidth.text(lang), &mut draft.fields.width, fresh));
+                    report.absorb(length_row(ui, Message::FieldHeight.text(lang), &mut draft.fields.height, fresh));
                 }
-                apply = ui.button(Message::ApplyFigure.text(lang)).clicked();
+                FigureKind::Polygon => {
+                    report.absorb(count_row(
+                        ui,
+                        Message::FieldSides.text(lang),
+                        &mut draft.fields.sides,
+                        MIN_POLYGON_SIDES..=MAX_POLYGON_SIDES,
+                        fresh,
+                    ));
+                    report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
+                }
+                FigureKind::Arc(_) => {
+                    report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
+                    report.absorb(angle_row(ui, Message::FieldEndAngle.text(lang), &mut draft.fields.end_angle, fresh));
+                }
             });
             if contour_editing {
                 ui.label(Message::FigureEditingInViewport.text(lang));
             }
         });
-        let replacement =
-            figure_replacement(self.figure_draft.as_ref(), apply, contour_editing, crate::language(ui.ctx()));
-        if let Some(Err(error)) = &replacement {
-            if let Some(draft) = self.figure_draft.as_mut() {
-                draft.error = Some(error.clone());
-            }
-            return None;
+        if !report.committed {
+            return (None, report);
         }
-        replacement
+        (Some(draft.parse(lang)), report)
     }
 
-    /// Draws the primitive parameters; returns the parsed primitive when Apply was pressed.
+    /// Draws the primitive parameters; returns the parsed primitive when a field handed its number over.
     ///
     /// Only the fields the shape has are shown: a cube has one edge, a cylinder a radius, a height
-    /// and its sides, a sphere a radius, its sides and its bands. Units come from
-    /// `furnicraft-units`, so the text is millimetres with the suffix the user typed.
-    fn primitive_section(&mut self, ui: &mut Ui, summary: &ObjectSummary) -> Option<Result<Primitive, String>> {
-        let primitive = summary.primitive.as_ref()?;
+    /// and its sides, a sphere a radius, its sides and its bands.
+    fn primitive_section(
+        &mut self,
+        ui: &mut Ui,
+        summary: &ObjectSummary,
+        fresh: EditScope,
+    ) -> (Option<Result<Primitive, String>>, FieldReport) {
+        let mut report = FieldReport::default();
+        let Some(primitive) = summary.primitive.as_ref() else {
+            return (None, report);
+        };
         let lang = crate::language(ui.ctx());
-        let draft = self.primitive_draft.as_mut()?;
-        let mut apply = false;
+        let Some(draft) = self.primitive_draft.as_mut() else {
+            return (None, report);
+        };
         ui.separator();
-        section(ui, "object.primitive", Message::SectionParameters.text(lang), true, |ui| {
-            ui.label(Message::PrimitiveEditHint.with(lang, [primitive_kind_label(primitive.kind()).text(lang)]));
-            match primitive {
-                Primitive::Cube(_) => {
-                    length_field(ui, Message::FieldEdge.text(lang), &mut draft.fields.edge);
-                }
-                Primitive::Cylinder(_) => {
-                    length_field(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius);
-                    length_field(ui, Message::FieldHeight.text(lang), &mut draft.fields.height);
-                    count_field(ui, Message::FieldSides.text(lang), &mut draft.fields.segments);
-                }
-                Primitive::Sphere(_) => {
-                    length_field(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius);
-                    count_field(ui, Message::FieldSides.text(lang), &mut draft.fields.segments);
-                    count_field(ui, Message::FieldBands.text(lang), &mut draft.fields.bands);
-                }
+        section(ui, "object.primitive", Message::SectionParameters.text(lang), true, |ui| match primitive {
+            Primitive::Cube(_) => {
+                report.absorb(length_row(ui, Message::FieldEdge.text(lang), &mut draft.fields.edge, fresh));
             }
-            if let Some(error) = &draft.error {
-                ui.colored_label(Color32::LIGHT_RED, error);
+            Primitive::Cylinder(_) => {
+                report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
+                report.absorb(length_row(ui, Message::FieldHeight.text(lang), &mut draft.fields.height, fresh));
+                report.absorb(count_row(
+                    ui,
+                    Message::FieldSides.text(lang),
+                    &mut draft.fields.segments,
+                    MIN_SEGMENTS..=MAX_SEGMENTS,
+                    fresh,
+                ));
             }
-            apply = ui.button(Message::Apply.text(lang)).clicked();
+            Primitive::Sphere(_) => {
+                report.absorb(length_row(ui, Message::FieldRadius.text(lang), &mut draft.fields.radius, fresh));
+                report.absorb(count_row(
+                    ui,
+                    Message::FieldSides.text(lang),
+                    &mut draft.fields.segments,
+                    MIN_SEGMENTS..=MAX_SEGMENTS,
+                    fresh,
+                ));
+                report.absorb(count_row(
+                    ui,
+                    Message::FieldBands.text(lang),
+                    &mut draft.fields.bands,
+                    MIN_BANDS..=MAX_BANDS,
+                    fresh,
+                ));
+            }
         });
-        if !apply {
-            return None;
+        if !report.committed {
+            return (None, report);
         }
-        let parsed = draft.parse(crate::language(ui.ctx()));
-        if let Err(error) = &parsed {
-            draft.error = Some(error.clone());
-            return None;
-        }
-        Some(parsed)
+        (Some(draft.parse(lang)), report)
     }
 
     fn mesh_section(
@@ -907,29 +919,103 @@ impl ObjectCard {
     }
 }
 
-/// A labelled millimetre text field.
-fn length_field(ui: &mut Ui, label: &str, text: &mut String) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.add(TextEdit::singleline(text).desired_width(100.0));
-        ui.label("mm");
-    });
+/// What the number fields of one section reported this frame.
+///
+/// A section draws several fields and at most one of them can hand a number over in a frame, so the
+/// card collects their outcomes and dispatches once, after the drawing.
+#[derive(Debug, Default)]
+struct FieldReport {
+    /// A field handed its number over.
+    committed: bool,
+    /// The undo scope the edit belongs to, minted when the drag or the typing began.
+    scope: Option<EditScope>,
+    /// Scopes Escape abandoned, which the card restores.
+    cancelled: Vec<EditScope>,
+    /// Why the last typed text was refused: the box is red and the card says why.
+    refused: Option<Message>,
 }
 
-/// A labelled whole-number text field.
-fn count_field(ui: &mut Ui, label: &str, text: &mut String) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.add(TextEdit::singleline(text).desired_width(100.0));
-    });
+impl FieldReport {
+    /// Folds one field's outcome into the section's report.
+    fn absorb(&mut self, outcome: scrub::FieldOutcome) {
+        if outcome.commit {
+            self.committed = true;
+            self.scope = outcome.scope;
+        }
+        if let Some(scope) = outcome.cancelled {
+            self.cancelled.push(scope);
+        }
+        if let Some(message) = outcome.error {
+            self.refused = Some(message);
+        }
+    }
 }
 
-/// A labelled degree text field.
-fn angle_field(ui: &mut Ui, label: &str, text: &mut String) {
+/// How far a millimetre field of this card moves per pixel of travel.
+const LENGTH_SPEED: f64 = 0.5;
+
+/// How far a whole-number field of this card moves per pixel of travel.
+///
+/// A count spans a few dozen steps, so a slower field lets the hand land on one without overshooting.
+const COUNT_SPEED: f64 = 0.05;
+
+/// How far an angle field of this card moves per pixel of travel.
+const ANGLE_SPEED: f64 = 1.0;
+
+/// A labelled millimetre field: the shared box with the unit outside it.
+///
+/// The policy is on-release because a figure or primitive dimension re-cuts geometry and rebuilds a
+/// mesh: the field shows the running number, and the document takes it once, at the release. The
+/// offered range is the document's own bound on a figure or primitive dimension.
+fn length_row(ui: &mut Ui, label: &str, value: &mut f64, fresh: EditScope) -> scrub::FieldOutcome {
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.add(TextEdit::singleline(text).desired_width(100.0));
-    });
+        Scrub::new(value)
+            .speed(LENGTH_SPEED)
+            .range(MIN_PRIMITIVE_SIZE.millimetres_f64()..=MAX_PRIMITIVE_SIZE.millimetres_f64())
+            .decimals(3)
+            .unit("mm")
+            .parse(scrub::parse_millimetres)
+            .policy(CommitPolicy::OnRelease)
+            .edit(fresh)
+            .show(ui)
+    })
+    .inner
+}
+
+/// A labelled whole-number field.
+fn count_row(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut u32,
+    range: RangeInclusive<u32>,
+    fresh: EditScope,
+) -> scrub::FieldOutcome {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        Scrub::new(value).speed(COUNT_SPEED).range(range).policy(CommitPolicy::OnRelease).edit(fresh).show(ui)
+    })
+    .inner
+}
+
+/// A labelled degree field: the shared box with `°` outside it.
+///
+/// A written angle is relative to the arc's own start, so the stored end can sit a full turn away
+/// from zero; the offered range is wide enough to show it without clamping.
+fn angle_row(ui: &mut Ui, label: &str, value: &mut f64, fresh: EditScope) -> scrub::FieldOutcome {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        Scrub::new(value)
+            .speed(ANGLE_SPEED)
+            .range(-1_000_000.0..=1_000_000.0)
+            .decimals(3)
+            .unit("°")
+            .parse(scrub::parse_degrees)
+            .policy(CommitPolicy::OnRelease)
+            .edit(fresh)
+            .show(ui)
+    })
+    .inner
 }
 
 /// The selected vertices that still exist, with their local positions.
@@ -1011,20 +1097,41 @@ fn replace_contour(session: &mut Session, object: Id, contour: Contour) -> Resul
 ///
 /// The two payloads have their own command, and both store the `Path` itself rather than a ring,
 /// so a figure's shape tag and its segment ids survive the edit (ADR 0073, ADR 0074).
-fn replace_path(session: &mut Session, object: Id, path: Path) -> Result<(), String> {
+fn replace_path(session: &mut Session, object: Id, path: Path, scope: Option<EditScope>) -> Result<(), String> {
     let body = session.project().object(object).is_some_and(|object| object.geometry().as_constructive().is_some());
     if body {
         let params = json(&ObjectContourReplace { object, path })?;
-        dispatch(session, OBJECT_CONTOUR_REPLACE_ID, &params).map(|_| ())
+        apply_object_edit(session, OBJECT_CONTOUR_REPLACE_ID, &params, scope)
     } else {
         let params = json(&ObjectPathReplace { object, path })?;
-        dispatch(session, OBJECT_PATH_REPLACE_ID, &params).map(|_| ())
+        apply_object_edit(session, OBJECT_PATH_REPLACE_ID, &params, scope)
     }
 }
 
-fn replace_primitive(session: &mut Session, object: Id, primitive: Primitive) -> Result<(), String> {
+fn replace_primitive(
+    session: &mut Session,
+    object: Id,
+    primitive: Primitive,
+    scope: Option<EditScope>,
+) -> Result<(), String> {
     let params = json(&ObjectPrimitiveReplace { object, primitive })?;
-    dispatch(session, OBJECT_PRIMITIVE_REPLACE_ID, &params).map(|_| ())
+    apply_object_edit(session, OBJECT_PRIMITIVE_REPLACE_ID, &params, scope)
+}
+
+/// Dispatches an object edit, folding it into `scope` when a field gesture is still running.
+///
+/// The field mints one scope per gesture, so a drag writes the document on every frame it commits
+/// and leaves one undo entry; without a scope the edit is a plain command of its own.
+fn apply_object_edit(
+    session: &mut Session,
+    id: &str,
+    params: &serde_json::Value,
+    scope: Option<EditScope>,
+) -> Result<(), String> {
+    match scope {
+        Some(scope) => session.dispatch_in(scope, id, params).map(|_| ()).map_err(|error| error.to_string()),
+        None => dispatch(session, id, params).map(|_| ()),
+    }
 }
 
 fn collapse_object(session: &mut Session, object: Id) -> Result<(), String> {
@@ -1040,7 +1147,7 @@ mod tests {
     use furnicraft_engine::object_cmds::OBJECT_EXTRUDE_CREATE_ID;
     use furnicraft_model::{Mesh, Placement};
     use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
-    use furnicraft_units::Length;
+    use furnicraft_units::{Degrees, Length};
 
     use super::*;
 
@@ -1154,27 +1261,25 @@ mod tests {
         for primitive in cases {
             let draft = PrimitiveDraft::new(Id::new(1).expect("id"), &primitive);
             assert_eq!(draft.fields, PrimitiveFields::read(&primitive), "{primitive:?} reads back");
-            assert_eq!(draft.parse(Lang::En).as_ref(), Ok(&primitive), "{primitive:?} parses from its own text");
+            assert_eq!(draft.parse(Lang::En).as_ref(), Ok(&primitive), "{primitive:?} parses from its own numbers");
         }
     }
 
     #[test]
-    fn the_primitive_fields_refuse_bad_text_and_out_of_range_values() {
+    fn the_primitive_fields_refuse_a_value_the_document_cannot_hold() {
         let cube = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
         let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &cube);
-        draft.fields.edge = "wide".to_owned();
-        assert!(draft.parse(Lang::En).is_err(), "text must parse as a length");
-        draft.fields.edge = "0".to_owned();
+        draft.fields.edge = 0.0;
         assert!(draft.parse(Lang::En).is_err(), "a zero edge is not a solid");
+        draft.fields.edge = 20_000.0;
+        assert!(draft.parse(Lang::En).is_err(), "a twenty-metre edge is past the document's cap");
 
         let sphere = Primitive::sphere(Length::from_millimetres(40).expect("radius"), 24, 12).expect("sphere");
         let mut draft = PrimitiveDraft::new(Id::new(1).expect("id"), &sphere);
-        draft.fields.segments = "two".to_owned();
-        assert!(draft.parse(Lang::En).is_err(), "the sides must be a whole number");
-        draft.fields.segments = "2".to_owned();
+        draft.fields.segments = 2;
         assert!(draft.parse(Lang::En).is_err(), "two sides are not a ring");
-        draft.fields.segments = "24".to_owned();
-        draft.fields.bands = "1".to_owned();
+        draft.fields.segments = 24;
+        draft.fields.bands = 1;
         assert!(draft.parse(Lang::En).is_err(), "one band has no surface");
     }
 
@@ -1184,13 +1289,31 @@ mod tests {
         let (mut session, id) = primitive_session(original.clone());
         let before = session.project().revision();
         let wider = Primitive::cube(Length::from_millimetres(160).expect("edge")).expect("cube");
-        replace_primitive(&mut session, id, wider.clone()).expect("replace the parameters");
-        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per apply");
+        replace_primitive(&mut session, id, wider.clone(), None).expect("replace the parameters");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per commit");
         assert_eq!(session.project().object_primitive(id), Ok(&wider));
         assert_eq!(session.project().object(id).expect("object").name(), "Shape", "only the parameters change");
 
         session.undo().expect("undo");
         assert_eq!(session.project().object_primitive(id), Ok(&original));
+    }
+
+    #[test]
+    fn a_dragged_primitive_field_is_one_undo_entry() {
+        let original = Primitive::cube(Length::from_millimetres(100).expect("edge")).expect("cube");
+        let (mut session, id) = primitive_session(original.clone());
+        let scope = session.edit_scope();
+        for edge in [120.0, 140.0, 160.0] {
+            let cube = Primitive::cube(scrub::millimetres(edge).expect("a length")).expect("cube");
+            replace_primitive(&mut session, id, cube, Some(scope)).expect("the field writes while the hand moves");
+        }
+        session.end_edit();
+        assert_eq!(
+            session.project().object_primitive(id),
+            Ok(&Primitive::cube(Length::from_millimetres(160).expect("edge")).expect("cube"))
+        );
+        session.undo().expect("undo the drag");
+        assert_eq!(session.project().object_primitive(id), Ok(&original), "one undo returns the whole drag");
     }
 
     #[test]
@@ -1363,9 +1486,9 @@ mod tests {
     fn the_figure_fields_read_and_parse_a_circle() {
         let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
         let mut draft = figure_draft(Id::new(1).expect("id"), &path);
-        assert_eq!(draft.fields.radius, millimetres(40).to_string());
+        assert_eq!(draft.fields.radius, 40.0);
 
-        draft.fields.radius = "60".to_owned();
+        draft.fields.radius = 60.0;
         let parsed = draft.parse(Lang::En).expect("a wider circle");
         assert_eq!(parsed.shape(), Some(PathShape::Circle), "the tag survives");
         assert_eq!(parsed.circle_frame().expect("frame").radius, millimetres(60));
@@ -1377,11 +1500,11 @@ mod tests {
         let path =
             Path::rectangle([Length::ZERO, Length::ZERO], [millimetres(100), millimetres(50)]).expect("rectangle");
         let mut draft = figure_draft(Id::new(1).expect("id"), &path);
-        assert_eq!(draft.fields.width, millimetres(100).to_string());
-        assert_eq!(draft.fields.height, millimetres(50).to_string());
+        assert_eq!(draft.fields.width, 100.0);
+        assert_eq!(draft.fields.height, 50.0);
 
-        draft.fields.width = "130".to_owned();
-        draft.fields.height = "70".to_owned();
+        draft.fields.width = 130.0;
+        draft.fields.height = 70.0;
         let parsed = draft.parse(Lang::En).expect("a wider rectangle");
         assert_eq!(parsed.shape(), Some(PathShape::Rectangle), "the tag survives");
         let frame = parsed.rectangle_frame().expect("frame");
@@ -1393,16 +1516,16 @@ mod tests {
         let path =
             Path::regular_polygon([Length::ZERO, Length::ZERO], [millimetres(30), Length::ZERO], 6).expect("hexagon");
         let mut draft = figure_draft(Id::new(1).expect("id"), &path);
-        assert_eq!(draft.fields.sides, "6");
-        assert_eq!(draft.fields.radius, millimetres(30).to_string());
+        assert_eq!(draft.fields.sides, 6);
+        assert_eq!(draft.fields.radius, 30.0);
 
-        draft.fields.sides = "8".to_owned();
-        draft.fields.radius = "50".to_owned();
+        draft.fields.sides = 8;
+        draft.fields.radius = 50.0;
         let parsed = draft.parse(Lang::En).expect("an octagon");
         assert_eq!(parsed.shape(), Some(PathShape::RegularPolygon), "the tag survives");
         let frame = parsed.polygon_frame().expect("frame");
         assert_eq!(frame.corners.len(), 8, "the side count is re-cut");
-        assert_eq!(frame.radius, millimetres(50), "the radius follows the typed value");
+        assert_eq!(frame.radius, millimetres(50), "the radius follows the field's number");
     }
 
     #[test]
@@ -1415,11 +1538,11 @@ mod tests {
         .expect("quarter arc");
         let segment = path.entries().first().expect("one segment").id();
         let mut draft = figure_draft(Id::new(1).expect("id"), &path);
-        assert_eq!(draft.fields.radius, millimetres(50).to_string());
-        assert_eq!(draft.fields.end_angle, Degrees::from_millidegrees(90_000).to_string());
+        assert_eq!(draft.fields.radius, 50.0);
+        assert_eq!(draft.fields.end_angle, 90.0);
 
-        draft.fields.radius = "70".to_owned();
-        draft.fields.end_angle = "45°".to_owned();
+        draft.fields.radius = 70.0;
+        draft.fields.end_angle = 45.0;
         let parsed = draft.parse(Lang::En).expect("a shorter, wider arc");
         let frame = parsed.arc_frame(segment).expect("the segment id survives");
         assert_eq!(frame.radius, millimetres(70));
@@ -1427,22 +1550,18 @@ mod tests {
     }
 
     #[test]
-    fn the_figure_fields_refuse_bad_text_and_out_of_range_values() {
+    fn the_figure_fields_refuse_a_value_the_document_cannot_hold() {
         let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
         let mut circle = figure_draft(Id::new(1).expect("id"), &path);
-        circle.fields.radius = "wide".to_owned();
-        assert!(circle.parse(Lang::En).is_err(), "radius text must parse");
-        circle.fields.radius = "0".to_owned();
+        circle.fields.radius = 0.0;
         assert!(circle.parse(Lang::En).is_err(), "a circle needs a positive radius");
 
         let polygon =
             Path::regular_polygon([Length::ZERO, Length::ZERO], [millimetres(30), Length::ZERO], 6).expect("hexagon");
         let mut draft = figure_draft(Id::new(1).expect("id"), &polygon);
-        draft.fields.sides = "two".to_owned();
-        assert!(draft.parse(Lang::En).is_err(), "sides must be a whole number");
-        draft.fields.sides = "2".to_owned();
+        draft.fields.sides = 2;
         assert!(draft.parse(Lang::En).is_err(), "two sides are not a polygon");
-        draft.fields.sides = "129".to_owned();
+        draft.fields.sides = 129;
         assert!(draft.parse(Lang::En).is_err(), "the polygon cap is 128 sides");
 
         let arc = Path::arc_from_center(
@@ -1452,8 +1571,8 @@ mod tests {
         )
         .expect("quarter arc");
         let mut draft = figure_draft(Id::new(1).expect("id"), &arc);
-        draft.fields.end_angle = "wide".to_owned();
-        assert!(draft.parse(Lang::En).is_err(), "the end angle must parse");
+        draft.fields.end_angle = 0.0;
+        assert!(draft.parse(Lang::En).is_err(), "an end angle on the start would have no sweep");
     }
 
     #[test]
@@ -1462,10 +1581,10 @@ mod tests {
         let (mut session, id) = path_project(path.clone());
         let before = session.project().revision();
         let mut draft = figure_draft(id, &path);
-        draft.fields.radius = "70".to_owned();
-        replace_path(&mut session, id, draft.parse(Lang::En).expect("parse")).expect("replace the figure");
+        draft.fields.radius = 70.0;
+        replace_path(&mut session, id, draft.parse(Lang::En).expect("parse"), None).expect("replace the figure");
 
-        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per apply");
+        assert_eq!(session.project().revision(), before.checked_next().expect("revision"), "one revision per commit");
         assert_eq!(
             session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
             millimetres(70)
@@ -1475,6 +1594,30 @@ mod tests {
             session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
             millimetres(40),
             "one undo restores the figure"
+        );
+    }
+
+    #[test]
+    fn a_dragged_figure_field_is_one_undo_entry() {
+        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
+        let (mut session, id) = path_project(path.clone());
+        let scope = session.edit_scope();
+        for radius in [50.0, 60.0, 70.0] {
+            let mut draft = figure_draft(id, &path);
+            draft.fields.radius = radius;
+            let parsed = draft.parse(Lang::En).expect("a wider circle");
+            replace_path(&mut session, id, parsed, Some(scope)).expect("the field writes while the hand moves");
+        }
+        session.end_edit();
+        assert_eq!(
+            session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
+            millimetres(70)
+        );
+        session.undo().expect("undo the drag");
+        assert_eq!(
+            session.project().object_path(id).expect("path").circle_frame().expect("frame").radius,
+            millimetres(40),
+            "one undo returns the whole drag"
         );
     }
 
@@ -1497,24 +1640,55 @@ mod tests {
         assert_eq!(summary.contour.as_ref(), Some(&rectangle(100, 50)), "the ring is still reported");
 
         let mut draft = figure_draft(id, stored);
-        draft.fields.width = "140".to_owned();
-        replace_path(&mut session, id, draft.parse(Lang::En).expect("parse")).expect("replace the body path");
+        draft.fields.width = 140.0;
+        replace_path(&mut session, id, draft.parse(Lang::En).expect("parse"), None).expect("replace the body path");
         let body = session.project().object(id).expect("object").geometry().as_constructive().expect("body");
         assert_eq!(body.path().shape(), Some(PathShape::Rectangle), "the tag survives the card edit");
         assert_eq!(body.contour().expect("ring").bounds_micrometres(), ([-20_000, 0], [120_000, 50_000]));
     }
 
+    /// Draws the object card for one session and returns the texts it painted.
+    fn drew_card(session: &mut Session, id: Id) -> Vec<String> {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::set_language(&ctx, Lang::En);
+        let mut card = ObjectCard::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            card.show(ui, session, id, None, false, true);
+        });
+        let texts = drawn_text(&output.shapes);
+        output.drop_without_applying_deltas();
+        texts
+    }
+
     #[test]
-    fn a_figure_edit_is_refused_while_the_viewport_owns_the_copy() {
-        let path = Path::circle([Length::ZERO, Length::ZERO], millimetres(40)).expect("circle");
-        let draft = figure_draft(Id::new(1).expect("id"), &path);
+    fn the_figure_card_draws_a_number_and_its_unit_and_no_apply() {
+        let path =
+            Path::rectangle([Length::ZERO, Length::ZERO], [millimetres(100), millimetres(50)]).expect("rectangle");
+        let (mut session, id) = path_project(path);
+        let texts = drew_card(&mut session, id);
+        assert!(texts.iter().any(|text| text == "100"), "the width is the field's own number: {texts:?}");
+        assert!(texts.iter().any(|text| text == "50"), "the height too: {texts:?}");
+        assert!(texts.iter().any(|text| text == "mm"), "and its unit is drawn outside the box: {texts:?}");
         assert!(
-            figure_replacement(Some(&draft), true, true, Lang::En).is_none(),
-            "a running viewport edit owns the working copy"
+            !texts.iter().any(|text| text.contains("Apply")),
+            "a number no longer waits behind an Apply button: {texts:?}"
         );
-        assert!(figure_replacement(Some(&draft), false, false, Lang::En).is_none(), "nothing was pressed");
-        let replacement = figure_replacement(Some(&draft), true, false, Lang::En).expect("an apply is a replacement");
-        assert_eq!(replacement.expect("parse"), path, "an unchanged figure is the same path");
+    }
+
+    #[test]
+    fn the_primitive_card_draws_numbers_and_their_units_and_no_apply() {
+        let primitive = Primitive::cylinder(millimetres(25), millimetres(80), 20).expect("the card has fields for it");
+        let (mut session, id) = primitive_session(primitive);
+        let texts = drew_card(&mut session, id);
+        assert!(texts.iter().any(|text| text == "25"), "the radius is the field's own number: {texts:?}");
+        assert!(texts.iter().any(|text| text == "80"), "the height too: {texts:?}");
+        assert!(texts.iter().any(|text| text == "20"), "and the side count: {texts:?}");
+        assert!(texts.iter().any(|text| text == "mm"), "the unit is drawn outside the box: {texts:?}");
+        assert!(
+            !texts.iter().any(|text| text.contains("Apply")),
+            "a parameter no longer waits behind an Apply button: {texts:?}"
+        );
     }
 
     fn drawn_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
