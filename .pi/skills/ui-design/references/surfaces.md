@@ -7,7 +7,7 @@ This table is the skill's knowledge of the product — the ADR numbers are why, 
 | Surface | Owner | Decisions |
 |---|---|---|
 | Window, title, tabs, header | `apps/furnicraft/src/main.rs`, `header.rs`, `tabs.rs` | ADR 0081 (one document per tab), 0064 (the header returns one action) |
-| Ribbon band and its tools | `crates/ui/src/toolbars.rs`, `toolbars/{spec,list,state,ready}.rs`, `theme.rs` (`RIBBON_*`, `ribbon`) | ADR 0066 (tabs and labelled tools), 0067 (one measured cell), 0091 (one const map) |
+| Ribbon band and its tools | `crates/ui/src/toolbars.rs`, `toolbars/{spec,list,state,ready}.rs`, `theme.rs` (`RIBBON_*`, `ribbon`), `icons.rs` (`ribbon_cell`, `ribbon_split_cell`) | ADR 0066 (tabs and labelled tools), 0067 (one measured cell), 0091 (one const map); U74 — a tool with variants is a split cell: the main face runs the pinned method, the caret face opens the list, and the pin is drawn only on the hot row |
 | Floating side panels (scene tree, inspector) | `apps/furnicraft/src/side_panels.rs` (`Panels`, `PanelRects`, `Chrome`), `crates/ui/src/settings.rs` (`PanelsSettings`) | ADR 0080 (the strips float over the design space), U66/U72 |
 | Scene tree and its cards | `crates/ui/src/scene_tree.rs`, `panel_card.rs`, `object_card.rs`, `container_card.rs`, `placement_card.rs`, `pivot_card.rs`, `properties_card.rs`, `camera_card.rs`, `light_card.rs`, `machining/` | ADR 0034, 0035 (typed properties, furniture types), 0092 (a field is a number with its unit outside) |
 | View cluster (bottom centre) | `apps/furnicraft/src/view_cluster.rs`, `crates/ui/src/display.rs` | ADR 0093 (the cluster lifts for the command bar), 0079 (each layout remembers its views) |

@@ -26,9 +26,11 @@
 //! viewport cluster keep the icon-only [`icons::tool_button`], whose row could not carry a second
 //! line.
 //!
-//! A tool with more than one input method draws a caret and opens its variant list on a click; the
-//! method the workspace pinned is what its key runs, and both the open list and the pin are view
-//! state — the pin is a workspace setting, the open list is forgotten on restart.
+//! A tool with more than one input method is a split button (U74): [`icons::ribbon_split_cell`] gives
+//! it a main face that runs the method the workspace pinned and a caret face that opens its variant
+//! list, while a tool with one method keeps the whole cell and runs on the click. The pin is a
+//! workspace setting, the open list is view state, and the key of the tool runs the pinned method
+//! without opening anything.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +42,7 @@ use furnicraft_units::Length;
 
 use self::spec::{CellSpec, FieldSpec, GroupSpec, TabSpec, ToolKind, ToolSpec};
 use crate::draw::DrawTool;
-use crate::icons;
+use crate::icons::{self, Icon};
 use crate::theme::{RIBBON_CAPTION_HEIGHT, RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT, RIBBON_RULE, RIBBON_TAB_HEIGHT};
 
 pub mod list;
@@ -484,9 +486,10 @@ fn caption_band(ui: &mut Ui, row_width: f32, caption: &str) {
 
 /// One tool cell: its glyph, and the action a click asks the editor to run.
 ///
-/// A tool with more than one input method runs nothing on a click: it opens its list and draws a
-/// caret in the corner that says so. The cell's glyph and hint still name the tool, not the method,
-/// because the map says «Круг» once and the list holds the ways to build one (U67).
+/// A tool with more than one input method is a split button (U74): its main face runs the method the
+/// workspace pinned and names it in the hint, and a caret face in the right column opens the list of
+/// the other methods. A tool with one method keeps the whole cell and runs on the click, so a tool
+/// that has no choice carries no caret.
 fn show_tool(
     ui: &mut Ui,
     tool: &'static ToolSpec,
@@ -501,43 +504,72 @@ fn show_tool(
     let Some(icon) = tool.icon else {
         return;
     };
-    // The projection button draws the mode the view is *in*, so the glyph flips with the camera while
-    // the hint names the switch.
-    let icon = if kind == ToolKind::Projection { projection_icon(context.perspective) } else { icon };
-    let ready = ready(kind, tool, state, context, lang);
-    let response = icons::ribbon_cell(ui, RIBBON_CELL_WIDTH, icon, &ready.hint, ready.enabled, ready.armed);
-    if tool.has_list() {
-        caret(ui, response.rect);
-        if response.clicked() {
-            state.toggle_list(tool);
+    if !tool.has_list() {
+        // The projection button draws the mode the view is *in*, so the glyph flips with the camera
+        // while the hint names the switch.
+        let icon = if kind == ToolKind::Projection { projection_icon(context.perspective) } else { icon };
+        let ready = ready(kind, tool, state, context, lang);
+        let response = icons::ribbon_cell(ui, RIBBON_CELL_WIDTH, icon, &ready.hint, ready.enabled, ready.armed);
+        if response.clicked()
+            && let Some(action) = ready.action
+        {
+            actions.push(action);
         }
-    } else if response.clicked()
-        && let Some(action) = ready.action
-    {
-        actions.push(action);
+        return;
+    }
+    let rows = method_rows(tool, state, context, lang);
+    let pinned = state.pinned_index(tool);
+    let Some(face) = main_face(tool, &rows, pinned, lang) else {
+        return;
+    };
+    let caret_hint = Message::ToolMethods.text(lang);
+    let cell =
+        icons::ribbon_split_cell(ui, RIBBON_CELL_WIDTH, face.icon, &face.hint, caret_hint, face.enabled, face.armed);
+    if face.enabled && cell.main.clicked() {
+        if let Some(action) = face.action {
+            actions.push(action);
+        }
+        // The main face runs its method whether the list is open or not; an open list goes away with
+        // the run, because the click answered the question the list was asking.
+        state.close_list();
+    }
+    if cell.caret.clicked() {
+        state.toggle_list(tool);
     }
     if state.list_open_for(tool) {
-        let rows = method_rows(tool, state, context, lang);
-        let pinned = state.pinned_index(tool);
-        let choice = list::show(ui, &mut state.list, tool, &rows, &response, pinned, lang);
+        let choice = list::show(ui, &mut state.list, tool, &rows, &cell.main, pinned, lang);
         apply_choice(state, tool, &rows, choice, actions);
     }
 }
 
-/// The carets of a cell that opens a list: a small wedge in its lower right corner.
+/// What the main face of a split cell draws and runs.
 ///
-/// It is the cell's own anatomy, like the accent underline of the open tab, not one of the icon
-/// assets: it marks the corner of a control rather than naming an action of its own.
-fn caret(ui: &Ui, rect: egui::Rect) {
-    let center = egui::pos2(rect.right() - 6.0, rect.bottom() - 5.0);
-    let points = vec![
-        egui::pos2(center.x - 2.5, center.y - 1.25),
-        egui::pos2(center.x + 2.5, center.y - 1.25),
-        egui::pos2(center.x, center.y + 1.25),
-    ];
-    ui.painter().add(egui::Shape::convex_polygon(points, crate::theme::text_dim(ui), egui::Stroke::NONE));
+/// It is the pinned method, not the tool: the glyph is the method's artwork when it has any and the
+/// tool's otherwise, because a method that shares its tool's shape must not leave the face blank.
+struct MainFace {
+    /// The glyph of the face.
+    icon: Icon,
+    /// The hint, which names the method and its key rather than the tool.
+    hint: String,
+    /// Whether the method can run here.
+    enabled: bool,
+    /// Whether the method owns the next click of the viewport.
+    armed: bool,
+    /// What a click asks the editor to run.
+    action: Option<ToolAction>,
 }
 
+/// The main face of a split cell: the row of the pinned method, read as one cell.
+fn main_face(tool: &'static ToolSpec, rows: &[list::Row], pinned: usize, lang: Lang) -> Option<MainFace> {
+    let row = rows.get(pinned)?;
+    Some(MainFace {
+        icon: row.method.icon.or(tool.icon)?,
+        hint: icons::tool_hint(row.method.label.text(lang), row.method.shortcut),
+        enabled: row.enabled,
+        armed: row.armed,
+        action: row.action,
+    })
+}
 /// The rows of one tool's list: every method the map declares, in order, planned ones included.
 ///
 /// A planned method stays in the list as a disabled row, unlike a planned tool, which the ribbon
@@ -552,6 +584,7 @@ fn method_rows(tool: &'static ToolSpec, state: &Toolbars, context: RibbonContext
                 method,
                 hint,
                 enabled: ready.as_ref().is_some_and(|ready| ready.enabled),
+                armed: ready.as_ref().is_some_and(|ready| ready.armed),
                 action: ready.and_then(|ready| ready.action),
             }
         })
@@ -629,7 +662,7 @@ mod tests {
     use super::*;
     use crate::draw::DEFAULT_POLYGON_SIDES;
     use crate::toolbars::ready::extrude_hint;
-    use crate::toolbars::spec::{self, CellSpec, TabSpec};
+    use crate::toolbars::spec::{self, CellSpec, TabSpec, VariantSpec};
 
     /// A context where every live tool can run and the viewport owns its view.
     fn full_context() -> RibbonContext {
@@ -709,13 +742,27 @@ mod tests {
         spec::tool(id).expect("the map declares this tool")
     }
 
-    /// The hints of the tools a tab draws, with its own tab buttons filtered out.
+    /// The hints of the cells a tab draws, with its own tab buttons and the caret faces filtered out.
+    ///
+    /// A split cell publishes two labels — the method and the list behind the caret — and this helper
+    /// answers the tool row, not the caret; [`caret_hints`] counts those.
     fn tool_hints(state: &mut Toolbars, context: RibbonContext) -> Vec<String> {
         let (_, labels, _) = draw(state, context);
         let tabs = spec::tabs().iter().map(|tab| tab.label.text(Lang::En)).collect::<Vec<_>>();
-        let mut hints = labels.into_iter().filter(|label| !tabs.iter().any(|tab| tab == label)).collect::<Vec<_>>();
+        let caret = Message::ToolMethods.text(Lang::En);
+        let mut hints = labels
+            .into_iter()
+            .filter(|label| !tabs.iter().any(|tab| tab == label) && label != caret)
+            .collect::<Vec<_>>();
         hints.sort();
         hints
+    }
+
+    /// The number of listed methods a caret face asks the list for.
+    fn caret_hints(state: &mut Toolbars, context: RibbonContext) -> usize {
+        let (_, labels, _) = draw(state, context);
+        let caret = Message::ToolMethods.text(Lang::En);
+        labels.iter().filter(|label| label.as_str() == caret).count()
     }
 
     #[test]
@@ -740,14 +787,14 @@ mod tests {
                 "sketch",
                 &[
                     "A draft needs two segments to close",
-                    "Arc  (A)",
-                    "Circle  (C)",
-                    "Line  (L)",
+                    "By side count  (N)",
+                    "Centre and radius  (C)",
+                    "From corner  (R)",
                     "No draft is running  (Esc)",
-                    "Polygon  (N)",
                     "Polyline · Tab line/arc · Alt ignores snaps  (P)",
-                    "Rectangle  (R)",
                     "Sides",
+                    "Through 2 points  (A)",
+                    "Two points  (L)",
                 ],
             ),
             (
@@ -772,6 +819,8 @@ mod tests {
             let mut wanted = hints.to_vec();
             wanted.sort_unstable();
             assert_eq!(drawn, wanted, "the {id} tab draws a different set of tools");
+            let listed = tab(id).live_groups().flat_map(GroupSpec::tools).filter(|tool| tool.has_list()).count();
+            assert_eq!(caret_hints(&mut state, full_context()), listed, "one caret face per tool with a list");
         }
     }
 
@@ -1215,6 +1264,131 @@ mod tests {
     }
 
     #[test]
+    fn a_main_face_click_runs_the_pinned_method_and_opens_nothing() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        state.pin(circle, circle.methods().nth(2).expect("the three-point method"));
+        let (actions, _) = click_cell(&mut state, circle, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::Draw { tool: DrawTool::CircleThreePoints, sides: DEFAULT_POLYGON_SIDES }],
+            "the main face runs exactly one method"
+        );
+        assert!(state.list().is_none(), "a main-face click opens nothing");
+    }
+
+    #[test]
+    fn a_caret_click_opens_and_closes_the_list_without_running_anything() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        let (actions, _) = click_cell(&mut state, circle, caret_point());
+        assert!(actions.is_empty(), "the caret opens the list instead of running a method: {actions:?}");
+        assert!(state.list_open_for(circle), "the caret opens the list");
+
+        let (actions, _) = click_cell(&mut state, circle, caret_point());
+        assert!(actions.is_empty(), "closing runs nothing either: {actions:?}");
+        assert!(state.list().is_none(), "the second caret click closes the list");
+    }
+
+    #[test]
+    fn a_main_face_click_closes_the_open_list() {
+        // The list is a question; answering it by running the method takes the question away, so a
+        // second click on the main face does not leave a popup hanging under the cell.
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        assert!(state.open_list(circle));
+        let (actions, _) = click_cell(&mut state, circle, main_point());
+        assert_eq!(actions, vec![ToolAction::Draw { tool: DrawTool::Circle, sides: DEFAULT_POLYGON_SIDES }]);
+        assert!(state.list().is_none(), "the main face closes the list it answered");
+    }
+
+    #[test]
+    fn a_pin_carries_the_main_face_to_the_new_method() {
+        let circle = tool("sketch.create.circle");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        let rows = method_rows(circle, &state, full_context(), Lang::En);
+        let own = main_face(circle, &rows, state.pinned_index(circle), Lang::En).expect("the tool's own method");
+        assert_eq!(own.icon, icons::contour::CIRCLE, "the face draws the method the workspace pinned");
+        assert_eq!(own.hint, "Centre and radius  (C)", "the hint names the method and its key, not the tool");
+
+        state.pin(circle, rows[2].method);
+        let rows = method_rows(circle, &state, full_context(), Lang::En);
+        let pinned = main_face(circle, &rows, state.pinned_index(circle), Lang::En).expect("a face");
+        assert_eq!(pinned.icon, icons::contour::CIRCLE_THREE_POINTS, "the face follows the pin at once");
+        assert_eq!(pinned.hint, "Circle through 3 points  (Shift+C)", "the hint follows the pin at once");
+
+        let (actions, labels) = click_cell(&mut state, circle, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::Draw { tool: DrawTool::CircleThreePoints, sides: DEFAULT_POLYGON_SIDES }],
+            "the main face runs the method the pin put there"
+        );
+        assert!(
+            labels.iter().any(|label| label == "Circle through 3 points  (Shift+C)"),
+            "the cell publishes the pinned method: {labels:?}"
+        );
+        assert!(labels.iter().any(|label| label == Message::ToolMethods.text(Lang::En)), "the caret names the list");
+    }
+
+    #[test]
+    fn a_pinned_method_without_artwork_keeps_the_tool_glyph() {
+        // A method that shares its tool's shape has no drawing of its own; the face must fall back
+        // to the tool rather than leave a blank cell.
+        static ARTWORKLESS: ToolSpec = ToolSpec {
+            id: "test.artworkless",
+            label: Message::ToolCircle,
+            icon: Some(icons::contour::CIRCLE),
+            shortcut: Some("C"),
+            run: Some(ToolKind::Draw(DrawTool::Circle)),
+            method: Some(Message::ToolCircleCentreRadius),
+            variants: &[VariantSpec {
+                id: "test.artworkless.three-points",
+                label: Message::ToolCircleThreePoints,
+                icon: None,
+                run: Some(ToolKind::Draw(DrawTool::CircleThreePoints)),
+                section: None,
+            }],
+        };
+        let rows = method_rows(&ARTWORKLESS, &Toolbars::new(), full_context(), Lang::En);
+        let face = main_face(&ARTWORKLESS, &rows, 1, Lang::En).expect("a face");
+        assert_eq!(face.icon, icons::contour::CIRCLE, "a method without artwork keeps the tool's glyph");
+        assert_eq!(face.hint, "Circle through 3 points  (Shift+C)", "the hint still names the method");
+    }
+
+    #[test]
+    fn the_pin_and_the_key_keep_their_columns_apart_in_both_languages() {
+        // The pin is a control inside the row, and the key is a label: the columns are measured once
+        // for the whole list, so the pin can never be drawn over a key (U74).
+        let row = egui::Rect::from_min_size(egui::pos2(4.0, 40.0), egui::vec2(list::WIDTH, list::ROW_HEIGHT));
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            for lang in [Lang::En, Lang::Ru] {
+                for id in ["sketch.create.circle", "sketch.create.line", "sketch.create.arc", "sketch.create.rectangle"]
+                {
+                    let rows = method_rows(tool(id), &Toolbars::new(), full_context(), lang);
+                    let columns = list::columns(row, list::shortcut_column(ui, &rows));
+                    assert!(
+                        columns.shortcut.right() < columns.pin.left(),
+                        "{id} {lang:?}: the key {columns:?} reaches the pin"
+                    );
+                    assert!(
+                        columns.label.right() <= columns.shortcut.left(),
+                        "{id} {lang:?}: the name {columns:?} reaches the key"
+                    );
+                    assert_eq!(columns.glyph.left(), row.left() + 10.0, "the glyph keeps the row's inset");
+                    assert!(columns.label.left() > columns.glyph.right(), "the name follows the glyph");
+                    assert_eq!(columns.pin.width(), 20.0, "the pin's column is the pin's control");
+                }
+            }
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
     fn a_tab_change_and_a_folded_body_close_the_list() {
         let circle = tool("sketch.create.circle");
         let mut state = Toolbars::new();
@@ -1336,6 +1510,164 @@ mod tests {
         assert!(slot.is_some(), "a click inside the list leaves it open");
     }
 
+    #[test]
+    fn the_pin_is_drawn_only_on_the_hovered_or_the_highlighted_row() {
+        // The pin is not part of the resting row: it appears on the row under the pointer and on the
+        // row the keyboard reached, and its column stays reserved either way (U74).
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        // Row 1 is a planned method, so an idle list draws no pin at all.
+        let mut slot = Some(list::VariantList { tool: circle.id, highlighted: 1 });
+        let (_, idle) = warm_list(&ctx, screen, &mut slot);
+        let base = count_images(&idle.shapes);
+        assert_eq!(base, 3, "the header's glyph and the two drawn methods, and no pin at rest");
+        let idle_label = text_place(&idle.shapes, "Centre and radius");
+        let idle_key = text_place(&idle.shapes, "Shift+C");
+        // Hovering is resolved from the previous pass, so the pointer moves and the next frame paints.
+        let hover = row_of(&idle.shapes, "Circle through 3 points").center();
+        idle.drop_without_applying_deltas();
+        let (_, moved) = list_paint(&ctx, screen, 8.0, &mut slot, vec![pointer_moved(hover)]);
+        moved.drop_without_applying_deltas();
+        let (_, hovered) = list_paint(&ctx, screen, 8.0, &mut slot, Vec::new());
+        assert_eq!(count_images(&hovered.shapes), base + 1, "the pin appears on the row under the pointer");
+        assert_eq!(text_place(&hovered.shapes, "Centre and radius"), idle_label, "the name does not move");
+        assert_eq!(text_place(&hovered.shapes, "Shift+C"), idle_key, "the key does not move");
+        hovered.drop_without_applying_deltas();
+
+        // The keyboard on the same row, with the pointer away from the list.
+        slot.as_mut().expect("the list is open").highlighted = 2;
+        let (_, away) = list_paint(&ctx, screen, 8.0, &mut slot, vec![pointer_moved(egui::pos2(700.0, 500.0))]);
+        away.drop_without_applying_deltas();
+        let (_, keyed) = list_paint(&ctx, screen, 8.0, &mut slot, Vec::new());
+        assert_eq!(count_images(&keyed.shapes), base + 1, "the pin appears on the row the keyboard reached");
+        keyed.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_pin_stays_under_a_pointer_that_reaches_it() {
+        // The pin is a second control inside the row: a pointer that reaches it must keep the pin
+        // drawn and the row washed, or the control disappears from under the hand (U74).
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        let mut slot = Some(list::VariantList { tool: circle.id, highlighted: 1 });
+        let (_, idle) = warm_list(&ctx, screen, &mut slot);
+        let base = count_images(&idle.shapes);
+        let row = row_of(&idle.shapes, "Circle through 3 points");
+        idle.drop_without_applying_deltas();
+        assert_eq!(base, 3, "an idle list draws no pin");
+
+        // One frame per step: the pointer reaches the row, then the pin at the row's right edge.
+        let pin = egui::pos2(row.right() - list::ROW_INSET - list::PIN_COLUMN / 2.0, row.center().y);
+        for pos in [row.center(), pin, pin] {
+            let (_, output) = list_paint(&ctx, screen, 8.0, &mut slot, vec![pointer_moved(pos)]);
+            output.drop_without_applying_deltas();
+        }
+        let (_, reached) = list_paint(&ctx, screen, 8.0, &mut slot, Vec::new());
+        assert_eq!(count_images(&reached.shapes), base + 1, "the pin stays under the pointer that reached it");
+        assert_eq!(fills_at(&reached.shapes, row).len(), 1, "the row stays washed under the pin");
+        reached.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn the_pinned_row_keeps_its_mark_when_the_pin_is_hidden() {
+        // The accent bar and the fill are what says "this is the main method"; the pin only says what
+        // a click on it would do, so it can hide without taking the mark away (U74).
+        let circle = tool("sketch.create.circle");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        crate::set_language(&ctx, Lang::En);
+        let mut slot = Some(list::VariantList { tool: circle.id, highlighted: 1 });
+        let (_, idle) = warm_list(&ctx, screen, &mut slot);
+        assert_eq!(count_images(&idle.shapes), 3, "an idle list draws no pin");
+        let mut marked = fills_at(&idle.shapes, row_of(&idle.shapes, "Centre and radius"));
+        assert_eq!(marked.len(), 2, "the pinned row keeps its fill and its accent bar");
+        assert!(marked.iter().all(|fill| *fill != egui::Color32::TRANSPARENT), "the mark is painted");
+        marked.sort_unstable_by_key(|fill| fill.to_array());
+        assert_ne!(marked[0], marked[1], "the bar is the accent, not the row's own fill");
+        assert!(
+            fills_at(&idle.shapes, row_of(&idle.shapes, "Circle through 3 points")).is_empty(),
+            "a row that is neither hovered nor pinned carries no mark"
+        );
+        idle.drop_without_applying_deltas();
+    }
+
+    /// Warms the open circle list for three frames and returns the anchor and the last paint.
+    fn warm_list(
+        ctx: &egui::Context,
+        screen: egui::Rect,
+        slot: &mut Option<list::VariantList>,
+    ) -> (egui::Response, egui::FullOutput) {
+        for _ in 0..2 {
+            let (_, output) = list_paint(ctx, screen, 8.0, slot, Vec::new());
+            output.drop_without_applying_deltas();
+        }
+        let (anchor, output) = list_paint(ctx, screen, 8.0, slot, Vec::new());
+        (anchor.expect("the cell drew"), output)
+    }
+
+    /// The rect of the row whose name is `label`, read from where the frame painted that name.
+    ///
+    /// The list's rows are not on a fixed pitch — a section caption takes its own band — so a test
+    /// asks the paint where a row is instead of recomputing the layout a second time.
+    fn row_of(shapes: &[egui::epaint::ClippedShape], label: &str) -> egui::Rect {
+        let name = text_rect(shapes, label).unwrap_or_else(|| panic!("the frame does not draw {label:?}"));
+        egui::Rect::from_center_size(name.center(), egui::vec2(list::WIDTH, list::ROW_HEIGHT))
+    }
+
+    /// The fills of the rects painted over the height of `row`: its own fill and its marks.
+    fn fills_at(shapes: &[egui::epaint::ClippedShape], row: egui::Rect) -> Vec<egui::Color32> {
+        fn walk(shape: &egui::Shape, row: egui::Rect, out: &mut Vec<egui::Color32>) {
+            match shape {
+                egui::Shape::Rect(painted)
+                    if (painted.rect.top() - row.top()).abs() < 0.5
+                        && (painted.rect.bottom() - row.bottom()).abs() < 0.5
+                        && painted.fill != egui::Color32::TRANSPARENT =>
+                {
+                    out.push(painted.fill);
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, row, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, row, &mut out);
+        }
+        out
+    }
+
+    /// The rect of one drawn text, or `None` when the frame does not draw it.
+    fn text_rect(shapes: &[egui::epaint::ClippedShape], text: &str) -> Option<egui::Rect> {
+        fn walk(shape: &egui::Shape, text: &str, out: &mut Option<egui::Rect>) {
+            match shape {
+                egui::Shape::Text(drawn) if drawn.galley.text() == text => {
+                    *out = Some(egui::Rect::from_min_size(drawn.pos, drawn.galley.size()));
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, text, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = None;
+        for clipped in shapes {
+            walk(&clipped.shape, text, &mut out);
+        }
+        out
+    }
+
     /// One frame of a window with a single open list under a cell at `anchor_x`.
     fn list_frame(
         ctx: &egui::Context,
@@ -1344,6 +1676,22 @@ mod tests {
         slot: &mut Option<list::VariantList>,
         events: Vec<egui::Event>,
     ) -> Option<egui::Response> {
+        let (anchor, output) = list_paint(ctx, screen, anchor_x, slot, events);
+        output.drop_without_applying_deltas();
+        anchor
+    }
+
+    /// One frame of the open circle list under a cell at `anchor_x`, with its paint.
+    ///
+    /// The pin, the accent bar and the columns are shapes rather than state, so a test reads them off
+    /// the frame instead of asking the model to repeat what it drew.
+    fn list_paint(
+        ctx: &egui::Context,
+        screen: egui::Rect,
+        anchor_x: f32,
+        slot: &mut Option<list::VariantList>,
+        events: Vec<egui::Event>,
+    ) -> (Option<egui::Response>, egui::FullOutput) {
         let circle = tool("sketch.create.circle");
         let mut anchor = None;
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
@@ -1359,13 +1707,95 @@ mod tests {
                 },
             );
         });
-        output.drop_without_applying_deltas();
-        anchor
+        (anchor, output)
     }
 
     /// One key press, as the platform hands it to `egui`.
     fn key_event(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// One pointer move, as the platform hands it to `egui`.
+    fn pointer_moved(pos: egui::Pos2) -> egui::Event {
+        egui::Event::PointerMoved(pos)
+    }
+
+    /// The rect one tool cell takes when a test draws it on its own.
+    fn cell_rect() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(16.0, 16.0), egui::vec2(RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT))
+    }
+
+    /// The middle of a split cell's main face.
+    fn main_point() -> egui::Pos2 {
+        let rect = cell_rect();
+        egui::pos2(rect.left() + (RIBBON_CELL_WIDTH - icons::RIBBON_CARET_WIDTH) / 2.0, rect.center().y)
+    }
+
+    /// The middle of a split cell's caret face.
+    fn caret_point() -> egui::Pos2 {
+        let rect = cell_rect();
+        egui::pos2(rect.right() - icons::RIBBON_CARET_WIDTH / 2.0, rect.center().y)
+    }
+
+    /// Draws one tool cell at [`cell_rect`], clicks `pos`, and reports what it ran and what it said.
+    ///
+    /// The cell is drawn alone, so a test aims at a face by its own metric instead of counting the
+    /// cells before it on the tab.
+    fn click_cell(state: &mut Toolbars, tool: &'static ToolSpec, pos: egui::Pos2) -> (Vec<ToolAction>, Vec<String>) {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::set_language(&ctx, Lang::En);
+        let mut actions = Vec::new();
+        let mut labels = Vec::new();
+        for pressed in [None, Some(true), Some(false)] {
+            let events = match pressed {
+                Some(pressed) => vec![pointer_button(pos, pressed)],
+                None => vec![pointer_moved(pos)],
+            };
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(cell_rect()), |ui| {
+                    show_tool(ui, tool, state, full_context(), &mut actions, Lang::En);
+                });
+            });
+            labels = accessible_labels(&output);
+            output.drop_without_applying_deltas();
+        }
+        (actions, labels)
+    }
+
+    /// The drawn text of one frame with the place of its galley, so a test can see a label move.
+    fn text_places(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Pos2)> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(text) => out.push((text.galley.text().to_owned(), text.pos)),
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    }
+
+    /// The place of one drawn text in a frame, or a failure that names what was drawn instead.
+    fn text_place(shapes: &[egui::epaint::ClippedShape], text: &str) -> egui::Pos2 {
+        text_places(shapes)
+            .into_iter()
+            .find(|(drawn, _)| drawn == text)
+            .map(|(_, pos)| pos)
+            .unwrap_or_else(|| panic!("the frame does not draw {text:?}"))
     }
 
     /// One mouse-button change at `pos`.
@@ -1486,7 +1916,7 @@ mod tests {
         let (_, english, _) = draw_in(&mut state, full_context(), Lang::En);
         let mut state = Toolbars::new();
         let (_, russian, _) = draw_in(&mut state, full_context(), Lang::Ru);
-        assert!(english.iter().any(|hint| hint.contains("Line  (L)")));
-        assert!(russian.iter().any(|hint| hint.contains("Линия  (L)")), "the hint is translated: {russian:?}");
+        assert!(english.iter().any(|hint| hint.contains("Two points  (L)")));
+        assert!(russian.iter().any(|hint| hint.contains("По двум точкам  (L)")), "the hint is translated: {russian:?}");
     }
 }
