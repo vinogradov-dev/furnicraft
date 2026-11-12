@@ -25,24 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U77** the shell's one frame is callable without a window, so a session can check the real interface silently
-  Why: FurniCraftApp implements eframe::App::ui and holds render_state: egui_wgpu::RenderState,
-   so only the running window can drive the real interface: the checks in crates/ui exercise a
-   card or a field in isolation, and a shell rule — the scene rectangle, the layer order,
-   Chrome::covers, a key while a modal is up — is verified by starting the app. The owner wants
-   those checks to run while he uses the machine.
-  Shape: Move everything App::ui does today into an inherent FurniCraftApp::frame(&mut self,
-   ui: &mut egui::Ui); the trait method delegates and ignores its Frame. Make the GPU handle
-   optional, so a test builds the app with no device, no adapter and no window and the paint
-   callback is skipped instead of registered. Give SettingsStore a constructor on an explicit
-   path, so a test never reads or writes the workspace file in the OS config directory; build
-   the document, the tabs and the settings from testkit fixtures. No behaviour change in the
-   window: the same frame, the same order.
-  Done: Tests: a headless egui::Context runs frame twice and the second frame is stable (no
-   panic, no document revision); the app constructs and runs with no GPU and no window; the
-   workspace settings file is byte-identical after a headless run; the window still opens and
-   draws by eye. cargo xtask ci green.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/tabs.rs, apps/furnicraft/src/settings_store.rs, crates/testkit/src/lib.rs`
 - `[ ]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
   Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a
    panel selects nothing" and "both themes checked by eye"; each of those is re-verified today
@@ -136,6 +118,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U77** the shell's one frame is callable without a window, so a session can check the real interface silently
+  Why: FurniCraftApp implements eframe::App::ui and holds render_state: egui_wgpu::RenderState,
+   so only the running window can drive the real interface: the checks in crates/ui exercise a
+   card or a field in isolation, and a shell rule — the scene rectangle, the layer order,
+   Chrome::covers, a key while a modal is up — is verified by starting the app. The owner wants
+   those checks to run while he uses the machine.
+  Shape: Move everything App::ui does today into an inherent FurniCraftApp::frame(&mut self,
+   ui: &mut egui::Ui); the trait method delegates and ignores its Frame. Make the GPU handle
+   optional, so a test builds the app with no device, no adapter and no window and the paint
+   callback is skipped instead of registered. Give SettingsStore a constructor on an explicit
+   path, so a test never reads or writes the workspace file in the OS config directory; build
+   the document, the tabs and the settings from testkit fixtures. No behaviour change in the
+   window: the same frame, the same order.
+  Done: Tests: a headless egui::Context runs frame twice and the second frame is stable (no
+   panic, no document revision); the app constructs and runs with no GPU and no window; the
+   workspace settings file is byte-identical after a headless run; the window still opens and
+   draws by eye. cargo xtask ci green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/tabs.rs, apps/furnicraft/src/settings_store.rs, crates/testkit/src/lib.rs` — `d6d0a4b`
 
 - `[x]` **U76** the ribbon holds tools only: the polygon sides, primitive size and extrude height fields leave the tool row and their typed values become session defaults
   Why: Three `CellSpec::Field` cells take two 34 pt cells each and turn a row of icons into a
