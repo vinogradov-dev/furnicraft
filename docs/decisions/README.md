@@ -103,6 +103,8 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0096](0096-before-the-first-release-the-format-has-no-past.md) | Before the first release the data format has no past | Accepted; amends the compatibility clause of `AGENTS.md` §4.5; retires the migration clauses until 1.0 |
 | [0097](0097-a-product-is-a-container-with-an-authored-envelope.md) | A product is a container with an authored envelope | Accepted; amends the trait list of 0094 |
 | [0098](0098-one-product-is-open-and-parts-are-born-inside-it.md) | One product is open, and furniture parts are born inside it | Accepted |
+| [0099](0099-a-niche-is-the-space-a-frame-reserves.md) | A niche is the space a frame reserves | Accepted; refines 0097 |
+| [0100](0100-a-frame-is-created-opened-and-drawn.md) | A frame is created, opened and drawn: the lifecycle | Accepted; amends 0097 and 0098 |
 
 ## Format
 

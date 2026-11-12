@@ -3,12 +3,15 @@
 Status: domain specification. A **product** is one piece of furniture — a cabinet, a shelf unit, a
 table, a chest — and the unit a maker works on and a report is written for. In the scene it is drawn
 as a dashed wireframe box, «Каркас изделия»; in the code and the file it is a container with a class
-and an envelope.
+and an envelope. The empty space it reserves is a **niche**, and the niche is what its parts are
+measured against.
 
 Related decisions: [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0094](../decisions/0094-a-class-registry-gives-the-machine-its-semantics.md),
 [0097](../decisions/0097-a-product-is-a-container-with-an-authored-envelope.md),
-[0098](../decisions/0098-one-product-is-open-and-parts-are-born-inside-it.md).
+[0098](../decisions/0098-one-product-is-open-and-parts-are-born-inside-it.md),
+[0099](../decisions/0099-a-niche-is-the-space-a-frame-reserves.md),
+[0100](../decisions/0100-a-frame-is-created-opened-and-drawn.md).
 
 ## 1. The entity
 
@@ -29,18 +32,19 @@ The envelope is three lengths — width, depth, height — in micrometres, writt
 the product's own frame.
 
 - **It is authored, never derived.** It is set when the product is created, before any part exists,
-  and no edit to a child changes it. This is the invariant the owner stated and it matches
-  `AGENTS.md` §4.2: the document stores decisions, everything else is derived.
-- **Content bounds are derived.** The bounding box of the children is computed when asked (an idle
-  diagnostic, a report, a drawing). It is never stored, so it can never go stale.
+  and no edit to a child changes it. This is the owner's invariant and it matches `AGENTS.md` §4.2:
+  the document stores decisions, everything else is derived.
+- **Content bounds are derived.** The bounding box of the children is computed when asked — an idle
+  diagnostic, a report, a drawing. It is never stored, so it can never go stale.
 - **A child may poke out.** It is a diagnostic — «деталь выходит за габарит изделия» — not a silent
-  resize and not a rejected edit. A maker measures the outside first and cuts the inside second.
-- **The envelope is validated** like a panel size: positive, finite, inside the documented maxima. A
-  bad number is a `Result::Err`, never a clamp.
-- **It is drawn, not shaded.** A dashed wireframe parallelepiped in the theme's neutral line, no fill,
-  no depth write, and it never picks: it bounds a space, it is not a body.
-- **It is a box.** Sloped or otherwise shaped envelopes are out of scope for version 1; the field is
-  three lengths, and a shape would be a new field and a new decision.
+  resize and not a rejected edit.
+- **It is validated** like a panel size: positive, finite, inside the documented maxima. A bad number
+  is a `Result::Err`, never a clamp.
+- **Its faces are virtual panels.** The six planes of the envelope stop a probe, accept a snap and
+  take a part flush against them exactly as a real panel would (0099). This is the reason a reserved
+  space is useful: the maker cuts to it.
+- **It is a box.** Sloped or otherwise shaped envelopes are out of scope; the field is three lengths
+  and a shape would be a new field and a new decision.
 
 ## 3. Place in the tree
 
@@ -53,67 +57,117 @@ the product's own frame.
   the outer product's parts list never picks them up. The tree expresses ownership; space expresses
   position.
 - `parent_id` and `product_id` are **not stored**. Both are computed by one walk of the tree, in the
-  model for the program and in the export for a reader. A stored parent reference would be a second
-  source of truth that a re-parent can leave stale.
+  model for the program and in the export for a reader.
 
-## 4. The workspace: open and closed
+## 4. The niche
 
-- Loading a scene leaves no product open. A product is opened by a **double click** in the viewport;
-  the first click selects, the double click opens.
-- **At most one product is open**, and opening another closes the previous one. This is session state
-  per tab, never a document field (`docs/domain/document.md`, ADR 0029).
-- An open product is the working area: new parts are created inside it and the empty-space tool
-  searches its envelope.
-- **A closed product accepts no new parts.** Moving, renaming, deleting and re-parenting it stay
-  allowed; the lock is about adding work, not about owning the object.
-- **Creating a product does not open it.** Creation and opening are two gestures.
+The niche is the feature the program is built around, and it is the workshop's own word: a product is
+the place reserved for a piece, and its inside — once the case exists — is a niche. When a shelf
+crosses the inside at full width, the piece has two niches: above and below.
 
-## 5. Creating parts
+**A niche is derived, never stored.** It is the connected empty space around a point inside a
+product, bounded by the envelope's virtual faces and by the parts or other products that stop it. No
+id, no node, no command, no field; like content bounds, it is computed when asked, so it cannot go
+stale.
+
+**It is measured by probes.** From the point, six rays are cast — right, left, up, down, forward,
+back — and each stops at the first furniture object or at the envelope. Version 1 uses the six
+distances as an axis-aligned box; the post tool and the shelf tool consume that box.
+
+**The shape is a staged promise.** The probes report *faces*, not only lengths, so the same query can
+return a cross-section. The first non-rectangular case is a piece whose posts stand at an angle: the
+free section is a trapezoid, extruded along the depth, and a shelf there must take the trapezoid.
+Version 2 builds the outline from the probed faces; version 3 would be arbitrary regions and is not
+planned. Nothing in the document changes between the stages.
+
+**Probes stop at parts, not at other envelopes.** Another product's parts are obstacles; its empty
+interior is not. That is what allows a niche to hold a wall cabinet inside a run of base units, and it
+is the rule the furniture move tool uses too.
+
+**A niche is a question, not a resource.** Nothing reserves it; two parts may claim the same empty
+space, and the overlap is a diagnostic, not a refused edit. The shop does not work by reservation,
+and a reservation system would be a second document model with its own staleness problem.
+
+**Which niches are offered.** Only the open product's (0098): a closed product is not a working area,
+so its voids are not offered as targets.
+
+## 5. The workspace: create, open, close
+
+**A frame is created open.** The ribbon's *add frame* opens a card: width, depth and height in 1 mm
+steps, and a type field listing product classes. Without a choice the frame is «изделие общего
+назначения» / “general product”, the editor's placeholder class, so the envelope invariant holds and
+the type is a later edit rather than a prerequisite.
+
+**Placement is deterministic.** An empty scene puts the frame at the origin, on the floor. Otherwise
+it goes beside the nearest product, on the floor, clear of every other envelope, and becomes selected.
+The maker then moves it with the furniture move tool (§8).
+
+**Opening is a double click in the viewport**, or the tree. At most one product is open at a time, and
+opening another closes the previous one. Openness is session state per tab, never a document field
+(ADR 0029).
+
+**A closed product accepts no new parts.** Moving, renaming, deleting and re-parenting it stay
+allowed; the lock is about adding work, not about owning the object.
+
+## 6. Creating parts
 
 - A panel, a facade or a fitting is created only inside the **open** product. The command's `enabled`
-  check refuses when no product is open, when the product is closed (there is none open), or when the
-  target parent is not inside the open product.
-- The refusal is readable and writes nothing: «сначала создайте изделие» or «изделие закрыто».
+  check refuses when no product is open or when the target parent is not inside it, and the message
+  says which: «сначала создайте изделие» or «изделие закрыто».
+- The refusal writes nothing: no revision, no history entry.
 - Free modelling is untouched: a primitive, a drawn figure, a mesh object or a hardware model can be
   created without a product. The guard applies to classes whose `level` is `Part` or `Fitting`.
 
-## 6. Filling a void
+## 7. Filling a niche
 
-The owner's scenario: open a product, choose “add a post” or “add a shelf”, point at a place.
+The maker's flow: open a product, choose “add a post” or “add a shelf”, point at the empty space.
 
-- The cursor ray meets the envelope; the point inside it defines the **free space** at that point,
-  recomputed against the parts already there: the box reaches the envelope walls and stops at the
-  nearest part boundary on each side.
-- A **post** takes the void's height and depth; a **shelf** takes its width and depth. Which axis pair
+- The cursor ray meets the envelope's interior; the point defines the niche (§4).
+- A **post** takes the niche's height and depth; a **shelf** takes its width and depth. Which axis pair
   a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`, `None`).
-- A **ghost** of the part follows the cursor while it moves, drawn through the session preview overlay
-  (ADR 0093): nothing is written until the click.
+- A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
+  is written until the click.
 - The offset step is **1 mm**; there are no fractional sizes.
 - A click creates the part with exactly the ghost's size, through one command and one undo entry.
-- Version 1 handles axis-aligned voids only, for posts and shelves. A drawer, a back panel and a
-  facade are later additions; they need their own fill rules and their own place in the guard.
+- Version 1 handles axis-aligned niches and the two fills. A drawer, a back panel and a facade need
+  their own fill rules; the trapezoid needs the shaped niche of §4.
 
-## 7. Moving a product
+## 8. Moving a product
 
 The existing move tool stays the tool for geometry. Furniture gets its own:
 
 - A **floor-standing** product (`mount = Floor`) moves only in the floor plane.
 - A **wall-hung** product (`mount = Wall`) moves freely, including the vertical.
-- Products do not interpenetrate: movement stops on contact instead of passing through.
-  The collision is between the parts of the products, not between their envelopes — otherwise a wall
-  cabinet could never sit under a worktop, and the niche case of §3 could not exist.
-- **Snapping** to the floor, to the faces of neighbouring objects and to the 1 mm grid, so a maker can
-  place a piece without fighting the mouse.
+- Products do not interpenetrate: movement stops on contact instead of passing through. The collision
+  is between the parts of the products, not between their envelopes — otherwise a wall cabinet could
+  never sit under a worktop and the niche of §3 could not exist.
+- **Snapping** to the floor, to the frame's virtual faces, to the faces of neighbouring parts and to
+  the 1 mm grid.
 - A drag is one undo operation, committed once on release.
 
-## 8. What output sees
+## 9. Drawing and picking
 
-The export gives every node a `product_id` (the nearest `level = Product` ancestor) and the product a
-row with its envelope and its derived content bounds; a part carries its exact outline and banding.
-See [order export](order-export.md). Nothing about the product is special-cased in the exporter: it
-reads the class traits, the envelope and the tree, like any other consumer.
+| State | Drawn |
+|---|---|
+| Open | envelope lines in the active line colour |
+| Closed, no parts | envelope lines in the inactive line colour |
+| Closed, with parts | no envelope lines |
 
-## 9. Invariants
+The frame is picked **by its envelope**, not only by its lines: a single click inside the piece, on
+empty space or on a line, selects the frame; a click on a part selects the part. Solids win a tie, so
+a click that hits a panel picks the panel. When several products contain the point, the innermost
+wins — that is how a product standing in the void of another stays reachable. A double click opens the
+product under the cursor. None of this is document data.
+
+## 10. What output sees
+
+The export gives every node a `product_id` (the nearest product ancestor) and the product a row with
+its envelope and its derived content bounds; a part carries its exact outline and banding. See
+[order export](order-export.md). The exporter special-cases nothing: it reads the class traits, the
+envelope and the tree, like any other consumer. A niche is not exported; a report that needs its
+volume asks the program for it when such a report exists.
+
+## 11. Invariants
 
 1. No stored parent or product reference in the document.
 2. No furniture part outside the open product.
@@ -122,32 +176,37 @@ reads the class traits, the envelope and the tree, like any other consumer.
 5. Envelope presence and `level = Product` agree in both directions.
 6. Products may overlap in space only where their parts do not; nothing about an intersection is ever
    stored.
-7. Every furniture-tool action writes through a command, and only a command.
+7. A niche is never stored; it is computed from the envelope and the parts.
+8. Every furniture-tool action writes through a command, and only a command.
 
-## 10. Answered questions
+## 12. Answered questions
 
 - **A code group for products?** No. `level = Product` is a class trait; the code names the product's
   function (a wall cabinet is `30.01.02`). A code range would put the assembly role back into the
-  digits, which 0094 removed, and a reader that needs the answer reads the trait from the class
-  table.
-- **Sloped envelopes?** Not in version 1. A straight box is the whole field; a slope is a new field.
-- **Walls?** The document has no walls. Version 1 snaps to the floor, to neighbouring objects and to
-  the 1 mm grid; wall objects are a separate decision.
+  digits, which 0094 removed.
+- **The class at creation?** A placeholder class, «изделие общего назначения», assigned by
+  `product.create` and changed later from the card; a product always has a class.
+- **Sloped envelopes?** Not in version 1. The niche's shape is a separate, staged promise (§4).
+- **Walls?** The document has no walls. Version 1 snaps to the floor, to the frame's own faces, to
+  neighbouring parts and to the 1 mm grid; wall objects are a separate decision.
 - **The interface word?** «Каркас изделия» / «Product frame».
 - **What a closed product refuses?** Creation only, in version 1.
-- **Which parts can fill a void?** A post and a shelf first; a drawer, a back panel and a facade later.
+- **Which parts can fill a niche?** A post and a shelf first; a drawer, a back panel and a facade
+  later.
 
-## 11. Open questions
+## 13. Open questions
 
 - **Resizing the envelope after creation.** The requirements define it at creation and never say how
   it changes. The command exists (`product.envelope.set`); the gesture does not. Options: numeric
-  fields in the inspector, draggable faces of the frame, or both. Shrinking below the parts should be
-  a diagnostic, not a refusal.
-- **A part of another product inside this one's volume** — the niche case — is legal spatially, but
-  the move tool's snapping and the cutting list must agree on it. The rule proposed here (collide with
-  parts, not envelopes) needs a confirming test with two products in a niche.
-- **What “open” means visually.** Whether the active product is emphasised, and what happens to the
-  parts of a closed one, is a UI decision, not a document one.
-- **A product's class at creation.** A product needs a class before it has parts; whether the create
-  flow asks for the class or offers “unclassified product”, and whether the class can be changed
-  later, is undecided.
+  fields in the card, draggable faces of the frame, or both. Shrinking below the parts is a
+  diagnostic, not a refusal.
+- **Placing a new frame.** Beside the nearest product and selected, or immediately in the move tool?
+  The first is the recommendation, the second is the owner's alternative.
+- **The niche's exact boundary rule.** Shells and slanted parts are answered by the shaped niche of
+  §4; whether a probe should stop at a part that merely touches the ray, or must be blocked by its
+  volume, is a detail for the tool's tests.
+- **What “open” looks like beyond the colour.** Whether the active product is emphasised, and what
+  happens to the parts of a closed one, is a UI decision.
+- **A part of another product inside this one's niche** — the niche case — is legal spatially, but the
+  move tool's snapping and the cutting list must agree on it; it needs a confirming test with two
+  products in a niche.

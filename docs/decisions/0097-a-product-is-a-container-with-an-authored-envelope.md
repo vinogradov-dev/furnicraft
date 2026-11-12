@@ -1,6 +1,7 @@
 # 0097. A product is a container with an authored envelope
 
-- Status: Accepted; amends the class trait list of 0094 and the product rows of 0034/0035
+- Status: Accepted; amends the class trait list of 0094 and the product rows of 0034/0035;
+  its "the frame never picks" clause is amended by 0100
 - Date: 2026-11-13
 
 ## Context

@@ -133,6 +133,10 @@ with one label and an alias.
   the scene loads. The registry is append-only, so this should never happen for a code that shipped.
 - Setting a class on a container marks it as a component; clearing removes the marker unless
   `prototype.id` or `component = true` is also present (0034).
+- A product always has a class. `product.create` assigns the editor's placeholder, «изделие общего
+  назначения» / “general product”, when the card is not given a type; the placeholder is a
+  `level = Product` row that is never offered for a part, and the maker changes it later from the
+  frame's card.
 - A code, once in a released build, is **immortal**: never reused, never renumbered, never moved to
   another parent. A withdrawn class is set `retired`, stays resolvable and translated, and stops being
   offered for assignment.

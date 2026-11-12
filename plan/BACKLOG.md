@@ -32,7 +32,9 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    inventing classes in code.
   Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
    40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
-   reserved. Every type and variant carries its traits (supply, measure, nesting, extent,
+   reserved, plus the editor placeholder row «изделие общего назначения» / general product
+   (level = Product, never offered for a part) that product.create assigns when the card names
+   no type. Every type and variant carries its traits (supply, measure, nesting, extent,
    operations, host, level, opening, mount, fill) and its slug; TT 90..99 stays reserved for
    local codes. Product rows get level = Product and a mount, part rows get a fill, and a
    product class is named by its function (a wall cabinet is 30.01.02), never by a product code
@@ -41,10 +43,11 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    overlay/inset/half-overlay) is the worked case. furntypes.md and PROJECT.md point at the new
    table; the old registry stays only as history.
   Done: The table covers every family the milestone needs; every row names all ten traits it
-   applies to; the product rows carry level = Product and mount, the part rows carry fill; a
-   fixture set (cabinet, shelf, side, back, door, spring hinge, runner, worktop, plinth)
-   resolves against it and shows the intended report and editor behaviour; the owner has
-   approved the rows entry by entry.
+   applies to; the product rows carry level = Product and mount, the part rows carry fill; the
+   placeholder product row exists and is never offered for a part; a fixture set (cabinet,
+   shelf, side, back, door, spring hinge, runner, worktop, plinth) resolves against it and
+   shows the intended report and editor behaviour; the owner has approved the rows entry by
+   entry.
   `files: docs/domain/classes.md, docs/domain/furntypes.md, PROJECT.md`
 - `[ ]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
   Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
@@ -114,42 +117,56 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    the model refuses the two mismatches: an envelope on a container whose class is not level
    Product, and a product class without one. node.duplicate copies it,
    node.component.convert_to_group clears it with the class, and a product is never a
-   descendant of a product. product.create takes parent, name, class, envelope and placement;
-   product.envelope.set edits the box and never a child size. Accessors product_of(id) and
-   products() walk the tree once; parent_id and product_id stay uncomputed in the document. The
-   schema is bumped; ADR 0096 means no migration, only a regenerated golden file.
-  Done: Tests: create a product with an envelope; refuse an envelope without a product class
-   and a product class without an envelope; refuse a product under a product; duplicate copies
-   the envelope; convert_to_group drops both; a bad envelope is a typed error; product_of
-   returns the nearest product for a shelf two levels down; cargo xtask ci is green.
+   descendant of a product. product.create takes parent, name, class, envelope and placement,
+   and assigns the registry placeholder «изделие общего назначения» when no class is given, so
+   a product always has one. product.envelope.set edits the box and never a child size.
+   Accessors product_of(id) and products() walk the tree once; parent_id and product_id stay
+   uncomputed in the document. The schema is bumped; ADR 0096 means no migration, only a
+   regenerated golden file.
+  Done: Tests: create a product with an envelope, and one with the placeholder class; refuse an
+   envelope without a product class and a product class without an envelope; refuse a product
+   under a product; duplicate copies the envelope; convert_to_group drops both; a bad envelope
+   is a typed error; product_of returns the nearest product for a shelf two levels down; cargo
+   xtask ci is green.
   `files: crates/model/src/container.rs, crates/model/src/lib.rs, crates/engine/src/node_cmds.rs`
 - `[ ]` **N2** the product frame is drawn as a dashed wireframe that never picks
-  Why: The envelope is useless if nobody can see it: the owner described the product in the
-   scene as a dashed wireframe, and a maker needs to see the space before the first part
-   exists. It also has to be visibly not a body, or it will be picked and grabbed by mistake.
+  Why: The envelope is useless if nobody can see it and nobody can click it: the owner
+   described the frame as a dashed wireframe that is picked to select, open and move the piece,
+   and the picture has to say whether the piece is open, closed and empty, or closed with
+   parts. It also has to be visibly not a body, or it will be grabbed by mistake.
   Shape: The scene description gains one frame item per product — the envelope in world space,
-   lines only; the renderer draws it as a dashed wireframe with no fill, in the theme neutral
-   line role, after the solid pass, with no depth write. Picking ignores it: a click through
-   the frame selects what is behind it, or nothing. The shell rebuilds the item with the rest
-   of the scene and keeps it out of the solid pipelines.
-  Done: A product with an empty envelope draws a dashed box; the box never appears in a pick
-   result; resizing the envelope through the command moves the box; the transparency and dashes
-   are checked offscreen (U81 mechanism) and the theme role owns the colour; cargo xtask ci is
-   green.
+   lines only; the renderer draws it dashed with no fill after the solid pass, with no depth
+   write. Three states per ADR 0100: open and active in the active line colour, closed and
+   empty in the inactive line colour, closed with parts not drawn at all. Picking uses the
+   envelope, not only the lines: a single click on a line or on empty space inside the piece
+   selects the frame, a click that hits a solid picks the solid, and when several products
+   contain the point the innermost wins. The shell rebuilds the item with the rest of the scene
+   and keeps it out of the solid pipelines.
+  Done: An open product draws active dashed lines, a closed empty one inactive dashed lines, a
+   closed one with parts draws none; a click inside empty space selects the frame, a click on a
+   panel selects the panel, a click on a nested product selects the inner one; a click through
+   the frame behind it still reaches what is behind; the colours come from the theme and are
+   checked offscreen; cargo xtask ci is green.
   `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/scene_build.rs`
 - `[ ]` **N3** one product is open at a time, opened by a double click and never written to the file
-  Why: The owner ruled that one product is open at a time and that opening is a double click;
-   without it there is no working area for the empty-space tool and no meaning for the creation
-   guard. ADR 0098 puts the state in the session, not in the file.
+  Why: The owner ruled that one product is open at a time and that a furniture piece is created
+   through a card and is open the moment it exists: press add frame, enter the dimensions, and
+   the next part goes inside it without another gesture. Without this the creation guard has
+   nothing to point at and a new project has no first step.
   Shape: Session carries active_product: Option<Id>, opened and closed by view operations,
-   cleared per tab and never serialised; opening another replaces the previous one and opening
-   a non-product does nothing. The shell turns a double click on a product in the viewport into
-   the session operation (the first click still selects), the scene tree marks the active
-   product and reveals its children, and the inspector can show the envelope fields. Nothing
-   here dispatches a document command.
-  Done: Tests: opening A then B leaves B open; closing leaves none; the state is not in the
-   saved file; a double click on a panel or a group does nothing; each tab keeps its own open
-   product; cargo xtask ci is green.
+   cleared per tab and never serialised; opening another replaces the previous one, and
+   product.create (N1) opens the new frame in the same user action — a command followed by a
+   session operation, never an open flag in the file. The ribbon gains one cell, add frame,
+   which opens a card: width, depth and height in 1 mm steps and a searchable list of product
+   classes defaulting to the placeholder. Placement is deterministic: the origin in an empty
+   scene, otherwise beside the nearest product on the floor, clear of every envelope, and
+   selected. The double click in the viewport and the click on the tree both open; nothing here
+   dispatches a document command.
+  Done: Tests: adding a frame opens it and the next panel lands inside; in an empty scene the
+   frame is at the origin, otherwise beside the nearest product and clear of every envelope;
+   opening A then B leaves B open; closing leaves none; the state is not in the saved file; a
+   double click on a part does not open a product that does not contain it; each tab keeps its
+   own open product; the card is driven through an egui context; cargo xtask ci is green.
   `files: crates/engine/src/session.rs, crates/ui/src/scene_tree.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **N4** the creation guard: a furniture part is created only inside the open product
   Why: The rule "no furniture part outside an open product" is worth nothing if a palette
@@ -173,30 +190,53 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
    the floor plane (the vertical is fixed at zero), Wall stays free. Movement stops at the
    first contact with the parts of another product, computed from part bounds, not envelopes,
-   so a wall cabinet may still hang in a niche. Snapping to the floor, to a neighbouring face
-   and to the 1 mm grid, with the constraint applied to the preview and one node.placement.set
-   on release, so a drag is one undo entry.
+   so a wall cabinet may still hang in a niche. Snapping to the floor, to the frame virtual
+   faces of the product and its neighbours, to a neighbouring part face and to the 1 mm grid,
+   with the constraint applied to the preview and one node.placement.set on release, so a drag
+   is one undo entry.
   Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
    product can; a drag that would intersect another product stops at contact; snapping lands on
    the grid and on a face; one undo restores the whole drag. The frame and the class attributes
    drive the behaviour without a code literal check.
   `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/query.rs`
 - `[ ]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
-  Why: This is the owner entrance to the whole product idea: open a piece, choose a post or a
-   shelf, point at the void and get a part that fits it. Without it the product is a box that
-   reports nicely but does not help build anything.
-  Shape: The document answers the free box at a point inside a product: the ray enters the
-   envelope, and on each axis the box reaches the envelope wall or the nearest part boundary,
-   whichever is closer. The tool is bound to a class whose fill trait says which axis pair it
-   takes (HeightAndDepth for a post, WidthAndDepth for a shelf); the ghost is drawn through the
-   session preview overlay from ADR 0093, moves in 1 mm steps, and a click dispatches one
-   panel.create with exactly the ghost size and placement, so history holds one entry. Version
-   1 handles axis-aligned voids and those two fills only.
-  Done: Tests: the free box shrinks around an existing part on the right axis; the ghost size
-   equals the created panel size; a click is one undo entry; the tool refuses when no product
-   is open; only classes with a fill can be chosen; the result is checked offscreen for the
-   ghost and by a live run for the 1 mm feel.
+  Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
+   feature the program is built around: the niche is the space the frame reserves, a post is
+   cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
+   drawing and a later report must agree on what the void is, and because a shelf crossing the
+   piece must split one niche into two without anything being stored.
+  Shape: The document answers the niche at a point inside a product (ADR 0099): six probes
+   along the axes stop at the first part of any product or at the envelope virtual face, and
+   the six distances give an axis-aligned box, derived and never stored. The tool is bound to a
+   class whose fill trait says which axis pair it takes — HeightAndDepth for a post,
+   WidthAndDepth for a shelf — and draws the ghost through the session preview overlay (ADR
+   0093); it moves in 1 mm steps and a click dispatches one panel.create with exactly the ghost
+   size and placement, so history holds one entry. Only the open product offers niches; a
+   closed one offers none.
+  Done: Tests: the niche shrinks around an existing part on the right axis and stops at the
+   envelope face; a shelf at full width splits the piece into two niches and the query at a
+   point above and below returns the two boxes; probes pass through another product empty
+   interior and stop at its parts; the ghost size equals the created panel size; a click is one
+   undo entry; the tool refuses when no product is open; only classes with a fill can be
+   chosen; the ghost is checked offscreen and the 1 mm feel by a live run.
   `files: crates/model/src/project/query.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs`
+- `[ ]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
+  Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
+   two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
+   instead of a box that does not fit. The six probes already report faces, so the outline is a
+   consequence of the query, not a new concept (ADR 0099).
+  Shape: The niche query returns the probed faces as well as the distances, builds the
+   cross-section of the free space in the vertical plane facing the viewer and extrudes it
+   along the depth into a geom::Region, so a slanted boundary becomes a polygon and not a
+   bounding box. The shelf fill takes that region as the panel outline through the existing
+   contour conversion (ADR 0042), and the ghost shows the polygon before the click. A piece
+   whose free section cannot be described by one extruded polygon is refused with a sentence
+   rather than approximated.
+  Done: Tests: two angled posts give a trapezoid region with the expected vertices; a shelf
+   created in it has the contour outline, not a rectangle; a rectangular case still produces
+   the rectangle through the same path; an unrepresentable section is a readable refusal; the
+   preview and the created panel agree; cargo xtask ci is green.
+  `files: crates/model/src/project/query.rs, crates/geom/src/lib.rs, apps/furnicraft/src/gizmo.rs`
 
 ## Bugs
 
