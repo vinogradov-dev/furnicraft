@@ -201,3 +201,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   so P2 ink·azure and P4 slate·mint draw their scene on a neutral background and the tinted ribbon
   reads against it. Deriving the frame's ink from the active palette — a `SceneColors` per preset, or
   a clear colour mixed from the palette's surface — closes the seam (U71, ADR 0089).
+
+- `[ui]` The view cluster centres on the whole scene rectangle, so in a window narrower than both
+  expanded panels plus the cluster (about 760 pt; the minimum window is 640 pt) the panels draw over
+  it and it disappears until one is folded. The corner widget had the same problem and U73 clears it
+  there; the cluster waits for the same treatment.
