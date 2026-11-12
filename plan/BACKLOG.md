@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
-  Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
-   it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
-   and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
-   click that should have been a pick. Review catches this sometimes; a parse catches it every
-   time.
-  Shape: A new xtask/src/ui_rules.rs that parses the source with syn rather than grepping text,
-   so an alias cannot slip past. Refused outside crates/ui/src/theme.rs: Color32::from_rgb,
-   from_rgba*, from_gray, the named constants and a raw struct literal. Refused outside a table
-   of owners (the shell's side_panels, status_bar, view_cluster, strip and ui's palette,
-   settings, home): egui::Area, Window, Panel, SidePanel, TopBottomPanel, CentralPanel, Popup.
-   The table is a const in the check, so adding a surface is one row and no allowance comment.
-   Join cargo xtask ci after layers.
-  Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
-   a host in a card fails; theme.rs and every owner in the table pass; an alias (use
-   egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
-  `files: xtask/src/ui_rules.rs, xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs`
 - `[ ]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
   Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
    55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
@@ -85,6 +68,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
+  Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
+   it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
+   and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
+   click that should have been a pick. Review catches this sometimes; a parse catches it every
+   time.
+  Shape: A new xtask/src/ui_rules.rs that parses the source with syn rather than grepping text,
+   so an alias cannot slip past. Refused outside crates/ui/src/theme.rs: Color32::from_rgb,
+   from_rgba*, from_gray, the named constants and a raw struct literal. Refused outside a table
+   of owners (the shell's side_panels, status_bar, view_cluster, strip and ui's palette,
+   settings, home): egui::Area, Window, Panel, SidePanel, TopBottomPanel, CentralPanel, Popup.
+   The table is a const in the check, so adding a surface is one row and no allowance comment.
+   Join cargo xtask ci after layers.
+  Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
+   a host in a card fails; theme.rs and every owner in the table pass; an alias (use
+   egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
+  `files: xtask/src/ui_rules.rs, xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs` — `7d78778`
 
 - `[x]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
   Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
