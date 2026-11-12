@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
-  Why: A unit inside the field is selected with the number and reads as data; Apply adds a
-   click to every change; typing «120» rebuilds three times. The field inventory, the commit
-   policy and the undo rules are in `plan/notes/U65.md`.
-  Shape: Keep `scrub.rs` as the drag source and add a per-field commit policy: `Live` (scrub,
-   every frame), `Debounced(150 ms)` (typed text and the numeric preset fields) and `OnEnter`
-   (the rare value that must not rebuild while typing). Typed text commits on Enter or blur;
-   invalid text keeps the old value and shows an inline error; one edit session per value
-   coalesces the keystrokes and the drag into one undo entry. Units leave the editable string:
-   they go to the section header («Размеры, мм», «Поворот, °»); fields are 76×22,
-   right-aligned, tabular. The cards keep scrolling and folding. For operations with a preview
-   (extrude, boolean), add a command bar with one ✓/✕ pair and Enter/Esc; no per-field Apply
-   remains. A slow rebuild shows «Перестроение…» in the status bar and keeps the last good
-   geometry; Esc cancels.
-  Done: Tests: an invalid entry leaves the value and the revision untouched and shows the
-   error; typing 1-2-0 commits once after the debounce; a drag commits one undo entry and
-   Escape during the drag restores the value; Enter and blur commit; no unit glyph is part of
-   the editable string; the command bar applies exactly once (a double click on ✓ is
-   idempotent) and Esc restores; a simulated slow rebuild reports busy and the window stays
-   responsive; every inspector card is checked for the new field width and headers.
-  `files: crates/ui/src/scrub.rs, crates/ui/src/panel_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/ui/src/settings.rs`
-
 - `[ ]` **U64** the status bar shows the tool and counts; the owner wants the selection context in the centre — name, kind, size, material, edge banding, warnings — and the three display sliders renamed and moved to Settings → View.
   Why: The card should not carry derived context, and the display names are ambiguous: «Сетка»
    is the floor grid, not the 10 mm snap; «Рёбра» collides with furniture edge banding. The
@@ -89,11 +67,61 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **M71** a previewing operation gets a command bar with a check and a cross, and a slow rebuild reports busy
+  Why: U65 delivered the field anatomy and the commit policy; the previewing half of the
+   owner's request has no operation to preview: the ribbon's boolean tools are `planned`, and
+   extrude is a shell gizmo with its own Enter/Escape number popup.
+  Shape: Add a session preview: an engine-side overlay of the document that a previewing
+   command fills without a revision or an undo entry, discarded on cancel. Then one command bar
+   at the bottom centre of the viewport — command name, the shared 76 px field with its unit
+   outside, check (Enter) and cross (Escape), idempotent on a double click — starting with
+   extrude and boolean. While a rebuild runs longer than ~250 ms the status bar says
+   «Перестроение…», the last good geometry stays, and Escape cancels the pending command.
+  Done: Tests: the preview changes no revision and no history; the check applies once however
+   often it is clicked; the cross restores the pre-command state; a simulated slow rebuild
+   reports busy and the window stays responsive.
+  `files: apps/furnicraft/src/status_bar.rs`
+- `[ ]` **M72** the figure, primitive and typed-property numbers use the shared field
+  Why: U65 converted the placement, pivot, panel, camera and light cards to the shared 76 px
+   field with the unit outside and a per-field commit policy. The figure and primitive
+   parameter fields still draw their own 100 px text edit with a hint, behind an Apply button,
+   and a typed Length or Angle property is a text edit as well.
+  Shape: Route every number in these cards through Scrub: field of view and height style units
+   outside the box, Live for a value the user feels out, OnRelease for a figure parameter that
+   costs a rebuild. Remove ApplyFigure and the primitive Apply; a property Length or Angle
+   keeps its numeric draft keyed by the property name and commits through the field.
+  Done: Tests: a typed figure parameter commits once after the debounce and one drag is one
+   undo entry; no numeric TextEdit is left in either card; an invalid entry keeps the value and
+   marks the box red.
+  `files: crates/ui/src/object_card.rs`
+
 ## Bugs
 
 ## Next
 
 ## Done
+
+- `[x]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
+  Why: A unit inside the field is selected with the number and reads as data; Apply adds a
+   click to every change; typing «120» rebuilds three times. The field inventory, the commit
+   policy and the undo rules are in `plan/notes/U65.md`.
+  Shape: Keep `scrub.rs` as the drag source and add a per-field commit policy: `Live` (scrub,
+   every frame), `Debounced(150 ms)` (typed text and the numeric preset fields) and `OnEnter`
+   (the rare value that must not rebuild while typing). Typed text commits on Enter or blur;
+   invalid text keeps the old value and shows an inline error; one edit session per value
+   coalesces the keystrokes and the drag into one undo entry. Units leave the editable string:
+   they go to the section header («Размеры, мм», «Поворот, °»); fields are 76×22,
+   right-aligned, tabular. The cards keep scrolling and folding. For operations with a preview
+   (extrude, boolean), add a command bar with one ✓/✕ pair and Enter/Esc; no per-field Apply
+   remains. A slow rebuild shows «Перестроение…» in the status bar and keeps the last good
+   geometry; Esc cancels.
+  Done: Tests: an invalid entry leaves the value and the revision untouched and shows the
+   error; typing 1-2-0 commits once after the debounce; a drag commits one undo entry and
+   Escape during the drag restores the value; Enter and blur commit; no unit glyph is part of
+   the editable string; the command bar applies exactly once (a double click on ✓ is
+   idempotent) and Esc restores; a simulated slow rebuild reports busy and the window stays
+   responsive; every inspector card is checked for the new field width and headers.
+  `files: crates/ui/src/scrub.rs, crates/ui/src/panel_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/pivot_card.rs, crates/ui/src/settings.rs` — `8e7e5bb`
 
 - `[x]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
   Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons

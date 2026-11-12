@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U65 state=idle base=cd4db46 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U64 state=idle base=7623046 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -15,13 +15,11 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
   S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
   0083), S6 proves it once in `frame_contract.rs`, and cameras and lights are scene objects (0036).
-- S7 audited the design rules and filed S8–S22 under `plan/refactor.md` (`main.rs` and `ui/lib.rs`
-  before U45): S8–S13 split `geom` and gave the tests one fixture definition (ADR 0084), S14
-  `engine/panel_cmds` into `panel`, `machining` and `banding`, S15–S17 `scene`'s camera and ray and
-  `render`'s pipelines and buffers, then S18–S19 the document rules and the whole `Editor` out of
-  `ui/lib.rs`, 50 lines, S20 the drawing draft out of `contour_edit.rs` and S22 the shell's chrome
-  out of `main.rs` (2608 -> 2037). U45 took the scene itself out of the shell: `Document` per tab,
-  `main.rs` 2037 -> 455 (ADR 0081); S21 predates its filing; F4 waits in `plan/questions.md`.
+- S7 audited the design rules and filed S8–S22 under `plan/refactor.md`: S8–S13 split `geom` and gave
+  the tests one fixture definition (ADR 0084), S14–S17 `engine/panel_cmds`, `scene`'s camera and ray
+  and `render`'s pipelines, S18–S19 the document rules and the `Editor` out of `ui/lib.rs` (50 lines),
+  S20–S22 the drawing draft and the shell's chrome (2608 -> 2037), then U45 the scene itself —
+  `Document` per tab, `main.rs` 2037 -> 455 (ADR 0081); S21 predates its filing, F4 is in questions.
 - U45 opens several scenes at once: one tab per open file in the header, with its dirty marker and
   its cross. *New* and *Open* open a tab (a path already open activates that tab), *Save*, *Undo* and
   *Redo* act on the active tab only, a close with unsaved changes asks and the last close leaves an
@@ -45,7 +43,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   shadow under every floor-standing object (0071), X11 a ring closed by an arc (0072), X12 a tool
   switch replaces the draft and X23 makes every *Close* commit. U52 made the UI scale a scrubbing
   field, and every numeric field reads the drag's delta and clamps what is typed. U68 drew the
-  ribbon from one const map: five noun tabs, a 29/72 pt strip and a fold kept in settings (0091).
+  ribbon from one const map (0091); U65 gave the inspector one numeric field — 76 x 22, the number
+  right-aligned and the unit outside the editable string — with a per-field commit policy and one
+  undo entry per drag or typing run through a session edit scope (0092).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
   (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8), and the gate follows every
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U65 is next: inspector fields carry numbers only at 76 px, commit on a short debounce or Enter/blur
-with one undo per value, and a previewing operation gets a command bar with a check and a cross. The
-commit policy and the field inventory are in `plan/notes/U65.md`.
+U64 is next: the status bar shows the tool and counts, and the owner wants the selection context in
+its centre — name, kind, size, material, edge banding and warnings — with the three display sliders
+renamed and moved to Settings → View. The zones, fields and reset values are in plan/notes/U64.md.
 
 ## Index
 
