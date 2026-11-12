@@ -25,29 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U76** the ribbon holds tools only: the polygon sides, primitive size and extrude height fields leave the tool row and their typed values become session defaults
-  Why: Three `CellSpec::Field` cells take two 34 pt cells each and turn a row of icons into a
-   form; `show_field` draws a `TextEdit`, the state carries three strings, and `FieldRefusal`
-   exists only to explain a bad field. The object card already edits a polygon sides and a
-   primitive parameters, and the extrude pull has its own numeric popup. The owner wants no
-   value fields in the toolbar.
-  Shape: Delete the three `CellSpec::Field` entries, `FieldSpec`, `FieldKind`,
-   `CellSpec::Field`, `show_field`, `FieldSpec::COLUMNS` and `field_text_mut`;
-   `GroupSpec::cells` becomes a tool list (or keeps one tool variant) and `columns()` counts
-   live tools. Keep the three values as typed session defaults on `Toolbars` (`primitive_size:
-   Length`, `extrude_height: Length`, `polygon_sides: u32`) initialized from the existing
-   constants; `Editor::set_extrude_height` updates the typed default instead of a text. `ready`
-   always sees a valid value, so `FieldRefusal` and its messages go. The object card stays the
-   editor for polygon sides and primitive parameters; the extrude pull and its popup stay the
-   editor for a height. If a value loses its only editor, record it in `plan/debt.md` rather
-   than keeping a ribbon field.
-  Done: Tests: no tab draws a `TextEdit` or a numeric cell; `GroupSpec` columns and the tab
-   width count tools only; a polygon is created with the default side count and its sides can
-   be changed in the object card; a primitive is created at the default size and its parameters
-   can be changed in the card; an extrusion uses the default height and the pull still changes
-   it and makes that the next default; no `FieldKind`, `FieldRefusal` or field message remains;
-   `cargo xtask ci` green.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/ribbon.rs, crates/ui/src/object_card.rs, crates/text/src/messages.rs`
 - `[ ]` **U77** the shell's one frame is callable without a window, so a session can check the real interface silently
   Why: FurniCraftApp implements eframe::App::ui and holds render_state: egui_wgpu::RenderState,
    so only the running window can drive the real interface: the checks in crates/ui exercise a
@@ -159,6 +136,30 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U76** the ribbon holds tools only: the polygon sides, primitive size and extrude height fields leave the tool row and their typed values become session defaults
+  Why: Three `CellSpec::Field` cells take two 34 pt cells each and turn a row of icons into a
+   form; `show_field` draws a `TextEdit`, the state carries three strings, and `FieldRefusal`
+   exists only to explain a bad field. The object card already edits a polygon sides and a
+   primitive parameters, and the extrude pull has its own numeric popup. The owner wants no
+   value fields in the toolbar.
+  Shape: Delete the three `CellSpec::Field` entries, `FieldSpec`, `FieldKind`,
+   `CellSpec::Field`, `show_field`, `FieldSpec::COLUMNS` and `field_text_mut`;
+   `GroupSpec::cells` becomes a tool list (or keeps one tool variant) and `columns()` counts
+   live tools. Keep the three values as typed session defaults on `Toolbars` (`primitive_size:
+   Length`, `extrude_height: Length`, `polygon_sides: u32`) initialized from the existing
+   constants; `Editor::set_extrude_height` updates the typed default instead of a text. `ready`
+   always sees a valid value, so `FieldRefusal` and its messages go. The object card stays the
+   editor for polygon sides and primitive parameters; the extrude pull and its popup stay the
+   editor for a height. If a value loses its only editor, record it in `plan/debt.md` rather
+   than keeping a ribbon field.
+  Done: Tests: no tab draws a `TextEdit` or a numeric cell; `GroupSpec` columns and the tab
+   width count tools only; a polygon is created with the default side count and its sides can
+   be changed in the object card; a primitive is created at the default size and its parameters
+   can be changed in the card; an extrusion uses the default height and the pull still changes
+   it and makes that the next default; no `FieldKind`, `FieldRefusal` or field message remains;
+   `cargo xtask ci` green.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/ribbon.rs, crates/ui/src/object_card.rs, crates/text/src/messages.rs` — `81f9e6b`
 
 - `[x]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
   Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
