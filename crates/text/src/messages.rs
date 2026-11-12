@@ -129,16 +129,11 @@ messages! {
     DrawLineSuffix = [" · line", " · линия"],
     SnapTenMillimetres = ["Snap 10 mm  (G)", "Привязка 10 мм  (G)"],
     FinishEnter = ["Finish  (Enter)", "Завершить  (Enter)"],
+    ApplyEnter = ["Apply  (Enter)", "Применить  (Enter)"],
     CancelEsc = ["Cancel  (Esc)", "Отмена  (Esc)"],
     DrawHint = [
         "LMB add point  ·  Tab line/arc  ·  Shift axis lock  ·  Alt ignores snaps  ·  Enter/RMB finish  ·  Esc cancel",
         "ЛКМ добавить точку  ·  Tab линия/дуга  ·  Shift фиксация оси  ·  Alt игнорирует привязки  ·  Enter/ПКМ завершить  ·  Esc отмена"
-    ],
-    ExtrudeStatus = ["Extrude · {}", "Выдавливание · {}"],
-    DropEsc = ["Drop  (Esc)", "Отменить  (Esc)"],
-    ExtrudeHint = [
-        "Drag the arrow or type a height  ·  Enter finish  ·  Esc drop the pull",
-        "Перетащите стрелку или введите высоту  ·  Enter завершить  ·  Esc отменить"
     ],
     PrimitiveStatus = ["Primitive · {} {}", "Примитив · {} {}"],
     PrimitivePlaceHint = ["LMB place on the work plane  ·  Esc cancel", "ЛКМ разместить на рабочей плоскости  ·  Esc отмена"],

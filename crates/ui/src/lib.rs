@@ -17,6 +17,7 @@
 
 mod camera_card;
 mod command;
+pub mod command_bar;
 mod container_card;
 mod contour_edit;
 mod contour_grips;
@@ -45,6 +46,7 @@ pub mod toolbars;
 pub mod ui_scale;
 mod view_flags;
 
+pub use command_bar::{CommandBar, CommandBarAction};
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use draw::{DrawDraft, DrawDraftError, DrawTool, DrawnPath};
