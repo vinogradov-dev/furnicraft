@@ -99,6 +99,10 @@ pub(crate) struct Shell {
     pub(crate) ribbon_rect: Option<egui::Rect>,
     /// Whether a view border owns the primary button until it is released.
     pub(crate) divider_dragging: bool,
+    /// Whether the frame being drawn rebuilt its scene, so the status bar can say «Перестроение…».
+    pub(crate) rebuilding: bool,
+    /// The cluster asked for Settings › View this frame; the shell opens it and clears this.
+    pub(crate) open_settings: bool,
     /// The background, grid and line ink of the theme variant the window draws with.
     ///
     /// The viewport is a `wgpu` surface, so it cannot read the `egui` palette at draw time; the
@@ -115,6 +119,8 @@ impl Default for Shell {
             pointer_position: None,
             ribbon_rect: None,
             divider_dragging: false,
+            rebuilding: false,
+            open_settings: false,
             colors: SceneColors::DARK,
         }
     }
@@ -195,7 +201,6 @@ impl FurniCraftApp {
         let render_state =
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
         let shell = Shell {
-            cluster: ViewCluster { all_edges: settings.viewport.all_edges, ..ViewCluster::default() },
             panels: Panels::from_settings(&settings.panels),
             colors: theme::scene_colors(cc.egui_ctx.theme()),
             ..Shell::default()
@@ -642,7 +647,9 @@ impl eframe::App for FurniCraftApp {
         self.shell.colors = theme::scene_colors(ui.ctx().theme());
         {
             let Self { tabs, shell, settings, .. } = self;
+            shell.rebuilding = tabs.active().rebuild_pending(&settings.viewport, &shell.cluster, shell.colors);
             if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster, shell.colors) {
+                shell.rebuilding = false;
                 tabs.active_mut().last_error = Some(error);
             }
         }
@@ -757,6 +764,13 @@ impl eframe::App for FurniCraftApp {
         }
         self.sync_panels();
         self.command_palette(ui);
+        // The cluster's *Configure…* link is drawn inside the viewport, which only has the shell;
+        // the window owns the Settings modal, so it opens it here on the same frame (U64).
+        if std::mem::take(&mut self.shell.open_settings) {
+            self.settings_open = true;
+            self.settings_section = SettingsSection::Viewport;
+            self.settings_notice = None;
+        }
         self.settings_window(ui.ctx());
         self.home_surface(ui.ctx());
         // The close command needs the context, which only the frame has: everything else a quit
@@ -845,15 +859,15 @@ mod tests {
     #[test]
     fn the_display_settings_switch_controls_the_contact_shadow() {
         let mut cluster = ViewCluster::default();
-        assert!(cluster.shadow_settings().draws(), "the soft ground shadow is on by default");
+        let default_strength = furnicraft_ui::settings::DEFAULT_SHADOW_STRENGTH;
+        assert!(cluster.shadow_settings(default_strength).draws(), "the soft ground shadow is on by default");
         cluster.contact_shadows = false;
-        assert!(!cluster.shadow_settings().visible, "the switch reaches the frame");
-        assert!(!cluster.shadow_settings().draws());
+        assert!(!cluster.shadow_settings(default_strength).visible, "the switch reaches the frame");
+        assert!(!cluster.shadow_settings(default_strength).draws());
         cluster.contact_shadows = true;
-        cluster.shadow_strength = 50.0;
-        assert!((cluster.shadow_settings().strength - 0.5).abs() < 1.0e-6);
-        cluster.shadow_strength = 0.0;
-        assert!(!cluster.shadow_settings().draws(), "a zero strength draws nothing either");
+        assert!((cluster.shadow_settings(50).strength - 0.5).abs() < 1.0e-6);
+        assert!(!cluster.shadow_settings(0).draws(), "a zero strength draws nothing either");
+        assert!((cluster.shadow_settings(140).strength - 1.0).abs() < 1.0e-6, "a hand-edited strength is clamped");
     }
 
     #[test]

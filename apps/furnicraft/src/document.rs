@@ -115,8 +115,8 @@ impl Display {
         Self {
             grid: viewport.grid,
             grid_step_mm: viewport.grid_step_mm,
-            all_edges: cluster.all_edges,
-            shadows: cluster.shadow_settings(),
+            all_edges: viewport.all_edges,
+            shadows: cluster.shadow_settings(viewport.shadow_strength),
             colors,
         }
     }
@@ -454,6 +454,26 @@ impl Document {
             self.layout.toggle_maximized();
         }
         save
+    }
+
+    /// The projection the active view is drawing with, for the status bar's readout.
+    pub(crate) fn projection(&self) -> Projection {
+        self.scene.camera.projection()
+    }
+
+    /// Whether the next [`Document::sync_scene`] will evaluate the scene.
+    ///
+    /// The status bar asks before the shell syncs, so the frame that pays for a rebuild is the one
+    /// that says «Перестроение…» instead of waiting a frame to admit it.
+    pub(crate) fn rebuild_pending(
+        &self,
+        viewport: &ViewportSettings,
+        cluster: &ViewCluster,
+        colors: SceneColors,
+    ) -> bool {
+        Display::of(viewport, cluster, colors).colors != self.display.colors
+            || self.session.project().revision() != self.scene_revision
+            || self.editor.visibility_revision() != self.scene_visibility
     }
 
     /// Takes the window's display state and rebuilds the frame when the document moved.
@@ -1282,9 +1302,9 @@ impl Document {
         // between form edges and the full triangulation reads a different cached list, so the last
         // upload is replayed when the switch flips.
         self.layout.apply_frame_style(&mut self.scene);
-        self.scene.contact_shadows = shell.cluster.shadow_settings();
-        if self.scene.all_edges != shell.cluster.all_edges {
-            self.scene.all_edges = shell.cluster.all_edges;
+        self.scene.contact_shadows = shell.cluster.shadow_settings(viewport.shadow_strength);
+        if self.scene.all_edges != viewport.all_edges {
+            self.scene.all_edges = viewport.all_edges;
             if let Err(error) = self.upload_scene() {
                 self.last_error = Some(error);
             }
@@ -1445,6 +1465,7 @@ impl Document {
                 // The style is frame data the renderer reads per view at draw time, so no upload.
                 self.layout.apply_frame_style(&mut self.scene);
             }
+            Some(ClusterAction::OpenSettings) => shell.open_settings = true,
             None => {}
         }
         self.paint_view_frames(ui, content, &regions);
