@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U66 state=doing base=b16dfb7 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U65 state=idle base=cd4db46 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U66 is next: dock the side panels as opaque M2 chrome over the scene — 92 % opacity, one setting for
-ribbon, panels and clusters, collapse-all and hide-all, neutral chevrons, an animated inset.
+U65 is next: inspector fields carry numbers only at 76 px, commit on a short debounce or Enter/blur
+with one undo per value, and a previewing operation gets a command bar with a check and a cross. The
+commit policy and the field inventory are in `plan/notes/U65.md`.
 
 ## Index
 

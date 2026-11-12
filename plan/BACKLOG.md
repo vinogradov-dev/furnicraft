@@ -25,30 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
-  Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons
-   are ambiguous and there is no way to clear the chrome. M2 is the most invasive part of the
-   accepted combo: the viewport must render under the panels and picking must ignore the
-   covered rects. Geometry, contracts and tests are in `plan/notes/U66.md`; metrics in
-   `plan/notes/U71.md`.
-  Shape: Turn both side panels into `Area`s at `Order::Middle` over a full-width viewport, with
-   a `panel` fill at the shared opacity; pass the covered rectangles to the shell so the scene
-   gizmo, the selection rectangle and the split-view layout ignore them. The top inset follows
-   the ribbon band plus 8 px; animate the ribbon height (150 ms) so the panels move smoothly on
-   a fold. Add the three tab-row buttons: collapse all (both to 34 px strips, remembering the
-   prior state), hide all (both hidden, remembering), fold ribbon. Replace the chevrons with
-   the neutral `panel-left`/`panel-right` glyphs pointing to the collapse edge, mirrored in the
-   strip; add tooltips and shortcuts `Ctrl+0` (hide all) and `Ctrl+Shift+0` (collapse all)
-   after checking for conflicts. Persist `appearance.panel_opacity` (55–100, default 92) and
-   the per-panel visible state.
-  Done: Tests: a click inside a covered rect never reaches the viewport (scene gizmo and
-   selection rectangle); hide-all then restore returns the exact prior state of both panels;
-   collapse-all and a single fold both round-trip; the opacity setting round-trips and repaints
-   all three surfaces; the panel tops stay aligned with the ribbon during the animation (a
-   frame test or a golden of the inset function); the split-view layout tiles only the
-   uncovered area; no document write. Both themes and 55/92/100 % are checked by eye.
-  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/header.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/shortcuts.rs, apps/furnicraft/src/strip.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
-
 - `[ ]` **U65** inspector fields carry units inside the editable text, are wide, and some edits need Apply; the owner wants numbers only at 76 px, immediate feedback with a short debounce, one undo per value, and a command bar with a check and a cross for operations that preview.
   Why: A unit inside the field is selected with the number and reads as data; Apply adds a
    click to every change; typing «120» rebuilds three times. The field inventory, the commit
@@ -118,6 +94,30 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Next
 
 ## Done
+
+- `[x]` **U66** side panels are docked and opaque; the owner approved the M2 layout — panels floating over the scene at 92 % opacity, one opacity setting for ribbon, panels and clusters, collapse-all and hide-all buttons, neutral chevrons and an animated inset.
+  Why: The panels are egui panels in the layout flow while the ribbon floats; the fold chevrons
+   are ambiguous and there is no way to clear the chrome. M2 is the most invasive part of the
+   accepted combo: the viewport must render under the panels and picking must ignore the
+   covered rects. Geometry, contracts and tests are in `plan/notes/U66.md`; metrics in
+   `plan/notes/U71.md`.
+  Shape: Turn both side panels into `Area`s at `Order::Middle` over a full-width viewport, with
+   a `panel` fill at the shared opacity; pass the covered rectangles to the shell so the scene
+   gizmo, the selection rectangle and the split-view layout ignore them. The top inset follows
+   the ribbon band plus 8 px; animate the ribbon height (150 ms) so the panels move smoothly on
+   a fold. Add the three tab-row buttons: collapse all (both to 34 px strips, remembering the
+   prior state), hide all (both hidden, remembering), fold ribbon. Replace the chevrons with
+   the neutral `panel-left`/`panel-right` glyphs pointing to the collapse edge, mirrored in the
+   strip; add tooltips and shortcuts `Ctrl+0` (hide all) and `Ctrl+Shift+0` (collapse all)
+   after checking for conflicts. Persist `appearance.panel_opacity` (55–100, default 92) and
+   the per-panel visible state.
+  Done: Tests: a click inside a covered rect never reaches the viewport (scene gizmo and
+   selection rectangle); hide-all then restore returns the exact prior state of both panels;
+   collapse-all and a single fold both round-trip; the opacity setting round-trips and repaints
+   all three surfaces; the panel tops stay aligned with the ribbon during the animation (a
+   frame test or a golden of the inset function); the split-view layout tiles only the
+   uncovered area; no document write. Both themes and 55/92/100 % are checked by eye.
+  `files: apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/header.rs, apps/furnicraft/src/view_cluster.rs, apps/furnicraft/src/shortcuts.rs, apps/furnicraft/src/strip.rs, crates/ui/src/settings.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs` — `cd4db46`
 
 - `[x]` **U67** variants of one tool — circle by centre and radius, by two points, by three points, tangent — live in a dropdown under the tool; a click always opens it; it closes on Esc, an outside click and a tab change; the pinned variant is a global setting.
   Why: The ten `DrawTool` values are siblings with their own icons, so the map cannot say
