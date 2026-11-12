@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U81 state=idle base=7d78778 updated=2026-11-12
+STATE: milestone=M7 phase=A task=T1 state=idle base=b370740 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U81 renders the interface offscreen to a PNG, so colour, contrast and translucency are checked
-without a window on the owner's screen.
+T1 writes the class table down: the registry's groups, types, variants and their eight traits in
+`docs/domain/classes.md`, approved row by row, so the registry has content before it has code.
 
 ## Index
 

@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
-  Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
-   55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
-   only way to answer it is to start the app while the owner is working. An offscreen render
-   into target/ui-shots answers it silently and leaves a picture the session can read.
-  Shape: After U77's seam: a wgpu instance and adapter with no surface, a device and queue,
-   egui_wgpu::Renderer on the app's own frame, a texture with RENDER_ATTACHMENT and COPY_SRC,
-   copy_texture_to_buffer and a PNG writer under target/ui-shots. One ignored test renders the
-   matrix: three presets, dark and light, panel opacity 55, 92 and 100, panels expanded and
-   folded, 100 and 200 % scale, on the same fixture scene. No adapter prints one sentence and
-   skips, so the check is safe on a machine without a GPU; the PNGs are looked at, never
-   compared pixel by pixel in CI.
-  Done: A run writes one PNG per cell of the matrix into target/ui-shots with a name that says
-   the cell; a machine without an adapter skips with a readable sentence; the image at 55 %
-   shows the model through the panel and the light image is not washed out; cargo test
-   --workspace and cargo xtask ci stay green without a GPU.
-  `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs`
 
 ## Bugs
 
@@ -69,6 +52,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Done
 
+- `[x]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
+  Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
+   55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
+   only way to answer it is to start the app while the owner is working. An offscreen render
+   into target/ui-shots answers it silently and leaves a picture the session can read.
+  Shape: After U77's seam: a wgpu instance and adapter with no surface, a device and queue,
+   egui_wgpu::Renderer on the app's own frame, a texture with RENDER_ATTACHMENT and COPY_SRC,
+   copy_texture_to_buffer and a PNG writer under target/ui-shots. One ignored test renders the
+   matrix: three presets, dark and light, panel opacity 55, 92 and 100, panels expanded and
+   folded, 100 and 200 % scale, on the same fixture scene. No adapter prints one sentence and
+   skips, so the check is safe on a machine without a GPU; the PNGs are looked at, never
+   compared pixel by pixel in CI.
+  Done: A run writes one PNG per cell of the matrix into target/ui-shots with a name that says
+   the cell; a machine without an adapter skips with a readable sentence; the image at 55 %
+   shows the model through the panel and the light image is not washed out; cargo test
+   --workspace and cargo xtask ci stay green without a GPU.
+  `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs` — `b370740`
 - `[x]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
   Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
    it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
