@@ -25,36 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
-  Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
-   method needs two clicks and the glyph never says which method a click runs. The pin is a 20
-   x 12 control in the same right-to-left row as the shortcut, so it covers the key label, and
-   pinning leaves the main cell unchanged. The owner wants two independent faces inside one
-   button.
-  Shape: Split the cell into two hit rectangles inside the same 34 x 30 control: a main face
-   that runs `pinned_index` and a caret face of at least 10 x 10 that opens or closes the list.
-   Draw one resting fill and let hover, press and the armed tint apply to the face under the
-   pointer; no gap between the faces. The main face draws the pinned method icon when it has
-   one, otherwise `tool.icon`, and its hint names the pinned method and its shortcut; the caret
-   hint names the list. A main-face click while the list is open runs the pinned method and
-   closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
-   columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
-   never overlaps the shortcut. The pin is not drawn at rest: it appears on the row under the
-   pointer and on the row the keyboard highlights, while its column stays reserved so the label
-   and shortcut never shift; the pinned row keeps its accent bar and fill as the persistent
-   marker, and the pin hint says it becomes the main method. Pinning writes
-   `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
-   new accent.
-  Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
-   opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
-   after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
-   pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
-   intersect on any row in either language; the pin is not drawn on an idle row, appears on
-   hover and on the keyboard-highlighted row, and its reserved column keeps the label and
-   shortcut from moving; the pinned row stays marked when the pin is hidden; Escape, outside
-   click and tab change still close; opening, caret and pin write no document revision. Both
-   themes and 100 and 200 % scale checked by eye.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
 - `[ ]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
   Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
    the tool row, and `theme::band` is `extreme_bg_color`, the darkest chrome, which makes the
@@ -205,6 +175,37 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
+  Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
+   method needs two clicks and the glyph never says which method a click runs. The pin is a 20
+   x 12 control in the same right-to-left row as the shortcut, so it covers the key label, and
+   pinning leaves the main cell unchanged. The owner wants two independent faces inside one
+   button.
+  Shape: Split the cell into two hit rectangles inside the same 34 x 30 control: a main face
+   that runs `pinned_index` and a caret face of at least 10 x 10 that opens or closes the list.
+   Draw one resting fill and let hover, press and the armed tint apply to the face under the
+   pointer; no gap between the faces. The main face draws the pinned method icon when it has
+   one, otherwise `tool.icon`, and its hint names the pinned method and its shortcut; the caret
+   hint names the list. A main-face click while the list is open runs the pinned method and
+   closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
+   columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
+   never overlaps the shortcut. The pin is not drawn at rest: it appears on the row under the
+   pointer and on the row the keyboard highlights, while its column stays reserved so the label
+   and shortcut never shift; the pinned row keeps its accent bar and fill as the persistent
+   marker, and the pin hint says it becomes the main method. Pinning writes
+   `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
+   new accent.
+  Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
+   opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
+   after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
+   pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
+   intersect on any row in either language; the pin is not drawn on an idle row, appears on
+   hover and on the keyboard-highlighted row, and its reserved column keeps the label and
+   shortcut from moving; the pinned row stays marked when the pin is hidden; Escape, outside
+   click and tab change still close; opening, caret and pin write no document revision. Both
+   themes and 100 and 200 % scale checked by eye.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs` — `b459feb`
 
 - `[x]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
   Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so
