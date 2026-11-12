@@ -132,7 +132,10 @@ pub const STATUS_HEIGHT: f32 = 28.0;
 pub const PANEL_HEADER_HEIGHT: f32 = 26.0;
 
 /// The width of a collapsed side panel's strip, in points.
-pub const COLLAPSED_PANEL_WIDTH: f32 = 26.0;
+///
+/// Wide enough for a 14 pt glyph over a turned title; the floating panel and its fold animation
+/// both start and end here (U66).
+pub const COLLAPSED_PANEL_WIDTH: f32 = 34.0;
 
 /// The air between a floating cluster and the edge of the surface it floats over, in points.
 pub const FLOATING_OFFSET: f32 = 12.0;

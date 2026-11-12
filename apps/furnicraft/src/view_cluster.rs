@@ -179,12 +179,21 @@ pub(crate) fn cluster_anchor(viewport: egui::Rect, offset: f32) -> egui::Pos2 {
     egui::pos2(viewport.center().x, viewport.bottom() - offset)
 }
 
+/// The fill of the floating cluster and its popovers at the shared chrome opacity.
+///
+/// The cluster sits over the scene and must stay readable even when the panels are set almost
+/// transparent, so its own alpha never drops below 80 %.
+pub(crate) fn cluster_fill(ui: &egui::Ui, opacity: u32) -> egui::Color32 {
+    theme::at_opacity(theme::floating(ui), opacity.clamp(80, 100))
+}
+
 /// Draws the cluster over `viewport` and applies its own view-state changes.
 pub(crate) fn show(
     ui: &mut egui::Ui,
     viewport: egui::Rect,
     state: &mut ViewCluster,
     view: ClusterView,
+    opacity: u32,
 ) -> Option<ClusterAction> {
     let mut action = None;
     let response = egui::Area::new(egui::Id::unique("view_cluster"))
@@ -194,7 +203,7 @@ pub(crate) fn show(
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::floating(ui))
+                .fill(cluster_fill(ui, opacity))
                 .stroke(egui::Stroke::new(1.0, theme::line(ui)))
                 .corner_radius(egui::CornerRadius::same(theme::RADIUS))
                 .inner_margin(egui::Margin::symmetric(6, 4));
@@ -290,7 +299,7 @@ pub(crate) fn show(
     if state.layout_open {
         if ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             state.layout_open = false;
-        } else if let Some(asked) = layout_popover(ui, viewport, rect, view) {
+        } else if let Some(asked) = layout_popover(ui, viewport, rect, view, opacity) {
             state.layout_open = false;
             action = Some(asked);
         }
@@ -298,7 +307,7 @@ pub(crate) fn show(
     if state.settings_open {
         if ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             state.settings_open = false;
-        } else if let Some(asked) = settings_popover(ui, viewport, rect, state, view) {
+        } else if let Some(asked) = settings_popover(ui, viewport, rect, state, view, opacity) {
             action = Some(asked);
         }
     }
@@ -364,6 +373,7 @@ fn layout_popover(
     viewport: egui::Rect,
     cluster: egui::Rect,
     view: ClusterView,
+    opacity: u32,
 ) -> Option<ClusterAction> {
     let mut action = None;
     let anchor = egui::pos2(cluster.center().x, cluster.top() - theme::STEP);
@@ -374,7 +384,7 @@ fn layout_popover(
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::floating(ui))
+                .fill(cluster_fill(ui, opacity))
                 .stroke(egui::Stroke::new(1.0, theme::line(ui)))
                 .corner_radius(egui::CornerRadius::same(theme::RADIUS))
                 .inner_margin(egui::Margin::same(10));
@@ -467,6 +477,7 @@ fn settings_popover(
     cluster: egui::Rect,
     state: &mut ViewCluster,
     view: ClusterView,
+    opacity: u32,
 ) -> Option<ClusterAction> {
     let mut action = None;
     let anchor = egui::pos2(cluster.center().x, cluster.top() - theme::STEP);
@@ -477,7 +488,7 @@ fn settings_popover(
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
-                .fill(theme::floating(ui))
+                .fill(cluster_fill(ui, opacity))
                 .stroke(egui::Stroke::new(1.0, theme::line(ui)))
                 .corner_radius(egui::CornerRadius::same(theme::RADIUS))
                 .inner_margin(egui::Margin::same(10));

@@ -28,6 +28,10 @@ pub(crate) struct Shortcuts {
     pub(crate) projection: bool,
     pub(crate) maximize: bool,
     pub(crate) palette: bool,
+    /// Hide both side panels, or show the pair the last press put away.
+    pub(crate) hide_panels: bool,
+    /// Fold both side panels to strips, or unfold the pair the last press folded.
+    pub(crate) collapse_panels: bool,
 }
 
 /// What one frame's keys ask of a running drawing draft.
@@ -64,6 +68,10 @@ pub(crate) fn take_shortcuts(ctx: &egui::Context) -> Shortcuts {
         projection: input.consume_key(egui::Modifiers::NONE, egui::Key::O),
         maximize: input.consume_key(egui::Modifiers::ALT, egui::Key::W),
         palette: input.consume_key(egui::Modifiers::COMMAND, egui::Key::K),
+        // The panel pair: Ctrl+Shift+0 folds both, Ctrl+0 hides them. Neither pair is taken by the
+        // viewport, the ribbon or the drawing tools.
+        hide_panels: input.consume_key(egui::Modifiers::CTRL, egui::Key::Num0),
+        collapse_panels: input.consume_key(egui::Modifiers { shift: true, ..egui::Modifiers::CTRL }, egui::Key::Num0),
     })
 }
 

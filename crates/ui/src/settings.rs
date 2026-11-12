@@ -276,6 +276,42 @@ impl Default for RibbonSettings {
     }
 }
 
+/// Whether one side panel is on screen and whether it is unfolded.
+///
+/// The two states are independent: a panel may be visible as a folded strip, and a hidden panel
+/// keeps the fold it had so the workspace can come back exactly as it left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelState {
+    /// Whether the panel is drawn at all.
+    #[serde(default = "shown")]
+    pub visible: bool,
+    /// Whether the panel is unfolded rather than a strip.
+    #[serde(default = "shown")]
+    pub expanded: bool,
+}
+
+impl Default for PanelState {
+    fn default() -> Self {
+        Self { visible: true, expanded: true }
+    }
+}
+
+/// A boolean whose absence means the panel is there, not that it was switched off.
+const fn shown() -> bool {
+    true
+}
+
+/// The *Panels* section: which side panels are shown and whether they are unfolded.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelsSettings {
+    /// The scene tree on the left.
+    pub scene: PanelState,
+    /// The inspector on the right.
+    pub inspector: PanelState,
+}
+
 /// Everything the workspace remembers between runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -290,6 +326,8 @@ pub struct Settings {
     pub recent: Vec<PathBuf>,
     /// The fold of the ribbon and the pinned method of each tool.
     pub ribbon: RibbonSettings,
+    /// The visibility and fold of the two side panels.
+    pub panels: PanelsSettings,
 }
 
 impl Default for Settings {
@@ -300,6 +338,7 @@ impl Default for Settings {
             viewport: ViewportSettings::default(),
             recent: Vec::new(),
             ribbon: RibbonSettings::default(),
+            panels: PanelsSettings::default(),
         }
     }
 }
@@ -449,19 +488,22 @@ pub enum SettingsSection {
     Appearance,
     /// Display style, grid, edges and opening view.
     Viewport,
+    /// Which side panels are shown and how opaque the chrome is.
+    Panels,
     /// The shortcut table.
     Shortcuts,
 }
 
 impl SettingsSection {
     /// Every section in the order the window lists them.
-    pub const ALL: [Self; 3] = [Self::Appearance, Self::Viewport, Self::Shortcuts];
+    pub const ALL: [Self; 4] = [Self::Appearance, Self::Viewport, Self::Panels, Self::Shortcuts];
 
     /// The user-visible name.
     pub const fn label(self) -> Message {
         match self {
             Self::Appearance => Message::SectionAppearance,
             Self::Viewport => Message::SectionViewport,
+            Self::Panels => Message::SectionPanels,
             Self::Shortcuts => Message::SectionShortcuts,
         }
     }
@@ -508,6 +550,7 @@ pub fn show(ctx: &Context, settings: &mut Settings, section: &mut SettingsSectio
                 outcome.changed |= match *section {
                     SettingsSection::Appearance => appearance_ui(ui, settings, lang),
                     SettingsSection::Viewport => viewport_ui(ui, settings, lang),
+                    SettingsSection::Panels => panels_ui(ui, settings, lang),
                     SettingsSection::Shortcuts => shortcuts_ui(ui, lang),
                 };
             });
@@ -562,17 +605,6 @@ fn appearance_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
     })
     .response
     .on_hover_text(Message::AccentHint.text(lang));
-    ui.add_space(theme::STEP);
-    ui.horizontal(|ui| {
-        ui.label(Message::PanelOpacity.text(lang));
-        changed |= ui
-            .add(
-                egui::Slider::new(&mut settings.appearance.panel_opacity, MIN_PANEL_OPACITY..=MAX_PANEL_OPACITY)
-                    .suffix(" %"),
-            )
-            .changed();
-    });
-    ui.label(egui::RichText::new(Message::PanelOpacityHint.text(lang)).small().color(theme::text_dim(ui)));
     ui.add_space(theme::STEP);
     ui.horizontal(|ui| {
         ui.label(Message::IconColor.text(lang));
@@ -646,6 +678,33 @@ fn preset_card(ui: &mut Ui, settings: &mut Settings, preset: theme::ThemePreset,
 fn swatch(ui: &mut Ui, fill: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 10.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, egui::CornerRadius::same(2), fill);
+}
+
+/// The *Panels* page: the two floating side panels and the opacity they share with the chrome.
+fn panels_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
+    let mut changed = false;
+    ui.heading(Message::SectionPanels.text(lang));
+    changed |= ui.checkbox(&mut settings.panels.scene.visible, Message::ScenePanelVisible.text(lang)).changed();
+    changed |= ui.checkbox(&mut settings.panels.inspector.visible, Message::InspectorPanelVisible.text(lang)).changed();
+    ui.add_space(theme::STEP);
+    ui.horizontal(|ui| {
+        ui.label(Message::PanelOpacity.text(lang));
+        changed |= ui
+            .add(
+                egui::Slider::new(&mut settings.appearance.panel_opacity, MIN_PANEL_OPACITY..=MAX_PANEL_OPACITY)
+                    .suffix(" %"),
+            )
+            .changed();
+    });
+    ui.label(egui::RichText::new(Message::PanelOpacityHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP);
+    ui.label(egui::RichText::new(Message::PanelsHint.text(lang)).small().color(theme::text_dim(ui)));
+    ui.add_space(theme::STEP * 2.0);
+    if ui.button(Message::ResetPanels.text(lang)).clicked() {
+        settings.panels = PanelsSettings::default();
+        changed = true;
+    }
+    changed
 }
 
 /// The *Viewport* page: the defaults a new viewport opens with.
@@ -732,6 +791,8 @@ pub fn shortcut_table(lang: Lang) -> Vec<(String, String)> {
         ("Ctrl+Z", Message::ShortcutUndo),
         ("Ctrl+Y", Message::ShortcutRedo),
         ("Ctrl+K", Message::ShortcutPalette),
+        ("Ctrl+0", Message::ShortcutHidePanels),
+        ("Ctrl+Shift+0", Message::ShortcutCollapsePanels),
         ("F", Message::ShortcutFrameAll),
         ("O", Message::ShortcutProjection),
         ("Alt+W", Message::ShortcutExpand),
@@ -789,6 +850,10 @@ mod tests {
                     "sketch.create.circle.three-points".to_owned(),
                 )]),
             },
+            panels: PanelsSettings {
+                scene: PanelState { visible: false, expanded: true },
+                inspector: PanelState { visible: true, expanded: false },
+            },
         }
     }
 
@@ -801,6 +866,8 @@ mod tests {
         assert_eq!(restored.appearance.palette, theme::ThemePreset::InkAzure);
         assert_eq!(restored.appearance.accent, Some([0x11, 0x99, 0x44]));
         assert_eq!(restored.appearance.panel_opacity, 70);
+        assert_eq!(restored.panels.scene, PanelState { visible: false, expanded: true });
+        assert_eq!(restored.panels.inspector, PanelState { visible: true, expanded: false });
         assert_eq!(restored.appearance.icon_color, IconColor::Never);
     }
 
@@ -859,6 +926,25 @@ mod tests {
         assert!(Settings::from_json(json).expect("load").ribbon.open);
         let json = r#"{"version":1,"ribbon":{"opacity":0.51}}"#;
         assert!(Settings::from_json(json).expect("load").ribbon.open);
+    }
+
+    #[test]
+    fn the_panel_pair_round_trips_and_a_missing_pair_opens_unfolded() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.panels, PanelsSettings::default(), "a fresh workspace shows both panels unfolded");
+        settings.panels.scene = PanelState { visible: false, expanded: true };
+        settings.panels.inspector = PanelState { visible: true, expanded: false };
+        let json = settings.to_json().expect("serialise");
+        assert_eq!(Settings::from_json(&json).expect("parse"), settings, "the workspace file keeps the pair");
+
+        // A file written before the section existed, or one that carries a partial panel object,
+        // opens visible and unfolded: an absent boolean means the panel is there.
+        let json = r#"{"version":1,"appearance":{"theme":"dark"}}"#;
+        assert_eq!(Settings::from_json(json).expect("load").panels, PanelsSettings::default());
+        let json = r#"{"version":1,"panels":{"scene":{"expanded":false}}}"#;
+        let read = Settings::from_json(json).expect("load");
+        assert_eq!(read.panels.scene, PanelState { visible: true, expanded: false });
+        assert_eq!(read.panels.inspector, PanelState::default(), "the unnamed panel keeps its default");
     }
 
     #[test]

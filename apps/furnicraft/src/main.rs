@@ -59,7 +59,10 @@ use crate::header::{HeaderAction, HeaderState, TabView};
 use crate::scene_build::{empty_session, sample_session};
 use crate::settings_store::SettingsStore;
 use crate::shortcuts::take_shortcuts;
-use crate::side_panels::{PanelHead, PanelSide, side_panel};
+use crate::side_panels::{
+    ANIMATION_SECONDS, Chrome, EXPANDED_WIDTH, PanelEvent, PanelHead, PanelRects, PanelSide, PanelSlot, Panels,
+    STRIP_WIDTH, panel_top, show as show_panel,
+};
 use crate::strip::strip_rect;
 use crate::tabs::{CloseOutcome, TabId, Tabs};
 use crate::view_cluster::ViewCluster;
@@ -80,10 +83,9 @@ pub(crate) enum TransformMode {
 /// keeps its own camera and its own split layout (ADR 0029). A document borrows this state for the
 /// frame it draws; it never stores any of it.
 pub(crate) struct Shell {
-    /// Whether the scene tree is unfolded.
-    pub(crate) tree_open: bool,
-    /// Whether the inspector is unfolded.
-    pub(crate) card_open: bool,
+    /// The two side panels: their visibility, their fold and the memories of the last *hide all*
+    /// and *collapse all* press.
+    pub(crate) panels: Panels,
     /// The floating viewport cluster: navigation, display style and settings.
     pub(crate) cluster: ViewCluster,
     /// Which transform gizmo the viewport shows.
@@ -95,9 +97,6 @@ pub(crate) struct Shell {
     /// height and the framing and the orientation widget stay below it (U51, ADR 0080). `None` until
     /// the first real frame, when the deterministic [`furnicraft_ui::toolbars::height`] stands in.
     pub(crate) ribbon_rect: Option<egui::Rect>,
-    /// The central area the viewport drew into last frame, so a keyboard *Frame all* knows the view
-    /// it fits into without waiting for the viewport to draw first.
-    pub(crate) viewport_area: Option<egui::Rect>,
     /// Whether a view border owns the primary button until it is released.
     pub(crate) divider_dragging: bool,
     /// The background, grid and line ink of the theme variant the window draws with.
@@ -110,13 +109,11 @@ pub(crate) struct Shell {
 impl Default for Shell {
     fn default() -> Self {
         Self {
-            tree_open: true,
-            card_open: true,
+            panels: Panels::default(),
             cluster: ViewCluster::default(),
             mode: TransformMode::Move,
             pointer_position: None,
             ribbon_rect: None,
-            viewport_area: None,
             divider_dragging: false,
             colors: SceneColors::DARK,
         }
@@ -199,6 +196,7 @@ impl FurniCraftApp {
             cc.wgpu_render_state.clone().ok_or_else(|| "FurniCraft requires the wgpu renderer".to_owned())?;
         let shell = Shell {
             cluster: ViewCluster { all_edges: settings.viewport.all_edges, ..ViewCluster::default() },
+            panels: Panels::from_settings(&settings.panels),
             colors: theme::scene_colors(cc.egui_ctx.theme()),
             ..Shell::default()
         };
@@ -250,6 +248,13 @@ impl FurniCraftApp {
             HeaderAction::Settings => {
                 self.settings_open = true;
                 self.settings_notice = None;
+            }
+            HeaderAction::CollapsePanels => self.shell.panels.toggle_collapse_all(),
+            HeaderAction::HidePanels => self.shell.panels.toggle_hide_all(),
+            HeaderAction::ToggleRibbon => {
+                let open = !self.tabs.active().ribbon_open();
+                self.tabs.active_mut().set_ribbon_open(open);
+                self.sync_ribbon_fold();
             }
             HeaderAction::NewTab => {
                 if let Err(error) = self.new_tab() {
@@ -464,45 +469,60 @@ impl FurniCraftApp {
         self.persist_settings();
     }
 
-    /// The scene tree, as a folding window.
+    /// Remembers the panels' visibility and fold as workspace settings.
+    ///
+    /// The write happens on the one frame a panel gesture changes them, not per frame. The memory
+    /// a collapse-all or hide-all press keeps stays in [`Panels`]; only the state the user sees is
+    /// written, so a restart opens exactly the layout the window was left in.
+    fn sync_panels(&mut self) {
+        let panels = self.shell.panels;
+        if self.settings.panels.scene == panels.scene && self.settings.panels.inspector == panels.inspector {
+            return;
+        }
+        self.settings.panels.scene = panels.scene;
+        self.settings.panels.inspector = panels.inspector;
+        self.persist_settings();
+    }
+
+    /// The scene tree, as a floating panel over the left edge of the scene.
     ///
     /// The panel owns no heading and no tools of its own: the header row names it and folds it, and
     /// the body is only the tree. Grouping survives in the row context menu.
-    fn scene_tree(&mut self, ui: &mut egui::Ui, inset: f32) {
-        let Self { shell, tabs, .. } = self;
-        let head = PanelHead {
-            title: furnicraft_text::Message::PanelScene,
-            icon: icons::scene::ASSEMBLY,
-            default_width: 240.0,
-            min_width: 180.0,
-        };
-        side_panel(ui, PanelSide::Left, "scene_tree", &mut shell.tree_open, head, inset, |ui| {
+    fn scene_tree(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let Self { shell, tabs, settings, .. } = self;
+        let head = PanelHead { title: furnicraft_text::Message::PanelScene, icon: icons::scene::ASSEMBLY };
+        let slot = PanelSlot { side: PanelSide::Left, id: "scene_tree", rect, state: shell.panels.scene, head };
+        match show_panel(ctx, slot, settings.appearance.panel_opacity, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 tabs.active_mut().show_scene_tree(ui);
             });
-        });
+        }) {
+            PanelEvent::Fold => shell.panels.scene.expanded = false,
+            PanelEvent::Restore => shell.panels.scene.expanded = true,
+            PanelEvent::None => {}
+        }
     }
 
-    /// The inspector, as a folding window over the same header row.
-    fn panel_card(&mut self, ui: &mut egui::Ui, inset: f32) {
-        let Self { shell, tabs, .. } = self;
-        let head = PanelHead {
-            title: furnicraft_text::Message::PanelInspector,
-            icon: icons::actions::SETTINGS,
-            default_width: 300.0,
-            min_width: 260.0,
-        };
-        side_panel(ui, PanelSide::Right, "panel_card", &mut shell.card_open, head, inset, |ui| {
+    /// The inspector, as a floating panel over the right edge of the scene.
+    fn panel_card(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let Self { shell, tabs, settings, .. } = self;
+        let head = PanelHead { title: furnicraft_text::Message::PanelInspector, icon: icons::actions::SETTINGS };
+        let slot = PanelSlot { side: PanelSide::Right, id: "panel_card", rect, state: shell.panels.inspector, head };
+        match show_panel(ctx, slot, settings.appearance.panel_opacity, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 tabs.active_mut().show_card(ui);
             });
-        });
+        }) {
+            PanelEvent::Fold => shell.panels.inspector.expanded = false,
+            PanelEvent::Restore => shell.panels.inspector.expanded = true,
+            PanelEvent::None => {}
+        }
     }
 
-    fn workspace(&mut self, ui: &mut egui::Ui) {
+    fn workspace(&mut self, ui: &mut egui::Ui, chrome: &Chrome) {
         egui::CentralPanel::default().show(ui, |ui| {
             let Self { tabs, shell, settings, .. } = self;
-            tabs.active_mut().viewport(ui, shell, &settings.viewport);
+            tabs.active_mut().viewport(ui, shell, &settings.viewport, chrome, settings.appearance.panel_opacity);
         });
     }
 
@@ -563,6 +583,12 @@ impl FurniCraftApp {
     fn apply_settings(&mut self, before: &Settings, ctx: &egui::Context) {
         self.settings.sanitize();
         let colors_before = self.shell.colors;
+        // The panels page edits the same state the header gestures write, so a change there replaces
+        // the runtime pair and drops a memory that would restore an older one by surprise.
+        if self.settings.panels != before.panels {
+            self.shell.panels = Panels::from_settings(&self.settings.panels);
+            self.shell.panels.forget_memory();
+        }
         if self.settings.appearance != before.appearance {
             let (preference, preset, accent) = self.settings.install_args();
             theme::install_with(ctx, preference, preset, accent);
@@ -635,10 +661,7 @@ impl eframe::App for FurniCraftApp {
             if shortcuts.palette {
                 self.palette.open();
             }
-            let requested = {
-                let Self { tabs, shell, .. } = self;
-                tabs.active_mut().handle_shortcuts(shortcuts, shell)
-            };
+            let requested = self.tabs.active_mut().handle_shortcuts(shortcuts);
             if let Some(action) = requested {
                 self.handle_file_action(action, furnicraft_ui::language(ui.ctx()));
             }
@@ -648,6 +671,12 @@ impl eframe::App for FurniCraftApp {
             if shortcuts.close_tab {
                 let active = self.tabs.active_id();
                 self.close_tab(active, furnicraft_ui::language(ui.ctx()));
+            }
+            if shortcuts.hide_panels {
+                self.shell.panels.toggle_hide_all();
+            }
+            if shortcuts.collapse_panels {
+                self.shell.panels.toggle_collapse_all();
             }
         }
 
@@ -666,6 +695,9 @@ impl eframe::App for FurniCraftApp {
                     .collect(),
                 can_undo: self.tabs.active().can_undo(),
                 can_redo: self.tabs.active().can_redo(),
+                ribbon_open: self.tabs.active().ribbon_open(),
+                panels_hidden: !self.shell.panels.any_visible(),
+                panels_collapsed: self.shell.panels.all_collapsed(),
             }
         };
         let mut header_action = None;
@@ -691,11 +723,39 @@ impl eframe::App for FurniCraftApp {
 
         let design = ui.available_rect_before_wrap();
         self.ribbon(ui, design);
-        let inset = self.shell.ribbon_inset(self.tabs.active().ribbon_open());
-        self.scene_tree(ui, inset);
-        self.panel_card(ui, inset);
         self.status_bar(ui);
-        self.workspace(ui);
+        // The viewport is the whole area under the header and above the status bar: the panels float
+        // over it, so the rendered scene runs under their translucent fill (M2). The frame's
+        // geometry is computed once and handed to the viewport, so picking and the split views read
+        // exactly the rectangles the panels cover.
+        let viewport = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        let ribbon_open = self.tabs.active().ribbon_open();
+        let band = self.shell.ribbon_band(viewport, ribbon_open);
+        let band_height = self.shell.ribbon_inset(ribbon_open);
+        let ctx = ui.ctx().clone();
+        let animated_band =
+            ctx.animate_value_with_time(egui::Id::unique("ribbon_band_height"), band_height, ANIMATION_SECONDS);
+        let width = |id: &str, state: furnicraft_ui::settings::PanelState| {
+            let target = if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
+            ctx.animate_value_with_time(egui::Id::unique((id, "panel_width")), target, ANIMATION_SECONDS)
+        };
+        let top = viewport.top() + panel_top(animated_band);
+        let panels = &self.shell.panels;
+        let rects = PanelRects::of(
+            viewport,
+            top,
+            panels,
+            (width("scene_tree", panels.scene), width("panel_card", panels.inspector)),
+        );
+        let chrome = Chrome { panels: rects, ribbon: band };
+        self.workspace(ui, &chrome);
+        if let Some(rect) = rects.left {
+            self.scene_tree(&ctx, rect);
+        }
+        if let Some(rect) = rects.right {
+            self.panel_card(&ctx, rect);
+        }
+        self.sync_panels();
         self.command_palette(ui);
         self.settings_window(ui.ctx());
         self.home_surface(ui.ctx());

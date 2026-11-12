@@ -900,7 +900,8 @@ units, solid shapes). They are not shrunken toolbar drawings.
 `assets/icons/actions/<name>.svg`, kebab-case: `confirm`, `dismiss`, `cancel`, `undo`, `redo`,
 `delete`, `add`, `remove`, `duplicate`, `rename`, `copy`, `paste`, `file-new`, `file-open`,
 `file-save`, `file-export`, `file-import`, `print`, `settings`, `search`, `command`, `visible`,
-`hidden`, `lock`, `unlock`, `expand`, `collapse`, `warning`, `error`, `info`, `help`, `pin`.
+`hidden`, `lock`, `unlock`, `expand`, `collapse`, `panel-left`, `panel-right`, `warning`, `error`,
+`info`, `help`, `pin`.
 
 A theme owns its icons: `contour/close` closes a ring, `actions/dismiss` dismisses a surface. They are
 different actions with different glyphs; never rename a geometry action to free a name.

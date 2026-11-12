@@ -49,7 +49,8 @@ use crate::rotate_gizmo::RotateGizmo;
 use crate::scene_build::{Bounds, evaluate, home_camera};
 use crate::scene_gizmo;
 use crate::shortcuts::{DraftKey, Shortcuts, drawing_key, take_drawing_shortcut};
-use crate::strip::{fit_uncovered, strip_area, uncovered, view_region};
+use crate::side_panels::Chrome;
+use crate::strip::{strip_area, uncovered, view_region};
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
@@ -435,7 +436,7 @@ impl Document {
     /// everything they act on belongs to the active document: one tab's undo never touches another.
     /// The save is returned rather than performed: writing a file is the shell's job, because it
     /// also remembers the path in the workspace settings.
-    pub(crate) fn handle_shortcuts(&mut self, shortcuts: Shortcuts, shell: &Shell) -> Option<FileAction> {
+    pub(crate) fn handle_shortcuts(&mut self, shortcuts: Shortcuts) -> Option<FileAction> {
         let save = if shortcuts.save { self.file.save() } else { None };
         if shortcuts.undo {
             self.undo();
@@ -444,7 +445,7 @@ impl Document {
             self.redo();
         }
         if shortcuts.frame {
-            self.frame_all(shell);
+            self.frame_all();
         }
         if shortcuts.projection {
             self.toggle_view_projection();
@@ -739,7 +740,7 @@ impl Document {
     /// objects created or moved since the file opened. Only the active view moves: its direction
     /// and its projection kind stay as the user left them. The fit targets the part of the view the
     /// floating ribbon leaves uncovered, so the scene is never framed under the strip (U51).
-    pub(crate) fn frame_all(&mut self, shell: &Shell) {
+    pub(crate) fn frame_all(&mut self) {
         let fit = match home_camera(self.scene_bounds) {
             Ok(fit) => fit,
             Err(error) => {
@@ -747,26 +748,8 @@ impl Document {
                 return;
             }
         };
-        let fit = match shell.viewport_area {
-            Some(area) => {
-                let band = shell.ribbon_band(area, self.editor.ribbon_open());
-                let view = self
-                    .layout
-                    .regions(area)
-                    .into_iter()
-                    .find(|(leaf, _)| *leaf == self.layout.active())
-                    .map(|(_, rect)| rect)
-                    .unwrap_or(area);
-                match fit_uncovered(fit, view.height(), uncovered(view, band).height()) {
-                    Ok(fit) => fit,
-                    Err(error) => {
-                        self.last_error = Some(error);
-                        return;
-                    }
-                }
-            }
-            None => fit,
-        };
+        // The content rectangle already excludes the ribbon band and both panels, so the fit needs
+        // no further narrowing: the whole scene lands in the part of the view the user can see.
         self.layout.active_leaf_mut().frame(fit);
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), self.layout.active_camera());
     }
@@ -791,34 +774,46 @@ impl Document {
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), camera);
     }
 
-    pub(crate) fn viewport(&mut self, ui: &mut egui::Ui, shell: &mut Shell, viewport: &ViewportSettings) {
+    pub(crate) fn viewport(
+        &mut self,
+        ui: &mut egui::Ui,
+        shell: &mut Shell,
+        viewport: &ViewportSettings,
+        chrome: &Chrome,
+        opacity: u32,
+    ) {
         // The toolbar can be wider than the panel in a narrow window; egui then reports the
         // overflowing width as available. Intersecting with the clip rect keeps the viewport and
         // its orientation widget inside the central panel.
-        let available = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-        if available.width() < 1.0 || available.height() < 1.0 {
+        let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+        if area.width() < 1.0 || area.height() < 1.0 {
             return;
         }
-        let (area, response) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
+        let (_, response) = ui.allocate_exact_size(area.size(), egui::Sense::click_and_drag());
         if !ui.is_rect_visible(area) {
             return;
         }
-        // The render target covers the whole central area, including the band under the floating
-        // ribbon, so the scene image runs under the strip (U51). Only the overlays that must stay
-        // readable — the orientation widget — move into the uncovered part.
-        shell.viewport_area = Some(area);
+        // The render target covers the whole central area, including the bands under the floating
+        // ribbon and the translucent panels, so the scene image runs under the chrome (M2). The
+        // split views tile the content rectangle the chrome leaves uncovered, and a pointer on the
+        // chrome is never a viewport hit.
         shell.pointer_position = ui.input(|input| input.pointer.hover_pos());
-
-        // The viewport is the whole central area; the layout divides it into views. Every view has
-        // its own camera and every border is draggable. A press on a border resizes without moving
-        // the target; a press anywhere else activates that view, whichever button it is, and only
-        // the active view is ever manipulated (ADR 0079).
-        let regions = self.layout.regions(area);
         let pointer = shell.pointer_position;
+        let pointer_on_chrome = pointer.is_some_and(|pointer| chrome.covers(pointer));
+        let content = chrome.content(area);
+
+        // The viewport is the whole central area; the layout divides the uncovered content into
+        // views. Every view has its own camera and every border is draggable. A press on a border
+        // resizes without moving the target; a press anywhere else activates that view, whichever
+        // button it is, and only the active view is ever manipulated (ADR 0079).
+        let regions = self.layout.regions(content);
         let pressed = ui.input(|input| input.pointer.any_pressed());
-        if pressed && let Some(pointer) = response.interact_pointer_pos() {
+        if pressed
+            && !pointer_on_chrome
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
             let primary = ui.input(|input| input.pointer.primary_pressed());
-            if self.layout.press(area, pointer, primary) {
+            if self.layout.press(content, pointer, primary) {
                 // A border drag owns the primary button until it is released; nothing else in the
                 // workspace reads the pointer meanwhile, so a resize cannot select an object or
                 // move an axis under the user's hand.
@@ -827,7 +822,7 @@ impl Document {
         }
         if shell.divider_dragging {
             let delta = response.drag_delta();
-            self.layout.drag_by(area, delta);
+            self.layout.drag_by(content, delta);
             if !ui.input(|input| input.pointer.primary_down()) {
                 self.layout.end_drag();
                 shell.divider_dragging = false;
@@ -836,8 +831,9 @@ impl Document {
                 ui.ctx().set_cursor_icon(axis.cursor());
             }
             ui.ctx().request_repaint();
-        } else if let Some(pointer) = shell.pointer_position
-            && let Some(axis) = self.layout.border_at(area, pointer)
+        } else if !pointer_on_chrome
+            && let Some(pointer) = pointer
+            && let Some(axis) = self.layout.border_at(content, pointer)
         {
             ui.ctx().set_cursor_icon(axis.cursor());
         }
@@ -845,16 +841,18 @@ impl Document {
         // The active view is the only target: orbit, pan, zoom, the presets, selection, the gizmos
         // and the cluster all act on it. A press is how the user points them at a neighbour.
         let target_leaf = self.layout.active();
-        let target_rect = regions.iter().find(|(leaf, _)| *leaf == target_leaf).map(|(_, rect)| *rect).unwrap_or(area);
+        let target_rect =
+            regions.iter().find(|(leaf, _)| *leaf == target_leaf).map(|(_, rect)| *rect).unwrap_or(content);
         let target_camera = self.layout.leaf(target_leaf).map(|leaf| leaf.camera()).unwrap_or_default();
-        let pointer_over_active = pointer.is_some_and(|pointer| target_rect.contains(pointer));
+        let pointer_over_active =
+            pointer.is_some_and(|pointer| !chrome.covers(pointer) && target_rect.contains(pointer));
         // The scene's camera is the one the active view draws with; an authored camera wins over
         // both, exactly as it does for a single view (ADR 0049).
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), target_camera);
         let rect = target_rect;
-        // The orientation widget belongs to the part of the view the ribbon leaves uncovered, so the
-        // strip never hides the cube (U51).
-        let visible = uncovered(rect, shell.ribbon_band(area, self.editor.ribbon_open()));
+        // The orientation widget belongs to the part of the view the ribbon and the panels leave
+        // uncovered, so neither hides the cube (U51, U66).
+        let visible = uncovered(rect, chrome.ribbon);
         let gizmo_rect = gizmo::widget_rect(visible);
 
         let points_per_pixel = ui.ctx().pixels_per_point();
@@ -870,17 +868,29 @@ impl Document {
             );
         }
 
-        let pointer_over_widget =
-            response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
+        let pointer_over_widget = !pointer_on_chrome
+            && response.hover_pos().is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         // A border drag owns the pointer: the tools, the gizmos and picking all stay out of its way
         // until it is released, so a resize can never select an object or move an axis.
-        let interactive = !shell.divider_dragging;
+        //
+        // A pointer on the chrome owns the pointer only while no gesture is live: a panel or the
+        // ribbon band is not the scene, so a press there never starts a gizmo, a draft, a selection
+        // rectangle or a navigation drag. A gesture that already started keeps the pointer even if
+        // the user drags it over a panel, so releasing there still commits the move.
+        let capturing = self.translate_gizmo.is_dragging()
+            || self.rotate_gizmo.is_dragging()
+            || self.vertex_gizmo.is_dragging()
+            || self.contour_gizmo.is_dragging()
+            || self.extrude_gizmo.is_dragging()
+            || self.gizmo.is_dragging();
+        let interactive = !shell.divider_dragging && (!pointer_on_chrome || capturing);
         // A contour edit owns the pointer: the object gizmo and picking would fight the corner drag.
         let contour_editing = interactive && self.editor.contour_edit().is_some();
-        // A drawing tool owns it too: the left button places points, not selections.
-        let drawing = interactive && self.editor.drawing().is_some();
+        // A drawing tool owns it too: the left button places points, not selections. A click on the
+        // chrome is never a point, so the tool waits for a click on the scene.
+        let drawing = interactive && !pointer_on_chrome && self.editor.drawing().is_some();
         // An armed primitive owns the next click: it places a cube, it does not select.
-        let placing = interactive && self.editor.pending_primitive().is_some();
+        let placing = interactive && !pointer_on_chrome && self.editor.pending_primitive().is_some();
         // The pull arrow is the live gesture after an extrusion. A contour edit, a draft, a
         // placement or a sub-object mode takes the pointer from it, so the arrow never competes
         // with a grip, a point or a cube for the same click.
@@ -894,7 +904,7 @@ impl Document {
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = shell.cluster.navigation;
         let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling;
-        let mesh_object = if contour_editing || drawing || placing || pulling {
+        let mesh_object = if !interactive || contour_editing || drawing || placing || pulling {
             None
         } else {
             self.editor.mesh_edit().map(|edit| edit.object())
@@ -1021,6 +1031,7 @@ impl Document {
             // plane's own rotation keeps its local axes on the plane.
             if response.clicked_by(egui::PointerButton::Primary)
                 && !pointer_over_widget
+                && !pointer_on_chrome
                 && let Some(pointer) = response.interact_pointer_pos()
             {
                 let plane = WorkPlane::from_camera(self.scene.camera);
@@ -1047,7 +1058,8 @@ impl Document {
         // drag never starts and no command is ever dispatched (ADR 0065). The status bar names the
         // node, so the missing handles read as a refusal instead of a bug.
         let locked_selection = self.editor.locked_selection(self.session.project());
-        let update: Result<Option<PlacementCommit>, String> = if contour_editing
+        let update: Result<Option<PlacementCommit>, String> = if !interactive
+            || contour_editing
             || drawing
             || placing
             || pulling
@@ -1191,6 +1203,7 @@ impl Document {
             .interact_pointer_pos()
             .is_some_and(|pointer| gizmo_rect.is_some_and(|widget| widget.contains(pointer)));
         let clicked = interactive
+            && !pointer_on_chrome
             && if mesh_object.is_some() {
                 // A double-click would otherwise toggle the same vertex twice; the first click of
                 // the pair already selected it.
@@ -1416,8 +1429,8 @@ impl Document {
             preset: self.layout.preset(target_leaf),
             style: self.layout.active_style(),
         };
-        match view_cluster::show(ui, area, &mut shell.cluster, view) {
-            Some(ClusterAction::FrameAll) => self.frame_all(shell),
+        match view_cluster::show(ui, content, &mut shell.cluster, view, opacity) {
+            Some(ClusterAction::FrameAll) => self.frame_all(),
             Some(ClusterAction::Home) => self.home_view(),
             Some(ClusterAction::ToggleProjection) => self.toggle_view_projection(),
             Some(ClusterAction::SetLayout(kind)) => self.set_layout(kind),
@@ -1434,7 +1447,7 @@ impl Document {
             }
             None => {}
         }
-        self.paint_view_frames(ui, area, &regions);
+        self.paint_view_frames(ui, content, &regions);
     }
 
     /// Divides the workspace into `kind`, keeping the cameras the views already have.
@@ -1640,7 +1653,7 @@ impl Document {
                 self.last_error = Some(error);
             }
             match outcome.view {
-                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.frame_all(shell),
+                Some(furnicraft_ui::RibbonViewAction::FrameAll) => self.frame_all(),
                 Some(furnicraft_ui::RibbonViewAction::ToggleProjection) => {
                     self.toggle_view_projection();
                 }
