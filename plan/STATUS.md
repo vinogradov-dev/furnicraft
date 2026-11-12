@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=R1 state=idle base=7703a06 updated=2026-11-12
+STATE: milestone=M7 phase=A task=M71 state=idle base=eb57520 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-R1 is next: the pre-release rename gives the product name one home — `theme::PRODUCT_NAME`, an
-`APP_ID` and `project::FORMAT`/`EXTENSION` — then renames the 13 crates, moves the app to `app/` and
-updates the four registers and the path hints. `plan/rename.md` holds the measured procedure.
+M71 is next: a previewing operation gets a command bar with a check and a cross, and a rebuild that
+runs long reports busy in the status bar. The session preview, the bar and the busy state are
+described in the entry.
 
 ## Index
 

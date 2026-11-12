@@ -104,7 +104,7 @@ The prose under `## Next` is the one part of `plan/STATUS.md` a command has to o
 requires it to name the current task: `edit::set_section` replaces a whole section body, and a close
 that changes the current task takes the new paragraph with it.
 
-`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|take|drop` and `cargo xtask state
+`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|take|defer|drop` and `cargo xtask state
 set` are the reference host: they take `--dry-run`, print the diff, hold `plan/.lock` while they
 write and land each file through a temp file and a rename.
 

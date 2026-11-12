@@ -25,26 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
-  later choice of name is one constant and no refactor. The work is measured and scripted in
-  `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
-  identity one home — `theme::PRODUCT_NAME` for the words, an `APP_ID` for the window class and the
-  settings directory set through `ViewportBuilder::with_app_id`, `project::FORMAT` +
-  `project::EXTENSION` for the file — and delete the hardcoded duplicates in `main.rs` (title, app
-  name, error), `scene_build.rs` (`"FurniCraft sample"`), `file_menu.rs` (the `scene.fcs` default and
-  the `"fcs"` filter) and `settings_store.rs` (three platform branches); (2) rename the 13 crates to
-  bare names and move `apps/furnicraft` to `app/` at the workspace root, with the `sed` and `mv` in
-  `plan/rename.md` and `cargo fmt --all` after them; (3) the four registers that must agree in that
-  commit — the `CRATES` table and its tests in `xtask`, the crate map in `AGENTS.md` and `PROJECT.md`,
-  the layer list in `skills/enforce-architecture/SKILL.md`, and the 38 path hints in
-  `plan/BACKLOG.md`, `plan/map.md` and `plan/debt.md`, which the plan gate rejects once the path is
-  gone; (4) the envelope `format`
-  string and line 2 of the eight goldens, leaving the `generator` fixture alone. No compatibility
-  path: nothing is released, so the file format and the settings directory change outright. Measured
-  on a scratch copy of this tree: 1140 tests pass, clippy clean, `layers: ok`, 960 changed lines and
-  no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
-  open-dialog filter all read the constants, so a second rename cannot miss a copy.
-  `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 - `[ ]` **M71** a previewing operation gets a command bar with a check and a cross, and a slow rebuild reports busy
   Why: U65 delivered the field anatomy and the commit policy; the previewing half of the
    owner's request has no operation to preview: the ribbon's boolean tools are `planned`, and
@@ -186,6 +166,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 ## Bugs
 
 ## Next
+- `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
+  later choice of name is one constant and no refactor. The work is measured and scripted in
+  `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
+  identity one home — `theme::PRODUCT_NAME` for the words, an `APP_ID` for the window class and the
+  settings directory set through `ViewportBuilder::with_app_id`, `project::FORMAT` +
+  `project::EXTENSION` for the file — and delete the hardcoded duplicates in `main.rs` (title, app
+  name, error), `scene_build.rs` (`"FurniCraft sample"`), `file_menu.rs` (the `scene.fcs` default and
+  the `"fcs"` filter) and `settings_store.rs` (three platform branches); (2) rename the 13 crates to
+  bare names and move `apps/furnicraft` to `app/` at the workspace root, with the `sed` and `mv` in
+  `plan/rename.md` and `cargo fmt --all` after them; (3) the four registers that must agree in that
+  commit — the `CRATES` table and its tests in `xtask`, the crate map in `AGENTS.md` and `PROJECT.md`,
+  the layer list in `skills/enforce-architecture/SKILL.md`, and the 38 path hints in
+  `plan/BACKLOG.md`, `plan/map.md` and `plan/debt.md`, which the plan gate rejects once the path is
+  gone; (4) the envelope `format`
+  string and line 2 of the eight goldens, leaving the `generator` fixture alone. No compatibility
+  path: nothing is released, so the file format and the settings directory change outright. Measured
+  on a scratch copy of this tree: 1140 tests pass, clippy clean, `layers: ok`, 960 changed lines and
+  no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
+  open-dialog filter all read the constants, so a second rename cannot miss a copy.
+  `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
 
