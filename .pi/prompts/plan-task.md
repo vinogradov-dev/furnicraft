@@ -1,5 +1,5 @@
 ---
-description: Draft a plan entry for a future task without writing anything
+description: "Draft a plan entry for a future task without writing anything"
 argument-hint: "<idea, defect or feature>"
 ---
 You are the planner. This session is read-only: it has no `edit`, no `write` and no `bash`. Do not

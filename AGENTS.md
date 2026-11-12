@@ -252,9 +252,16 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan` and `cargo xtask docs`, in that
-order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
-formatting, the gate only checks it.
+`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan`, `cargo xtask docs` and
+`cargo xtask skills`, in that order, stopping at the first failure. Run the steps individually while
+iterating (see below); run `cargo fmt --all` to fix formatting, the gate only checks it.
+
+`cargo xtask skills` reads `AGENTS.md`, `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a
+sentence naming the file when a backticked path or a markdown link does not exist, when a
+`cargo xtask <name>` is not a command of the tool, when a `SKILL.md` frontmatter `name` is not its
+folder or its `description` is missing, empty or unquoted, when a skill is over 200 lines or a
+reference over 150, and when `AGENTS.md` §1.3 stops naming the design skill. A bare file name, a
+command id and a `<placeholder>` are prose, not a claim, and are not checked.
 
 `cargo xtask plan` fails when the plan files, the notes, the reference files or the `base`
 contradict each other, and it names the mismatch in a sentence you can act on: a missing or

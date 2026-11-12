@@ -158,12 +158,10 @@ grep -rnE 'std::fs|std::net|std::process' crates/model/src
 grep -rn 'furnicraft-testkit' --include=Cargo.toml .
 ```
 
-Reading the results: for commands 2–6 an **empty** result is a pass; any line is a violation to investigate. In command 7, hits in the root `Cargo.toml` (`[workspace.dependencies]`) and in `crates/testkit/Cargo.toml` itself are normal; every other hit must be a `[dev-dependencies]` entry. `cargo tree -e normal` excludes dev- and build-dependencies, so a dev-only helper will not produce false positives there.
+Reading the results: for commands 2–6 an **empty** result is a pass; any line is a violation to investigate. In command 7, hits in the root `Cargo.toml` (`[workspace.dependencies]`) and in `crates/testkit/Cargo.toml` itself are normal; every other hit must be a `[dev-dependencies]` entry, and `cargo tree -e normal` will not show a dev-only helper.
 
 Also inspect the change itself, because no command catches these:
 
-- `ui`: search for `document_mut`, `&mut self.document`, assignments to model fields, `session.document.` writes. There must be none.
-- `render`: search for `winit`, `Window`, `Surface::create`, `eframe`, `egui`. There must be none.
 - `apps/furnicraft`: does it contain geometry or command logic? It must not.
 - `model`: does it import anything from a higher layer, even behind a feature flag? It must not.
 
@@ -196,13 +194,6 @@ The checker covers layering, per-crate forbidden dependencies and `testkit`'s de
 
 - General dev- and build-dependency policy beyond `testkit` (they are skipped by design: they do not ship).
 - File/network/process access in `model`, document mutation in `ui`, window creation in `render`.
-- Licenses and justification of dependencies.
-- Source-level imports that `cargo metadata` cannot see (re-exports, feature-gated code).
+- Licenses and justification of dependencies; source-level imports that `cargo metadata` cannot see.
 
-Next improvements: a license allowlist check over the dependency graph, and an optional source scan that strips comments before looking for forbidden imports. When such a check lands, update this skill and the `AGENTS.md` checklist in the same change.
-
-## Project status
-
-The workspace is at M5: the document, the kernel adapter, the renderer and the editor exist, so the
-boundaries are real rather than vacuous. Run `cargo xtask layers` in every task that touches manifests
-or crate structure, and the manual audit whenever a change crosses a layer.
+Next improvements: a license allowlist over the dependency graph, and a source scan that strips comments before looking for forbidden imports. When one lands, update this skill and the `AGENTS.md` checklist in the same change.

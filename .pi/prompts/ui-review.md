@@ -1,5 +1,5 @@
 ---
-description: Review a FurniCraft interface change against the design rubric
+description: "Review a FurniCraft interface change against the design rubric"
 argument-hint: "[paths, symbols or a diff range; empty reviews the working tree]"
 ---
 Review the interface change: ${@:-git diff of the working tree}.
