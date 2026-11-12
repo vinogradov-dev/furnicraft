@@ -355,7 +355,6 @@ messages! {
     ],
     Length = ["Length", "Длина"],
     Width = ["Width", "Ширина"],
-    ApplySize = ["Apply size", "Применить размер"],
     LengthField = ["Length: {}", "Длина: {}"],
     WidthField = ["Width: {}", "Ширина: {}"],
     SectionResolved = ["Resolved", "Расчётные"],
@@ -462,7 +461,6 @@ messages! {
     BetweenRange = ["Between {} and {}.", "От {} до {}."],
     CameraHeightHint = ["2000 mm", "2000 мм"],
     PositiveAtMost = ["Positive and at most {}.", "Положительное и не больше {}."],
-    ApplyProjection = ["Apply projection", "Применить проекцию"],
     SectionRenderView = ["Render view", "Вид рендера"],
     RenderFromCamera = ["Render the scene from this camera", "Рендерить сцену с этой камеры"],
     CameraNameEmpty = ["Camera name must not be empty.", "Имя камеры не должно быть пустым."],
@@ -481,7 +479,6 @@ messages! {
     PowerWatts = ["Power (W)", "Мощность (Вт)"],
     Intensity = ["Intensity", "Интенсивность"],
     Power = ["Power", "Мощность"],
-    ApplyLight = ["Apply light", "Применить свет"],
     ColourComponents = ["Colour components must be between 0 and 1.", "Компоненты цвета должны быть от 0 до 1."],
     IntensityRange = ["{} must be between 0 and {}.", "{}: допустимо от 0 до {}."],
 
