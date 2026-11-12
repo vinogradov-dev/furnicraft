@@ -193,6 +193,15 @@ messages! {
         "Draw the pitch, yaw, roll and the projection under the cube",
         "Рисовать тангаж, рыскание, крен и проекцию под кубом"
     ],
+    ShowOrientationWidget = ["Show the orientation cube", "Показывать куб ориентации"],
+    OrientationWidgetOn = [
+        "The corner cube, its home button and the projection toggle are drawn beside the panels",
+        "Куб в углу, кнопка «домой» и переключатель проекции рисуются рядом с панелями"
+    ],
+    OrientationWidgetOff = [
+        "Hide the corner cube, its home button and the projection toggle; the views stay reachable from the cluster",
+        "Скрыть куб в углу, кнопку «домой» и переключатель проекции; виды остаются доступны из кластера"
+    ],
     AuthoredCameraOwns = ["An authored camera owns the projection", "Проекцию задаёт авторская камера"],
     ContactShadows = ["Contact shadows", "Контактные тени"],
     ContactShadowsHint = [

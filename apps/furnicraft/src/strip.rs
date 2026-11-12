@@ -1,9 +1,8 @@
 //! The floating tool strip's band and the view rectangles it feeds.
 //!
 //! [`strip_rect`] reserves the band the ribbon covers at the top of the design space,
-//! [`strip_area`] draws the strip into it on the middle layer, [`uncovered`] keeps the orientation
-//! widget out from under it, and [`view_region`] converts one view's point rectangle into the pixel
-//! rectangle the renderer draws that view into.
+//! [`strip_area`] draws the strip into it on the middle layer, and [`view_region`] converts one
+//! view's point rectangle into the pixel rectangle the renderer draws that view into.
 //!
 //! The band is in egui points and the region is rounded to whole physical pixels from
 //! `points_per_pixel`, each edge separately, so two views that share an edge in points share exactly
@@ -62,15 +61,6 @@ pub(crate) fn strip_area(
             });
         });
     (!sizing).then_some(response.response.rect)
-}
-
-/// The part of `view` the floating strip leaves uncovered: the view below the band `strip` covers.
-///
-/// A view the strip does not reach — a bottom-row leaf of a split, or a strip that has not been
-/// measured yet — is returned unchanged, so only an overlay that really covers the view shrinks it.
-pub(crate) fn uncovered(view: egui::Rect, strip: egui::Rect) -> egui::Rect {
-    let covered = (strip.bottom() - view.top()).clamp(0.0, view.height());
-    egui::Rect::from_min_max(egui::pos2(view.left(), view.top() + covered), view.max)
 }
 
 /// The physical pixels one view's rectangle covers inside the workspace.
@@ -355,18 +345,5 @@ mod tests {
         assert!((rect.width() - design.width()).abs() < 0.5, "the strip fills the design width: {rect:?}");
         assert!((rect.height() - height).abs() < 0.5, "the strip is its reserved height: {rect:?}");
         assert!((rect.min - design.min).length() < 0.5, "the strip is anchored to the design's top-left");
-    }
-
-    #[test]
-    fn framing_keeps_the_scene_inside_the_uncovered_view() {
-        let view = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 600.0));
-        let design = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(800.0, 700.0));
-        let strip = strip_rect(design, 130.0);
-        let visible = uncovered(view, strip);
-        assert!((visible.top() - (view.top() + 130.0)).abs() < 0.5, "the band is cut off the top");
-        assert!((visible.height() - (view.height() - 130.0)).abs() < 0.5);
-        // A view the strip does not reach keeps its whole height.
-        let bottom = egui::Rect::from_min_size(egui::pos2(0.0, 400.0), egui::vec2(800.0, 300.0));
-        assert_eq!(uncovered(bottom, strip), bottom);
     }
 }

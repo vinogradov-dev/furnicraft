@@ -12,6 +12,10 @@
 //! left, bottom and right set the absolute roll to 0°, 90°, 180° and 270°, and a drag anywhere on
 //! the annulus turns it by hand in the step from the workspace settings. The accent handle sits at
 //! the camera's current roll, so the ring reads even when the view is not a preset.
+//!
+//! The widget draws in the free top corner of the view: below the floating ribbon band and clear of
+//! both side panels, on the right when the inspector leaves room and mirrored on the left otherwise
+//! (U73). The display-settings popover can turn it off entirely.
 use std::f64::consts::{PI, TAU};
 
 use eframe::egui;
@@ -21,6 +25,8 @@ use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection};
 use furnicraft_text::{Lang, Message};
 use furnicraft_ui::{icons, theme};
 use furnicraft_units::Degrees;
+
+use crate::side_panels::{Chrome, PanelSide};
 
 /// Whether a direction should have a line connector to the center in the corner widget.
 ///
@@ -146,18 +152,19 @@ impl Gizmo {
 
     /// Draws the widget and returns the one action a click or a drag step asked for.
     ///
+    /// `rect` is the placement [`widget_rect`] returned; the shell skips this call when the display
+    /// switch is off, so the widget's drag state survives a hidden frame.
     /// `readout` turns the line under the projection button on; the numbers are read from the same
     /// camera the viewport draws with, so the label cannot disagree with the image.
     /// `step_degrees` is the hand-turn step from the workspace settings.
     pub(crate) fn show(
         &mut self,
         ui: &Ui,
-        viewport: Rect,
+        rect: Rect,
         camera: Camera,
         readout: bool,
         step_degrees: u32,
     ) -> Option<GizmoAction> {
-        let rect = widget_rect(viewport)?;
         let cube = Rect::from_min_size(rect.min, Vec2::splat(SIZE));
         let center = cube.center();
         let painter = ui.painter().with_clip_rect(rect);
@@ -322,19 +329,59 @@ impl Gizmo {
     }
 }
 
-/// The widget rectangle in the top-right corner of `viewport`, if the viewport is large enough.
+/// The widget rectangle in the free top corner of `view`, if one has room.
+///
+/// The placement starts with the part of the view below the ribbon band, because the band sits over
+/// the view and never moves for the widget. Each top corner is then measured against the panel on
+/// its side: a visible inspector covers the top-right corner, so the rectangle comes to rest to its
+/// left, and a visible scene tree mirrors that on the left. The right corner is tried first, because
+/// that is where the widget has always been; the left one is the fallback for a view too narrow for
+/// the inspector's clearance. A viewport that holds neither corner returns `None`, and the shell
+/// then draws no widget at all (U73).
 ///
 /// The rectangle covers the cube, the home button in its corner and the projection button under it,
 /// because all three take clicks; the readout is a passive label painted below it and is
 /// deliberately outside, so it neither blocks a click on the scene nor widens the area that stops
 /// the transform gizmo.
-pub(crate) fn widget_rect(viewport: Rect) -> Option<Rect> {
-    let height = SIZE + GAP + BUTTON_SIZE;
-    if viewport.width() < SIZE + 2.0 * MARGIN || viewport.height() < height + 2.0 * MARGIN {
+pub(crate) fn widget_rect(view: Rect, chrome: &Chrome) -> Option<Rect> {
+    let size = Vec2::new(SIZE, SIZE + GAP + BUTTON_SIZE);
+    // The band is chrome: the corner it covers has no room, so the placement starts below it.
+    let band = chrome.ribbon.bottom().clamp(view.top(), view.bottom());
+    let free = Rect::from_min_max(egui::pos2(view.left(), band), view.max);
+    if free.width() < size.x + 2.0 * MARGIN || free.height() < size.y + 2.0 * MARGIN {
         return None;
     }
-    let min = egui::pos2(viewport.right() - SIZE - MARGIN, viewport.top() + MARGIN);
-    Some(Rect::from_min_size(min, Vec2::new(SIZE, height)))
+    // The free edges keep [`MARGIN`], so a corner never touches the view's border.
+    let available = Rect::from_min_max(free.min + Vec2::splat(MARGIN), free.max - Vec2::splat(MARGIN));
+    [PanelSide::Right, PanelSide::Left].into_iter().find_map(|side| {
+        let rect = corner_rect(available, side, chrome.panels.of_side(side), size);
+        // The panel on the far side can reach into this corner when the view is narrow enough for
+        // both panels to cross it; the corner is then not free and the mirror is tried instead.
+        let clear = !chrome.panels.panels().any(|panel| panel.intersects(rect)) && !chrome.ribbon.intersects(rect);
+        (available.contains_rect(rect) && clear).then_some(rect)
+    })
+}
+
+/// The widget rectangle in the top corner of `available` on `side`, pulled clear of the panel there.
+///
+/// A panel that reaches into the corner's vertical band pushes the rectangle to its inner edge, so
+/// the widget sits beside the chrome instead of under it; the caller rejects a rectangle that no
+/// longer fits between the two panels.
+fn corner_rect(available: Rect, side: PanelSide, panel: Option<Rect>, size: Vec2) -> Rect {
+    let top = available.top();
+    let bottom = top + size.y;
+    let blocked = panel.filter(|panel| panel.top() < bottom && panel.bottom() > top);
+    let min = match side {
+        PanelSide::Right => {
+            let right = blocked.map_or(available.right(), |panel| available.right().min(panel.left() - MARGIN));
+            egui::pos2(right - size.x, top)
+        }
+        PanelSide::Left => {
+            let left = blocked.map_or(available.left(), |panel| available.left().max(panel.right() + MARGIN));
+            egui::pos2(left, top)
+        }
+    };
+    Rect::from_min_size(min, size)
 }
 
 /// The home button's rectangle in the cube's top-right corner.
@@ -488,11 +535,34 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
+    use crate::side_panels::{EXPANDED_WIDTH, PanelRects, Panels, STRIP_WIDTH, panel_top};
+    use furnicraft_ui::settings::PanelState;
+
+    /// The frame geometry of a view with no ribbon band and no side panel.
+    fn plain(viewport: Rect) -> Chrome {
+        Chrome {
+            panels: PanelRects::default(),
+            ribbon: Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), 0.0)),
+        }
+    }
+
+    /// The widget's placement in a `viewport` no chrome covers.
+    fn placement(viewport: Rect) -> Rect {
+        widget_rect(viewport, &plain(viewport)).expect("the viewport is large enough")
+    }
+
+    /// The frame geometry of `panels` under a `ribbon_height` band of `viewport`.
+    fn chrome_of(viewport: Rect, ribbon_height: f32, panels: &Panels) -> Chrome {
+        let ribbon = Rect::from_min_size(viewport.min, Vec2::new(viewport.width(), ribbon_height));
+        let width = |state: PanelState| if state.expanded { EXPANDED_WIDTH } else { STRIP_WIDTH };
+        let top = viewport.top() + panel_top(ribbon_height);
+        Chrome { panels: PanelRects::of(viewport, top, panels, (width(panels.scene), width(panels.inspector))), ribbon }
+    }
 
     #[test]
     fn the_widget_sits_in_the_corner_and_hides_in_a_small_viewport() {
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let rect = widget_rect(viewport).expect("the viewport is large enough");
+        let rect = placement(viewport);
         assert!((rect.right() - (viewport.right() - MARGIN)).abs() < 1.0e-6);
         assert!((rect.top() - (viewport.top() + MARGIN)).abs() < 1.0e-6);
         assert!((rect.width() - SIZE).abs() < 1.0e-6);
@@ -501,13 +571,107 @@ mod tests {
         assert!(rect.contains_rect(projection_rect(rect)), "and so is the projection button");
 
         let small = Rect::from_min_size(egui::Pos2::ZERO, Vec2::splat(SIZE));
-        assert!(widget_rect(small).is_none());
+        assert!(widget_rect(small, &plain(small)).is_none());
+    }
+
+    #[test]
+    fn the_widget_never_sits_under_a_panel_or_the_ribbon() {
+        // Every pair the header's *collapse all* and *hide all* can make, both layouts, and the
+        // default window beside the minimum one: the widget is either in a free corner or absent.
+        for size in [Vec2::new(1280.0, 800.0), Vec2::new(640.0, 480.0)] {
+            let viewport = Rect::from_min_size(egui::Pos2::ZERO, size);
+            for layout in 0..2 {
+                let content = Rect::from_min_max(egui::pos2(viewport.left(), viewport.top() + 72.0), viewport.max);
+                let views: Vec<Rect> = match layout {
+                    0 => vec![content],
+                    _ => vec![
+                        Rect::from_min_max(content.min, egui::pos2(content.center().x, content.bottom())),
+                        Rect::from_min_max(egui::pos2(content.center().x, content.top()), content.max),
+                    ],
+                };
+                for scene in [
+                    PanelState::default(),
+                    PanelState { visible: true, expanded: false },
+                    PanelState { visible: false, expanded: true },
+                    PanelState { visible: false, expanded: false },
+                ] {
+                    for inspector in [
+                        PanelState::default(),
+                        PanelState { visible: true, expanded: false },
+                        PanelState { visible: false, expanded: true },
+                        PanelState { visible: false, expanded: false },
+                    ] {
+                        let mut panels = Panels::default();
+                        panels.scene = scene;
+                        panels.inspector = inspector;
+                        let chrome = chrome_of(viewport, 72.0, &panels);
+                        for view in &views {
+                            let Some(rect) = widget_rect(*view, &chrome) else { continue };
+                            assert!(
+                                !rect.intersects(chrome.ribbon),
+                                "{size:?} {layout} {scene:?} {inspector:?}: {rect:?} under the band"
+                            );
+                            for panel in chrome.panels.panels() {
+                                assert!(
+                                    !rect.intersects(panel),
+                                    "{size:?} {layout} {scene:?} {inspector:?}: {rect:?} under {panel:?}"
+                                );
+                            }
+                            assert!(
+                                view.contains_rect(rect),
+                                "{size:?} {layout} {scene:?} {inspector:?}: {rect:?} escapes {view:?}"
+                            );
+                        }
+                        // A single view of the default window always has a free corner.
+                        if layout == 0 && size.x > 1000.0 {
+                            assert!(widget_rect(views[0], &chrome).is_some(), "{scene:?} {inspector:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_inspector_pushes_the_widget_to_its_left_and_a_fold_lets_it_return() {
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1000.0, 700.0));
+        let mut panels = Panels::default();
+        let expanded = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room beside the panel");
+        let inspector = chrome_of(viewport, 72.0, &panels).panels.right.expect("the inspector is shown");
+        assert!(expanded.right() <= inspector.left() - MARGIN + 1.0e-6, "the widget rests left of the inspector");
+        assert!(expanded.right() < viewport.right() - EXPANDED_WIDTH);
+
+        panels.inspector.expanded = false;
+        let folded = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room here too");
+        assert!(folded.right() > expanded.right(), "folding the inspector lets the widget return toward the corner");
+        let strip = chrome_of(viewport, 72.0, &panels).panels.right.expect("the strip is shown");
+        assert!(folded.right() <= strip.left() - MARGIN + 1.0e-6, "a folded panel keeps the widget clear too");
+
+        panels.inspector.visible = false;
+        let gone = widget_rect(viewport, &chrome_of(viewport, 72.0, &panels)).expect("room here too");
+        assert!(
+            (gone.right() - (viewport.right() - MARGIN)).abs() < 1.0e-6,
+            "a hidden inspector frees the corner margin"
+        );
+    }
+
+    #[test]
+    fn the_widget_clears_the_band_and_the_scene_tree_on_the_mirrored_corner() {
+        // A view too narrow beside the inspector takes the left corner, right of the scene tree.
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(640.0, 480.0));
+        let mut panels = Panels::default();
+        panels.inspector = PanelState { visible: false, expanded: true };
+        let chrome = chrome_of(viewport, 72.0, &panels);
+        let rect = widget_rect(viewport, &chrome).expect("the left corner is free");
+        let tree = chrome.panels.left.expect("the tree is shown");
+        assert!(rect.left() >= tree.right() + MARGIN - 1.0e-6, "the widget sits right of the tree");
+        assert!((rect.top() - (chrome.ribbon.bottom() + MARGIN)).abs() < 1.0e-6, "and below the band");
     }
 
     #[test]
     fn the_projection_button_sits_centred_below_the_cube() {
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let widget = widget_rect(viewport).expect("large enough");
+        let widget = placement(viewport);
         let cube = Rect::from_min_size(widget.min, Vec2::splat(SIZE));
         let button = projection_rect(widget);
         assert!((button.center().x - cube.center().x).abs() < 1.0e-6, "the button is centred under the cube");
@@ -522,7 +686,7 @@ mod tests {
         let ctx = egui::Context::default();
         furnicraft_ui::theme::install(&ctx);
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let pointer = projection_rect(widget_rect(viewport).expect("large enough")).center();
+        let pointer = projection_rect(placement(viewport)).center();
 
         let press = |pressed| egui::Event::PointerButton {
             pos: pointer,
@@ -569,7 +733,7 @@ mod tests {
         };
         let mut action = None;
         let output = ctx.run_ui(input, |ui| {
-            action = Gizmo::default().show(ui, viewport, Camera::default(), false, 1);
+            action = Gizmo::default().show(ui, placement(viewport), Camera::default(), false, 1);
         });
         output.drop_without_applying_deltas();
         action
@@ -611,13 +775,13 @@ mod tests {
         // The label is painted only on request: the widget's own rectangle never covers it either
         // way, so a hidden readout leaves the scene exactly as it was.
         let viewport = Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let widget = widget_rect(viewport).expect("large enough");
+        let widget = placement(viewport);
         let ctx = egui::Context::default();
         furnicraft_ui::theme::install(&ctx);
         let count = |readout: bool| {
             let mut texts = 0;
             let output = ctx.run_ui(Default::default(), |ui| {
-                let action = Gizmo::default().show(ui, viewport, Camera::default(), readout, 1);
+                let action = Gizmo::default().show(ui, widget, Camera::default(), readout, 1);
                 assert!(action.is_none(), "drawing alone asks for nothing");
             });
             fn walk(shape: &egui::Shape, out: &mut usize) {
@@ -693,8 +857,7 @@ mod tests {
 
     /// The cube's centre inside `viewport`.
     fn widget_center(viewport: Rect) -> egui::Pos2 {
-        let widget = widget_rect(viewport).expect("the viewport is large enough");
-        Rect::from_min_size(widget.min, Vec2::splat(SIZE)).center()
+        Rect::from_min_size(placement(viewport).min, Vec2::splat(SIZE)).center()
     }
 
     /// One widget frame with `events`, keeping the interaction state in `gizmo`.
@@ -716,7 +879,7 @@ mod tests {
         };
         let mut action = None;
         let output = ctx.run_ui(input, |ui| {
-            action = gizmo.show(ui, viewport, camera, false, step_degrees);
+            action = gizmo.show(ui, placement(viewport), camera, false, step_degrees);
         });
         output.drop_without_applying_deltas();
         action

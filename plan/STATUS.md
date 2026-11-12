@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U73 state=idle base=c23e14b updated=2026-11-12
+STATE: milestone=M7 phase=A task=U74 state=idle base=45283da updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U73 clears the corner orientation widget from the ribbon and both side panels and gives the
-display-settings popover a switch that hides it.
+U74 is next: a tool with variants becomes a split button — the main face runs the pinned method, a
+joined caret opens the list, and pinning changes the main face without covering a shortcut.
 
 ## Index
 

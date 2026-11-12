@@ -206,3 +206,5 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   expanded panels plus the cluster (about 760 pt; the minimum window is 640 pt) the panels draw over
   it and it disappears until one is folded. The corner widget had the same problem and U73 clears it
   there; the cluster waits for the same treatment.
+
+· `[ui]` The inspector's widest rows — the name field beside its *Rename* button and the property rows — need about 355 pt, so a 226 pt floating panel draws them clipped or scrolled sideways (`side_panels::scroll_body`). The rows should reflow to the panel width (a wrapping label, a narrower field) so the horizontal scrollbar goes away; the panel keeps its rectangle either way (U73).

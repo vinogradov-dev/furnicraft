@@ -1,8 +1,8 @@
 ---
 name: enforce-architecture
-description: Audit FurniCraft's architectural boundaries: crate layering, forbidden UI/GPU dependencies, dependency hygiene and the checks that enforce them. Use when adding or moving code, adding a crate or dependency, reviewing a change, or before finishing a task that touches the workspace.
+description: "Audit FurniCraft's architectural boundaries: crate layering, forbidden UI/GPU dependencies, dependency hygiene and the checks that enforce them. Use when adding or moving code, adding a crate or dependency, reviewing a change, or before finishing a task that touches the workspace."
 license: MIT
-compatibility: opencode
+compatibility: pi
 metadata:
   audience: agents
   workflow: architecture

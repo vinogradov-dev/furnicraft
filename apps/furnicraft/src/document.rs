@@ -54,7 +54,7 @@ use crate::scene_build::{Bounds, evaluate, home_camera};
 use crate::scene_gizmo;
 use crate::shortcuts::{DraftKey, Shortcuts, drawing_key, take_drawing_shortcut};
 use crate::side_panels::Chrome;
-use crate::strip::{strip_area, uncovered, view_region};
+use crate::strip::{strip_area, view_region};
 use crate::translate_gizmo::TranslateGizmo;
 use crate::vertex_gizmo;
 use crate::vertex_gizmo::{MeshVertexCommit, VertexGizmo, VertexPreview};
@@ -1021,12 +1021,11 @@ impl Document {
         // both, exactly as it does for a single view (ADR 0049).
         self.scene.camera = crate::scene_build::scene_camera(self.session.project(), target_camera);
         let rect = target_rect;
-        // The orientation widget belongs to the part of the view the ribbon band leaves uncovered,
-        // so the strip never hides the cube (U51). A scene rectangle that starts below the band is
-        // returned unchanged; keeping the call keeps a view that does reach the band safe. The
-        // panels float over the view, so U73 places the widget clear of them.
-        let visible = uncovered(rect, chrome.ribbon);
-        let gizmo_rect = gizmo::widget_rect(visible);
+        // The orientation widget belongs to the free corner of the view: below the ribbon band and
+        // clear of both floating panels, mirrored to the left when the inspector leaves no room
+        // (U73). The display-settings popover can turn it off, and a hidden widget draws nothing and
+        // takes no click.
+        let gizmo_rect = widget_placement(&shell.cluster, rect, chrome);
 
         let points_per_pixel = ui.ctx().pixels_per_point();
         let width = (area.width() * points_per_pixel).round().max(1.0) as u32;
@@ -1570,8 +1569,9 @@ impl Document {
         // The widget belongs to the view under the pointer, so clicking an axis snaps that view and
         // the readout names the camera it draws with.
         if self.session.project().active_camera().is_none()
+            && let Some(widget) = gizmo_rect
             && let Some(action) =
-                self.gizmo.show(ui, visible, target_camera, shell.cluster.angles_visible(), viewport.roll_step_degrees)
+                self.gizmo.show(ui, widget, target_camera, shell.cluster.angles_visible(), viewport.roll_step_degrees)
         {
             match action {
                 gizmo::GizmoAction::LookFrom(direction) => {
@@ -1991,6 +1991,16 @@ fn viewport_owns_view(project: &Project) -> bool {
     project.active_camera().is_none()
 }
 
+/// Where the corner orientation widget draws this frame, or `None` while it is hidden.
+///
+/// The placement is the free top corner of `view` below the ribbon band and beside both panels
+/// ([`gizmo::widget_rect`]); the display switch in the cluster's settings popover turns the whole
+/// widget off, and the shell then draws no cube, no home and no projection button and leaves the
+/// click to the scene.
+fn widget_placement(cluster: &ViewCluster, view: egui::Rect, chrome: &Chrome) -> Option<egui::Rect> {
+    if cluster.widget_visible() { gizmo::widget_rect(view, chrome) } else { None }
+}
+
 /// Whether a finish still has to write the height.
 ///
 /// The pull closes on the first finish, so a second check — a double click, or a key and a button
@@ -2213,6 +2223,32 @@ mod tests {
             )
             .expect("light");
         Fixture { project, rig, camera, light }
+    }
+
+    #[test]
+    fn the_display_switch_hides_the_corner_widget_without_touching_the_document() {
+        // The widget is a view-state drawing, so its switch is one: a press on it draws nothing on
+        // the next frame and cannot reach the document (U73).
+        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let revision = session.project().revision();
+        let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let chrome = Chrome {
+            panels: crate::side_panels::PanelRects::default(),
+            ribbon: egui::Rect::from_min_size(
+                view.min,
+                egui::vec2(view.width(), furnicraft_ui::toolbars::height(true)),
+            ),
+        };
+        let mut cluster = ViewCluster::default();
+        assert!(cluster.widget_visible(), "the corner widget is on until the switch turns it off");
+        assert!(widget_placement(&cluster, view, &chrome).is_some(), "a plain view has a free corner");
+
+        cluster.show_widget = false;
+        assert!(
+            widget_placement(&cluster, view, &chrome).is_none(),
+            "a hidden widget draws no cube, no home and no projection button"
+        );
+        assert_eq!(session.project().revision(), revision, "a display switch is view state, never an edit");
     }
 
     #[test]
