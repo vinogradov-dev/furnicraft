@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use eframe::egui_wgpu;
@@ -27,19 +28,22 @@ use furnicraft_engine::node_cmds::NODE_PLACEMENT_SET_MANY_ID;
 use furnicraft_engine::{MeshVertexMove, MeshVerticesMove, NodePlacement, NodePlacementSetMany, Session};
 use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{EvaluationCache, object_mesh};
-use furnicraft_model::{Catalog, CornerMove, Id, NodeQuery, Placement, Project, Revision, StructuralKind};
+use furnicraft_model::{Catalog, CornerMove, Geometry, Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
 use furnicraft_render::ViewportRenderer;
 use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneColors, SceneFrame};
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
-use furnicraft_ui::{ContourGrip, DrawDraft, Editor, GripValue, MeshElement, PaletteContext, ViewFlags};
+use furnicraft_ui::{
+    CommandBar, CommandBarAction, ContourGrip, DrawDraft, Editor, GripValue, MeshElement, Message, PaletteContext,
+    ViewFlags, command_bar,
+};
 use furnicraft_units::Length;
 
 use crate::contour_gizmo;
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::{DrawAction, DrawGizmo, DrawModifiers};
-use crate::extrude_gizmo::{ExtrudeAction, ExtrudeEvent, ExtrudeGizmo};
+use crate::extrude_gizmo::{ExtrudeEvent, ExtrudeGizmo};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
 use crate::gizmo;
 use crate::gizmo_math;
@@ -131,6 +135,57 @@ impl Display {
     }
 }
 
+/// How long a rebuild may take before the shell announces the next one.
+///
+/// The evaluation is synchronous, so the only honest moment to paint «Перестроение…» is the frame
+/// *before* it runs: a scene whose last rebuild overran this budget waits one frame, keeps the last
+/// good geometry on screen and paints the busy state, and the work runs on the next frame, so the
+/// window answers input in between. A cheap scene never shows the message at all.
+pub(crate) const SLOW_REBUILD: Duration = Duration::from_millis(250);
+
+/// What the last rebuild cost, and whether the pending one has announced itself yet.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Rebuild {
+    /// How long the last evaluation took, if this scene has been evaluated since it opened.
+    last: Option<Duration>,
+    /// Whether the pending rebuild already painted its busy state.
+    announced: bool,
+}
+
+impl Rebuild {
+    /// Whether the last rebuild overran [`SLOW_REBUILD`].
+    pub(crate) fn slow(&self) -> bool {
+        self.last.is_some_and(|last| last >= SLOW_REBUILD)
+    }
+
+    /// Whether the status bar says «Перестроение…» while a rebuild is pending.
+    pub(crate) fn busy(&self, pending: bool) -> bool {
+        pending && (self.slow() || self.announced)
+    }
+
+    /// Whether the pending rebuild waits one frame so its busy state can be painted first.
+    ///
+    /// A cheap rebuild is never announced and never waits: the extra frame is paid only by the
+    /// scenes that would have blocked the frame that asked for it.
+    pub(crate) fn defer(&mut self, pending: bool) -> bool {
+        if !pending {
+            self.announced = false;
+            return false;
+        }
+        if self.slow() && !self.announced {
+            self.announced = true;
+            return true;
+        }
+        false
+    }
+
+    /// Records how long a rebuild took.
+    pub(crate) fn record(&mut self, elapsed: Duration) {
+        self.last = Some(elapsed);
+        self.announced = false;
+    }
+}
+
 /// One open scene and everything derived from it.
 pub(crate) struct Document {
     pub(crate) session: Session,
@@ -150,6 +205,13 @@ pub(crate) struct Document {
     /// The editor's visibility revision the frame was built from. A hidden subtree changes the
     /// frame without touching the document revision, so the rebuild watches both (ADR 0065).
     scene_visibility: u64,
+    /// The preview overlay's version the frame was built from. A previewing operation shows a node
+    /// the document does not hold yet, so the frame follows the overlay as it follows the revision.
+    scene_preview: u64,
+    /// How the last rebuild cost, so a scene that takes more than a frame announces the next one.
+    rebuild: Rebuild,
+    /// The rectangle the command bar drew last frame, so a press on it is chrome and never a pick.
+    command_bar_rect: Option<egui::Rect>,
     renderer: ViewportRenderer,
     /// The wgpu handles this tab draws with, cloned from the window's render state.
     render_state: egui_wgpu::RenderState,
@@ -221,6 +283,9 @@ impl Document {
         Ok(Self {
             scene_revision: session.project().revision(),
             scene_visibility: 0,
+            scene_preview: session.preview_version(),
+            rebuild: Rebuild::default(),
+            command_bar_rect: None,
             session,
             editor,
             kernel,
@@ -461,27 +526,32 @@ impl Document {
         self.scene.camera.projection()
     }
 
-    /// Whether the next [`Document::sync_scene`] will evaluate the scene.
+    /// Whether the status bar should say «Перестроение…» on this frame.
     ///
-    /// The status bar asks before the shell syncs, so the frame that pays for a rebuild is the one
-    /// that says «Перестроение…» instead of waiting a frame to admit it.
-    pub(crate) fn rebuild_pending(
-        &self,
-        viewport: &ViewportSettings,
-        cluster: &ViewCluster,
-        colors: SceneColors,
-    ) -> bool {
+    /// The shell asks before it syncs, so the frame that announces a heavy rebuild is the one that
+    /// paints the message and the last good geometry, and the work runs on the frame after it. A
+    /// cheap rebuild is never announced: it costs less than a frame and the message would be noise.
+    pub(crate) fn busy(&self, viewport: &ViewportSettings, cluster: &ViewCluster, colors: SceneColors) -> bool {
+        self.rebuild.busy(self.rebuild_pending(viewport, cluster, colors))
+    }
+
+    /// Whether the next [`Document::sync_scene`] will evaluate the scene.
+    fn rebuild_pending(&self, viewport: &ViewportSettings, cluster: &ViewCluster, colors: SceneColors) -> bool {
         Display::of(viewport, cluster, colors).colors != self.display.colors
             || self.session.project().revision() != self.scene_revision
             || self.editor.visibility_revision() != self.scene_visibility
+            || self.session.preview_version() != self.scene_preview
     }
 
     /// Takes the window's display state and rebuilds the frame when the document moved.
     ///
     /// The shell calls this once per frame for the active tab: the display switches belong to the
-    /// window, the geometry to the tab, and a scene that did not move costs nothing.
+    /// window, the geometry to the tab, and a scene that did not move costs nothing. A scene whose
+    /// last rebuild overran [`SLOW_REBUILD`] waits one frame here, so the busy state the shell just
+    /// painted is on screen while the work runs; `ctx` asks for that frame.
     pub(crate) fn sync_scene(
         &mut self,
+        ctx: &egui::Context,
         viewport: &ViewportSettings,
         cluster: &ViewCluster,
         colors: SceneColors,
@@ -494,24 +564,32 @@ impl Document {
             self.display.apply(&mut self.scene);
             return self.upload_scene();
         }
+        let pending = self.rebuild_pending(viewport, cluster, colors);
+        if self.rebuild.defer(pending) {
+            ctx.request_repaint();
+            return Ok(());
+        }
         self.refresh()
     }
 
-    /// Re-evaluates the scene when the document revision moved.
+    /// Re-evaluates the scene when the document revision, the visibility or the preview moved.
     ///
     /// Every operation that changes the document ends here, so a new frame is uploaded before the
     /// viewport draws again: the evaluated geometry, this tab's per-view styles and the window's
-    /// display state are composed into one frame.
+    /// display state are composed into one frame. The evaluation is timed, so the next rebuild of a
+    /// scene that takes longer than a frame is announced before it runs (M71).
     fn refresh(&mut self) -> Result<(), String> {
         let revision = self.session.project().revision();
         let visibility = self.editor.visibility_revision();
-        if revision == self.scene_revision && visibility == self.scene_visibility {
+        let preview = self.session.preview_version();
+        if revision == self.scene_revision && visibility == self.scene_visibility && preview == self.scene_preview {
             return Ok(());
         }
         // A delete or an undo can take a flag with it; pruning before the rebuild keeps a stale
         // hidden or locked id out of the frame the user is about to see.
         self.editor.retain_flags(self.session.project());
         let visibility = self.editor.visibility_revision();
+        let started = Instant::now();
         let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags())?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
@@ -521,7 +599,10 @@ impl Document {
         self.scene = scene;
         self.scene_revision = revision;
         self.scene_visibility = visibility;
-        self.upload_scene()
+        self.scene_preview = preview;
+        let uploaded = self.upload_scene();
+        self.rebuild.record(started.elapsed());
+        uploaded
     }
 
     pub(crate) fn upload_scene(&mut self) -> Result<(), String> {
@@ -676,44 +757,106 @@ impl Document {
 
     /// Applies one event from the pull arrow.
     ///
-    /// A released drag writes the height and keeps the pull open so the user can adjust it again;
-    /// a click or Enter finishes the pull, writing the height only if the drag did not already.
+    /// A drag only previews the height: the overlay shows the body the pull would produce and the
+    /// document is not written. A click finishes the pull, and finishing is the one command.
     fn apply_extrude_event(&mut self, event: ExtrudeEvent) -> Result<(), String> {
         match event {
-            ExtrudeEvent::Set { object, height } => {
-                self.editor.set_extrude_height(&mut self.session, object, height)?;
-                self.extrude_gizmo.committed_height(height);
-                self.refresh()
-            }
+            ExtrudeEvent::Preview { object, height } => self.preview_extrude(object, height),
             ExtrudeEvent::Finish { object, height } => self.finish_extrude(object, height),
         }
     }
 
-    /// Applies what the pull's numeric field asked for.
+    /// Shows the pull's height as a session preview, without writing the document.
     ///
-    /// Enter writes the typed height and closes the pull; Escape drops the pull without touching
-    /// the document, so the body keeps the height its last committed drag gave it.
-    pub(crate) fn apply_extrude_action(&mut self, action: ExtrudeAction) {
-        match action {
-            ExtrudeAction::Finish(height) => {
-                let Some(object) = self.extrude_gizmo.object() else {
-                    return;
-                };
+    /// The preview is the body itself at that height, evaluated from the same parameters the ✓
+    /// would store, so the user sees the solid and not a stand-in for it. It moves no revision and
+    /// leaves no undo entry (M71).
+    fn preview_extrude(&mut self, object: Id, height: Length) -> Result<(), String> {
+        let geometry = previewed_body(self.session.project(), object, height)?;
+        self.session.set_preview_geometry(object, geometry);
+        self.refresh()
+    }
+
+    /// Writes the pull's height once and drops the preview.
+    ///
+    /// Idempotent by construction: after the first call the pull is gone, so a second ✓ — a double
+    /// click, a key and a button in one frame — has no object to write and dispatches nothing.
+    pub(crate) fn finish_extrude(&mut self, object: Id, height: Length) -> Result<(), String> {
+        if extrude_writes(self.extrude_gizmo.committed(), height) {
+            self.editor.set_extrude_height(&mut self.session, object, height)?;
+        }
+        self.extrude_gizmo.cancel();
+        self.session.clear_preview();
+        self.refresh()
+    }
+
+    /// Drops the pull and its preview, leaving the body at the height the document holds.
+    ///
+    /// This is the ✕ and the Escape of the command bar: nothing was written, so restoring the
+    /// pre-command state is dropping the overlay and evaluating the document again.
+    pub(crate) fn cancel_extrude(&mut self) {
+        if !self.extrude_gizmo.is_active() {
+            return;
+        }
+        self.extrude_gizmo.cancel();
+        self.session.clear_preview();
+        if let Err(error) = self.refresh() {
+            self.last_error = Some(error);
+        }
+    }
+
+    /// Draws the command bar of the previewing operation and applies what it asked for.
+    ///
+    /// The bar is the one surface a previewing operation talks to: its field drives the preview
+    /// live, the ✓ commits it with a single command and the ✕ drops it. A number that leaves the
+    /// field's range or cannot be parsed is refused by the field itself, so the preview keeps the
+    /// last height the document could hold.
+    fn show_command_bar(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, opacity: u32) {
+        let Some(object) = self.extrude_gizmo.object() else {
+            self.command_bar_rect = None;
+            return;
+        };
+        let Some(height) = self.extrude_gizmo.height() else {
+            self.command_bar_rect = None;
+            return;
+        };
+        let focus = self.extrude_gizmo.take_focus();
+        let mut millimetres = height.millimetres_f64();
+        let maximum = (furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() / 1_000) as f64;
+        let outcome = command_bar::show(
+            ui,
+            viewport,
+            CommandBar {
+                label: Message::CmdSetExtrusionHeight,
+                value: &mut millimetres,
+                unit: "mm",
+                range: crate::extrude_gizmo::MIN_HEIGHT_MM..=maximum,
+                decimals: 3,
+                focus,
+            },
+            opacity,
+        );
+        // A press on the bar is chrome, exactly like a press on a panel: the bar floats over the
+        // scene, so its rectangle is handed to the viewport's own hit test next frame.
+        self.command_bar_rect = Some(outcome.rect);
+        // The field's number is the preview: a drag or a typed value shows the body at that height.
+        let whole = millimetres.round();
+        if let Some(next) = Length::from_millimetres(whole as i64)
+            && next != height
+            && let Err(error) = self.preview_extrude(object, next)
+        {
+            self.last_error = Some(error);
+        }
+        match outcome.action {
+            Some(CommandBarAction::Apply) => {
+                let height = self.extrude_gizmo.height().unwrap_or(height);
                 if let Err(error) = self.finish_extrude(object, height) {
                     self.last_error = Some(error);
                 }
             }
-            ExtrudeAction::Cancel => self.extrude_gizmo.cancel(),
+            Some(CommandBarAction::Cancel) => self.cancel_extrude(),
+            None => {}
         }
-    }
-
-    /// Writes the final height if the document does not hold it yet, then closes the pull.
-    pub(crate) fn finish_extrude(&mut self, object: Id, height: Length) -> Result<(), String> {
-        if self.extrude_gizmo.committed() != Some(height) {
-            self.editor.set_extrude_height(&mut self.session, object, height)?;
-        }
-        self.extrude_gizmo.cancel();
-        self.refresh()
     }
 
     /// Dispatches one `node.placement.set_many` for a finished drag and rebuilds the scene.
@@ -819,7 +962,12 @@ impl Document {
         // chrome is never a viewport hit.
         shell.pointer_position = ui.input(|input| input.pointer.hover_pos());
         let pointer = shell.pointer_position;
-        let pointer_on_chrome = pointer.is_some_and(|pointer| chrome.covers(pointer));
+        // A press on the command bar is chrome too: the bar floats over the scene, so a click on
+        // its field or its buttons is never a pick. The rectangle is the one the bar drew last
+        // frame, which is the one on screen while the bar stays open.
+        let pointer_on_chrome = pointer.is_some_and(|pointer| {
+            chrome.covers(pointer) || self.command_bar_rect.is_some_and(|bar| bar.contains(pointer))
+        });
         let content = chrome.content(area);
 
         // The viewport is the whole central area; the layout divides the uncovered content into
@@ -917,7 +1065,7 @@ impl Document {
         if self.extrude_gizmo.is_active()
             && (contour_editing || drawing || placing || self.editor.mesh_edit().is_some())
         {
-            self.extrude_gizmo.cancel();
+            self.cancel_extrude();
         }
         let pulling = interactive && self.extrude_gizmo.is_active();
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
@@ -1403,9 +1551,7 @@ impl Document {
             };
             self.vertex_gizmo.paint(ui, rect, target);
         } else if pulling {
-            if let Some(action) = self.extrude_gizmo.paint(ui, rect, self.scene.camera, self.session.project()) {
-                self.apply_extrude_action(action);
-            }
+            self.extrude_gizmo.paint(ui, rect, self.scene.camera, self.session.project());
         } else if navigating || locked_selection.is_some() {
             // The navigation gesture owns the viewport, and a locked selection owns nothing: an
             // axis under the pointer would compete with the camera drag, and a locked node draws no
@@ -1439,7 +1585,10 @@ impl Document {
             self.scene.camera = crate::scene_build::scene_camera(self.session.project(), target_camera);
         }
 
-        // The cluster floats over the drawn viewport, so it is the last thing painted inside it.
+        // The cluster floats over the drawn viewport, so it is the last thing painted inside it. A
+        // command bar takes the bottom-centre slot while a previewing operation runs, so the
+        // cluster moves up by the bar's height and the two never overlap.
+        let bar_offset = if self.extrude_gizmo.is_active() { command_bar::BAR_HEIGHT + 6.0 } else { 0.0 };
         let view = ClusterView {
             owns_view: viewport_owns_view(self.session.project()),
             projection: self.scene.camera.projection(),
@@ -1449,7 +1598,7 @@ impl Document {
             preset: self.layout.preset(target_leaf),
             style: self.layout.active_style(),
         };
-        match view_cluster::show(ui, content, &mut shell.cluster, view, opacity) {
+        match view_cluster::show(ui, content, &mut shell.cluster, view, opacity, bar_offset) {
             Some(ClusterAction::FrameAll) => self.frame_all(),
             Some(ClusterAction::Home) => self.home_view(),
             Some(ClusterAction::ToggleProjection) => self.toggle_view_projection(),
@@ -1468,6 +1617,7 @@ impl Document {
             Some(ClusterAction::OpenSettings) => shell.open_settings = true,
             None => {}
         }
+        self.show_command_bar(ui, content, opacity);
         self.paint_view_frames(ui, content, &regions);
     }
 
@@ -1654,7 +1804,7 @@ impl Document {
         if let Some(outcome) = outcome {
             if outcome.started_drawing {
                 self.draw_gizmo.reset();
-                self.extrude_gizmo.cancel();
+                self.cancel_extrude();
                 // Starting a drawing tool is a deliberate change of gesture: an armed navigation
                 // mode must not take the primary button back when the draft ends.
                 shell.cluster.navigation = None;
@@ -1735,18 +1885,18 @@ impl Document {
                 self.editor.cancel_primitive();
             }
         } else if self.extrude_gizmo.is_active() {
-            // The field parses a typed height itself and keeps both keys while it has focus.
-            // Outside it, Enter closes the pull and Escape drops it, leaving the height the
-            // document already holds.
-            if !ui.ctx().text_edit_focused() {
-                if escape {
-                    self.extrude_gizmo.cancel();
-                } else if enter
-                    && let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
-                    && let Err(error) = self.finish_extrude(object, height)
-                {
-                    self.last_error = Some(error);
-                }
+            // Escape drops the pull and its preview whatever has the focus: the field's text is part
+            // of the preview, so a cancel is never only a text cancel. Enter is the bar's when the
+            // field has the focus, because the field commits the typed height first and the bar
+            // then applies it; outside the field Enter finishes here, before the viewport draws.
+            if escape {
+                self.cancel_extrude();
+            } else if enter
+                && !ui.ctx().text_edit_focused()
+                && let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
+                && let Err(error) = self.finish_extrude(object, height)
+            {
+                self.last_error = Some(error);
             }
         } else if escape
             && !self.translate_gizmo.is_dragging()
@@ -1784,7 +1934,7 @@ impl Document {
             let sides = self.editor.polygon_sides();
             if take_drawing_shortcut(ui.ctx(), &mut self.editor, sides) {
                 self.draw_gizmo.reset();
-                self.extrude_gizmo.cancel();
+                self.cancel_extrude();
                 shell.cluster.navigation = None;
             }
         }
@@ -1834,6 +1984,30 @@ fn locked_command_refusal(editor: &Editor, project: &Project, id: &str, lang: La
 /// pins both navigation and the projection toggle; a command is the only way to change either.
 fn viewport_owns_view(project: &Project) -> bool {
     project.active_camera().is_none()
+}
+
+/// Whether a finish still has to write the height.
+///
+/// The pull closes on the first finish, so a second check — a double click, or a key and a button
+/// in one frame — finds no pull and dispatches nothing: the check applies once however often it is
+/// clicked (M71).
+fn extrude_writes(committed: Option<Length>, height: Length) -> bool {
+    committed.is_some_and(|committed| committed != height)
+}
+
+/// The body `object` would have at `height`, for the session preview.
+///
+/// The preview is the stored body with one number changed, so the frame shows the exact solid the
+/// ✓ would store: the same path, the same features and the same evaluator (M71).
+fn previewed_body(project: &Project, object: Id, height: Length) -> Result<Geometry, String> {
+    let node = project.object(object).ok_or_else(|| format!("{object:?} is not in the scene"))?;
+    let mut body = node
+        .geometry()
+        .as_constructive()
+        .cloned()
+        .ok_or_else(|| format!("{} is not a constructive body", node.name()))?;
+    body.set_height(height).map_err(|error| error.to_string())?;
+    Ok(Geometry::Constructive(body))
 }
 
 /// World placements a drag previews for cameras and lights.
@@ -1944,11 +2118,58 @@ mod tests {
     use furnicraft_geom::{DMat4, DQuat, DVec3};
     use furnicraft_model::{CameraProjection, LightKind};
     use furnicraft_scene::Projection;
-    use furnicraft_testkit::sample_project;
+    use furnicraft_testkit::{millimetres, sample_project};
 
     use super::*;
     use crate::icons;
     use crate::view_cluster::projection_button;
+
+    #[test]
+    fn a_cheap_rebuild_is_never_announced() {
+        let mut rebuild = Rebuild::default();
+        assert!(!rebuild.busy(true), "nothing is known about a scene that has not rebuilt yet");
+        rebuild.record(Duration::from_millis(8));
+        assert!(!rebuild.slow(), "8 ms is inside the budget");
+        assert!(!rebuild.busy(true), "a cheap rebuild shows no message");
+        assert!(!rebuild.defer(true), "and it does not cost a frame");
+        assert!(!rebuild.busy(false));
+    }
+
+    #[test]
+    fn a_simulated_slow_rebuild_reports_busy_and_waits_one_frame() {
+        // A rebuild that overran the budget is announced before the next one runs: the first frame
+        // paints «Перестроение…» and keeps the last good geometry, and the work runs on the next.
+        let mut rebuild = Rebuild::default();
+        rebuild.record(SLOW_REBUILD);
+        assert!(rebuild.slow());
+        assert!(rebuild.busy(true), "the status bar says the scene is rebuilding");
+        assert!(rebuild.defer(true), "the frame does no work, so it stays responsive");
+        assert!(rebuild.busy(true), "the message is still up on the frame that works");
+        assert!(!rebuild.defer(true), "the next frame pays for the rebuild");
+        rebuild.record(Duration::from_millis(4));
+        assert!(!rebuild.busy(true), "a fast rebuild ends the message");
+    }
+
+    #[test]
+    fn the_rebuild_flag_clears_when_nothing_is_pending() {
+        let mut rebuild = Rebuild::default();
+        rebuild.record(SLOW_REBUILD);
+        assert!(rebuild.defer(true));
+        assert!(!rebuild.defer(false), "an idle frame runs no work and clears the flag");
+        assert!(rebuild.defer(true), "so the next slow rebuild is announced again");
+    }
+
+    #[test]
+    fn the_check_writes_once_and_a_second_one_writes_nothing() {
+        // The pull is open and holds the document's height: the first check writes nothing either,
+        // because the body already has that height.
+        assert!(!extrude_writes(Some(millimetres(100)), millimetres(100)), "no write when the document agrees");
+        assert!(extrude_writes(Some(millimetres(100)), millimetres(250)), "a new height is written");
+        assert!(
+            !extrude_writes(None, millimetres(250)),
+            "a closed pull writes nothing, so a double check is one write"
+        );
+    }
 
     /// Root (1): shelf (2), drawer (3) with front (4), rig (5) carrying a camera and a light.
     struct Fixture {

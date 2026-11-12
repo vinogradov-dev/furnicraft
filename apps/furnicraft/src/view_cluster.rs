@@ -172,18 +172,22 @@ pub(crate) fn cluster_fill(ui: &egui::Ui, opacity: u32) -> egui::Color32 {
 }
 
 /// Draws the cluster over `viewport` and applies its own view-state changes.
+///
+/// `lift` raises the cluster by that many points, so the command bar of a previewing operation can
+/// take the bottom-centre slot without the two overlapping (M71).
 pub(crate) fn show(
     ui: &mut egui::Ui,
     viewport: egui::Rect,
     state: &mut ViewCluster,
     view: ClusterView,
     opacity: u32,
+    lift: f32,
 ) -> Option<ClusterAction> {
     let mut action = None;
     let response = egui::Area::new(egui::Id::unique("view_cluster"))
         .order(egui::Order::Middle)
         .pivot(egui::Align2::CENTER_BOTTOM)
-        .fixed_pos(cluster_anchor(viewport, theme::FLOATING_OFFSET))
+        .fixed_pos(cluster_anchor(viewport, theme::FLOATING_OFFSET + lift))
         .constrain_to(viewport)
         .show(ui.ctx(), |ui| {
             let frame = egui::Frame::new()
@@ -595,12 +599,12 @@ mod tests {
         // An area is drawn invisibly on its sizing pass, so the second frame is the one that shows it.
         for _ in 0..2 {
             let output = ctx.run_ui(input.clone(), |ui| {
-                show(ui, viewport, &mut state, view, 92);
+                show(ui, viewport, &mut state, view, 92, 0.0);
             });
             output.drop_without_applying_deltas();
         }
         let output = ctx.run_ui(input.clone(), |ui| {
-            show(ui, viewport, &mut state, view, 92);
+            show(ui, viewport, &mut state, view, 92, 0.0);
         });
         let texts = drawn_text(&output.shapes);
         output.drop_without_applying_deltas();
