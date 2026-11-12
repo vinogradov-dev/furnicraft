@@ -15,6 +15,8 @@
     clippy::unreachable
 )]
 
+use std::path::PathBuf;
+
 use furnicraft_model::{Catalog, EdgeBandingMaterial, MaterialId, PanelMaterial, PanelNominalSize, PanelRect};
 use furnicraft_units::Length;
 
@@ -22,6 +24,19 @@ use furnicraft_units::Length;
 /// (C7): a crate cannot re-export them back into `furnicraft-model`, because the dev-dependency
 /// cycle would compile the model twice and its types would not match.
 pub use furnicraft_model::testing::{millimetres, open_path, sample_project};
+
+/// A unique, empty scratch directory under the session temp root.
+///
+/// A fixture that writes a file needs a path nobody else uses: the name keeps the call sites of one
+/// test binary apart and the process id keeps two binaries running at once apart. The directory is
+/// removed and created again, so a test that died halfway never hands its leftovers to the next
+/// run. Failures are left to the test: a directory that cannot be made shows up as a missing file.
+pub fn scratch_dir(name: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("furnicraft-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let _ = std::fs::create_dir_all(&directory);
+    directory
+}
 
 /// The stable id of the sample panel material.
 #[allow(clippy::expect_used)]

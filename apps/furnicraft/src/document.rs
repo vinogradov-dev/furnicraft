@@ -30,8 +30,10 @@ use furnicraft_kernel_truck::TruckKernel;
 use furnicraft_mesh::{EvaluationCache, object_mesh};
 use furnicraft_model::{Catalog, CornerMove, Geometry, Id, NodeQuery, Placement, Project, Revision, StructuralKind};
 use furnicraft_project::SceneFile;
-use furnicraft_render::ViewportRenderer;
-use furnicraft_scene::{Camera, ContactShadows, Polyline, Projection, SELECTION_LINE_COLOR, SceneColors, SceneFrame};
+use furnicraft_render::{ViewSpec, ViewportRenderer};
+use furnicraft_scene::{
+    Camera, ContactShadows, Lighting, Polyline, Projection, SELECTION_LINE_COLOR, SceneColors, SceneFrame,
+};
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{
@@ -186,6 +188,62 @@ impl Rebuild {
     }
 }
 
+/// The GPU handles one tab draws with: the window's render state, this tab's render target and the
+/// texture egui draws that target into.
+///
+/// The window always has one. A test builds the application without a device, an adapter or a
+/// window, and then the document holds none: the frame still lays out, picks and paints its
+/// overlays, it only draws no scene image (U77).
+struct Target {
+    /// The window's handles, cloned once, so a tab never reaches back into the shell.
+    render_state: egui_wgpu::RenderState,
+    /// This tab's colour target: one image for every view of the split layout.
+    renderer: ViewportRenderer,
+    /// The egui texture that target is drawn through.
+    texture_id: egui::TextureId,
+}
+
+impl Target {
+    /// Creates a `width` x `height` pixel target and registers it with egui.
+    fn new(render_state: &egui_wgpu::RenderState, width: u32, height: u32) -> Self {
+        let renderer = ViewportRenderer::new(&render_state.device, width, height);
+        let texture_id = render_state.renderer.write().register_native_texture(
+            &render_state.device,
+            renderer.color_view(),
+            wgpu::FilterMode::Linear,
+        );
+        Self { render_state: render_state.clone(), renderer, texture_id }
+    }
+
+    /// Uploads one frame of this scene into the target.
+    fn upload(&mut self, scene: &SceneFrame) -> Result<(), String> {
+        self.renderer.upload(&self.render_state.device, scene).map_err(|error| error.to_string())
+    }
+
+    /// Follows the viewport's pixel size; a size the target already has costs nothing.
+    fn resize(&mut self, width: u32, height: u32) {
+        let device = self.render_state.device.clone();
+        if self.renderer.resize(&device, width, height) {
+            self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
+                &device,
+                self.renderer.color_view(),
+                wgpu::FilterMode::Linear,
+                self.texture_id,
+            );
+        }
+    }
+
+    /// One pass per view into this target, in the order the layout tiles them.
+    fn render(&mut self, scene: &SceneFrame, lighting: &Lighting, views: &[ViewSpec]) {
+        self.renderer.render_views(&self.render_state.device, &self.render_state.queue, scene, lighting, views);
+    }
+
+    /// Hands the texture back to the window's renderer, so a closed document leaves no target behind.
+    fn release(self) {
+        self.render_state.renderer.write().free_texture(&self.texture_id);
+    }
+}
+
 /// One open scene and everything derived from it.
 pub(crate) struct Document {
     pub(crate) session: Session,
@@ -212,12 +270,8 @@ pub(crate) struct Document {
     rebuild: Rebuild,
     /// The rectangle the command bar drew last frame, so a press on it is chrome and never a pick.
     command_bar_rect: Option<egui::Rect>,
-    renderer: ViewportRenderer,
-    /// The wgpu handles this tab draws with, cloned from the window's render state.
-    render_state: egui_wgpu::RenderState,
-    /// The texture this tab draws into; a close frees it, so a workspace of tabs holds no stale
-    /// render targets.
-    texture_id: egui::TextureId,
+    /// The window's GPU handles and this tab's render target; `None` in a headless run (U77).
+    target: Option<Target>,
     file: FileMenu,
     /// Top-level sections of the loaded file that this build does not understand; written back on
     /// save so an older build never silently destroys a newer build's data.
@@ -243,14 +297,15 @@ pub(crate) struct Document {
 }
 
 impl Document {
-    /// Builds a document around a session: evaluates the scene, fits every view and registers its
-    /// own render target.
+    /// Builds a document around a session: evaluates the scene, fits every view and, when the window
+    /// has a GPU, registers its own render target.
     ///
     /// The workspace defaults come from `settings` and the display diagnostics, including the
     /// active theme's viewport colours, from the window's `shell`; none of it ever enters the scene
-    /// file.
+    /// file. `render_state` is `None` in a headless run, where a test drives the real frame with no
+    /// device and no window (U77).
     pub(crate) fn new(
-        render_state: &egui_wgpu::RenderState,
+        render_state: Option<&egui_wgpu::RenderState>,
         settings: &Settings,
         shell: &Shell,
         session: Session,
@@ -273,12 +328,10 @@ impl Document {
         // new tab opens the ribbon the way the user left the last one.
         editor.set_ribbon_open(settings.ribbon.open);
         editor.set_pinned_variants(settings.ribbon.pinned_variants.clone());
-        let mut renderer = ViewportRenderer::new(&render_state.device, 1280, 800);
-        let texture_id = {
-            let mut egui_renderer = render_state.renderer.write();
-            egui_renderer.register_native_texture(&render_state.device, renderer.color_view(), wgpu::FilterMode::Linear)
-        };
-        renderer.upload(&render_state.device, &scene).map_err(|error| error.to_string())?;
+        let mut target = render_state.map(|render_state| Target::new(render_state, 1280, 800));
+        if let Some(target) = target.as_mut() {
+            target.upload(&scene)?;
+        }
 
         Ok(Self {
             scene_revision: session.project().revision(),
@@ -293,9 +346,7 @@ impl Document {
             scene,
             layout,
             scene_bounds,
-            renderer,
-            render_state: render_state.clone(),
-            texture_id,
+            target,
             file: FileMenu::new(),
             extra,
             translate_gizmo: TranslateGizmo::default(),
@@ -319,7 +370,7 @@ impl Document {
     /// empty history, an empty selection and a fresh evaluation. The catalogue is the workspace's —
     /// it is session state, not scene data, and the file never carries it.
     pub(crate) fn open(
-        render_state: &egui_wgpu::RenderState,
+        render_state: Option<&egui_wgpu::RenderState>,
         settings: &Settings,
         shell: &Shell,
         path: &Path,
@@ -370,9 +421,15 @@ impl Document {
         self.session.can_redo()
     }
 
-    /// The render target this tab draws into, so a close can free it.
-    pub(crate) fn texture_id(&self) -> egui::TextureId {
-        self.texture_id
+    /// Frees this tab's render target and drops the document.
+    ///
+    /// The texture is registered on the window's egui renderer and outlives the document that drew
+    /// into it, so a workspace that opens and closes scenes has to hand it back; a headless
+    /// document has none to give.
+    pub(crate) fn release(mut self) {
+        if let Some(target) = self.target.take() {
+            target.release();
+        }
     }
 
     /// Whether the ribbon of this scene is unfolded.
@@ -626,7 +683,9 @@ impl Document {
         // Keep the chains of the frame that is about to be uploaded, after every preview, so the
         // screen-space outline is drawn where the renderer draws the path.
         self.selected_chains = frame.polylines().iter().filter(|chain| geometry.contains(&chain.id)).cloned().collect();
-        self.renderer.upload(&self.render_state.device, &frame).map_err(|error| error.to_string())?;
+        if let Some(target) = self.target.as_mut() {
+            target.upload(&frame)?;
+        }
         self.highlighted.clear();
         self.highlighted.extend_from_slice(selection);
         self.uploaded_preview = self.preview_key();
@@ -1030,14 +1089,8 @@ impl Document {
         let points_per_pixel = ui.ctx().pixels_per_point();
         let width = (area.width() * points_per_pixel).round().max(1.0) as u32;
         let height = (area.height() * points_per_pixel).round().max(1.0) as u32;
-        let device = self.render_state.device.clone();
-        if self.renderer.resize(&device, width, height) {
-            self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
-                &device,
-                self.renderer.color_view(),
-                wgpu::FilterMode::Linear,
-                self.texture_id,
-            );
+        if let Some(target) = self.target.as_mut() {
+            target.resize(width, height);
         }
 
         let pointer_over_widget = !pointer_on_chrome
@@ -1464,34 +1517,45 @@ impl Document {
         // A drag preview commits nothing, but the frame can still follow a moved light: the shader
         // reads one uniform, so a sun direction or a point-light position updates without a mesh
         // rebuild. With no moved light the base lighting is already correct.
-        let lighting = if previewed.is_empty() {
-            self.scene.lighting.clone()
-        } else {
-            crate::scene_build::authored_lighting_with(self.session.project(), &previewed, self.editor.flags())
-                .unwrap_or_else(|| self.scene.lighting.clone())
-        };
-        // One pass per view into the same target: the camera comes from the view, the region from
-        // its rectangle, and the aspect ratio from the region, so a narrow view is not stretched
-        // by the workspace's shape.
-        let views: Vec<furnicraft_render::ViewSpec> = regions
-            .iter()
-            .filter_map(|(leaf, view_rect)| {
-                let leaf = self.layout.leaf(*leaf)?;
-                let camera = crate::scene_build::scene_camera(self.session.project(), leaf.camera());
-                Some(furnicraft_render::ViewSpec {
-                    camera,
-                    region: view_region(area, *view_rect, points_per_pixel),
-                    shading: leaf.style(),
-                })
-            })
-            .collect();
-        self.renderer.render_views(&self.render_state.device, &self.render_state.queue, &self.scene, &lighting, &views);
-        ui.painter().with_clip_rect(area).image(
-            self.texture_id,
-            area,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+        //
+        // The passes and the image are the only part of the frame that needs a GPU. A headless
+        // application draws the window's own background in their place, so the scene rectangle, the
+        // layers and the overlays are still exactly what the window would draw (U77).
+        match self.target.as_mut() {
+            Some(target) => {
+                let lighting = if previewed.is_empty() {
+                    self.scene.lighting.clone()
+                } else {
+                    crate::scene_build::authored_lighting_with(self.session.project(), &previewed, self.editor.flags())
+                        .unwrap_or_else(|| self.scene.lighting.clone())
+                };
+                // One pass per view into the same target: the camera comes from the view, the region
+                // from its rectangle, and the aspect ratio from the region, so a narrow view is not
+                // stretched by the workspace's shape.
+                let views: Vec<ViewSpec> = regions
+                    .iter()
+                    .filter_map(|(leaf, view_rect)| {
+                        let leaf = self.layout.leaf(*leaf)?;
+                        let camera = crate::scene_build::scene_camera(self.session.project(), leaf.camera());
+                        Some(ViewSpec {
+                            camera,
+                            region: view_region(area, *view_rect, points_per_pixel),
+                            shading: leaf.style(),
+                        })
+                    })
+                    .collect();
+                target.render(&self.scene, &lighting, &views);
+                ui.painter().with_clip_rect(area).image(
+                    target.texture_id,
+                    area,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+            }
+            None => {
+                ui.painter().with_clip_rect(area).rect_filled(area, 0.0, ui.visuals().extreme_bg_color);
+            }
+        }
         // The overlaid feedback is drawn per view, with that view's camera and rectangle, so a
         // camera glyph or a selection outline lands where its own pass drew the model.
         for (leaf, view_rect) in &regions {
