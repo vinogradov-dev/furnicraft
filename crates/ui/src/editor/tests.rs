@@ -1559,3 +1559,56 @@ fn the_master_key_starts_the_pinned_method_with_the_list_closed() {
     assert_eq!(editor.drawing().map(DrawDraft::tool), Some(DrawTool::CircleThreePoints));
     assert!(editor.toolbars_mut().list().is_none(), "a shortcut never opens the list");
 }
+
+/// The middle of the first accessibility node labelled `label`, so a test can aim at a face.
+///
+/// The ribbon's faces are not on a pitch a test can count: a cell is split and the caption band and
+/// the field take their own width, so the frame is asked where it put the control.
+fn node_center(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+    let update = output.platform_output.accesskit_update.as_ref()?;
+    update.nodes.iter().find_map(|(_, node)| {
+        if node.label() != Some(label) {
+            return None;
+        }
+        let bounds = node.bounds()?;
+        Some(egui::pos2(((bounds.x0 + bounds.x1) / 2.0) as f32, ((bounds.y0 + bounds.y1) / 2.0) as f32))
+    })
+}
+
+#[test]
+fn a_caret_click_opens_the_list_and_writes_no_revision() {
+    // The split cell is two controls, and both are view state: opening the list can never reach the
+    // document, so the caret is clicked through the real ribbon and the revision is compared (U74).
+    let (project, _) = cube_project();
+    let mut session = Session::new(project);
+    let mut editor = Editor::new();
+    let revision = session.project().revision();
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let help = furnicraft_text::Message::ToolMethods.text(furnicraft_text::Lang::En);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 720.0));
+    let mut caret = None;
+    for press in [None, Some(true), Some(false)] {
+        let events = match press {
+            Some(pressed) => vec![egui::Event::PointerButton {
+                pos: caret.unwrap_or(egui::pos2(20.0, 20.0)),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            None => Vec::new(),
+        };
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let output = ctx.run_ui(input, |ui| {
+            let _ = editor.show_ribbon(ui, &mut session, RibbonView::default());
+        });
+        if caret.is_none() {
+            caret = node_center(&output, help);
+        }
+        output.drop_without_applying_deltas();
+    }
+    assert!(caret.is_some(), "the caret face publishes its name");
+    assert!(editor.variant_list_open(), "a click on the caret opens the list");
+    assert_eq!(session.project().revision(), revision, "opening the list is view state, not an edit");
+    assert!(editor.pinned_variants().is_empty(), "opening the list pins nothing");
+}

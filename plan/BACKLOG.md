@@ -25,36 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
-  Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
-   method needs two clicks and the glyph never says which method a click runs. The pin is a 20
-   x 12 control in the same right-to-left row as the shortcut, so it covers the key label, and
-   pinning leaves the main cell unchanged. The owner wants two independent faces inside one
-   button.
-  Shape: Split the cell into two hit rectangles inside the same 34 x 30 control: a main face
-   that runs `pinned_index` and a caret face of at least 10 x 10 that opens or closes the list.
-   Draw one resting fill and let hover, press and the armed tint apply to the face under the
-   pointer; no gap between the faces. The main face draws the pinned method icon when it has
-   one, otherwise `tool.icon`, and its hint names the pinned method and its shortcut; the caret
-   hint names the list. A main-face click while the list is open runs the pinned method and
-   closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
-   columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
-   never overlaps the shortcut. The pin is not drawn at rest: it appears on the row under the
-   pointer and on the row the keyboard highlights, while its column stays reserved so the label
-   and shortcut never shift; the pinned row keeps its accent bar and fill as the persistent
-   marker, and the pin hint says it becomes the main method. Pinning writes
-   `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
-   new accent.
-  Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
-   opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
-   after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
-   pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
-   intersect on any row in either language; the pin is not drawn on an idle row, appears on
-   hover and on the keyboard-highlighted row, and its reserved column keeps the label and
-   shortcut from moving; the pinned row stays marked when the pin is hidden; Escape, outside
-   click and tab change still close; opening, caret and pin write no document revision. Both
-   themes and 100 and 200 % scale checked by eye.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs`
 - `[ ]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
   Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
    the tool row, and `theme::band` is `extreme_bg_color`, the darkest chrome, which makes the
@@ -94,6 +64,91 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    it and makes that the next default; no `FieldKind`, `FieldRefusal` or field message remains;
    `cargo xtask ci` green.
   `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/ribbon.rs, crates/ui/src/object_card.rs, crates/text/src/messages.rs`
+- `[ ]` **U77** the shell's one frame is callable without a window, so a session can check the real interface silently
+  Why: FurniCraftApp implements eframe::App::ui and holds render_state: egui_wgpu::RenderState,
+   so only the running window can drive the real interface: the checks in crates/ui exercise a
+   card or a field in isolation, and a shell rule — the scene rectangle, the layer order,
+   Chrome::covers, a key while a modal is up — is verified by starting the app. The owner wants
+   those checks to run while he uses the machine.
+  Shape: Move everything App::ui does today into an inherent FurniCraftApp::frame(&mut self,
+   ui: &mut egui::Ui); the trait method delegates and ignores its Frame. Make the GPU handle
+   optional, so a test builds the app with no device, no adapter and no window and the paint
+   callback is skipped instead of registered. Give SettingsStore a constructor on an explicit
+   path, so a test never reads or writes the workspace file in the OS config directory; build
+   the document, the tabs and the settings from testkit fixtures. No behaviour change in the
+   window: the same frame, the same order.
+  Done: Tests: a headless egui::Context runs frame twice and the second frame is stable (no
+   panic, no document revision); the app constructs and runs with no GPU and no window; the
+   workspace settings file is byte-identical after a headless run; the window still opens and
+   draws by eye. cargo xtask ci green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/tabs.rs, apps/furnicraft/src/settings_store.rs, crates/testkit/src/lib.rs`
+- `[ ]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
+  Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a
+   panel selects nothing" and "both themes checked by eye"; each of those is re-verified today
+   by starting the app on the owner's screen. After U77 the same frame runs in a test, so the
+   sentence becomes an assertion and a regression cannot come back quietly.
+  Shape: A test module beside the shell (apps/furnicraft/src/frame_tests.rs, declared from
+   main.rs) with one helper that builds the app headless and drives RawInput. Cover: the scene
+   rectangle and the active camera aspect are identical with both panels expanded, folded and
+   hidden and with the ribbon open and folded; a click on a panel is chrome and starts no pick,
+   no border drag and no camera gesture, while a click just outside selects; two-column and
+   quad tile the view rect exactly and their dividers stay grabbable; a modal owns the keys, so
+   no save, undo, reframe or tool change happens under it; no fold, hide or camera move writes
+   a revision. Keep the assertions on public shell facts, not on private fields.
+  Done: Every listed assertion is a test that fails when the rule is broken, proven by
+   temporarily reverting one line of Chrome::content and one of the key handler; cargo xtask ci
+   green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/strip.rs, apps/furnicraft/src/shortcuts.rs, crates/testkit/src/lib.rs`
+- `[ ]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
+  Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
+   to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
+   skill load reliably. The move to `.pi/skills` also showed that pi parses frontmatter as
+   strict YAML: an unquoted colon in a description silently loaded no skill at all, and nothing
+   in the gate noticed.
+  Shape: A new `xtask/src/skills.rs` in the shape of the other checks. It reads `AGENTS.md`,
+   `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a sentence when: a path named in
+   backticks or as a markdown link does not exist; a `cargo xtask <name>` is not a command of
+   the tool; a `references/*.md` a skill names is missing; the frontmatter `name` is not the
+   folder name; `description` is missing, empty or unquoted; a `SKILL.md` is over 200 lines or
+   a reference over 150; `AGENTS.md` §1.3 does not name the design skill. Tests use fixture
+   trees, one per refusal, and the real tree must pass. Join `cargo xtask ci` after `docs`.
+  Done: Each refusal has a test that names the offending file; the real tree passes; cargo
+   xtask ci runs the new step and fails when a path in a skill is renamed away.
+  `files: xtask/src/main.rs, AGENTS.md, .pi/skills/ui-design/SKILL.md, .pi/prompts/ui-review.md`
+- `[ ]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
+  Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
+   it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
+   and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
+   click that should have been a pick. Review catches this sometimes; a parse catches it every
+   time.
+  Shape: A new xtask/src/ui_rules.rs that parses the source with syn rather than grepping text,
+   so an alias cannot slip past. Refused outside crates/ui/src/theme.rs: Color32::from_rgb,
+   from_rgba*, from_gray, the named constants and a raw struct literal. Refused outside a table
+   of owners (the shell's side_panels, status_bar, view_cluster, strip and ui's palette,
+   settings, home): egui::Area, Window, Panel, SidePanel, TopBottomPanel, CentralPanel, Popup.
+   The table is a const in the check, so adding a surface is one row and no allowance comment.
+   Join cargo xtask ci after layers.
+  Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
+   a host in a card fails; theme.rs and every owner in the table pass; an alias (use
+   egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
+  `files: xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs`
+- `[ ]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
+  Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
+   55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
+   only way to answer it is to start the app while the owner is working. An offscreen render
+   into target/ui-shots answers it silently and leaves a picture the session can read.
+  Shape: After U77's seam: a wgpu instance and adapter with no surface, a device and queue,
+   egui_wgpu::Renderer on the app's own frame, a texture with RENDER_ATTACHMENT and COPY_SRC,
+   copy_texture_to_buffer and a PNG writer under target/ui-shots. One ignored test renders the
+   matrix: three presets, dark and light, panel opacity 55, 92 and 100, panels expanded and
+   folded, 100 and 200 % scale, on the same fixture scene. No adapter prints one sentence and
+   skips, so the check is safe on a machine without a GPU; the PNGs are looked at, never
+   compared pixel by pixel in CI.
+  Done: A run writes one PNG per cell of the matrix into target/ui-shots with a name that says
+   the cell; a machine without an adapter skips with a readable sentence; the image at 55 %
+   shows the model through the panel and the light image is not washed out; cargo test
+   --workspace and cargo xtask ci stay green without a GPU.
+  `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs`
 
 ## Bugs
 
@@ -120,6 +175,37 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
+  Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
+   method needs two clicks and the glyph never says which method a click runs. The pin is a 20
+   x 12 control in the same right-to-left row as the shortcut, so it covers the key label, and
+   pinning leaves the main cell unchanged. The owner wants two independent faces inside one
+   button.
+  Shape: Split the cell into two hit rectangles inside the same 34 x 30 control: a main face
+   that runs `pinned_index` and a caret face of at least 10 x 10 that opens or closes the list.
+   Draw one resting fill and let hover, press and the armed tint apply to the face under the
+   pointer; no gap between the faces. The main face draws the pinned method icon when it has
+   one, otherwise `tool.icon`, and its hint names the pinned method and its shortcut; the caret
+   hint names the list. A main-face click while the list is open runs the pinned method and
+   closes it; the caret only toggles. Keep the keyboard rules. In `list.rs`, reserve fixed
+   columns `[glyph][label with ellipsis][shortcut][pin]`, with at least 6 pt apart, so the pin
+   never overlaps the shortcut. The pin is not drawn at rest: it appears on the row under the
+   pointer and on the row the keyboard highlights, while its column stays reserved so the label
+   and shortcut never shift; the pinned row keeps its accent bar and fill as the persistent
+   marker, and the pin hint says it becomes the main method. Pinning writes
+   `ribbon.pinned_variants` and redraws the main face at once; the list may stay open under the
+   new accent.
+  Done: Tests: a main-face click on a multi-method tool runs exactly the pinned method and
+   opens nothing; a caret click opens the list and runs nothing; the caret closes an open list;
+   after a pin, a main-face click runs the new method and the cell draws its icon and hint; a
+   pinned method without artwork falls back to the tool icon; pin and shortcut rects do not
+   intersect on any row in either language; the pin is not drawn on an idle row, appears on
+   hover and on the keyboard-highlighted row, and its reserved column keeps the label and
+   shortcut from moving; the pinned row stays marked when the pin is hidden; Escape, outside
+   click and tab change still close; opening, caret and pin write no document revision. Both
+   themes and 100 and 200 % scale checked by eye.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars/list.rs, crates/ui/src/toolbars/state.rs, crates/ui/src/icons.rs, crates/text/src/messages.rs` — `b459feb`
 
 - `[x]` **U73** the corner orientation widget avoids the ribbon and both side panels, and the display-settings popover can hide it
   Why: `gizmo::widget_rect` takes the top-right of the active view minus the ribbon only, so

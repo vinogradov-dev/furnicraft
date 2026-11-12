@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U74 state=idle base=45283da updated=2026-11-12
+STATE: milestone=M7 phase=A task=U75 state=idle base=b459feb updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U74 is next: a tool with variants becomes a split button — the main face runs the pinned method, a
-joined caret opens the list, and pinning changes the main face without covering a shortcut.
+U75 is next: the ribbon group caption gets air above and below and sits one quiet step below the
+control tone, instead of sitting on the darkest chrome.
 
 ## Index
 

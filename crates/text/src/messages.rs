@@ -804,8 +804,9 @@ messages! {
     ToolPolygonSides = ["By side count", "По числу сторон"],
     SectionBuild = ["Build", "Построение"],
     SectionTangents = ["Tangents", "Касательные"],
-    PinMethod = ["Keep as the default method", "Сделать способом по умолчанию"],
-    MethodPinned = ["The default method", "Способ по умолчанию"],
+    PinMethod = ["Use this as the main method", "Сделать основным способом"],
+    MethodPinned = ["The main method", "Основной способ"],
+    ToolMethods = ["All methods", "Все способы"],
 
     FieldSides = ["Sides", "Стороны"],
     FieldSize = ["Size", "Размер"],

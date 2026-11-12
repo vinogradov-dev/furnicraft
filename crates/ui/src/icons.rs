@@ -32,6 +32,12 @@ pub const RIBBON_ICON_POINT_SIZE: f32 = 22.0;
 /// Point size of a ribbon group's caption, before the UI scale turns it into pixels.
 pub const RIBBON_CAPTION_POINT_SIZE: f32 = 9.5;
 
+/// The width of the caret face of a split ribbon cell, in points.
+///
+/// It is the right column of the same cell, so the two faces tile the control with no gap between
+/// them, and it is well past the 10 x 10 a pointer needs to hit a control without aiming (U74).
+pub const RIBBON_CARET_WIDTH: f32 = 10.0;
+
 /// The semantic family of an icon: the role its ink carries and the meaning it speaks for.
 ///
 /// A family is not a theme directory — `contour/arc` is [`Family::Draw`] while `actions/delete` is
@@ -665,6 +671,136 @@ pub fn ribbon_cell(ui: &mut Ui, width: f32, icon: Icon, hint: &str, enabled: boo
     if hint.is_empty() { response } else { response.on_hover_text(hint) }
 }
 
+/// The two faces of a split ribbon cell: the method a click runs and the caret that lists the rest.
+///
+/// Both faces sit inside one [`crate::theme::RIBBON_CELL_WIDTH`] x
+/// [`crate::theme::RIBBON_ROW_HEIGHT`] control: the main face takes everything but the right
+/// [`RIBBON_CARET_WIDTH`] points, and the two hit rectangles touch, so there is no dead strip
+/// between them. The main face anchors the variant list.
+pub struct SplitCell {
+    /// The face that runs the pinned method.
+    pub main: Response,
+    /// The face that opens or closes the list.
+    pub caret: Response,
+}
+
+/// A ribbon cell split into a main face and a caret face (U74).
+///
+/// A tool with more than one input method needs two answers from one cell: the method the workspace
+/// pinned, on the face that carries the glyph, and the list of the others, behind the caret. The
+/// resting cell is still one quiet face; the hover, the press and the armed tint follow the face
+/// under the pointer, and only that face's outer corners are rounded, so a hover never reads as two
+/// buttons.
+///
+/// `enabled` is the main face's: a pinned method that cannot run here leaves a dim face whose hint
+/// says why, while the caret stays live, because the list is the only way to choose another method.
+/// `on` is the tool's, not the face's: an armed tool carries the accent across the whole cell.
+pub fn ribbon_split_cell(
+    ui: &mut Ui,
+    width: f32,
+    icon: Icon,
+    hint: &str,
+    caret_hint: &str,
+    enabled: bool,
+    on: bool,
+) -> SplitCell {
+    let size = Vec2::new(width, crate::theme::RIBBON_ROW_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let seam = (rect.right() - RIBBON_CARET_WIDTH).max(rect.left());
+    let main_rect = egui::Rect::from_min_max(rect.min, pos2(seam, rect.bottom()));
+    let caret_rect = egui::Rect::from_min_max(pos2(seam, rect.top()), rect.max);
+    let main = ui.interact(main_rect, response.id.with("method"), Sense::click());
+    let caret = ui.interact(caret_rect, response.id.with("caret"), Sense::click());
+    if ui.is_rect_visible(rect) {
+        paint_split_cell(ui, rect, main_rect, caret_rect, &main, &caret, icon, hint, enabled, on);
+    }
+    main.widget_info(|| WidgetInfo::selected(Role::Button, enabled, on, hint));
+    caret.widget_info(|| WidgetInfo::labeled(Role::Button, true, caret_hint));
+    SplitCell {
+        main: if hint.is_empty() { main } else { main.on_hover_text(hint) },
+        caret: if caret_hint.is_empty() { caret } else { caret.on_hover_text(caret_hint) },
+    }
+}
+
+/// Paints one split cell: the fill of the face under the pointer, its glyph and the caret wedge.
+///
+/// The fill is one shape per face, and the face that carries the outer edge of the cell takes the
+/// cell's corner radius there and a square corner on the seam, so the hovered face sits inside the
+/// control instead of reading as a second button beside it.
+#[allow(clippy::too_many_arguments)]
+fn paint_split_cell(
+    ui: &Ui,
+    rect: egui::Rect,
+    main_rect: egui::Rect,
+    caret_rect: egui::Rect,
+    main: &Response,
+    caret: &Response,
+    icon: Icon,
+    hint: &str,
+    enabled: bool,
+    on: bool,
+) {
+    let radius = crate::theme::RADIUS;
+    let caret_hot = caret.hovered() || caret.is_pointer_button_down_on();
+    let main_hot = main.hovered() || main.is_pointer_button_down_on();
+    if on {
+        let visuals = ui.visuals().selection;
+        ui.painter().rect(rect, CornerRadius::same(radius), visuals.bg_fill, visuals.stroke, StrokeKind::Inside);
+    } else if caret_hot {
+        let fill = split_fill(ui, caret);
+        let corners = CornerRadius { nw: 0, ne: radius, sw: 0, se: radius };
+        ui.painter().rect_filled(caret_rect, corners, fill);
+    } else if enabled && main_hot {
+        let fill = split_fill(ui, main);
+        let corners = CornerRadius { nw: radius, ne: 0, sw: radius, se: 0 };
+        ui.painter().rect_filled(main_rect, corners, fill);
+    }
+    let color = if on {
+        Color32::WHITE
+    } else if enabled {
+        crate::theme::text(ui)
+    } else {
+        crate::theme::text_dim(ui)
+    };
+    // The glyph stays in the middle of the whole cell, not of the main face: a split cell keeps the
+    // row's icon rhythm, so the cell beside it does not look shifted.
+    if icon.is_drawn() {
+        let icon_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(RIBBON_ICON_POINT_SIZE));
+        let tone = widget_tone(ui, main, enabled, on);
+        paint_icon_toned(ui, icon, icon_rect, RIBBON_ICON_POINT_SIZE, color, tone);
+    } else {
+        let word = hint.split_whitespace().next().unwrap_or(hint);
+        ui.painter().text(
+            main_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            word,
+            FontId::proportional(RIBBON_CAPTION_POINT_SIZE),
+            color,
+        );
+    }
+    // The caret is the cell's own anatomy, like the accent underline of an open tab, not one of the
+    // icon assets: it marks the corner of a control rather than naming an action of its own.
+    let ink = if on {
+        Color32::WHITE
+    } else if caret_hot {
+        crate::theme::text(ui)
+    } else {
+        crate::theme::text_dim(ui)
+    };
+    let center = pos2(caret_rect.center().x, caret_rect.bottom() - 5.0);
+    let points = vec![
+        pos2(center.x - 2.5, center.y - 1.25),
+        pos2(center.x + 2.5, center.y - 1.25),
+        pos2(center.x, center.y + 1.25),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
+}
+
+/// The wash of one face: the active fill while the button is down, the hover fill under the pointer.
+fn split_fill(ui: &Ui, face: &Response) -> Color32 {
+    if face.is_pointer_button_down_on() { crate::theme::control_active(ui) } else { crate::theme::control_hover(ui) }
+}
+
 /// Paints one cell's frame and fill for its state.
 ///
 /// The ribbon's button, the icon-only tool button and a labelled button share this, so a hover or a
@@ -1229,6 +1365,54 @@ mod tests {
         for size in sizes {
             assert_eq!(size, expected, "a ribbon cell is {size:?}, not the shared {expected:?}");
         }
+    }
+
+    #[test]
+    fn a_split_cell_tiles_one_cell_into_a_method_and_a_caret() {
+        // Two controls, one cell: the main face and the caret face meet with no gap and no dead strip,
+        // so a pointer anywhere in the cell reaches one of them (U74).
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut faces = None;
+        let output = ctx.run_ui(Default::default(), |ui| {
+            let cell = ribbon_split_cell(
+                ui,
+                crate::theme::RIBBON_CELL_WIDTH,
+                drawn(),
+                "Line  (L)",
+                "All methods",
+                true,
+                false,
+            );
+            faces = Some((cell.main.rect, cell.caret.rect));
+        });
+        output.drop_without_applying_deltas();
+        let (main, caret) = faces.expect("the split cell drew");
+        let height = crate::theme::RIBBON_ROW_HEIGHT;
+        assert_eq!(main.size(), Vec2::new(crate::theme::RIBBON_CELL_WIDTH - RIBBON_CARET_WIDTH, height));
+        assert_eq!(caret.size(), Vec2::new(RIBBON_CARET_WIDTH, height));
+        assert!((main.right() - caret.left()).abs() < 0.01, "the faces meet with no gap");
+        assert_eq!(main.left(), caret.left() - (crate::theme::RIBBON_CELL_WIDTH - RIBBON_CARET_WIDTH));
+        assert!(caret.width() >= 10.0 && caret.height() >= 10.0, "the caret is a target a hand can reach");
+    }
+
+    #[test]
+    fn a_disabled_main_face_leaves_the_caret_live() {
+        // A pinned method that cannot run here dims its own face; the caret stays enabled, because the
+        // list is the only way back to a method that runs (U74).
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let output = ctx.run_ui(Default::default(), |ui| {
+            ribbon_split_cell(ui, crate::theme::RIBBON_CELL_WIDTH, drawn(), "Line  (L)", "All methods", false, false);
+        });
+        let update = output.platform_output.accesskit_update.as_ref().expect("accessibility is on");
+        let disabled = |label: &str| {
+            update.nodes.iter().find_map(|(_, node)| (node.label() == Some(label)).then(|| node.is_disabled()))
+        };
+        assert_eq!(disabled("Line  (L)"), Some(true), "the method cannot run here");
+        assert_eq!(disabled("All methods"), Some(false), "the list is the only way to another method");
+        output.drop_without_applying_deltas();
     }
 
     #[test]
