@@ -96,7 +96,8 @@ fn read_stdin() -> Result<String, String> {
     Ok(text)
 }
 
-/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `drop` and `state set`.
+/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `take`, `defer` and `drop`, plus
+/// `state set`.
 pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     run_with(root, args, &ProcessGit::new(root))
 }
@@ -104,7 +105,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
 /// [`run`] with the git facts supplied by `git`, so a test needs no repository.
 pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let Some(verb) = args.first().map(String::as_str) else {
-        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|drop> …".to_owned());
+        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|defer|drop> …".to_owned());
     };
     let rest = &args[1..];
     match verb {
@@ -117,6 +118,7 @@ pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), Strin
         "reopen" => reopen(root, rest, git),
         "drop" => drop(root, rest, git),
         "take" => take(root, rest, git),
+        "defer" => defer(root, rest, git),
         other => Err(format!("unknown verb `{other}`")),
     }
 }
@@ -394,6 +396,57 @@ fn take(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     apply(root, changes, &options, git)?;
     if !options.dry_run {
         println!("task {id} taken into `## Now`");
+    }
+    Ok(())
+}
+
+/// `task defer <ID> [--next <text>]`: moves an open entry out of the work order into `## Next`.
+///
+/// The inverse of [`take`], and the one write an owner needs when a task is real but its moment is
+/// later than the rest of the order (R1 waits for the release): the entry keeps its fields, its
+/// hint and its note, and stops being scheduled, so no session-start block names it until somebody
+/// takes it back. The order must keep a head, so deferring the current task points `STATE:` at the
+/// next open entry and names it in `## Next` in the same write; deferring a later entry leaves the
+/// state alone. A running task is not deferred: its session note is the record of the step in hand.
+fn defer(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
+    let options = Options::parse(args, &["next"])?;
+    let id = options.words.first().ok_or("task defer needs a task id")?.clone();
+    let backlog_text = read(root, "plan/BACKLOG.md")?;
+    let tasks = crate::parse_backlog(&backlog_text);
+    let task = find(&tasks, &id)?;
+    if task.status == TaskStatus::Done {
+        return Err(format!("task {id} is done; there is nothing to defer"));
+    }
+    if task.status == TaskStatus::Doing {
+        return Err(format!(
+            "task {id} is in progress; `cargo xtask task close {id}` or `cargo xtask task reopen {id}` \
+             ends its session before it can be deferred"
+        ));
+    }
+    if task.section != "Now" {
+        return Err(format!("task {id} sits in `## {}`, not in the work order", task.section));
+    }
+    let backlog = edit::move_entry(&backlog_text, &id, "Next", edit::At::End)?;
+    let moved = crate::parse_backlog(&backlog);
+    let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
+    if first_open(&tasks).is_some_and(|head| head.id == id) {
+        let next = first_open(&moved).ok_or_else(|| {
+            format!(
+                "deferring {id} would leave `## Now` with nothing to work on; close the milestone or add a \
+                 task first"
+            )
+        })?;
+        let status = read(root, "plan/STATUS.md")?;
+        let status = edit::set_state(&status, &[("task".to_owned(), next.id.clone())])?;
+        let status = match options.value("next") {
+            Some(next) => edit::set_section(&status, "Next", next)?,
+            None => edit::set_section(&status, "Next", &format!("{} is next: {}", next.id, next.lead))?,
+        };
+        changes = changes.with("plan/STATUS.md", status);
+    }
+    apply(root, changes, &options, git)?;
+    if !options.dry_run {
+        println!("task {id} deferred to `## Next`");
     }
     Ok(())
 }
@@ -1099,6 +1152,82 @@ now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
         run(&root, &["take", "X2"]).expect("the end of `## Now` does not disturb the running task");
         assert!(text(&root, "plan/STATUS.md").contains("task=P6 state=doing"));
         crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A status with the `## Next` paragraph the gate wants when `STATE:` moves.
+    fn with_next(status: &str) -> String {
+        format!("{status}\n## Next\n\nP6 is next: the writer.\n")
+    }
+
+    #[test]
+    fn deferring_the_current_task_points_the_state_at_the_next_one() {
+        let root = project("defer-head", &with_next(STATUS), BACKLOG, None);
+        run(&root, &["defer", "P6"]).expect("P6 leaves the order");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        let now = backlog.find("## Now").expect("Now is there");
+        let next = backlog.find("## Next").expect("Next is there");
+        assert!(!backlog[now..next].contains("**P6**"), "P6 left the order: {backlog}");
+        assert!(
+            backlog[next..].contains("- `[ ]` **P6** the writer\n  `files: src/a.rs`"),
+            "the entry moves whole, fields and hint included: {backlog}"
+        );
+        assert!(backlog[now..next].contains("**S14**"), "the rest of the order is untouched: {backlog}");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=S14 state=idle"), "{status}");
+        assert!(status.contains("S14 is next: the banding"), "the paragraph names the new head: {status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deferring_a_later_task_leaves_the_state_alone() {
+        let root = project("defer-later", &with_next(STATUS), BACKLOG, None);
+        run(&root, &["defer", "S14"]).expect("S14 leaves the order");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=P6 state=idle"), "the head did not move: {status}");
+        assert!(status.contains("P6 is next: the writer"), "the paragraph still names it: {status}");
+        assert!(!text(&root, "plan/BACKLOG.md").contains("**S14** the banding\n  `files: src/b.rs`\n\n## Bugs"));
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_deferred_task_keeps_its_note_and_stops_being_scheduled() {
+        let done = format!("{STATUS}\n## Next\n\nP6 is next: the writer.\n");
+        let root = project("defer-note", &done, FILED_BACKLOG, None);
+        run(&root, &["note", "X2", "--body", "a measured defect"]).expect("the bug has a note");
+        run(&root, &["defer", "X2"]).expect_err("X2 is filed under `## Bugs`, not the order");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn deferring_a_running_or_unknown_task_is_refused() {
+        let running = with_next(&STATUS.replace("state=idle", "state=doing"));
+        let backlog = BACKLOG.replace("- `[ ]` **P6**", "- `[~]` **P6**");
+        let root = project("defer-running", &running, &backlog, Some(NOTE));
+        let before = snapshot(&root);
+        let error = run(&root, &["defer", "P6"]).expect_err("a running task keeps its session");
+        assert!(error.contains("in progress"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+
+        let status = with_next(STATUS);
+        let root = project("defer-unknown", &status, BACKLOG, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["defer", "P9"]).expect_err("P9 does not exist");
+        assert!(error.contains("no task `P9`"), "{error}");
+        assert_eq!(snapshot(&root), before);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_order_cannot_be_emptied_by_deferring_its_last_task() {
+        let backlog = "## Now\n\n- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n## Bugs\n\n## Next\n\n## Done\n";
+        let root = project("defer-last", &with_next(STATUS), backlog, None);
+        let before = snapshot(&root);
+        let error = run(&root, &["defer", "P6"]).expect_err("the order must keep a head");
+        assert!(error.contains("nothing to work on"), "{error}");
+        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
         let _ = std::fs::remove_dir_all(&root);
     }
 
