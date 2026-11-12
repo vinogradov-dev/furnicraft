@@ -1,8 +1,8 @@
 ---
 name: draw-icon
-description: Create, edit or review a FurniCraft icon: a toolbar geometry icon or a service action (confirm, cancel, undo, file, warning). Use only when adding or changing an SVG under assets/icons.
+description: "Create, edit or review a FurniCraft icon: a toolbar geometry icon or a service action (confirm, cancel, undo, file, warning). Use only when adding or changing an SVG under assets/icons."
 license: MIT
-compatibility: opencode
+compatibility: pi
 metadata:
   audience: agents
   workflow: ui-assets

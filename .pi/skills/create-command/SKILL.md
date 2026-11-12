@@ -1,8 +1,8 @@
 ---
 name: create-command
-description: Add a new user-visible command to FurniCraft end to end: stable id, typed params, engine mutation, undo/redo, UI dispatch by id, tests, docs and the final gate. Use when adding, renaming or changing any editor action that mutates the document.
+description: "Add a new user-visible command to FurniCraft end to end: stable id, typed params, engine mutation, undo/redo, UI dispatch by id, tests, docs and the final gate. Use when adding, renaming or changing any editor action that mutates the document."
 license: MIT
-compatibility: opencode
+compatibility: pi
 metadata:
   audience: agents
   workflow: engine
