@@ -6,7 +6,7 @@ use crate::toolbars::RibbonView;
 
 use crate::contour_edit::ContourTarget;
 use crate::contour_grips::ContourGrip;
-use crate::draw::{DrawDraftError, DrawTool};
+use crate::draw::{DEFAULT_POLYGON_SIDES, DrawDraftError, DrawTool};
 use crate::mesh_edit::MeshElement;
 use crate::scene_tree::TreeAction;
 use crate::toolbars::{ToolAction, spec};
@@ -936,18 +936,22 @@ fn a_pulled_height_becomes_the_next_extrusions_default() {
     editor
         .extrude_path(&mut session, path, Length::from_millimetres(100).expect("height"), furnicraft_text::Lang::En)
         .expect("extrude the path");
-    assert_eq!(editor.extrude_height_text(), "100", "the ribbon starts at the default");
+    assert_eq!(
+        editor.extrude_height(),
+        Length::from_millimetres(crate::toolbars::DEFAULT_EXTRUDE_HEIGHT_MM).expect("height"),
+        "the ribbon starts at the default"
+    );
 
     let height = Length::from_millimetres(240).expect("height");
     editor.set_extrude_height(&mut session, path, height).expect("raise the body");
-    assert_eq!(editor.extrude_height_text(), "240 mm", "the next extrusion starts at the pulled height");
+    assert_eq!(editor.extrude_height(), height, "the next extrusion starts at the pulled height");
     let body = session.project().object(path).and_then(|object| object.geometry().as_constructive()).expect("a body");
     assert_eq!(body.height(), Some(height));
 
     let revision = session.project().revision();
     assert!(editor.set_extrude_height(&mut session, path, Length::ZERO).is_err(), "a zero height is refused");
     assert_eq!(session.project().revision(), revision, "a refused height changes nothing");
-    assert_eq!(editor.extrude_height_text(), "240 mm", "a refused height leaves the field alone");
+    assert_eq!(editor.extrude_height(), height, "a refused height leaves the default alone");
 }
 
 #[test]
@@ -1002,27 +1006,14 @@ fn a_body_keeps_the_paths_placement_and_frame() {
 }
 
 #[test]
-fn the_extrude_height_field_parses_a_positive_length() {
-    let mut state = crate::toolbars::Toolbars::new();
-    assert_eq!(state.extrude_height_text(), "100");
-    assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
-    state.set_extrude_height_text("-2");
-    assert!(state.extrude_height().is_err());
-    state.set_extrude_height_text("thick");
-    assert!(state.extrude_height().is_err());
-}
-
-#[test]
-fn the_primitive_size_field_parses_millimetres() {
-    let mut state = crate::toolbars::Toolbars::new();
-    assert_eq!(state.primitive_size_text(), "200");
-    assert_eq!(state.primitive_size(), Ok(Length::from_millimetres(200).expect("length")));
-    state.set_primitive_size_text("18.5");
-    assert_eq!(state.primitive_size(), Ok(Length::from_micrometres(18_500)));
-    state.set_primitive_size_text("0");
-    assert!(state.primitive_size().is_err());
-    state.set_primitive_size_text("tall");
-    assert!(state.primitive_size().is_err());
+fn the_ribbon_hands_a_new_polygon_the_default_side_count() {
+    // The side count is a typed default (U76): the ribbon starts the figure at six sides and the
+    // object card's `Sides` field is the editor for the finished polygon.
+    let mut editor = Editor::new();
+    let sides = editor.polygon_sides();
+    assert_eq!(sides, DEFAULT_POLYGON_SIDES);
+    editor.start_shortcut(DrawTool::RegularPolygon, sides);
+    assert_eq!(editor.drawing().map(|draft| draft.sides()), Some(DEFAULT_POLYGON_SIDES));
 }
 
 #[test]

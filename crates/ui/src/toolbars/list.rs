@@ -362,7 +362,7 @@ fn caption(ui: &mut Ui, caption: Message, lang: Lang) {
 
 /// The arrow keys and Enter, read only while no text field owns the keyboard.
 ///
-/// A ribbon field can hold the focus while the list is open, so the list never steals a key the user
+/// The inspector can hold the focus while the list is open, so the list never steals a key the user
 /// is typing into; Escape is the popup's own and is not read here.
 fn keyboard(ui: &mut Ui, list: &mut VariantList, rows: &[Row]) -> Option<ListChoice> {
     if ui.memory(|memory| memory.focused().is_some()) {

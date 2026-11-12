@@ -37,8 +37,8 @@ impl Editor {
     ///
     /// A running draft is replaced, because it wrote nothing and undo gains no half figure
     /// (ADR 0076): choosing another tool is one gesture, not "cancel, then start". The count is
-    /// clamped by [`DrawDraft::with_sides`], so a ribbon field can pass anything and the document
-    /// still receives a polygon it accepts.
+    /// clamped by [`DrawDraft::with_sides`], so the caller can pass anything and the document still
+    /// receives a polygon it accepts.
     pub fn start_drawing_with(&mut self, tool: DrawTool, sides: u32) {
         self.mesh_edit = None;
         self.contour_edit = None;

@@ -1,17 +1,20 @@
 //! The ribbon: one row of tabs over the tools of the active tab.
 //!
 //! The map — five tabs that name a domain (*Sketch, Model, Furniture, Scene, View*), the groups of
-//! operations under them, the tools and the fields that configure them — is one const table in
-//! [`spec`]. This module draws it with one loop: a tab is drawn when it owns a live group, a group is
-//! drawn when it owns a live tool or a field, and a planned tool (no command yet) is skipped, so the
-//! ribbon never shows a greyed "coming soon" row and a tab with nothing to run is not drawn at all.
+//! operations under them and the tools inside them — is one const table in [`spec`]. This module
+//! draws it with one loop: a tab is drawn when it owns a live group, a group when it owns a live
+//! tool, and a planned tool (no command yet) is skipped, so the ribbon never shows a greyed "coming
+//! soon" row and a tab with nothing to run is not drawn at all.
 //!
 //! Whether a tool can run *here* is code, not data: [`ready::ready`] decides it against the
 //! [`RibbonContext`] — a catalogue material, a closed path, a running draft, a viewport that owns its
 //! projection — and returns the hint that says what is missing, so a disabled cell still explains
-//! itself. Whether the body is open, which tab is active, what the numeric fields remember, which
+//! itself. Whether the body is open, which tab is active, the typed defaults it remembers, which
 //! method each tool is pinned to and which list is open is view state in [`state::Toolbars`]: never
 //! document data; the fold and the pin are also workspace settings the shell remembers.
+//!
+//! The ribbon holds tools only (U76): a number a tool needs is a typed session default, and the
+//! object card or the operation's own command bar is where the user edits it, so no cell is a form.
 //!
 //! This module is the drawing: [`show`] and the row, cell and list wiring. The map is [`spec`], the
 //! state is [`state`], the readiness table is [`ready`] and the popup under a cell is [`list`].
@@ -34,13 +37,13 @@
 
 use std::collections::BTreeMap;
 
-use egui::{TextEdit, Ui};
+use egui::Ui;
 use furnicraft_engine::PrimitiveKind;
 use furnicraft_model::Id;
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
-use self::spec::{CellSpec, FieldSpec, GroupSpec, TabSpec, ToolKind, ToolSpec};
+use self::spec::{GroupSpec, TabSpec, ToolKind, ToolSpec};
 use crate::draw::DrawTool;
 use crate::icons::{self, Icon};
 use crate::theme::{RIBBON_CAPTION_HEIGHT, RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT, RIBBON_RULE, RIBBON_TAB_HEIGHT};
@@ -51,14 +54,14 @@ pub mod spec;
 pub mod state;
 
 pub use self::ready::draft_can_close;
-pub use self::state::{FieldRefusal, Toolbars};
+pub use self::state::Toolbars;
 
 use self::ready::{projection_icon, ready};
 
-/// Edge length of a new cube, in millimetres; also the value the field starts with.
+/// Edge length of a new cube, in millimetres; also the size a new primitive starts at.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
-/// Height of a new extrusion, in millimetres; also the value the field starts with.
+/// Height of a new extrusion, in millimetres; also the height the next extrusion starts at.
 pub const DEFAULT_EXTRUDE_HEIGHT_MM: i64 = 100;
 
 /// One action a toolbar panel asks the editor to run.
@@ -457,11 +460,8 @@ fn show_group(
         let row = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.set_height(RIBBON_ROW_HEIGHT);
-            for cell in group.cells.iter().filter(|cell| cell.is_live()) {
-                match cell {
-                    CellSpec::Tool(tool) => show_tool(ui, tool, state, context, actions, lang),
-                    CellSpec::Field(field) => show_field(ui, field, state),
-                }
+            for tool in group.live_tools() {
+                show_tool(ui, tool, state, context, actions, lang);
             }
         });
         caption_band(ui, row.response.rect.width(), group.label.text(lang));
@@ -652,7 +652,7 @@ pub fn shortcut_method(tool: DrawTool, pinned: &BTreeMap<String, String>) -> Dra
 fn tool_of_default(tool: DrawTool) -> Option<&'static ToolSpec> {
     for tab in spec::tabs() {
         for group in tab.live_groups() {
-            for tool_spec in group.tools() {
+            for tool_spec in group.live_tools() {
                 if tool_spec.default_method().run == Some(ToolKind::Draw(tool)) {
                     return Some(tool_spec);
                 }
@@ -660,16 +660,6 @@ fn tool_of_default(tool: DrawTool) -> Option<&'static ToolSpec> {
         }
     }
     None
-}
-
-/// One numeric field: two cells wide, named by its hint, with the unit in the field itself.
-fn show_field(ui: &mut Ui, field: &'static FieldSpec, state: &mut Toolbars) {
-    let size = egui::vec2(FieldSpec::COLUMNS as f32 * RIBBON_CELL_WIDTH, RIBBON_ROW_HEIGHT);
-    ui.allocate_ui_with_layout(size, egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-        let text = state.field_text_mut(field.kind);
-        let edit = TextEdit::singleline(text).desired_width(size.x - 2.0 * crate::theme::STEP).hint_text(field.hint);
-        ui.add(edit).on_hover_text(field.label.text(crate::language(ui.ctx())));
-    });
 }
 
 /// What one ribbon cell draws and what a click on it runs.
@@ -680,7 +670,7 @@ mod tests {
     use super::*;
     use crate::draw::DEFAULT_POLYGON_SIDES;
     use crate::toolbars::ready::extrude_hint;
-    use crate::toolbars::spec::{self, CellSpec, TabSpec, VariantSpec};
+    use crate::toolbars::spec::{self, TabSpec, VariantSpec};
 
     /// A context where every live tool can run and the viewport owns its view.
     fn full_context() -> RibbonContext {
@@ -701,7 +691,7 @@ mod tests {
     static PLANNED_ONLY: TabSpec = TabSpec {
         id: "test",
         label: Message::RibbonScene,
-        groups: &[GroupSpec { id: "test.group", label: Message::GroupCreate, cells: &[] }],
+        groups: &[GroupSpec { id: "test.group", label: Message::GroupCreate, tools: &[] }],
     };
 
     /// The tab `id`, as the map declares it.
@@ -810,7 +800,6 @@ mod tests {
                     "From corner  (R)",
                     "No draft is running  (Esc)",
                     "Polyline · Tab line/arc · Alt ignores snaps  (P)",
-                    "Sides",
                     "Through 2 points  (A)",
                     "Two points  (L)",
                 ],
@@ -820,9 +809,7 @@ mod tests {
                 &[
                     "Cube: click the work plane",
                     "Cylinder: click the work plane",
-                    "Height",
                     "Select a closed path first",
-                    "Size",
                     "Sphere: click the work plane",
                 ],
             ),
@@ -837,7 +824,7 @@ mod tests {
             let mut wanted = hints.to_vec();
             wanted.sort_unstable();
             assert_eq!(drawn, wanted, "the {id} tab draws a different set of tools");
-            let listed = tab(id).live_groups().flat_map(GroupSpec::tools).filter(|tool| tool.has_list()).count();
+            let listed = tab(id).live_groups().flat_map(GroupSpec::live_tools).filter(|tool| tool.has_list()).count();
             assert_eq!(caret_hints(&mut state, full_context()), listed, "one caret face per tool with a list");
         }
     }
@@ -1071,7 +1058,7 @@ mod tests {
         state.set_tab(tab("model"));
         let (_, labels, _) = draw(&mut state, full_context());
         assert!(labels.iter().any(|label| label.contains("Select a closed path first")));
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(100).expect("height")));
+        assert_eq!(state.extrude_height(), Length::from_millimetres(100).expect("height"));
     }
 
     #[test]
@@ -1122,48 +1109,76 @@ mod tests {
     fn a_closed_path_offers_one_extrusion_at_the_typed_height() {
         let mut state = Toolbars::new();
         state.set_tab(tab("model"));
-        state.set_extrude_height_text("24");
+        state.set_extrude_height(Length::from_millimetres(24).expect("height"));
         let node = Id::new(7).expect("id");
         let context = RibbonContext { selected: Some(node), selected_path: Some(true), ..full_context() };
         let (_, labels, actions) = draw(&mut state, context);
         assert!(labels.iter().any(|label| label.contains("Extrude the selected path")));
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(24).expect("height")));
+        assert_eq!(state.extrude_height(), Length::from_millimetres(24).expect("height"));
         assert!(actions.is_empty(), "drawing alone runs no tool");
     }
 
     #[test]
-    fn a_blank_extrusion_height_is_refused_in_the_group() {
-        let mut state = Toolbars::new();
-        state.set_extrude_height_text("   ");
-        assert!(state.extrude_height().is_err());
-        state.set_extrude_height_text("0");
-        assert!(state.extrude_height().is_err());
-        state.set_extrude_height_text("12");
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(12).expect("height")));
-    }
-
-    #[test]
-    fn the_height_field_stops_where_the_command_does() {
-        let mut state = Toolbars::new();
-        // The document's contour limit is 10 m; the field must not accept a height the command
-        // would refuse, or the group would offer a tool that always fails.
-        let max = furnicraft_model::MAX_CONTOUR_COORDINATE.micrometres() / 1_000;
-        state.set_extrude_height_text(max.to_string());
-        assert_eq!(state.extrude_height(), Ok(Length::from_millimetres(max).expect("height")));
-        state.set_extrude_height_text((max + 1).to_string());
-        assert!(state.extrude_height().is_err(), "one millimetre past the limit is refused");
-    }
-
-    #[test]
-    fn a_refusal_reads_in_the_workspace_language() {
-        let refusal = FieldRefusal::HeightTooLong { max_mm: 10_000 };
-        assert_eq!(refusal.text(Lang::En), "The extrusion height must be at most 10000 mm.");
-        assert_eq!(refusal.text(Lang::Ru), "Высота выдавливания должна быть не больше 10000 мм.");
+    fn the_ribbon_starts_on_the_typed_defaults() {
+        // The three numbers a tool needs are typed session defaults (U76): always valid, never text.
+        let state = Toolbars::new();
         assert_eq!(
-            FieldRefusal::SizeNotPositive.text(Lang::En),
-            "The primitive size must be positive.",
-            "a refusal is a whole sentence, not half of one"
+            state.primitive_size(),
+            Length::from_millimetres(DEFAULT_PRIMITIVE_SIZE_MM).expect("the default size is a length")
         );
+        assert_eq!(
+            state.extrude_height(),
+            Length::from_millimetres(DEFAULT_EXTRUDE_HEIGHT_MM).expect("the default height is a length")
+        );
+        assert_eq!(state.polygon_sides(), DEFAULT_POLYGON_SIDES);
+    }
+
+    #[test]
+    fn a_primitive_cell_runs_at_the_default_size() {
+        let cube = tool("model.primitives.cube");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("model"));
+        let (actions, _) = click_cell(&mut state, cube, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::CreatePrimitive {
+                kind: PrimitiveKind::Cube,
+                size: Length::from_millimetres(DEFAULT_PRIMITIVE_SIZE_MM).expect("the default size is a length"),
+            }],
+            "the cell hands the command the typed default"
+        );
+    }
+
+    #[test]
+    fn a_polygon_is_started_with_the_default_side_count() {
+        let polygon = tool("sketch.create.polygon");
+        let mut state = Toolbars::new();
+        state.set_tab(tab("sketch"));
+        let (actions, _) = click_cell(&mut state, polygon, main_point());
+        assert_eq!(
+            actions,
+            vec![ToolAction::Draw { tool: DrawTool::RegularPolygon, sides: DEFAULT_POLYGON_SIDES }],
+            "the polygon starts at the typed side count and the object card edits it afterwards"
+        );
+    }
+
+    #[test]
+    fn no_tab_draws_a_text_field() {
+        // The ribbon is tools only: a tab that drew a `TextEdit` would be a form in the tool row.
+        for tab in spec::tabs() {
+            let mut state = Toolbars::new();
+            state.set_tab(tab);
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            crate::set_language(&ctx, Lang::En);
+            let output = ctx.run_ui(Default::default(), |ui| {
+                show(ui, &mut state, full_context(), &mut Vec::new());
+            });
+            let text_inputs =
+                accessible_roles(&output).into_iter().filter(|role| *role == egui::Role::TextInput).count();
+            output.drop_without_applying_deltas();
+            assert_eq!(text_inputs, 0, "{} draws a text field in its tool row", tab.id);
+        }
     }
 
     #[test]
@@ -1245,11 +1260,14 @@ mod tests {
     }
 
     #[test]
-    fn every_live_tool_draws_exactly_one_cell() {
-        for group in spec::tabs().iter().flat_map(TabSpec::live_groups) {
-            let tools = group.tools().count();
-            let fields = group.cells.iter().filter(|cell| matches!(cell, CellSpec::Field(_)) && cell.is_live()).count();
-            assert_eq!(group.columns(), tools + fields * FieldSpec::COLUMNS, "{} miscounts its row", group.id);
+    fn a_row_and_a_tab_count_tools_only() {
+        for tab in spec::tabs() {
+            let mut columns = 0;
+            for group in tab.live_groups() {
+                assert_eq!(group.columns(), group.live_tools().count(), "{} counts more than its tools", group.id);
+                columns += group.columns();
+            }
+            assert_eq!(tab.columns(), columns, "{} disagrees with its groups", tab.id);
         }
     }
 
@@ -2037,6 +2055,16 @@ mod tests {
         for clipped in shapes {
             walk(&clipped.shape, out);
         }
+    }
+
+    /// The accessible roles this frame published, so a test can see a text field among the cells.
+    fn accessible_roles(output: &egui::FullOutput) -> Vec<egui::Role> {
+        output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| update.nodes.iter().map(|(_, node)| node.role()).collect())
+            .unwrap_or_default()
     }
 
     /// The accessible labels this frame published: a drawn icon carries its hint here, not as text.

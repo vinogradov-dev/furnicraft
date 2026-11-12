@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U76 state=idle base=154b007 updated=2026-11-12
+STATE: milestone=M7 phase=A task=U77 state=idle base=81f9e6b updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U76 is next: the ribbon holds tools only. The polygon sides, the primitive size and the extrude
-height fields leave the tool row and their typed values become session defaults, so a row of icons
-stays a row of icons.
+U77 is next: the shell's one frame is callable without a window. `FurniCraftApp::frame` takes the
+frame eframe delegates to, the GPU handle becomes optional so a test builds the app with no device,
+and `SettingsStore` takes an explicit path — so a session can drive the real interface silently.
 
 ## Index
 

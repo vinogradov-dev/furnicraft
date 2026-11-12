@@ -3,12 +3,11 @@
 //! The ribbon draws from one `RibbonContext` and reports what it asked for; the drawing, the
 //! creation and the extrusion the buttons start are commands, while the view actions and the close
 //! of a draft belong to the shell that owns the view camera and the work plane (ADR 0052). The
-//! primitive size and the extrude height are session view state, so a field's last value carries
-//! into the next tool.
+//! primitive size, the side count and the extrude height are typed session defaults, so the last
+//! value a tool used carries into the next one.
 //!
-//! Refuses a panel or an assembly creation without a catalogue entry, an extrusion of an open path,
-//! and an extrude height the command rejects; a refused action is the command's sentence and leaves
-//! the field untouched.
+//! Refuses a panel or an assembly creation without a catalogue entry and an extrusion of an open
+//! path; a refused action is the command's sentence and leaves the default untouched.
 //!
 //! Changes when: a tool appears on the ribbon, or a button's action changes.
 
@@ -27,7 +26,7 @@ use crate::toolbars::{self, ToolAction};
 impl Editor {
     /// Draws the ribbon: the row of tabs and the tool groups of the active tab.
     ///
-    /// The open body, the active tab and the numeric fields are view state owned by the editor, so
+    /// The open body, the active tab and the typed defaults are view state owned by the editor, so
     /// they survive a selection change and a document command and never reach the scene file. A
     /// creation tool lands at the scene root unless a container was armed through an explicit entry
     /// (ADR 0056). The tool that owns the next click draws pressed, so the ribbon never hides what
@@ -105,7 +104,7 @@ impl Editor {
         Ok(outcome)
     }
 
-    /// The regular polygon side count the ribbon field holds.
+    /// The regular polygon side count a new polygon starts with.
     ///
     /// The key handler starts a polygon with the same count the ribbon would, so a keyboard
     /// shortcut and a button click never build different figures.
@@ -142,19 +141,19 @@ impl Editor {
 
     /// Sets one body's extrusion height and remembers it as the next default.
     ///
-    /// The height is session view state, not document data: the ribbon field carries it into the
-    /// next extrusion, while the document only ever sees the command. A refused height leaves both
-    /// the document and the field untouched.
+    /// The height is a typed session default, not document data: it carries into the next
+    /// extrusion, while the document only ever sees the command. A refused height leaves both the
+    /// document and the default untouched.
     pub fn set_extrude_height(&mut self, session: &mut Session, object: Id, height: Length) -> Result<(), String> {
         let params = json(&ObjectExtrudeHeightSet { object, height })?;
         dispatch(session, OBJECT_EXTRUDE_HEIGHT_SET_ID, &params)?;
-        self.toolbars.set_extrude_height_text(height.to_string());
+        self.toolbars.set_extrude_height(height);
         Ok(())
     }
 
     /// The height the ribbon will hand the next extrusion.
-    pub fn extrude_height_text(&self) -> &str {
-        self.toolbars.extrude_height_text()
+    pub const fn extrude_height(&self) -> Length {
+        self.toolbars.extrude_height()
     }
 
     /// Whether the ribbon's body is open.
