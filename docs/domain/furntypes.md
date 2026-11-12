@@ -1,9 +1,14 @@
 # Furniture types
 
-Status: domain specification. This document defines FurniCraft's numeric furniture-type
-classification: what a `FurnType` is, how it is encoded, which codes exist today and how commands
-and reports use them. It does not describe how any product is built; product prototypes are user
-scripts and live outside the document model.
+Status: superseded by [`classes.md`](classes.md) and
+[ADR 0094](../decisions/0094-a-class-registry-gives-the-machine-its-semantics.md). The six-digit
+encoding, the three levels and the tree rules survive; the registry's top-level grouping, its role as
+prose, and the word `FurnType` do not. Read `classes.md` for the live specification; this file stays
+only until the rename lands.
+
+The rest of this file is the previous milestone's registry, kept for the history of the encoding.
+It defines FurniCraft's numeric furniture-type classification: what a `FurnType` is, how it is
+encoded, which codes existed and how commands and reports used them.
 
 Related decisions: [0034](../decisions/0034-nodes-carry-typed-properties.md),
 [0035](../decisions/0035-furniture-types-form-a-numbered-tree.md).

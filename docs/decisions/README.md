@@ -98,6 +98,9 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0091](0091-the-ribbon-is-one-const-map.md) | The ribbon is one const map, and one tool is one glyph in a 34 x 30 cell | Accepted; supersedes the cell metrics and the caption rule of 0067; fields removed by its amendment |
 | [0092](0092-a-field-is-a-number-with-its-unit-outside.md) | A numeric field is a number with its unit outside, and one edit is one undo entry | Accepted |
 | [0093](0093-a-preview-fills-a-session-overlay.md) | A previewing operation fills a session overlay, not the document, and one command bar applies it | Accepted |
+| [0094](0094-a-class-registry-gives-the-machine-its-semantics.md) | A class registry gives the machine its semantics; the code identifies, the traits decide | Accepted; supersedes the registry role and top-level grouping of 0035 |
+| [0095](0095-the-order-package-is-a-published-snapshot.md) | The order package is a published snapshot, not the internal database | Accepted |
+| [0096](0096-before-the-first-release-the-format-has-no-past.md) | Before the first release the data format has no past | Accepted; amends the compatibility clause of `AGENTS.md` §4.5; retires the migration clauses until 1.0 |
 
 ## Format
 

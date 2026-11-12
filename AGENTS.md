@@ -159,7 +159,8 @@ A furniture project is the user's work; a crash must never be the answer to bad 
 
 ### 4.5 No format assumptions
 
-- Documents are versioned serde data. Keep older files loading: new fields get `#[serde(default)]`; unknown fields are preserved or explicitly rejected, never silently dropped.
+- **Before the first release the file format has no past** (ADR 0096). A schema bump changes the layout and deletes the old loader in the same change: no migration pass, no `serde` alias for an older field name, no golden file for an older schema. One golden file per current schema; a `schema_version` other than the current one is a readable error. The day `1.0` ships this clause flips — older files keep loading, a bump ships a migration, and a new ADR records the flip. Compatibility promises follow released users, not version numbers, so earmarked freedom must not be spent silently.
+- `#[serde(default)]` marks a field that is optional in the *current* layout. A default that exists only so a previous layout can load leaves the tree with the migration — before `1.0`, it leaves now.
 - Never assume a material, thickness, unit or hardware type exists: all of these are data with defaults chosen by the document, not constants in code.
 - Unknown enum variants from a newer file are an error the user can read, never a panic or a silent reinterpretation.
 
@@ -391,6 +392,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `assets/icons/STYLE_GUIDE.md` — icon visual language; read only when drawing or editing an icon
   (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
+- `docs/domain/classes.md` — the semantic class registry: encoding, traits and lifecycle; `docs/domain/order-export.md` — the published order-package contract other programs read.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one entry per task with a stable id, its order, its labelled fields and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.

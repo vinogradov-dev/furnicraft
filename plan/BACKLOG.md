@@ -25,6 +25,111 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
+- `[ ]` **T1** the class table is written down and approved, so the registry has content before it has code
+  Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with
+   nothing to say, and every later task reads the table (the model, the picker, the trait
+   gates, the export). Until the rows are written and approved, none of them can start without
+   inventing classes in code.
+  Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
+   40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
+   reserved. Every type and variant carries its traits (supply, measure, nesting, extent,
+   operations, host, level, opening) and its slug; TT 90..99 stays reserved for local codes.
+   Each row must earn its code by a rule difference or a separate report line, and the hinge
+   example (card versus spring, then overlay/inset/half-overlay) is the worked case.
+   furntypes.md and PROJECT.md point at the new table; the old registry stays only as history.
+  Done: The table covers every family the milestone needs; every row names all eight traits; a
+   fixture set (cabinet, shelf, side, back, door, spring hinge, runner, worktop, plinth)
+   resolves against it and shows the intended report and editor behaviour; the owner has
+   approved the rows entry by entry.
+  `files: docs/domain/classes.md, docs/domain/furntypes.md, PROJECT.md`
+- `[ ]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
+  Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
+   serde aliases for renamed fields, a separate error path for a newer schema, and a
+   version-by-version history in two domain documents — all of it protecting files no user has
+   ever saved. ADR 0096 makes the rule explicit and this is the commit that spends it.
+  Shape: Delete the migration functions and their tests, the older golden files, and every
+   serde alias that exists only for a previous field name. Keep one schema_version, one golden
+   file for the current schema, and one readable error for any other number (older or newer).
+   The envelope keeps format_version as it is. docs/domain/scene-file.md §7 and
+   docs/domain/document.md §8 already state the rule; this task makes the code match them. A
+   default stays only where the field is optional in the current layout.
+  Done: cargo test -p furnicraft-model -p furnicraft-project is green with one golden file; a
+   file with any other schema number is rejected by the same sentence; rg finds no migration
+   pass and no alias for an older name; the two domain documents no longer describe a
+   migration; cargo xtask ci is green.
+  `files: crates/model/src/project/wire.rs, crates/project/tests/scene_file.rs, crates/project/src/lib.rs, docs/domain/scene-file.md`
+- `[ ]` **T2** the class registry is data in the model, and the program can see what it is looking at
+  Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)
+   but not its meaning: 20.01.09 is accepted although no such type exists, and no algorithm can
+   ask what an object is. The class registry turns the code into something the program can see
+   with, and ADR 0094 is the accepted design.
+  Shape: furntype.rs becomes the class module: ClassCode (six digits, three levels, 000000
+   unclassified), TraitSet as a bit mask, and a const registry table whose inheritance is
+   resolved at compile time so a lookup never walks parents. PropertyValue::FurnType becomes
+   PropertyValue::Class under the reserved key class, query.rs renames with_furntype_under to
+   with_class_under, assignment rejects a code the registry does not know while loading keeps
+   an unknown number. A test compares the registry with the table in docs/domain/classes.md.
+   The schema is bumped because the stored serde tag changes, and ADR 0096 means no migration.
+  Done: Tests: lookup and inheritance per level; a contradictory override is rejected; an
+   unknown code is refused on set and kept on load; the document table equals the registry row
+   for row; no code literal is compared outside a test; cargo xtask ci is green.
+  `files: crates/model/src/furntype.rs, crates/model/src/properties.rs, crates/model/src/query.rs`
+- `[ ]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
+  Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
+   today it edits a raw GG.TT.VV text field, so a saved project can hold a code the registry
+   never heard of, and nothing shows a user what the digits mean.
+  Shape: A picker per the ui-design skill: one search field over label, slug and alias, the
+   tree group to type to variant, retired rows hidden, an explicit unclassified row, and the
+   current class marked. The scene-tree badge shows the label with the code in the tooltip; the
+   property card shows a class row instead of a text edit. No new command: assignment stays
+   node.property.set with the reserved key.
+  Done: A click assigns a class and one undo entry restores the previous one; searching полка,
+   shelf and the alias finds the same row; a retired class cannot be assigned but still
+   renders; the picker state is tested through an egui context and the result is checked
+   offscreen.
+  `files: crates/ui/src/properties_card.rs, crates/ui/src/scene_tree.rs`
+- `[ ]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
+  Why: Traits only matter if the program refuses what the class forbids. Without this the class
+   table is documentation: a worktop still stretches across its width, a hinge still offers
+   resize, and the cutting list still has no flag to read.
+  Shape: The enabled check reads extent, operations and host: panel.resize and the mesh
+   commands refuse a LengthOnly or None class on the forbidden axis, edge banding refuses a
+   class without EdgeBand, cutouts refuse a class without Cutout, and mounting checks host. The
+   gizmo offers free, length-only or no handles from the same accessor. One accessor exposes
+   nesting and measure for the cutting list and the export that follow.
+  Done: Tests: a worktop resizes by length only, a hinge offers no resize and no banding, a
+   fitting never enters nesting, and changing a class row flips the behaviour without touching
+   the command; no code path compares a class literal outside a test.
+  `files: crates/engine/src/commands.rs, crates/engine/src/node_cmds.rs, apps/furnicraft/src/gizmo_math.rs`
+- `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
+  Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
+   process, possibly in Python, and neither the document JSON nor the internal database is a
+   contract they can rely on (ADR 0095). The package is that contract, and the class traits
+   only pay off when they travel with it.
+  Shape: A new crate crates/export at layer 3, registered in the layer map and PROJECT.md, with
+   one column table as the only source for the manifest, the JSONL writer and the CSV copies.
+   Tables: products, nodes, parts, banding, facades, fittings, machining, materials, classes,
+   properties; integer micrometres, millidegrees, square millimetres and scaled-integer
+   rotation, no floats. The package embeds the catalogue rows the order uses and the class rows
+   it references, so it is self-contained; measured sizes, areas, banding totals and product_id
+   are resolved by the exporter, not by the reader. Ordering by key and no timestamp in the
+   tables make one revision produce byte-identical output.
+  Done: A golden package from the fixture scene; two exports of one revision are identical; the
+   manifest column list equals the writer table and each CSV copy carries exactly those
+   columns; an order with two cabinets groups correctly by product_id; cargo xtask layers and
+   cargo xtask ci are green.
+  `files: Cargo.toml, xtask/src/main.rs, crates/model/src/lib.rs, docs/domain/order-export.md`
+- `[ ]` **K3** the order package is written from a command line, without opening a window
+  Why: A package is useless if producing it needs a window and a person. The report pipeline
+   runs over saved files, and the assistant milestone already needs a headless job over a
+   project, so the exporter has to be reachable from a command line in the same binary.
+  Shape: furnicraft export <scene.fcs> --out <dir> [--format bundle|single] [--no-timestamp]:
+   the subcommand is handled before the window starts, prints one line per written table, and
+   exits non-zero with a readable message on a bad path, an unreadable scene or an unknown
+   format. No second binary, no new dependency.
+  Done: A CLI test writes a package from a fixture and checks its manifest and one table; no
+   window opens; the help text names the flags; cargo xtask ci is green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Bugs
 
@@ -49,6 +154,30 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
+  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
+   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
+   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
+   the writer.
+  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
+   units; the exporter adds the additive columns and declares kerf and trim in the manifest
+   rules block. The package major version does not move.
+  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
+   columns are additive; the golden file records them; cargo xtask ci is green.
+  `files: crates/model/src/catalog.rs`
+- `[ ]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
+  Why: Filed from the class/export planning session: `task add --phase K` created the first
+   task of a new phase, but the paragraph that declares what each phase letter means
+   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
+   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
+   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
+  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
+   <text>` verb appends or updates the legend line in one gated write, so a session can declare
+   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
+   covers adding a phase that the legend does not mention and updating one that it does.
+  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
+   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
+  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
 
 ## Done
 
@@ -69,6 +198,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    shows the model through the panel and the light image is not washed out; cargo test
    --workspace and cargo xtask ci stay green without a GPU.
   `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs` — `b370740`
+
 - `[x]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
   Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
    it: a literal Color32 in a card looks right in the dark palette and breaks the light one,

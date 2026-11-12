@@ -130,17 +130,22 @@ Rules:
 
 ## 7. Versioning and migrations
 
+**Before `1.0` the document has no past**
+([0096](../decisions/0096-before-the-first-release-the-format-has-no-past.md)). A schema bump changes
+the layout and deletes the old loader in the same change: there is no migration pass and no golden
+file for an older schema. The format-cleanup task removes the machinery this section used to
+describe; the rules below are what stays.
+
 - Bump `document.schema` when the document layout changes; bump `format_version` only when the
   framing changes.
-- Every schema bump adds a migration from the previous version and a checked-in golden file that
-  must keep loading. A bump that only adds a node kind or a payload variant still ships a golden
-  file for the new version; the older goldens stay in the suite.
-- A migration never guesses. A value that cannot be derived gets its documented default and a
-  diagnostic; it is never inferred from geometry, a name or a catalogue entry.
-- A file whose `schema` is newer than this build supports is a readable error — "saved by a newer
-  version" — not a partial load.
+- A `schema` that is not the current one — older or newer — is one readable error that names both
+  numbers. It is never a partial load and never a second code path.
+- One golden file per current schema proves that the writer and the reader agree with each other. A
+  schema move regenerates it and deletes the previous one; older goldens are not kept.
 - Unknown top-level sections survive a load and save cycle, so a newer build's extra data is not
   destroyed by an older one.
+- The version-by-version history of pre-release schemas is not documented and not kept; `git log`
+  holds it.
 
 ## 8. The scene and an order
 
@@ -161,7 +166,7 @@ Rules:
 
 At minimum:
 
-- every checked-in golden file loads, migrates and re-saves to the same document;
+- the golden file for the current schema loads and re-saves to the same document;
 - a round trip of a scene with a container, a panel, a geometry object, a camera and a light;
 - an unknown top-level section survives a load and save cycle;
 - an unknown field inside `document` is a readable error;

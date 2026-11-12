@@ -222,31 +222,19 @@ The document itself validates identity, nominal dimensions, finite values, uniqu
 
 ## 8. Schema and migrations
 
-- The scene file is versioned.
-- New fields use `#[serde(default)]` so older files keep loading.
-- Unknown required fields or unknown enum variants are a readable error, never a silent interpretation.
-- Legacy files without a panel material load as panels with no material assigned:
-  - the old length and width become the nominal size;
-  - the old thickness is preserved as `last_known_thickness`;
-  - `material = None` and the panel is marked as a problem panel;
-  - the user sees a warning and can assign a material.
-- The schema version is bumped; the migration preserves the old dimensions instead of attempting to infer a catalogue material.
-- Version 3 moved panel machining to the nominal panel frame. Version 2 cutouts are migrated by adding the stored fallback core origin, so their physical position does not change.
-- Version 4 gives banding one ordered list of segments. A version 3 file migrates with its edge bands in their stored order, followed by its corner bands.
-- Version 5 splits assemblies from groups. A version 4 file stores an assembly at the root and only assemblies below it; the root loads as an ordinary container and every nested assembly keeps its kind (the kinds are unified by schema 7).
-- Version 6 stores the pivot offset on every node as three micrometre lengths. A version 5 or older file materializes the version 6 default once: panels keep zero, non-empty containers get the centre of their local panel bounds, empty containers and the root get zero. A container created today is born at zero instead, and the migration is the only place that writes a centre pivot; no later pass re-normalizes a stored one.
-- Version 9 adds authored `camera` and `light` nodes and the optional `active_camera` document field. A version 8 file loads with no camera and no light, and the viewport falls back to the built-in camera and key light; an `active_camera` that does not name a camera node is a readable load error. Deleting the active camera clears the field.
-- Version 10 adds the constructive geometry payload: a closed contour and an ordered feature history whose mesh is derived. A version 9 object still loads as a baked mesh, and a constructive object is not editable as a mesh until it is collapsed.
-- Version 11 stores a constructive contour as directed line and arc segments instead of a point list, so an object can carry a round corner. A version 10 point list loads as a ring of lines, which is the same shape it described, and is saved back as segments.
-- Version 12 gives every contour segment a stable id and the ring a counter for the next one. A version 11 ring loads with ids `1..n`, so a later edit can name a segment instead of an index without renumbering the ring.
-- Version 13 adds the contour panel: a panel outline may be a stored ring, and ring banding is one record per segment. A version 12 panel loads with the rectangle outline and its edge and corner banding unchanged.
-- Version 14 lets a cutout outline be a contour ring. A version 13 cutout loads as a rectangle, and every value it stored keeps its place.
-- Version 15 moves a rectangle panel's corner features and bowed edges from the panel into its outline, so the outline is the one source of the panel shape. A version 14 panel keeps its features: they load from the old top-level fields and are written back inside the outline.
-- Version 16 replaces the tagged machining enum with one ordered list of records, each carrying a stable id, a face or edge anchor and tagged parameters. A version 15 cutout loads as a face-anchored cutout with the same id.
-- Version 17 adds a flat path payload: an open or closed chain of drawn line and arc segments with stable ids, stored on a geometry object. A version 16 file contains no path and loads unchanged.
-- Version 18 adds the parametric primitive payload: a shape and its parameters whose mesh is derived. A version 17 file contains only baked meshes and constructive objects, and loads unchanged; a collapsed primitive saves as a mesh.
-- Version 20 renames the stored pivot field to `pivot_local`; a version 19 or older file's `pivot` is read through a serde alias and means the same offset. Origin is not a field: it stays implicit in `Placement::translation`. A panel's non-zero stored pivot is still a readable error, and the legacy schema-5 container centre stays a `pivot_local` without moving the world.
-- Version 7 replaces the `assembly` and `group` node kinds with one `container` that carries typed properties. A version 6 assembly loads as a container with `component = true`; a version 6 group loads as a container without the marker. Placement, pivot_local, children and panel data are unchanged.
+**Before `1.0` the document has no past**
+([0096](../decisions/0096-before-the-first-release-the-format-has-no-past.md)). The current layout is
+the only one this build reads: any other `schema` number is one readable error naming both numbers.
+A schema change bumps the number and deletes the old loader in the same commit — no migration pass,
+no alias for a previous field name, no older golden file. The first release flips the rule; a
+recorded decision restores compatibility for released users only.
+
+- A field that is optional in the *current* layout uses `#[serde(default)]`. A default that exists
+  only so a previous layout can load is a defect and leaves with the migration.
+- Unknown required fields or unknown enum variants are a readable error, never a silent
+  interpretation.
+- The version-by-version history of pre-release schemas is not kept in this document; `git log` and
+  the decisions hold it.
 - On save, fallback values are refreshed from the catalogue when the material is found.
 
 ## 9. Commands and undo
