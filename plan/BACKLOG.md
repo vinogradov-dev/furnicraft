@@ -195,7 +195,8 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    shell, so no product is half inside another envelope while containment stays legal. Snapping
    to the floor, to the frame virtual faces of the product and its neighbours, to a
    neighbouring part face and to the 1 mm grid, with the constraint applied to the preview and
-   one node.placement.set on release, so a drag is one undo entry.
+   one node.placement.set on release, so a drag is one undo entry. The drag reads the probe
+   (ADR 0103) for contact and snap targets; typed distances during the drag arrive with N8.
   Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
    product can; a drag that would intersect another product stops at contact; snapping lands on
    the grid and on a face; one undo restores the whole drag. The frame and the class attributes
@@ -207,21 +208,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
    drawing and a later report must agree on what the void is, and because a shelf crossing the
    piece must split one niche into two without anything being stored.
-  Shape: The document answers the niche at a point inside a product (ADR 0099, corrected by
-   0102): six probes along the axes stop at the first surface of any furniture entity — a panel
-   face, a hardware body or another product shell — and at the envelope virtual face, never
-   passing through. The six distances give an axis-aligned box, derived and never stored. The
-   tool is bound to a class whose fill trait says which axis pair it takes — HeightAndDepth for
-   a post, WidthAndDepth for a shelf — and draws the ghost through the session preview overlay
-   (ADR 0093); it moves in 1 mm steps and a click dispatches one panel.create with exactly the
-   ghost size and placement, so history holds one entry. Only the open product offers niches; a
-   closed one offers none.
-  Done: Tests: the niche shrinks around an existing part on the right axis and stops at the
-   envelope face; a shelf at full width splits the piece into two niches and the query at a
-   point above and below returns the two boxes; probes pass through another product empty
-   interior and stop at its parts; the ghost size equals the created panel size; a click is one
-   undo entry; the tool refuses when no product is open; only classes with a fill can be
-   chosen; the ghost is checked offscreen and the 1 mm feel by a live run.
+  Shape: The model answers the measurement (ADR 0103): probe(point, direction) reports the
+   distance to the first furniture surface and what it hit — a panel face, a hardware body,
+   another product shell or the envelope virtual face — and niche(point) aggregates the axes
+   into a size, a world position and a shape (a box today). Both are pure document queries,
+   derived and never stored, tested without a UI. The tool is bound to a class whose fill trait
+   says which axis pair it takes — HeightAndDepth for a post, WidthAndDepth for a shelf — and
+   draws the ghost through the session preview overlay (ADR 0093); it moves in 1 mm steps and a
+   click dispatches one panel.create with exactly the ghost size and placement, so history
+   holds one entry. Only the open product offers niches. The exact-distance fields and the
+   centred value land in N8.
+  Done: Headless tests: a probe stops at the envelope face, at a panel and at another product
+   shell, and reports which; a niche shrinks around an existing part on the right axis; a shelf
+   at full width splits the piece into two niches and the query above and below returns the two
+   boxes; a niche reports a world position and a shape, not only three lengths; the ghost size
+   equals the created panel size; a click is one undo entry; the tool refuses when no product
+   is open; only classes with a fill can be chosen; the ghost is checked offscreen and the 1 mm
+   feel by a live run.
   `files: crates/model/src/project/query.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
   Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
@@ -270,13 +273,37 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
    gesture — base rectangle, then height — dispatches product.create, so the card and the draw
    reach the same command. The grips show whenever the frame is selected, including the
-   closed-with-parts state where its dashed lines are hidden (0100).
+   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
+   fields during the gesture land with N8.
   Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
    one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
    exactly the ghost size with the placeholder class; the card and the gesture produce the same
    document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
    green.
   `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs, crates/engine/src/node_cmds.rs`
+- `[ ]` **N8** the exact-distance fields: type a distance, lock it, centre it, with the keyboard
+  Why: A maker cannot place a post to the millimetre with a mouse, and the same need appears in
+   three gestures: filling a niche, drawing a box or a frame, and moving a piece. The probe
+   exists (N6, ADR 0103); without the fields it is a measurement nobody can state exactly.
+   Studied as behaviour in an established editor, the mechanism is a live distance field per
+   direction with one active field — not a dialog.
+  Shape: A session overlay draws one shared number field per direction of the work plane from
+   the new face to the first surface the probe found, with the unit outside (ADR 0092); exactly
+   one field is active and shows the focus ring from the theme. Typing takes the mouse out of
+   the gesture for that direction, Enter commits, Escape returns the mouse, Tab moves to the
+   opposite direction. A field offers the semantic value «По центру» / Centred in its menu,
+   which places the part in the middle of the void and yields a computed coordinate. A
+   committed distance shows a lock and the next is measured from the locked face. A direction
+   with no neighbour disables the field with a sentence; an impossible value is refused with a
+   message and writes nothing; the whole gesture is one undo entry. The overlay is shared by
+   the niche fill, the box gesture and the move tool, and the numbers come from the model
+   probe, never from a second computation.
+  Done: Tests over the pure parts: the active field, Tab, Enter and Escape move focus and
+   commit or abandon without a write; a lock makes the second distance relative to the locked
+   face; the centred value produces the midpoint coordinate; a missing neighbour disables the
+   field; an impossible value is refused. The overlay is checked offscreen for the focus ring
+   and the lock glyph, and a live run for the typing feel; cargo xtask rules and ci are green.
+  `files: crates/ui/src/scrub.rs, apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
 
 ## Bugs
 

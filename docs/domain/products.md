@@ -93,6 +93,18 @@ space therefore reduces the niche of the outer piece exactly as a panel would, w
 niche "bounded by the envelope and by panels and other furniture products" true in the program and not
 only in the sentence.
 
+**A niche answers with three things:** its **size** (width, height, depth), its **world position** —
+the corner the box is anchored at — and its **shape** (a box today, an extruded cross-section once the
+trapezoid lands). A tool never re-derives a position from a cursor point and a size; that is where
+rounding drift appears. The answer is a model query (0103), so the fill tool, the distance indicator
+and the move tool all consume the same one.
+
+**It is shown, not stored.** Hovering a void with a fill tool draws the niche: a wireframe box on its
+edges, no fill, drawn slightly in front of the piece so the panels around it do not hide it, with three
+dimension callouts — height, width, depth in whole millimetres. The box uses the measurement role of
+the theme and never picks; the callouts disappear when the gesture ends. The forward offset is a
+visibility device, not a statement that the niche extends beyond the envelope.
+
 **A niche is a question, not a resource.** Nothing reserves it; two parts may claim the same empty
 space, and the overlap is a diagnostic, not a refused edit. The shop does not work by reservation,
 and a reservation system would be a second document model with its own staleness problem.
@@ -144,6 +156,21 @@ The maker's flow: open a product, choose “add a post” or “add a shelf”, 
 - A click creates the part with exactly the ghost's size, through one command and one undo entry.
 - Version 1 handles axis-aligned niches and the two fills. A drawer, a back panel and a facade need
   their own fill rules; the trapezoid needs the shaped niche of §4.
+
+**Exact distances.** While a fill, a box creation or a move runs, the viewport shows one distance field
+per direction of the work plane — from the new face to the first surface — and exactly one of them is
+active (0103). The fields are the shared number field with the unit outside, so the mechanism is the
+one the cards already use.
+
+- Typing into a field takes the mouse out of the gesture for that direction; Enter commits the
+  gesture, Escape returns the mouse, Tab moves to the opposite direction.
+- A field also accepts a semantic value, «По центру» / “Centred”, from its menu: the part is placed in
+  the middle of the void and the result is a computed coordinate, not a number.
+- A committed distance shows a lock, and the next one is measured from the locked face rather than
+  from the original reference, so two typed distances cannot drift apart.
+- A direction with no neighbour disables its field and says why. A value that is negative, larger than
+  the void or would overlap a part is refused with a message, and nothing is written.
+- Every value is a whole millimetre, and one gesture is one undo entry.
 
 ## 8. Moving a product
 
@@ -224,9 +251,13 @@ volume asks the program for it when such a report exists.
 
 - **Shrinking the envelope below the parts.** It is a diagnostic, not a refusal, but the frame's grips
   make it easy to do by accident; whether the tool warns at the drag or only after the drop is open.
+- **The forward offset of the niche box.** Confirmed as a visibility device: the box is drawn in front
+  of the piece so the surrounding panels do not hide it; the niche itself stays inside the envelope.
 - **Moving a product into another's reserved space.** The shell rule (0102) allows it and the mover
   must stop at walls, not at envelopes; the snapping of a shell face to another shell face needs one
   confirming test.
+- **Other semantic values in a distance field.** «По центру» is the first; equal gaps between several
+  parts and "flush with the envelope face" are plausible next ones and are not decided.
 - **What “open” looks like beyond the colour.** Whether the active product is emphasised, and what
   happens to the parts of a closed one, is a UI decision.
 - **A part of another product inside this one's niche** — the niche case — is legal spatially, but the
