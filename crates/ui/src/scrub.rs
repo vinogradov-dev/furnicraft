@@ -150,6 +150,7 @@ pub(crate) struct Scrub<'a, N: Numeric> {
     policy: CommitPolicy,
     parse: Parse,
     fresh: Option<EditScope>,
+    focus: bool,
 }
 
 impl<'a, N: Numeric> Scrub<'a, N> {
@@ -164,6 +165,7 @@ impl<'a, N: Numeric> Scrub<'a, N> {
             policy: CommitPolicy::default(),
             parse: parse_number,
             fresh: None,
+            focus: false,
         }
     }
 
@@ -213,13 +215,24 @@ impl<'a, N: Numeric> Scrub<'a, N> {
         self
     }
 
+    /// Takes the keyboard focus this frame, so a field that just appeared can be typed into
+    /// without a click. The caller owns the flag and clears it, because a field that asked for the
+    /// focus every frame could never lose it.
+    pub(crate) fn focus(mut self, focus: bool) -> Self {
+        self.focus = focus;
+        self
+    }
+
     /// Draws the field and reports whether this frame's number belongs in the document.
     pub(crate) fn show(self, ui: &mut Ui) -> FieldOutcome {
-        let Self { value, speed, range, unit, decimals, policy, parse, fresh } = self;
+        let Self { value, speed, range, unit, decimals, policy, parse, fresh, focus } = self;
         // The space is reserved without a widget: an allocation with `Sense::hover` would tell egui
         // this id cannot take the focus, and egui would drop the focus it had just given it.
         let (id, rect) = ui.allocate_space(vec2(FIELD_WIDTH, FIELD_HEIGHT));
         ui.memory_mut(|memory| memory.interested_in_focus(id, ui.layer_id()));
+        if focus {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
 
         // A value the range does not cover — a hand-edited file, a preset this build no longer
         // offers — becomes the nearest end, so the field never shows what it could not set.

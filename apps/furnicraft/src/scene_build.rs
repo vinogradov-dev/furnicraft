@@ -432,7 +432,14 @@ impl<'a> Evaluation<'a> {
     ) -> Result<SubtreeBounds, String> {
         let world = Placement::compose(parent, object.placement()).map_err(describe)?;
         let revision = self.session.project().revision();
-        let evaluated = self.cache.object(revision, object).map_err(|error| format!("{}: {error}", object.name()))?;
+        // A previewing operation hands the viewport the geometry the node would have, so the frame
+        // draws the result the command bar is about to commit instead of the stored one.
+        let geometry =
+            self.session.drawn_geometry(object.id()).ok_or_else(|| format!("{}: no geometry", object.name()))?;
+        let evaluated = self
+            .cache
+            .object_with(revision, object.id(), geometry)
+            .map_err(|error| format!("{}: {error}", object.name()))?;
         let transform = DMat4::from_rotation_translation(world.rotation(), world.translation());
         let mut bounds = SubtreeBounds::empty();
         // A path has no solid: it is drawn as an unlit chain of line segments, and its points are
@@ -1069,6 +1076,49 @@ mod tests {
             assert!(Arc::ptr_eq(&before.mesh, &after.mesh), "an unchanged node keeps its mesh across a rebuild");
         }
         assert_eq!(kernel.body_count(), 0, "a hit touches no kernel body");
+    }
+
+    /// The highest vertex of the mesh drawn for `id`, in the node's own millimetres.
+    fn top_of(scene: &EvaluatedScene, id: Id) -> f32 {
+        mesh_of(scene, id).positions.iter().map(|position| position[2]).fold(f32::MIN, f32::max)
+    }
+
+    #[test]
+    fn a_preview_draws_the_body_the_command_would_store() {
+        // A previewing operation shows a node the document does not hold yet. The frame must follow
+        // the overlay — the taller body, not the stored one — while the document keeps its height,
+        // its revision and its history (M71).
+        let mut project = sample_project();
+        let root = project.root().id();
+        let path = Path::rectangle(
+            [millimetres(20).expect("x"), millimetres(10).expect("y")],
+            [millimetres(120).expect("width"), millimetres(60).expect("height")],
+        )
+        .expect("a rectangle");
+        let body = furnicraft_model::Constructive::extrude(path, millimetres(100).expect("height")).expect("a body");
+        let object = project
+            .add_object(root, "Body", Placement::IDENTITY, Geometry::Constructive(body.clone()))
+            .expect("object");
+        let mut session = Session::new(project);
+        let revision = session.project().revision();
+        let mut kernel = TruckKernel::new();
+        let mut cache = EvaluationCache::new();
+        let stored = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("stored scene");
+        assert!((top_of(&stored, object) - 100.0).abs() < 0.5, "the document draws its own height");
+
+        let mut previewed = body;
+        previewed.set_height(millimetres(250).expect("height")).expect("a preview height");
+        session.set_preview_geometry(object, Geometry::Constructive(previewed));
+        let preview = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("preview scene");
+
+        assert_eq!(session.preview().len(), 1, "one node is previewed");
+        assert_eq!(session.project().revision(), revision, "a preview is not an edit");
+        assert!(!session.can_undo(), "a preview leaves no undo entry");
+        assert!((top_of(&preview, object) - 250.0).abs() < 0.5, "the frame shows the preview height");
+
+        session.clear_preview();
+        let restored = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default()).expect("restored scene");
+        assert!((top_of(&restored, object) - 100.0).abs() < 0.5, "the cross restores the pre-command body");
     }
 
     #[test]

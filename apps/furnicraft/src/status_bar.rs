@@ -35,8 +35,6 @@ struct StatusInfo {
     drawing: Option<(DrawTool, usize, bool, bool)>,
     /// Why the pointer cannot extend the live draft, if it cannot.
     preview_error: Option<String>,
-    /// The height a live pull arrow shows, if a fresh extrusion is waiting for it.
-    extrude: Option<Length>,
     primitive: Option<(furnicraft_engine::PrimitiveKind, Length)>,
     grid: bool,
     mesh: Option<(MeshElement, usize)>,
@@ -216,8 +214,6 @@ enum StatusAction {
     CloseDraft,
     FinishDraft,
     CancelDraft,
-    FinishExtrude,
-    CancelExtrude,
     CancelPrimitive,
     ClearCreationParent,
     EndNavigation,
@@ -318,20 +314,8 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
         };
         return (action, None);
     }
-    if let Some(height) = info.extrude {
-        ui.label(Message::ExtrudeStatus.with(lang, [height]));
-        let finish = ui.button(Message::FinishEnter.text(lang)).clicked();
-        let drop = ui.button(Message::DropEsc.text(lang)).clicked();
-        hint(ui, Message::ExtrudeHint.text(lang));
-        let action = if finish {
-            Some(StatusAction::FinishExtrude)
-        } else if drop {
-            Some(StatusAction::CancelExtrude)
-        } else {
-            None
-        };
-        return (action, None);
-    }
+    // A live pull arrow is drawn and finished by the viewport's own command bar: the bar owns the
+    // height field, the check and the cross, so the status bar names no second Apply (M71).
     if let Some((kind, size)) = info.primitive {
         let name = match kind {
             furnicraft_engine::PrimitiveKind::Cube => Message::ToolCube,
@@ -533,7 +517,6 @@ impl Document {
                 .drawing()
                 .map(|draft| (draft.tool(), draft.len(), draft.is_closed(), draft.arc_mode())),
             preview_error: self.draw_gizmo.preview_error().map(str::to_owned),
-            extrude: self.extrude_gizmo.height(),
             primitive: self.editor.pending_primitive(),
             grid: self.draw_gizmo.grid(),
             mesh: self.editor.mesh_edit().map(|edit| {
@@ -576,14 +559,6 @@ impl Document {
                 }
             }
             StatusAction::CancelDraft => self.cancel_drawing(),
-            StatusAction::FinishExtrude => {
-                if let (Some(object), Some(height)) = (self.extrude_gizmo.object(), self.extrude_gizmo.height())
-                    && let Err(error) = self.finish_extrude(object, height)
-                {
-                    self.last_error = Some(error);
-                }
-            }
-            StatusAction::CancelExtrude => self.extrude_gizmo.cancel(),
             StatusAction::CancelPrimitive => self.editor.cancel_primitive(),
             StatusAction::ClearCreationParent => self.editor.clear_creation_parent(),
             StatusAction::EndNavigation => {}
@@ -612,7 +587,6 @@ mod tests {
             contour: None,
             drawing: None,
             preview_error: None,
-            extrude: None,
             primitive: None,
             grid: true,
             mesh: None,

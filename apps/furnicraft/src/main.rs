@@ -647,8 +647,11 @@ impl eframe::App for FurniCraftApp {
         self.shell.colors = theme::scene_colors(ui.ctx().theme());
         {
             let Self { tabs, shell, settings, .. } = self;
-            shell.rebuilding = tabs.active().rebuild_pending(&settings.viewport, &shell.cluster, shell.colors);
-            if let Err(error) = tabs.active_mut().sync_scene(&settings.viewport, &shell.cluster, shell.colors) {
+            // A scene whose last rebuild overran the budget says so before it runs, so the frame
+            // that paints the message and the last good geometry is the frame before the work.
+            shell.rebuilding = tabs.active().busy(&settings.viewport, &shell.cluster, shell.colors);
+            if let Err(error) = tabs.active_mut().sync_scene(ui.ctx(), &settings.viewport, &shell.cluster, shell.colors)
+            {
                 shell.rebuilding = false;
                 tabs.active_mut().last_error = Some(error);
             }
