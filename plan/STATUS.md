@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U75 state=idle base=b459feb updated=2026-11-12
+STATE: milestone=M7 phase=A task=U76 state=idle base=154b007 updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -8,13 +8,12 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 - M7 — objects and the scene file, after M6. `Container` is the only container kind, every node
   carries typed properties, `FurnType` is a six-digit tree (ADRs 0034–0035). `Contour` is a closed
-  ring of stable-id segments (ADR 0040, schema 13) with the drawing-tolerance joint (ADR 0072);
-  `Path` is the chain `to_contour` turns into a ring, a drawn figure carries a `PathShape` tag (ADR
-  0073), and an extrusion owns its path (ADR 0074). A primitive stores its parameters (ADR 0054);
-  every figure shows its grips, a corner moves freely or along the picked segment (ADR 0075), and a
-  fresh extrusion pulls its height from an arrow that previews the body as a wireframe prism (X19).
-  S5 chose the frame rule; X24, X29 and X30 applied it to a drawing, a group and a panel (ADRs 0082,
-  0083), S6 proves it once in `frame_contract.rs`, and cameras and lights are scene objects (0036).
+  ring of stable-id segments (0040, schema 13) with the drawing-tolerance joint (0072); `Path` is the
+  chain `to_contour` turns into a ring, a drawn figure carries a `PathShape` tag (0073), an extrusion
+  owns its path (0074) and a primitive stores its parameters (0054). Every figure shows its grips, a
+  corner moves freely or along the picked segment (0075), a fresh extrusion pulls its height from an
+  arrow previewing a wireframe prism (X19), and S5's frame rule reached a drawing, a group and a panel
+  (0082, 0083), proved once in `frame_contract.rs`; cameras and lights are scene objects (0036).
 - S7 audited the design rules and filed S8–S22 under `plan/refactor.md`: S8–S13 split `geom` and gave
   the tests one fixture definition (ADR 0084), S14–S17 `engine/panel_cmds`, `scene`'s camera and ray
   and `render`'s pipelines, S18–S19 the document rules and the `Editor` out of `ui/lib.rs` (50 lines),
@@ -43,9 +42,10 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
   shadow under every floor-standing object (0071), X11 a ring closed by an arc (0072), X12 a tool
   switch replaces the draft and X23 makes every *Close* commit. U52 made the UI scale a scrubbing
   field, and every numeric field reads the drag's delta and clamps what is typed. U68 drew the
-  ribbon from one const map (0091); U65 gave the inspector one numeric field — 76 x 22, the number
-  right-aligned and the unit outside the editable string — with a per-field commit policy and one
-  undo entry per drag or typing run through a session edit scope (0092).
+  ribbon from one const map (0091), U74 made a multi-method tool a split cell, and U75 put the group
+  caption in a 16 pt band a step off the control tone, every name on one baseline, so the ribbon is
+  76 pt. U65 gave every number one 76 x 22 field, right-aligned with its unit outside the string, one
+  commit policy and one undo entry per drag or typing run (0092).
 - Faber's architecture is recorded (ADRs 0028–0032) but not implemented. `state-contract` (L0) is the
   whole plan tool — gate, report, writer, dashboard, ADR index, `agents`/`init`, the command table
   (P4–P7, P9, ADR 0085); `xtask` keeps the layering rules and `ci` (P8), and the gate follows every
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U75 is next: the ribbon group caption gets air above and below and sits one quiet step below the
-control tone, instead of sitting on the darkest chrome.
+U76 is next: the ribbon holds tools only. The polygon sides, the primitive size and the extrude
+height fields leave the tool row and their typed values become session defaults, so a row of icons
+stays a row of icons.
 
 ## Index
 

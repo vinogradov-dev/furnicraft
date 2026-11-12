@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
-  Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
-   the tool row, and `theme::band` is `extreme_bg_color`, the darkest chrome, which makes the
-   strip read as a hole. The owner wants a calmer band, slightly darker than the buttons.
-  Shape: Raise `RIBBON_CAPTION_HEIGHT` from 12 to 16 pt so the 9.5 pt capitals have at least 3
-   pt above and below; update `toolbars::height` (open 72 to 76, folded stays 29),
-   `plan/map.md`, the U68 metric note and every golden that names 72. Add
-   `theme::caption_band(ui)` as a small mix of `control(ui)` toward `band(ui)` (about 30 %) and
-   use it for the group caption instead of `theme::band`; keep `text_dim` and the hairline. The
-   tool row stays 30 pt and no tool moves.
-  Done: Tests: the caption is optically centred with at least 3 pt clearance at 9.5 pt;
-   `caption_band` is darker than `control` and lighter than `band` in every preset x variant,
-   and `text_dim` on it clears 3:1; `height(true)` is 76 and `height(false)` is 29, and the
-   drawn strip matches; the tool row still measures 30 pt; both themes checked by eye on all
-   five tabs.
-  `files: crates/ui/src/toolbars.rs, crates/ui/src/theme.rs, plan/map.md`
 - `[ ]` **U76** the ribbon holds tools only: the polygon sides, primitive size and extrude height fields leave the tool row and their typed values become session defaults
   Why: Three `CellSpec::Field` cells take two 34 pt cells each and turn a row of icons into a
    form; `show_field` draws a `TextEdit`, the state carries three strings, and `FieldRefusal`
@@ -175,6 +159,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U75** the ribbon group caption has air above and below and sits one quiet step below the control tone instead of on the darkest chrome
+  Why: The caption band is 12 pt with a 9.5 pt face, so the capital text touches the rule and
+   the tool row, and `theme::band` is `extreme_bg_color`, the darkest chrome, which makes the
+   strip read as a hole. The owner wants a calmer band, slightly darker than the buttons.
+  Shape: Raise `RIBBON_CAPTION_HEIGHT` from 12 to 16 pt so the 9.5 pt capitals have at least 3
+   pt above and below; update `toolbars::height` (open 72 to 76, folded stays 29),
+   `plan/map.md`, the U68 metric note and every golden that names 72. Add
+   `theme::caption_band(ui)` as a small mix of `control(ui)` toward `band(ui)` (about 30 %) and
+   use it for the group caption instead of `theme::band`; keep `text_dim` and the hairline. The
+   tool row stays 30 pt and no tool moves.
+  Done: Tests: the caption is optically centred with at least 3 pt clearance at 9.5 pt;
+   `caption_band` is darker than `control` and lighter than `band` in every preset x variant,
+   and `text_dim` on it clears 3:1; `height(true)` is 76 and `height(false)` is 29, and the
+   drawn strip matches; the tool row still measures 30 pt; both themes checked by eye on all
+   five tabs.
+  `files: crates/ui/src/toolbars.rs, crates/ui/src/theme.rs, plan/map.md` — `154b007`
 
 - `[x]` **U74** a tool with variants is a split button: the main face runs the pinned method, a joined caret face opens the list, and pinning changes the main face without covering a shortcut
   Why: U67 made the whole 34 x 30 cell open the list when a tool has variants, so the common
