@@ -84,13 +84,22 @@ pub(crate) struct ViewCluster {
     pub(crate) layout_open: bool,
     /// Whether the orientation widget draws the pitch/yaw/roll and projection readout (U42).
     pub(crate) show_angles: bool,
+    /// Whether the corner orientation widget draws at all (U73).
+    pub(crate) show_widget: bool,
     /// Whether the contact-shadow pass draws (U44).
     pub(crate) contact_shadows: bool,
 }
 
 impl Default for ViewCluster {
     fn default() -> Self {
-        Self { navigation: None, settings_open: false, layout_open: false, show_angles: false, contact_shadows: true }
+        Self {
+            navigation: None,
+            settings_open: false,
+            layout_open: false,
+            show_angles: false,
+            show_widget: true,
+            contact_shadows: true,
+        }
     }
 }
 
@@ -98,6 +107,11 @@ impl ViewCluster {
     /// Whether the orientation widget draws its angle and projection readout.
     pub(crate) fn angles_visible(&self) -> bool {
         self.show_angles
+    }
+
+    /// Whether the corner orientation widget draws at all.
+    pub(crate) fn widget_visible(&self) -> bool {
+        self.show_widget
     }
 
     /// The frame's contact-shadow settings from the cluster's switch and the workspace strength.
@@ -457,8 +471,8 @@ fn preset_row(ui: &mut egui::Ui, view: OpeningView, on: bool, lang: furnicraft_t
     response.clicked()
 }
 
-/// The display-settings popover above the cluster: the angle switch, the projection, the contact
-/// shadow and the link to the page that owns the strengths.
+/// The display-settings popover above the cluster: the angle and widget switches, the projection,
+/// the contact shadow and the link to the page that owns the strengths.
 fn settings_popover(
     ui: &mut egui::Ui,
     viewport: egui::Rect,
@@ -497,6 +511,20 @@ fn settings_popover(
                         furnicraft_text::Message::ProjectionAnglesOn
                     } else {
                         furnicraft_text::Message::ProjectionAnglesOff
+                    }
+                    .text(furnicraft_ui::language(ui.ctx())),
+                );
+                // The cube itself has its own switch beside the readout: a user who wants the corner
+                // free for the model keeps the readout's switch alone and turns the whole widget off (U73).
+                let widget = ui.checkbox(
+                    &mut state.show_widget,
+                    furnicraft_text::Message::ShowOrientationWidget.text(furnicraft_ui::language(ui.ctx())),
+                );
+                widget.on_hover_text(
+                    if state.widget_visible() {
+                        furnicraft_text::Message::OrientationWidgetOn
+                    } else {
+                        furnicraft_text::Message::OrientationWidgetOff
                     }
                     .text(furnicraft_ui::language(ui.ctx())),
                 );
@@ -616,7 +644,7 @@ mod tests {
             !texts.iter().any(|text| text.contains("triangle edge")),
             "the diagnostic left the cluster with the strength sliders: {texts:?}"
         );
-        for switch in ["Show projection and angles", "Contact shadows"] {
+        for switch in ["Show projection and angles", "Show the orientation cube", "Contact shadows"] {
             assert!(texts.iter().any(|text| text.contains(switch)), "the switch stays: {switch} in {texts:?}");
         }
     }

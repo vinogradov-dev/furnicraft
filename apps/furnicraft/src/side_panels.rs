@@ -170,9 +170,20 @@ impl PanelRects {
         }
     }
 
+    /// The rectangle one side covers, or `None` while that panel is hidden.
+    ///
+    /// The orientation widget asks by side, because the corner it may draw in is the one the panel
+    /// otherwise covers (U73).
+    pub(crate) fn of_side(&self, side: PanelSide) -> Option<egui::Rect> {
+        match side {
+            PanelSide::Left => self.left,
+            PanelSide::Right => self.right,
+        }
+    }
+
     /// Every rectangle the pointer and the split views must treat as chrome.
     pub(crate) fn panels(&self) -> impl Iterator<Item = egui::Rect> {
-        self.left.into_iter().chain(self.right)
+        [PanelSide::Left, PanelSide::Right].into_iter().filter_map(|side| self.of_side(side))
     }
 }
 
@@ -257,6 +268,17 @@ pub(crate) struct PanelSlot<'a> {
     pub(crate) state: PanelState,
     /// The title and icon the header and the strip draw.
     pub(crate) head: PanelHead,
+}
+
+/// Draws one panel body in a scroller that never widens the panel.
+///
+/// A panel's rectangle is a contract the shell reads twice — [`Chrome::covers`] turns a press on it
+/// into chrome, and the orientation widget is placed clear of it. A body wider than the panel would
+/// therefore paint over the scene the widget was told is free, and a press on it would reach the
+/// scene instead of the panel. The scroller bounds the body to the panel's inner width and gives a
+/// row too wide for it a horizontal scrollbar instead of growing the panel (U73).
+pub(crate) fn scroll_body(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::both().show(ui, body);
 }
 
 /// Draws one floating panel into `rect` and returns the gesture its chrome asked for.
@@ -479,6 +501,27 @@ mod tests {
         panels.scene.visible = false;
         panels.inspector.visible = false;
         panels
+    }
+
+    #[test]
+    fn a_panel_body_never_widens_the_panel() {
+        // The inspector's rows are wider than the panel, so its body scrolls sideways: a painted
+        // rect wider than `PanelRects` would cover the scene and steal the widget's free corner.
+        let ctx = context();
+        let input = input();
+        let mut width = 0.0_f32;
+        for _ in 0..2 {
+            let output = ctx.run_ui(input.clone(), |ui| {
+                ui.set_width(EXPANDED_WIDTH);
+                let left = ui.min_rect().left();
+                scroll_body(ui, |ui| {
+                    ui.allocate_exact_size(egui::vec2(400.0, 20.0), egui::Sense::hover());
+                });
+                width = ui.min_rect().right() - left;
+            });
+            output.drop_without_applying_deltas();
+        }
+        assert!(width <= EXPANDED_WIDTH + 1.0, "the panel keeps its width: {width}");
     }
 
     #[test]

@@ -39,8 +39,11 @@ on the middle layer: the viewport cluster does exactly that, pinned to the viewp
   with the furniture drawn under it rather than with the clear colour.
 - What must stay readable moves into the uncovered part of the view: *Frame all* fits the scene into
   the active view's rectangle, which starts below the strip, so the model is centred in what the user
-  can see rather than behind the chrome. The orientation widget is placed there too; keeping it
-  clear of both floating panels is U73.
+  can see rather than behind the chrome. **The orientation widget takes the free top corner (U73):**
+  it is placed below the band and beside both floating panels — to the left of a visible inspector
+  on the right corner, to the right of a visible scene tree on the mirrored one — and a view with
+  room for neither corner draws it nowhere instead of under the chrome. The cluster's
+  display-settings popover can turn the widget off; the switch is view state and draws no command.
 - The header and the status bar stay panels: they are window edges, not tools, and nothing is drawn
   under them.
 

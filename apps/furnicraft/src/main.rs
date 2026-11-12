@@ -61,7 +61,7 @@ use crate::settings_store::SettingsStore;
 use crate::shortcuts::take_shortcuts;
 use crate::side_panels::{
     ANIMATION_SECONDS, Chrome, EXPANDED_WIDTH, PanelEvent, PanelHead, PanelRects, PanelSide, PanelSlot, Panels,
-    STRIP_WIDTH, panel_top, show as show_panel,
+    STRIP_WIDTH, panel_top, scroll_body, show as show_panel,
 };
 use crate::strip::strip_rect;
 use crate::tabs::{CloseOutcome, TabId, Tabs};
@@ -513,10 +513,10 @@ impl FurniCraftApp {
         let Self { shell, tabs, settings, .. } = self;
         let head = PanelHead { title: furnicraft_text::Message::PanelInspector, icon: icons::actions::SETTINGS };
         let slot = PanelSlot { side: PanelSide::Right, id: "panel_card", rect, state: shell.panels.inspector, head };
+        // The inspector's rows (the name field and its button, the property rows) are wider than a
+        // 226 pt panel, so the body scrolls sideways instead of widening the panel (U73).
         match show_panel(ctx, slot, settings.appearance.panel_opacity, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                tabs.active_mut().show_card(ui);
-            });
+            scroll_body(ui, |ui| tabs.active_mut().show_card(ui));
         }) {
             PanelEvent::Fold => shell.panels.inspector.expanded = false,
             PanelEvent::Restore => shell.panels.inspector.expanded = true,
