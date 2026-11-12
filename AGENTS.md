@@ -69,6 +69,17 @@ of opening a file, `symbols` to outline a large one, `workspace_diagnostics` aft
 strings, TOML, docs, `plan/` and anything the compiler does not index; `plan/map.md` still says
 where a feature lives.
 
+### 1.3 Designing the interface
+
+Before changing anything under `crates/ui/` or the app chrome in `apps/furnicraft/src`, read
+`.pi/skills/ui-design/SKILL.md`: it carries the procedure, the invariants and the review form. Its
+`references/checklist.md` is the rubric and `/ui-review` runs it over a diff. Naming another program
+— Blender included — states a quality bar, never a specification: decompose the borrowed behaviour
+into the button, the modifier, the feedback, the cancel and the awkward case, decide them in our
+words, and record an ADR when the decision is not reversible. A UI change is verified silently by
+default (an `egui::Context` driven with `RawInput`); colour, contrast and translucency need an
+offscreen render or a live run, and the task says which one was used.
+
 ## 2. Non-negotiable constraints
 
 - **Rust only.** No JS/TS, no scripting runtime, no code generation into other languages.
