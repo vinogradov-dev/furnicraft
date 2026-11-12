@@ -4,21 +4,26 @@
 //! read-only *World origin* row shows what the parent chain composes to, read from
 //! `Project::origin_world`.
 //! Rotation is shown as intrinsic XYZ Euler angles in degrees; the document keeps a unit
-//! quaternion, so the angles are only a view of it. The card keeps the typed text until the edit
-//! ends: Enter in any field or the Apply button parses all six fields and dispatches one
-//! `node.placement.set`, so an edit is one undo entry. The half that did not change is kept
-//! bit-for-bit. *Place at world zero* dispatches `node.placement.world_zero`, which clears the
-//! parent-frame translation and keeps the rotation.
+//! quaternion, so the angles are only a view of it. Every field is a scrub: a drag writes the
+//! document while the hand moves and the whole gesture is one undo entry, typed text lands after a
+//! short debounce, and Escape during a drag puts the value back. Each field changes its own
+//! component and leaves the other five exactly as the document holds them, so a translation edit
+//! keeps the stored quaternion bit-for-bit and a rotation edit keeps the stored translation.
+//! *Place at world zero* dispatches `node.placement.world_zero`, which clears the parent-frame
+//! translation and keeps the rotation.
 
-use egui::{Color32, RichText, TextEdit, Ui};
+use std::ops::RangeInclusive;
+
+use egui::{Color32, RichText, Ui};
 use furnicraft_engine::node_cmds::{NODE_PLACEMENT_SET_ID, NODE_PLACEMENT_WORLD_ZERO_ID};
-use furnicraft_engine::{NodePlacementSet, NodePlacementWorldZero, Session};
+use furnicraft_engine::{EditScope, NodePlacementSet, NodePlacementWorldZero, Session};
 use furnicraft_model::{EulerAngles, Id, Placement};
 use furnicraft_text::{Lang, Message};
-use furnicraft_units::{Degrees, Length};
+use furnicraft_units::Length;
 
 use crate::command::{dispatch, json};
 use crate::coords;
+use crate::scrub::{self, CommitPolicy, Parse, Scrub};
 use crate::section::section;
 
 /// Persistent state of the placement card.
@@ -28,20 +33,22 @@ pub(crate) struct PlacementCard {
     error: Option<String>,
 }
 
-/// Text being edited and the document placement it was read from.
+/// The placement as the fields show it, and the document placement it was read from.
 ///
-/// `base` detects a change made elsewhere, for example by undo: the card re-reads the document
-/// instead of letting stale text overwrite a restored placement.
+/// `base` detects a change made elsewhere, for example by undo or the viewport: the card re-reads
+/// the document instead of letting a stale draft overwrite a restored placement. The numbers are
+/// millimetres and degrees because that is what a field scrubs; the document keeps micrometres and a
+/// unit quaternion, and the card converts at the command boundary.
 #[derive(Clone, Debug, PartialEq)]
 struct Draft {
     node: Id,
     base: Placement,
-    x: String,
-    y: String,
-    z: String,
-    rx: String,
-    ry: String,
-    rz: String,
+    x: f64,
+    y: f64,
+    z: f64,
+    rx: f64,
+    ry: f64,
+    rz: f64,
 }
 
 impl Draft {
@@ -51,13 +58,89 @@ impl Draft {
         Some(Self {
             node,
             base,
-            x: x.to_string(),
-            y: y.to_string(),
-            z: z.to_string(),
-            rx: rotation.x.to_string(),
-            ry: rotation.y.to_string(),
-            rz: rotation.z.to_string(),
+            x: x.millimetres_f64(),
+            y: y.millimetres_f64(),
+            z: z.millimetres_f64(),
+            rx: rotation.x.degrees_f64(),
+            ry: rotation.y.degrees_f64(),
+            rz: rotation.z.degrees_f64(),
         })
+    }
+
+    /// The component one field edits.
+    fn axis(&mut self, axis: Axis) -> &mut f64 {
+        match axis {
+            Axis::X => &mut self.x,
+            Axis::Y => &mut self.y,
+            Axis::Z => &mut self.z,
+            Axis::Rx => &mut self.rx,
+            Axis::Ry => &mut self.ry,
+            Axis::Rz => &mut self.rz,
+        }
+    }
+}
+
+/// One component of the placement: a translation axis in millimetres or a rotation axis in degrees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Axis {
+    X,
+    Y,
+    Z,
+    Rx,
+    Ry,
+    Rz,
+}
+
+impl Axis {
+    /// The three translation fields, in the order the card draws them.
+    const TRANSLATION: [Self; 3] = [Self::X, Self::Y, Self::Z];
+
+    /// The three rotation fields, in the order the card draws them.
+    const ROTATION: [Self; 3] = [Self::Rx, Self::Ry, Self::Rz];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+            Self::Rx => "X",
+            Self::Ry => "Y",
+            Self::Rz => "Z",
+        }
+    }
+
+    /// The unit drawn beside the field, never inside it.
+    fn unit(self) -> &'static str {
+        match self {
+            Self::X | Self::Y | Self::Z => "mm",
+            Self::Rx | Self::Ry | Self::Rz => "°",
+        }
+    }
+
+    /// How the typed text becomes a number: a length or an angle, both with the document's precision.
+    fn parse(self) -> Parse {
+        match self {
+            Self::X | Self::Y | Self::Z => scrub::parse_millimetres,
+            Self::Rx | Self::Ry | Self::Rz => scrub::parse_degrees,
+        }
+    }
+
+    /// The range a drag stays inside; the command validates what the field allows.
+    fn range(self) -> RangeInclusive<f64> {
+        match self {
+            Self::X | Self::Y | Self::Z => -1_000_000.0..=1_000_000.0,
+            Self::Rx | Self::Ry | Self::Rz => -360_000.0..=360_000.0,
+        }
+    }
+
+    /// The index of a translation axis inside a three-component vector.
+    fn index(self) -> Option<usize> {
+        match self {
+            Self::X => Some(0),
+            Self::Y => Some(1),
+            Self::Z => Some(2),
+            Self::Rx | Self::Ry | Self::Rz => None,
+        }
     }
 }
 
@@ -66,6 +149,8 @@ impl PlacementCard {
     ///
     /// The root container defines the world frame and has no placement, so it never reaches here.
     pub(crate) fn show(&mut self, ui: &mut Ui, session: &mut Session, node: Id) {
+        // One token per frame for the six fields: the edit that takes it owns one undo entry.
+        let fresh = session.edit_scope();
         let Some(current) = session.project().node(node).map(|node| node.placement()) else {
             self.draft = None;
             self.error = None;
@@ -95,18 +180,24 @@ impl PlacementCard {
 
         let world = coords::world_origin(session.project(), node);
         let can_zero = draft.base.translation_lengths().is_some_and(|translation| translation != [Length::ZERO; 3]);
-        let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-        let mut commit = false;
         let mut zero = false;
-        let lang = crate::language(ui.ctx());
+        let mut edits: Vec<(Axis, f64, EditScope)> = Vec::new();
+        let mut cancelled: Vec<EditScope> = Vec::new();
+        let mut refused: Option<Message> = None;
+
         section(ui, "placement.transform", Message::SectionTransform.text(lang), true, |ui| {
             section(ui, "placement.transform.origin", origin_title.clone(), true, |ui| {
-                for (label, text) in [("X", &mut draft.x), ("Y", &mut draft.y), ("Z", &mut draft.z)] {
+                for axis in Axis::TRANSLATION {
                     ui.horizontal(|ui| {
-                        ui.label(label);
-                        let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("mm"));
-                        ui.label("mm");
-                        commit |= response.lost_focus() && enter;
+                        ui.label(axis.label());
+                        let outcome = draw_axis(ui, axis, draft.axis(axis), fresh);
+                        if outcome.commit
+                            && let Some(scope) = outcome.scope
+                        {
+                            edits.push((axis, *draft.axis(axis), scope));
+                        }
+                        refused = refused.or(outcome.error);
+                        cancelled.extend(outcome.cancelled);
                     });
                 }
                 ui.horizontal(|ui| {
@@ -125,22 +216,28 @@ impl PlacementCard {
                 Message::RotationWithOrder.with(lang, [EulerAngles::ORDER_LABEL]),
                 true,
                 |ui| {
-                    for (label, text) in [("X", &mut draft.rx), ("Y", &mut draft.ry), ("Z", &mut draft.rz)] {
+                    for axis in Axis::ROTATION {
                         ui.horizontal(|ui| {
-                            ui.label(label);
-                            let response = ui.add(TextEdit::singleline(text).desired_width(96.0).hint_text("°"));
-                            ui.label("°");
-                            commit |= response.lost_focus() && enter;
+                            ui.label(axis.label());
+                            let outcome = draw_axis(ui, axis, draft.axis(axis), fresh);
+                            if outcome.commit
+                                && let Some(scope) = outcome.scope
+                            {
+                                edits.push((axis, *draft.axis(axis), scope));
+                            }
+                            refused = refused.or(outcome.error);
+                            cancelled.extend(outcome.cancelled);
                         });
                     }
                 },
             );
-            if ui.button(Message::Apply.text(lang)).clicked() {
-                commit = true;
-            }
         });
-        if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+        if let Some(message) = refused {
+            ui.colored_label(Color32::LIGHT_RED, message.text(lang));
+        }
+
+        for scope in cancelled {
+            session.cancel_edit(scope);
         }
 
         if zero {
@@ -155,72 +252,85 @@ impl PlacementCard {
             return;
         }
 
-        if !commit {
+        if let Some(error) = &self.error {
+            ui.colored_label(Color32::LIGHT_RED, error);
+        }
+        if edits.is_empty() {
             return;
         }
-        let fields = Fields {
-            x: draft.x.clone(),
-            y: draft.y.clone(),
-            z: draft.z.clone(),
-            rx: draft.rx.clone(),
-            ry: draft.ry.clone(),
-            rz: draft.rz.clone(),
-        };
-        match apply_placement(session, node, &fields, lang) {
-            Ok(()) => {
-                self.error = None;
-                self.draft = None;
+        for (axis, value, scope) in edits {
+            match apply_axis(session, node, axis, value, scope, lang) {
+                Ok(()) => self.error = None,
+                Err(error) => self.error = Some(error),
             }
-            Err(error) => self.error = Some(error),
         }
+        self.draft = None;
         ui.ctx().request_repaint();
     }
 }
 
-/// Text of all six placement fields as typed by the user.
-#[derive(Clone, Debug, PartialEq)]
-struct Fields {
-    x: String,
-    y: String,
-    z: String,
-    rx: String,
-    ry: String,
-    rz: String,
+/// Draws one axis field and hands back what it reported.
+fn draw_axis(ui: &mut Ui, axis: Axis, value: &mut f64, fresh: EditScope) -> crate::scrub::FieldOutcome {
+    Scrub::new(value)
+        .speed(0.5)
+        .range(axis.range())
+        .decimals(3)
+        .unit(axis.unit())
+        .parse(axis.parse())
+        .policy(CommitPolicy::Live)
+        .edit(fresh)
+        .show(ui)
 }
 
-/// Parses the six fields and places `node`, leaving the document untouched when nothing changed.
-///
-/// Only the half that changed is rebuilt: a translation edit keeps the exact stored quaternion and a
-/// rotation edit keeps the exact stored translation. An Euler triple that wraps to the displayed one,
-/// or one that describes the same rotation in another way, is not a change.
-fn apply_placement(session: &mut Session, node: Id, fields: &Fields, lang: Lang) -> Result<(), String> {
+/// Writes one component and leaves the rest of the placement exactly as the document holds it.
+fn apply_axis(
+    session: &mut Session,
+    node: Id,
+    axis: Axis,
+    value: f64,
+    scope: EditScope,
+    lang: Lang,
+) -> Result<(), String> {
     let current = session
         .project()
         .node(node)
         .map(|node| node.placement())
         .ok_or_else(|| Message::NodeNotInScene.with(lang, [node]))?;
-    let translation =
-        [parse_length("X", &fields.x, lang)?, parse_length("Y", &fields.y, lang)?, parse_length("Z", &fields.z, lang)?];
-    let rotation = EulerAngles {
-        x: parse_degrees(&Message::RotateAxis.with(lang, ["X"]), &fields.rx, lang)?,
-        y: parse_degrees(&Message::RotateAxis.with(lang, ["Y"]), &fields.ry, lang)?,
-        z: parse_degrees(&Message::RotateAxis.with(lang, ["Z"]), &fields.rz, lang)?,
-    };
-
     let mut placement = current;
-    if current.translation_lengths() != Some(translation) {
-        placement = placement
-            .with_translation(translation[0], translation[1], translation[2])
-            .map_err(|error| error.to_string())?;
-    }
-    if rotation.wrapped() != current.rotation_euler() {
-        placement = placement.with_rotation_euler(rotation).map_err(|error| error.to_string())?;
+    if let Some(index) = axis.index() {
+        let mut translation = current.translation_lengths().ok_or_else(|| {
+            Message::FieldWithError.with(lang, [axis.label(), Message::LengthErrorOutOfRange.text(lang)])
+        })?;
+        let Some(length) = scrub::millimetres(value) else {
+            return Err(Message::FieldWithError.with(lang, [axis.label(), Message::LengthErrorOutOfRange.text(lang)]));
+        };
+        if let Some(slot) = translation.get_mut(index) {
+            *slot = length;
+        }
+        if current.translation_lengths() != Some(translation) {
+            placement = placement
+                .with_translation(translation[0], translation[1], translation[2])
+                .map_err(|error| error.to_string())?;
+        }
+    } else {
+        let Some(angle) = scrub::degrees(value) else {
+            return Err(Message::FieldWithError.with(lang, [axis.label(), Message::DegreesErrorOutOfRange.text(lang)]));
+        };
+        let mut rotation = current.rotation_euler();
+        match axis {
+            Axis::Rx => rotation.x = angle,
+            Axis::Ry => rotation.y = angle,
+            _ => rotation.z = angle,
+        }
+        if rotation.wrapped() != current.rotation_euler() {
+            placement = placement.with_rotation_euler(rotation).map_err(|error| error.to_string())?;
+        }
     }
     if placement.same_transform(current) {
         return Ok(());
     }
     let params = json(&NodePlacementSet { node, placement })?;
-    dispatch(session, NODE_PLACEMENT_SET_ID, &params).map(|_| ())
+    session.dispatch_in(scope, NODE_PLACEMENT_SET_ID, &params).map(|_| ()).map_err(|error| error.to_string())
 }
 
 /// Clears the parent-frame translation through `node.placement.world_zero`, keeping the rotation.
@@ -232,68 +342,39 @@ fn apply_world_zero(session: &mut Session, node: Id, lang: Lang) -> Result<(), S
     dispatch(session, NODE_PLACEMENT_WORLD_ZERO_ID, &params).map(|_| ())
 }
 
-fn parse_length(label: &str, text: &str, lang: Lang) -> Result<Length, String> {
-    Length::parse_millimetres(text)
-        .map_err(|error| Message::FieldWithError.with(lang, [label, crate::length_error(error).text(lang)]))
-}
-
-fn parse_degrees(label: &str, text: &str, lang: Lang) -> Result<Degrees, String> {
-    Degrees::parse_degrees(text)
-        .map_err(|error| Message::FieldWithError.with(lang, [label, crate::degrees_error(error).text(lang)]))
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_testkit::{sample_catalog, sample_project};
+    use furnicraft_units::Degrees;
 
     use super::*;
-
-    fn fields(x: &str, y: &str, z: &str, rx: &str, ry: &str, rz: &str) -> Fields {
-        Fields {
-            x: x.to_owned(),
-            y: y.to_owned(),
-            z: z.to_owned(),
-            rx: rx.to_owned(),
-            ry: ry.to_owned(),
-            rz: rz.to_owned(),
-        }
-    }
-
-    fn identity_fields() -> Fields {
-        fields("0", "0", "0", "0", "0", "0")
-    }
-
-    fn fields_from_draft(draft: &Draft) -> Fields {
-        Fields {
-            x: draft.x.clone(),
-            y: draft.y.clone(),
-            z: draft.z.clone(),
-            rx: draft.rx.clone(),
-            ry: draft.ry.clone(),
-            rz: draft.rz.clone(),
-        }
-    }
 
     fn set_placement(session: &mut Session, node: Id, placement: Placement) {
         let params = json(&NodePlacementSet { node, placement }).expect("command parameters");
         dispatch(session, NODE_PLACEMENT_SET_ID, &params).expect("set placement");
     }
 
+    /// Places `node` one axis at a time inside one edit, as a drag does.
+    fn drag(session: &mut Session, node: Id, axis: Axis, values: &[f64]) {
+        let scope = session.edit_scope();
+        for value in values {
+            apply_axis(session, node, axis, *value, scope, Lang::En).expect("axis edit");
+        }
+        session.end_edit();
+    }
+
     #[test]
-    fn applying_fields_moves_the_node_as_one_undo_step() {
+    fn an_axis_edit_moves_the_node_as_one_undo_step() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("10", "-2.5", "3", "0", "0", "0"), Lang::En)
-            .expect("apply placement");
+        drag(&mut session, panel, Axis::X, &[10.0]);
         let placement = session.project().panel(panel).expect("panel").placement();
         assert_eq!(
             placement.translation_lengths(),
-            Some(
-                [Length::from_micrometres(10_000), Length::from_micrometres(-2_500), Length::from_micrometres(3_000),]
-            )
+            Some([Length::from_micrometres(10_000), Length::ZERO, Length::ZERO])
         );
         assert_eq!(placement.rotation(), Placement::IDENTITY.rotation());
 
@@ -303,12 +384,27 @@ mod tests {
     }
 
     #[test]
-    fn applying_rotation_is_one_undo_step_and_keeps_the_translation() {
+    fn a_drag_that_writes_every_frame_is_one_undo_step() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "90", "0", "45"), Lang::En)
-            .expect("apply rotation");
+        drag(&mut session, panel, Axis::Y, &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            session.project().panel(panel).expect("panel").placement().translation_lengths(),
+            Some([Length::ZERO, Length::from_micrometres(4_000), Length::ZERO])
+        );
+        session.undo().expect("undo the whole drag");
+        assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
+        assert!(!session.can_undo(), "a drag is one undo entry, whatever number of frames it took");
+    }
+
+    #[test]
+    fn a_rotation_edit_is_one_undo_step_and_keeps_the_translation() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let panel = Id::new(2).expect("panel id");
+
+        drag(&mut session, panel, Axis::Rx, &[90.0]);
+        drag(&mut session, panel, Axis::Rz, &[45.0]);
         let placement = session.project().panel(panel).expect("panel").placement();
         assert_eq!(placement.translation(), Placement::IDENTITY.translation());
         let angles = placement.rotation_euler();
@@ -316,16 +412,18 @@ mod tests {
         assert_eq!(angles.y, Degrees::ZERO);
         assert_eq!(angles.z, Degrees::from_millidegrees(45_000));
 
-        session.undo().expect("undo the rotation");
+        session.undo().expect("undo the second turn");
+        session.undo().expect("undo the first turn");
         assert_eq!(session.project().panel(panel).expect("panel").placement(), Placement::IDENTITY);
-        assert!(!session.can_undo(), "a rotation edit must be exactly one undo entry");
+        assert!(!session.can_undo());
     }
 
     #[test]
-    fn an_unchanged_placement_does_not_touch_history() {
+    fn an_unchanged_value_does_not_touch_history() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
-        apply_placement(&mut session, panel, &identity_fields(), Lang::En).expect("apply identity");
+        drag(&mut session, panel, Axis::X, &[0.0]);
+        drag(&mut session, panel, Axis::Rx, &[0.0]);
         assert!(!session.can_undo());
     }
 
@@ -334,69 +432,27 @@ mod tests {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
 
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "360", "-720", "0"), Lang::En)
-            .expect("apply full turn");
+        drag(&mut session, panel, Axis::Rx, &[360.0]);
+        drag(&mut session, panel, Axis::Ry, &[-720.0]);
         assert!(!session.can_undo(), "a full turn is not a change");
-
-        apply_placement(&mut session, panel, &fields("0", "0", "0", "0", "0", "0"), Lang::En).expect("apply identity");
-        assert!(!session.can_undo());
     }
 
     #[test]
-    fn invalid_text_names_the_axis_and_keeps_the_document() {
+    fn a_hostile_value_is_refused_without_touching_the_document() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
         let panel = Id::new(2).expect("panel id");
+        let scope = session.edit_scope();
 
-        let error = apply_placement(&mut session, panel, &fields("wide", "0", "0", "0", "0", "0"), Lang::En)
-            .expect_err("invalid X");
+        let error =
+            apply_axis(&mut session, panel, Axis::X, f64::INFINITY, scope, Lang::En).expect_err("an infinite length");
+        assert!(error.starts_with("X: "), "error was {error}");
+        let error = apply_axis(&mut session, panel, Axis::Rx, f64::NAN, scope, Lang::En).expect_err("a NaN angle");
         assert!(error.starts_with("X: "), "error was {error}");
         assert!(!session.can_undo());
 
-        let error = apply_placement(&mut session, panel, &fields("0", "1.2345", "0", "0", "0", "0"), Lang::En)
-            .expect_err("too precise");
-        assert!(error.starts_with("Y: "), "error was {error}");
-
-        let error = apply_placement(&mut session, panel, &fields("0", "0", "0", "spin", "0", "0"), Lang::En)
-            .expect_err("invalid rotate X");
-        assert!(error.starts_with("Rotate X: "), "error was {error}");
-        assert!(!session.can_undo());
-
         let missing = Id::new(999).expect("id");
-        let error = apply_placement(&mut session, missing, &identity_fields(), Lang::En).expect_err("missing node");
+        let error = apply_axis(&mut session, missing, Axis::X, 0.0, scope, Lang::En).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
-    }
-
-    #[test]
-    fn the_draft_prefills_from_the_document_and_reads_it_back_exactly() {
-        let mut session = Session::with_catalog(sample_project(), sample_catalog());
-        let panel = Id::new(2).expect("panel id");
-        apply_placement(&mut session, panel, &fields("12.5", "-7", "0.125", "30.5", "-15", "90"), Lang::En)
-            .expect("apply placement");
-        let placement = session.project().panel(panel).expect("panel").placement();
-
-        let draft = Draft::new(panel, placement).expect("representable translation");
-        assert_eq!(draft.x, "12.5 mm");
-        assert_eq!(draft.y, "-7 mm");
-        assert_eq!(draft.z, "0.125 mm");
-        assert_eq!(draft.rx, "30.5°");
-        assert_eq!(draft.ry, "-15°");
-        assert_eq!(draft.rz, "90°");
-
-        let rebuilt = placement
-            .with_translation(
-                parse_length("X", &draft.x, Lang::En).expect("x"),
-                parse_length("Y", &draft.y, Lang::En).expect("y"),
-                parse_length("Z", &draft.z, Lang::En).expect("z"),
-            )
-            .expect("rebuild translation")
-            .with_rotation_euler(EulerAngles {
-                x: parse_degrees("Rotate X", &draft.rx, Lang::En).expect("rx"),
-                y: parse_degrees("Rotate Y", &draft.ry, Lang::En).expect("ry"),
-                z: parse_degrees("Rotate Z", &draft.rz, Lang::En).expect("rz"),
-            })
-            .expect("rebuild rotation");
-        assert_eq!(rebuilt, placement);
-        assert_eq!(draft.base, placement);
     }
 
     #[test]
@@ -410,9 +466,7 @@ mod tests {
         .expect("placement");
         set_placement(&mut session, panel, placement);
 
-        let mut draft = Draft::new(panel, placement).expect("draft");
-        draft.rx = "45".to_owned();
-        apply_placement(&mut session, panel, &fields_from_draft(&draft), Lang::En).expect("rotate");
+        drag(&mut session, panel, Axis::Rx, &[45.0]);
 
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.translation(), placement.translation());
@@ -431,9 +485,7 @@ mod tests {
         .expect("placement");
         set_placement(&mut session, panel, placement);
 
-        let mut draft = Draft::new(panel, placement).expect("draft");
-        draft.x = "10".to_owned();
-        apply_placement(&mut session, panel, &fields_from_draft(&draft), Lang::En).expect("move");
+        drag(&mut session, panel, Axis::X, &[10.0]);
 
         let after = session.project().panel(panel).expect("panel").placement();
         assert_eq!(after.rotation(), placement.rotation());
@@ -465,6 +517,23 @@ mod tests {
 
         let error = apply_world_zero(&mut session, Id::new(999).expect("id"), Lang::En).expect_err("missing node");
         assert!(error.contains("not in the scene"), "error was {error}");
+    }
+
+    #[test]
+    fn the_draft_prefills_from_the_document_without_units() {
+        let mut project = sample_project();
+        let panel = Id::new(2).expect("panel id");
+        let placement: Placement = serde_json::from_value(serde_json::json!({
+            "translation": [12.5, -7.0, 0.125],
+            "rotation": [0.0, 0.0, 0.0, 1.0]
+        }))
+        .expect("placement");
+        project.set_node_placement(panel, placement).expect("place the panel");
+
+        let draft = Draft::new(panel, placement).expect("representable translation");
+        assert_eq!((draft.x, draft.y, draft.z), (12.5, -7.0, 0.125));
+        assert_eq!((draft.rx, draft.ry, draft.rz), (0.0, 0.0, 0.0));
+        assert_eq!(draft.base, placement);
     }
 
     #[test]

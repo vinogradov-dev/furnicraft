@@ -740,7 +740,7 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
             .add(
                 Scrub::new(&mut settings.viewport.roll_step_degrees)
                     .range(MIN_ROLL_STEP_DEGREES..=MAX_ROLL_STEP_DEGREES)
-                    .suffix(" °")
+                    .unit("°")
                     .speed(0.2),
             )
             .on_hover_text(Message::RollRingStepHint.text(lang))
@@ -751,7 +751,7 @@ fn viewport_ui(ui: &mut Ui, settings: &mut Settings, lang: Lang) -> bool {
         .add(
             Scrub::new(&mut settings.viewport.grid_step_mm)
                 .range(MIN_GRID_STEP_MM..=MAX_GRID_STEP_MM)
-                .suffix(" mm")
+                .unit("mm")
                 .speed(5.0),
         )
         .changed();

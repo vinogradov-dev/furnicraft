@@ -43,4 +43,4 @@ pub use panel_cmds::{
     PanelResize, PanelRingBandingClear, PanelRingBandingSet,
 };
 pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
-pub use session::Session;
+pub use session::{EditScope, Session};

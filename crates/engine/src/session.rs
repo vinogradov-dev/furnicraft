@@ -10,6 +10,22 @@ use crate::commands::{CommandError, CommandOutcome, CommandRegistry};
 use crate::diagnostics::{PanelDiagnostic, diagnose_panel};
 use crate::resolve;
 
+/// One edit by the user — a drag or a run of keystrokes — as a single undo entry.
+///
+/// A field commits while the user drags it, so one command runs many times with a new value each
+/// frame. Those dispatches belong to one scope, so undo returns the value the field had before the
+/// hand touched it instead of the frame before the last one (ADR 0092).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EditScope(u64);
+
+/// The edit scope that is open right now, and whether it already owns an undo entry.
+#[derive(Clone, Copy, Debug)]
+struct OpenEdit {
+    scope: EditScope,
+    /// Whether the scope's first dispatch has pushed the snapshot taken before the edit.
+    snapshot_pushed: bool,
+}
+
 /// A document plus its undo/redo history and saved-content marker.
 #[derive(Debug)]
 pub struct Session {
@@ -19,6 +35,8 @@ pub struct Session {
     redo: Vec<Project>,
     dirty: bool,
     catalog: Arc<Catalog>,
+    edit: Option<OpenEdit>,
+    next_scope: u64,
 }
 
 impl Session {
@@ -30,7 +48,16 @@ impl Session {
     /// Creates a clean session around a document and its read-only material catalogue.
     pub fn with_catalog(project: Project, catalog: Catalog) -> Self {
         let saved_project = project.clone();
-        Self { project, saved_project, undo: Vec::new(), redo: Vec::new(), dirty: false, catalog: Arc::new(catalog) }
+        Self {
+            project,
+            saved_project,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            dirty: false,
+            catalog: Arc::new(catalog),
+            edit: None,
+            next_scope: 0,
+        }
     }
 
     /// The current document. Commands are the only way to mutate it.
@@ -91,23 +118,113 @@ impl Session {
         self.dirty = false;
     }
 
+    /// Opens an edit scope: every command dispatched inside it shares one undo entry.
+    ///
+    /// A new scope replaces the one that was open, so a field that begins an edit never inherits the
+    /// history of another. The scope closes on [`Session::end_edit`], on any plain dispatch and on
+    /// undo or redo.
+    pub fn begin_edit(&mut self) -> EditScope {
+        let scope = self.edit_scope();
+        self.edit = Some(OpenEdit { scope, snapshot_pushed: false });
+        scope
+    }
+
+    /// A fresh scope token, for a caller that dispatches later through [`Session::dispatch_in`].
+    ///
+    /// The token alone groups nothing: the history starts at the first dispatch that carries it, so
+    /// a card can mint one before it borrows the document and only use it if the user edits.
+    pub fn edit_scope(&mut self) -> EditScope {
+        self.next_scope = self.next_scope.wrapping_add(1);
+        EditScope(self.next_scope)
+    }
+
+    /// Closes the open edit scope, keeping its single undo entry.
+    pub fn end_edit(&mut self) {
+        self.edit = None;
+    }
+
+    /// Drops the open edit scope and restores the document it started from.
+    ///
+    /// This is what Escape during a drag means: the edit never happened, so it leaves no undo entry
+    /// and no redo entry either. Returns whether anything was restored; a scope that dispatched
+    /// nothing, or one that is not open, has nothing to undo.
+    pub fn cancel_edit(&mut self, scope: EditScope) -> bool {
+        let Some(open) = self.edit else {
+            return false;
+        };
+        if open.scope != scope {
+            return false;
+        }
+        self.edit = None;
+        if !open.snapshot_pushed {
+            return false;
+        }
+        let Some(snapshot) = self.undo.pop() else {
+            return false;
+        };
+        if self.project.restore_from(&snapshot).is_err() {
+            self.undo.push(snapshot);
+            return false;
+        }
+        self.redo.clear();
+        self.dirty = !self.project.same_content(&self.saved_project);
+        true
+    }
+
     /// Dispatches a command by id with JSON parameters.
     ///
     /// The command runs on a copy of the document. A successful command becomes one undo entry;
-    /// a failed command leaves the current document untouched.
+    /// a failed command leaves the current document untouched. A dispatch outside an edit scope
+    /// closes the scope, so it is never merged into another field's edit.
     pub fn dispatch(&mut self, id: &str, params: &Value) -> Result<CommandOutcome, CommandError> {
+        let (outcome, previous) = self.run(id, params)?;
+        self.edit = None;
+        self.record(previous);
+        Ok(outcome)
+    }
+
+    /// Dispatches a command as part of one edit, so the whole edit is one undo entry.
+    ///
+    /// The first dispatch in `scope` pushes the snapshot taken before it; the next ones replace the
+    /// document without touching the history. A scope that is no longer open — because the edit
+    /// ended, another field began one, or undo ran — starts a fresh entry instead of merging into
+    /// history it does not own.
+    pub fn dispatch_in(&mut self, scope: EditScope, id: &str, params: &Value) -> Result<CommandOutcome, CommandError> {
+        let (outcome, previous) = self.run(id, params)?;
+        match self.edit {
+            Some(open) if open.scope == scope && open.snapshot_pushed && !self.undo.is_empty() => {
+                // The entry already holds the state before the edit; `previous` is a step inside it.
+            }
+            _ => {
+                self.record(previous);
+                self.edit = Some(OpenEdit { scope, snapshot_pushed: true });
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// Runs one command on a copy of the document and installs the result.
+    ///
+    /// Returns the command's outcome and the document as it was before it, which is what the history
+    /// keeps; a failed command leaves the current document untouched.
+    fn run(&mut self, id: &str, params: &Value) -> Result<(CommandOutcome, Project), CommandError> {
         let spec = CommandRegistry::new().get(id).ok_or_else(|| CommandError::UnknownCommand { id: id.to_owned() })?;
         let mut working = self.project.clone();
         let outcome = spec.run(&mut working, &self.catalog, params)?;
         let previous = std::mem::replace(&mut self.project, working);
+        Ok((outcome, previous))
+    }
+
+    /// Pushes the state before a command and drops the redo branch it invalidates.
+    fn record(&mut self, previous: Project) {
         self.undo.push(previous);
         self.redo.clear();
         self.dirty = !self.project.same_content(&self.saved_project);
-        Ok(outcome)
     }
 
     /// Restores the content from before the last command and advances the revision.
     pub fn undo(&mut self) -> Result<(), CommandError> {
+        self.edit = None;
         let snapshot = self.undo.pop().ok_or(CommandError::NothingToUndo)?;
         let current = self.project.clone();
         if let Err(error) = self.project.restore_from(&snapshot) {
@@ -121,6 +238,7 @@ impl Session {
 
     /// Reapplies the last undone command and advances the revision.
     pub fn redo(&mut self) -> Result<(), CommandError> {
+        self.edit = None;
         let snapshot = self.redo.pop().ok_or(CommandError::NothingToRedo)?;
         let current = self.project.clone();
         if let Err(error) = self.project.restore_from(&snapshot) {
@@ -586,6 +704,147 @@ mod tests {
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
+    }
+
+    #[test]
+    fn an_edit_scope_makes_a_drag_one_undo_entry() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").nominal_size();
+
+        let scope = session.begin_edit();
+        for width in [720, 740, 760] {
+            let size = furnicraft_model::PanelNominalSize::new(
+                Length::from_millimetres(700).expect("length"),
+                Length::from_millimetres(width).expect("width"),
+            )
+            .expect("a size");
+            let params = json_params(&PanelResize { panel: panel_id, nominal_size: size });
+            session.dispatch_in(scope, "panel.resize", &params).expect("resize inside the edit");
+        }
+        session.end_edit();
+
+        let after = Length::from_millimetres(760).expect("width");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size().width(), after);
+        session.undo().expect("undo the whole edit");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
+        assert!(!session.can_undo(), "a drag is one undo entry, not one per frame");
+    }
+
+    #[test]
+    fn a_minted_scope_groups_the_dispatches_that_carry_it() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").nominal_size();
+
+        // A card mints a token before it borrows the document; the history starts at the first
+        // dispatch that carries it, so no `begin_edit` is needed.
+        let scope = session.edit_scope();
+        for width in [720, 740] {
+            let size = furnicraft_model::PanelNominalSize::new(
+                Length::from_millimetres(700).expect("length"),
+                Length::from_millimetres(width).expect("width"),
+            )
+            .expect("a size");
+            let params = json_params(&PanelResize { panel: panel_id, nominal_size: size });
+            session.dispatch_in(scope, "panel.resize", &params).expect("resize inside the edit");
+        }
+        session.undo().expect("undo the edit");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn two_edit_scopes_are_two_undo_entries() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+
+        let first = session.begin_edit();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
+        session.dispatch_in(first, "panel.resize", &params).expect("first edit");
+        session.end_edit();
+
+        let second = session.begin_edit();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_panel_nominal_size() });
+        session.dispatch_in(second, "panel.resize", &params).expect("second edit");
+        session.end_edit();
+
+        session.undo().expect("undo the second edit");
+        assert_eq!(
+            session.project().panel(panel_id).expect("panel").nominal_size(),
+            sample_resized_panel_nominal_size()
+        );
+        session.undo().expect("undo the first edit");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), sample_panel_nominal_size());
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn cancelling_an_edit_restores_the_document_and_leaves_no_history() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let before = session.project().panel(panel_id).expect("panel").nominal_size();
+
+        let scope = session.begin_edit();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
+        session.dispatch_in(scope, "panel.resize", &params).expect("resize inside the edit");
+        assert!(session.cancel_edit(scope), "the edit had something to restore");
+
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), before);
+        assert!(!session.can_undo(), "a cancelled edit is not undoable");
+        assert!(!session.can_redo(), "and it is not redoable either");
+        assert!(!session.is_dirty());
+        assert!(!session.cancel_edit(scope), "a second cancel has nothing to restore");
+    }
+
+    #[test]
+    fn an_edit_that_dispatched_nothing_has_nothing_to_cancel() {
+        let mut session = sample_session();
+        let scope = session.begin_edit();
+        assert!(!session.cancel_edit(scope));
+        assert!(!session.can_undo());
+        let other = session.begin_edit();
+        assert!(!session.cancel_edit(scope), "another scope does not own that edit");
+        assert!(!session.cancel_edit(other), "an edit that dispatched nothing has nothing to restore");
+    }
+
+    #[test]
+    fn a_plain_dispatch_closes_the_open_edit() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let scope = session.begin_edit();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
+        session.dispatch_in(scope, "panel.resize", &params).expect("inside the edit");
+
+        let params = json_params(&Box::new(panel_create(&session, "Other")));
+        session.dispatch("panel.create", &params).expect("a command outside the edit");
+
+        // The scope no longer owns history, so its next dispatch opens a new entry instead of
+        // folding into the one it never pushed.
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_panel_nominal_size() });
+        session.dispatch_in(scope, "panel.resize", &params).expect("after a plain command");
+        session.undo().expect("undo the last edit");
+        assert_eq!(
+            session.project().panel(panel_id).expect("panel").nominal_size(),
+            sample_resized_panel_nominal_size()
+        );
+        session.undo().expect("undo the plain command");
+        assert_eq!(session.project().root().children().len(), 2);
+    }
+
+    #[test]
+    fn undo_closes_an_open_edit() {
+        let mut session = sample_session();
+        let panel_id = Id::new(2).expect("id");
+        let scope = session.begin_edit();
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
+        session.dispatch_in(scope, "panel.resize", &params).expect("resize inside the edit");
+        session.undo().expect("undo during the edit");
+
+        let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
+        session.dispatch_in(scope, "panel.resize", &params).expect("a new edit with the old scope");
+        session.undo().expect("undo it");
+        assert_eq!(session.project().panel(panel_id).expect("panel").nominal_size(), sample_panel_nominal_size());
     }
 
     #[test]

@@ -96,6 +96,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0089](0089-three-palettes-are-data-and-derive-their-states.md) | Three palettes are data: one ramp per variant, derived states, one accent override | Accepted |
 | [0090](0090-icons-are-coloured-by-semantic-family.md) | An icon is coloured by its semantic family, and the theme maps the literal | Accepted; supersedes the one-ink clause of 0047 and 0055 |
 | [0091](0091-the-ribbon-is-one-const-map.md) | The ribbon is one const map, and one tool is one glyph in a 34 x 30 cell | Accepted; supersedes the cell metrics and the caption rule of 0067 |
+| [0092](0092-a-field-is-a-number-with-its-unit-outside.md) | A numeric field is a number with its unit outside, and one edit is one undo entry | Accepted |
 
 ## Format
 
