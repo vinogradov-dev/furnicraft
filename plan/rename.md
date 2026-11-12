@@ -7,6 +7,10 @@ when a change adds a new place the name appears.
 Measured on 2026-11-07 at commit `0b568c3` (`dev`). Re-measure with the commands in §3 before
 trusting the numbers; the procedure itself does not go stale as fast as the counts.
 
+R1 waits for the release, not for its turn: it sits under `## Next` in `plan/BACKLOG.md`, out of the
+work order, and the `[release]` entry in `plan/debt.md` is the reminder. Take it back with
+`cargo xtask task take R1` when the release is planned.
+
 ## 1. Why the name is in the tree at all
 
 Three different roles, with three different prices. Confusing them is what makes a rename look
@@ -260,4 +264,3 @@ The per-file list after the mechanical pass is short enough to keep in the head:
 
 To see what the finished rename looks like, re-create it from §5 step 2 — the whole mechanical part
 is four `sed`s and one `mv`, and it builds in one `cargo build --workspace`.
-
