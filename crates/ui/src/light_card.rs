@@ -1,8 +1,9 @@
 //! The selected light card.
 //!
 //! A light is a scene object ([ADR 0036]): the card renames it and edits its kind, colour and
-//! intensity or power. Values stay in the card until Apply, so one edit is one undo entry. A sun
-//! intensity is a multiplier; a point power is in watts ([ADR 0039]).
+//! intensity or power. Every number is a scrub and commits as one edit — a drag writes the document
+//! while the hand moves and is one undo entry, typed text lands after a short debounce — so there is
+//! no Apply button. A sun intensity is a multiplier; a point power is in watts ([ADR 0039]).
 //!
 //! [ADR 0036]: ../docs/decisions/0036-cameras-and-lights-are-scene-objects.md
 //! [ADR 0039]: ../docs/decisions/0039-point-lights-use-watts-and-inverse-square-falloff.md
@@ -10,12 +11,12 @@
 use egui::{TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::scene_cmds::LIGHT_PARAMS_SET_ID;
-use furnicraft_engine::{LightParamsSet, NodeRename, Session};
+use furnicraft_engine::{EditScope, LightParamsSet, NodeRename, Session};
 use furnicraft_model::{Id, LightKind, LightNode};
 use furnicraft_text::{Lang, Message};
 
 use crate::command::{dispatch, json};
-use crate::scrub::Scrub;
+use crate::scrub::{CommitPolicy, Scrub};
 use crate::section::section;
 
 /// Default point-light power in watts when a sun is switched to a point light.
@@ -67,6 +68,9 @@ impl LightCard {
         };
 
         let lang = crate::language(ui.ctx());
+        // One token per frame for the colour and intensity fields: the edit that takes it is one
+        // undo entry.
+        let fresh = session.edit_scope();
         let mut rename = None;
         let mut name_error = None;
         ui.separator();
@@ -85,38 +89,59 @@ impl LightCard {
             });
         });
 
-        let mut apply = false;
+        let mut switched = false;
+        let mut commit = None;
+        let mut cancelled = Vec::new();
+        let mut refused = None;
         ui.separator();
         section(ui, "light.params", Message::SectionLight.text(lang), true, |ui| {
-            let mut kind_changed = false;
             ui.horizontal(|ui| {
-                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Sun, Message::Sun.text(lang)).changed();
-                kind_changed |= ui.radio_value(&mut draft.kind, LightKind::Point, Message::Point.text(lang)).changed();
+                switched |= ui.radio_value(&mut draft.kind, LightKind::Sun, Message::Sun.text(lang)).changed();
+                switched |= ui.radio_value(&mut draft.kind, LightKind::Point, Message::Point.text(lang)).changed();
             });
-            if kind_changed && draft.kind == LightKind::Point {
+            if switched && draft.kind == LightKind::Point {
                 draft.intensity = power_for_point_switch(draft.intensity);
             }
-            ui.horizontal(|ui| {
-                ui.label(Message::Colour.text(lang));
-                for (component, value) in ["R", "G", "B"].into_iter().zip(draft.color.iter_mut()) {
+            for (component, value) in ["R", "G", "B"].into_iter().zip(draft.color.iter_mut()) {
+                ui.horizontal(|ui| {
                     ui.label(component);
-                    ui.add(Scrub::new(value).speed(0.01).range(0.0..=1.0).decimals(3));
-                }
-            });
+                    let outcome = Scrub::new(value)
+                        .speed(0.01)
+                        .range(0.0..=1.0)
+                        .decimals(3)
+                        .policy(CommitPolicy::Live)
+                        .edit(fresh)
+                        .show(ui);
+                    if outcome.commit {
+                        commit = outcome.scope;
+                    }
+                    refused = refused.or(outcome.error);
+                    cancelled.extend(outcome.cancelled);
+                });
+            }
             ui.horizontal(|ui| {
                 // A sun stores an irradiance multiplier; a point light stores radiant power in watts
-                // ([ADR 0039]). The two units get their own label and drag speed.
-                let (label, speed) = if draft.kind == LightKind::Point {
-                    (Message::PowerWatts.text(lang), 10.0)
+                // ([ADR 0039]). The two units get their own label, unit and drag speed.
+                let (label, unit, speed) = if draft.kind == LightKind::Point {
+                    (Message::PowerWatts.text(lang), "W", 10.0)
                 } else {
-                    (Message::Intensity.text(lang), 0.05)
+                    (Message::Intensity.text(lang), "", 0.05)
                 };
                 ui.label(label);
-                ui.add(Scrub::new(&mut draft.intensity).speed(speed).range(0.0..=LightNode::MAX_INTENSITY).decimals(2));
+                let outcome = Scrub::new(&mut draft.intensity)
+                    .speed(speed)
+                    .range(0.0..=LightNode::MAX_INTENSITY)
+                    .decimals(2)
+                    .unit(unit)
+                    .policy(CommitPolicy::Live)
+                    .edit(fresh)
+                    .show(ui);
+                if outcome.commit {
+                    commit = outcome.scope;
+                }
+                refused = refused.or(outcome.error);
+                cancelled.extend(outcome.cancelled);
             });
-            if ui.button(Message::ApplyLight.text(lang)).clicked() {
-                apply = true;
-            }
         });
 
         // Take a snapshot so the document borrow ends before a command runs.
@@ -136,14 +161,24 @@ impl LightCard {
             ui.ctx().request_repaint();
             return;
         }
-        if apply {
-            match params_from_draft(&fields, lang).and_then(|request| apply_params(session, request)) {
+        for scope in cancelled {
+            session.cancel_edit(scope);
+        }
+        let commit = if switched { Some(None) } else { commit.map(Some) };
+        if let Some(scope) = commit {
+            match params_from_draft(&fields, lang).and_then(|request| apply_params(session, request, scope)) {
                 Ok(()) => {
                     self.error = None;
-                    self.draft = None;
+                    if scope.is_some() {
+                        // The drag continues from the document value next frame.
+                        self.draft = None;
+                    }
                 }
                 Err(error) => self.error = Some(error),
             }
+            ui.ctx().request_repaint();
+        } else if let Some(message) = refused {
+            self.error = Some(message.text(lang).to_owned());
         } else if let Some(error) = name_error {
             self.error = Some(error);
         }
@@ -175,9 +210,15 @@ fn apply_rename(session: &mut Session, light: Id, name: String) -> Result<(), St
     dispatch(session, NODE_RENAME_ID, &params).map(|_| ())
 }
 
-fn apply_params(session: &mut Session, request: LightParamsSet) -> Result<(), String> {
+/// Applies the parameters; with a scope, the whole drag is one undo entry.
+fn apply_params(session: &mut Session, request: LightParamsSet, scope: Option<EditScope>) -> Result<(), String> {
     let params = json(&request)?;
-    dispatch(session, LIGHT_PARAMS_SET_ID, &params).map(|_| ())
+    match scope {
+        Some(scope) => {
+            session.dispatch_in(scope, LIGHT_PARAMS_SET_ID, &params).map(|_| ()).map_err(|error| error.to_string())
+        }
+        None => dispatch(session, LIGHT_PARAMS_SET_ID, &params).map(|_| ()),
+    }
 }
 
 #[cfg(test)]
@@ -248,7 +289,7 @@ mod tests {
     fn applying_changes_one_revision_and_can_be_undone() {
         let (mut session, light) = light_session();
         let request = LightParamsSet { light, kind: LightKind::Point, color: [0.2, 0.3, 0.4], intensity: 4.0 };
-        apply_params(&mut session, request).expect("apply");
+        apply_params(&mut session, request, None).expect("apply");
         let node = session.project().light(light).expect("light");
         assert_eq!(node.kind(), LightKind::Point);
         assert_eq!(node.color(), [0.2, 0.3, 0.4]);
