@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U78 state=idle base=d6d0a4b updated=2026-11-12
+STATE: milestone=M7 phase=A task=U79 state=idle base=04e6a7d updated=2026-11-12
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U78 asserts the shell's own rules on the headless frame: the scene rectangle, the layer order,
-Chrome::covers and the keys, all on the real app.
+U79 is next: cargo xtask skills keeps the project skills honest, so every path, command and sibling
+a skill names exists and its frontmatter is what the loader needs.
 
 ## Index
 

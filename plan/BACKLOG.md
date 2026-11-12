@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
-  Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a
-   panel selects nothing" and "both themes checked by eye"; each of those is re-verified today
-   by starting the app on the owner's screen. After U77 the same frame runs in a test, so the
-   sentence becomes an assertion and a regression cannot come back quietly.
-  Shape: A test module beside the shell (apps/furnicraft/src/frame_tests.rs, declared from
-   main.rs) with one helper that builds the app headless and drives RawInput. Cover: the scene
-   rectangle and the active camera aspect are identical with both panels expanded, folded and
-   hidden and with the ribbon open and folded; a click on a panel is chrome and starts no pick,
-   no border drag and no camera gesture, while a click just outside selects; two-column and
-   quad tile the view rect exactly and their dividers stay grabbable; a modal owns the keys, so
-   no save, undo, reframe or tool change happens under it; no fold, hide or camera move writes
-   a revision. Keep the assertions on public shell facts, not on private fields.
-  Done: Every listed assertion is a test that fails when the rule is broken, proven by
-   temporarily reverting one line of Chrome::content and one of the key handler; cargo xtask ci
-   green.
-  `files: apps/furnicraft/src/main.rs, apps/furnicraft/src/side_panels.rs, apps/furnicraft/src/view_layout.rs, apps/furnicraft/src/strip.rs, apps/furnicraft/src/shortcuts.rs, crates/testkit/src/lib.rs`
 - `[ ]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
   Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
    to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
@@ -118,6 +101,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
 
 ## Done
+
+- `[x]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
+  Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a
+   panel selects nothing" and "both themes checked by eye"; each of those is re-verified today
+   by starting the app on the owner's screen. After U77 the same frame runs in a test, so the
+   sentence becomes an assertion and a regression cannot come back quietly.
+  Shape: A test module beside the shell (apps/furnicraft/src/frame_tests.rs, declared from
+   main.rs) with one helper that builds the app headless and drives RawInput. Cover: the scene
+   rectangle and the active camera aspect are identical with both panels expanded, folded and
+   hidden and with the ribbon open and folded; a click on a panel is chrome and starts no pick,
+   no border drag and no camera gesture, while a click just outside selects; two-column and
+   quad tile the view rect exactly and their dividers stay grabbable; a modal owns the keys, so
+   no save, undo, reframe or tool change happens under it; no fold, hide or camera move writes
+   a revision. Keep the assertions on public shell facts, not on private fields.
+  Done: Every listed assertion is a test that fails when the rule is broken, proven by
+   temporarily reverting one line of Chrome::content and one of the key handler; cargo xtask ci
+   green.
+  `files: apps/furnicraft/src/frame_tests.rs, apps/furnicraft/src/main.rs, apps/furnicraft/src/document.rs, apps/furnicraft/src/shortcuts.rs` — `04e6a7d`
 
 - `[x]` **U77** the shell's one frame is callable without a window, so a session can check the real interface silently
   Why: FurniCraftApp implements eframe::App::ui and holds render_state: egui_wgpu::RenderState,
