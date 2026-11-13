@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=V3 state=doing base=03a076b updated=2026-11-13
+STATE: milestone=M7 phase=T task=R1 state=idle base=6f8b62c updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-V3: the frame joins the box editor — corner and face grips on the envelope and the drawn creation
-gesture, both reaching `product.create`. `plan/notes/V2.md` records the box tool, its ten grips and
-the offscreen shots; `plan/notes/U82.md` records why a new document is empty.
+R1: the pre-release rename — one home for the product identity, the 13 bare crate names, the four
+registers that must agree and the envelope format string. `plan/rename.md` holds the measured
+procedure.
 
 ## Index
 

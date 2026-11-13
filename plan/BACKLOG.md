@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
-  Why: The owner wants the frame created and edited exactly like the box, not with a separate
-   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
-   is card-only while the box has grips, and the two owners of a box disagree.
-  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
-   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
-   and a face one, the card keeping the three numbers and the type. Dragging a min face
-   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
-   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
-   reach the same command. The grips show whenever the frame is selected, including the
-   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
-   fields during the gesture land with N8.
-  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
-   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
-   exactly the ghost size with the placeholder class; the card and the gesture produce the same
-   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
-   green.
-  `files: apps/furnicraft/src/box_gizmo.rs, crates/ui/src/box_tool.rs`
-
-## Bugs
-
-## Next
 - `[ ]` **R1** the pre-release rename: the product name leaves the code before the first release, so a
   later choice of name is one constant and no refactor. The work is measured and scripted in
   `plan/rename.md`; read that file, not the tree. Four parts, each its own commit: (1) give the
@@ -67,6 +45,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+
+## Bugs
+
+## Next
 - `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
   Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
    money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
@@ -125,6 +107,25 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    window opens; the help text names the flags; cargo xtask ci is green.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 ## Done
+
+- `[x]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
+  Why: The owner wants the frame created and edited exactly like the box, not with a separate
+   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
+   is card-only while the box has grips, and the two owners of a box disagree.
+  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
+   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
+   and a face one, the card keeping the three numbers and the type. Dragging a min face
+   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
+   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
+   reach the same command. The grips show whenever the frame is selected, including the
+   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
+   fields during the gesture land with N8.
+  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
+   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
+   exactly the ghost size with the placeholder class; the card and the gesture produce the same
+   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
+   green.
+  `files: apps/furnicraft/src/box_gizmo.rs, crates/ui/src/box_tool.rs` — `6f8b62c`
 
 - `[x]` **U82** the editor opens empty: a new scene carries no demonstration panels, edges or groups
   Why: The startup document is the maker's work surface. Three sample panels, two cutouts,
