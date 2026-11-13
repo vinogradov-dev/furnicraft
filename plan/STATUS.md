@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N3 state=idle base=36d4dde updated=2026-11-13
+STATE: milestone=M7 phase=T task=N4 state=idle base=5f5a232 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N3 opens one product at a time: the session carries `active_product`, a double click opens a piece,
-and the *add frame* card creates one through `product.create`, already open, beside the nearest
-product.
+N4 makes the open product a rule: panel, facade and fitting creation refuse when no product is open
+or when the target parent sits outside it, while primitives, drawn figures and mesh objects stay
+free.
 
 ## Index
 

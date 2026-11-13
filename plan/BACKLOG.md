@@ -25,28 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N3** one product is open at a time, opened by a double click and never written to the file
-  Why: The owner ruled that one product is open at a time and that a furniture piece is created
-   through a card and is open the moment it exists: press add frame, enter the dimensions, and
-   the next part goes inside it without another gesture. Without this the creation guard has
-   nothing to point at and a new project has no first step.
-  Shape: Session carries active_product: Option<Id>, opened and closed by view operations,
-   cleared per tab and never serialised; opening another replaces the previous one, and
-   product.create (N1) opens the new frame in the same user action — a command followed by a
-   session operation, never an open flag in the file. The ribbon gains one cell, add frame,
-   which opens a card: width, depth and height in 1 mm steps and a searchable list of product
-   classes defaulting to the placeholder. Placement is deterministic: the origin in an empty
-   scene, otherwise beside the nearest product on the floor, clear of every envelope, and
-   selected. The double click in the viewport and the click on the tree both open; nothing here
-   dispatches a document command. The card is the numeric path; the drawn gesture (rect then
-   height) reaches the same command and arrives with the box tool (V3), so this task does not
-   wait for it.
-  Done: Tests: adding a frame opens it and the next panel lands inside; in an empty scene the
-   frame is at the origin, otherwise beside the nearest product and clear of every envelope;
-   opening A then B leaves B open; closing leaves none; the state is not in the saved file; a
-   double click on a part does not open a product that does not contain it; each tab keeps its
-   own open product; the card is driven through an egui context; cargo xtask ci is green.
-  `files: crates/engine/src/session.rs, crates/ui/src/scene_tree.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **N4** the creation guard: a furniture part is created only inside the open product
   Why: The rule "no furniture part outside an open product" is worth nothing if a palette
    entry, a shortcut or a future assistant can bypass the button that enforces it. ADR 0098
@@ -264,6 +242,29 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N3** one product is open at a time, opened by a double click and never written to the file
+  Why: The owner ruled that one product is open at a time and that a furniture piece is created
+   through a card and is open the moment it exists: press add frame, enter the dimensions, and
+   the next part goes inside it without another gesture. Without this the creation guard has
+   nothing to point at and a new project has no first step.
+  Shape: Session carries active_product: Option<Id>, opened and closed by view operations,
+   cleared per tab and never serialised; opening another replaces the previous one, and
+   product.create (N1) opens the new frame in the same user action — a command followed by a
+   session operation, never an open flag in the file. The ribbon gains one cell, add frame,
+   which opens a card: width, depth and height in 1 mm steps and a searchable list of product
+   classes defaulting to the placeholder. Placement is deterministic: the origin in an empty
+   scene, otherwise beside the nearest product on the floor, clear of every envelope, and
+   selected. The double click in the viewport and the click on the tree both open; nothing here
+   dispatches a document command. The card is the numeric path; the drawn gesture (rect then
+   height) reaches the same command and arrives with the box tool (V3), so this task does not
+   wait for it.
+  Done: Tests: adding a frame opens it and the next panel lands inside; in an empty scene the
+   frame is at the origin, otherwise beside the nearest product and clear of every envelope;
+   opening A then B leaves B open; closing leaves none; the state is not in the saved file; a
+   double click on a part does not open a product that does not contain it; each tab keeps its
+   own open product; the card is driven through an egui context; cargo xtask ci is green.
+  `files: crates/engine/src/session.rs, crates/ui/src/scene_tree.rs, apps/furnicraft/src/main.rs` — `5f5a232`
 
 - `[x]` **N2** the product frame is drawn as a dashed wireframe that never picks
   Why: The envelope is useless if nobody can see it and nobody can click it: the owner
