@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=T2 state=idle base=48bbceb updated=2026-11-13
+STATE: milestone=M7 phase=T task=T3 state=idle base=de739a0 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-T2 turns `furntype.rs` into the class module: `ClassCode`, the `TraitSet` bit mask and the approved
-registry table of `docs/domain/classes.md` §7, resolved at compile time, with the property key
-renamed to `class` and the schema bumped.
+T3 draws the class picker: a search over the registry's labels, slugs and aliases, the tree from
+family to type to variant with an unclassified row, and the class label on the scene-tree badge.
+Assignment stays one `node.property.set`.
 
 ## Index
 

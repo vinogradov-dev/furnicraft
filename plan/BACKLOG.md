@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **T2** the class registry is data in the model, and the program can see what it is looking at
-  Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)
-   but not its meaning: 20.01.09 is accepted although no such type exists, and no algorithm can
-   ask what an object is. The class registry turns the code into something the program can see
-   with, and ADR 0094 is the accepted design.
-  Shape: furntype.rs becomes the class module: ClassCode (six digits, three levels, 000000
-   unclassified), TraitSet as a bit mask, and a const registry table whose inheritance is
-   resolved at compile time so a lookup never walks parents. PropertyValue::FurnType becomes
-   PropertyValue::Class under the reserved key class, query.rs renames with_furntype_under to
-   with_class_under, assignment rejects a code the registry does not know while loading keeps
-   an unknown number. A test compares the registry with the table in docs/domain/classes.md.
-   The schema is bumped because the stored serde tag changes, and ADR 0096 means no migration.
-  Done: Tests: lookup and inheritance per level; a contradictory override is rejected; an
-   unknown code is refused on set and kept on load; the document table equals the registry row
-   for row; no code literal is compared outside a test; cargo xtask ci is green.
-  `files: crates/model/src/furntype.rs, crates/model/src/properties.rs, crates/model/src/query.rs`
 - `[ ]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
   Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
    today it edits a raw GG.TT.VV text field, so a saved project can hold a code the registry
@@ -347,6 +331,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **T2** the class registry is data in the model, and the program can see what it is looking at
+  Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)
+   but not its meaning: 20.01.09 is accepted although no such type exists, and no algorithm can
+   ask what an object is. The class registry turns the code into something the program can see
+   with, and ADR 0094 is the accepted design.
+  Shape: furntype.rs becomes the class module: ClassCode (six digits, three levels, 000000
+   unclassified), TraitSet as a bit mask, and a const registry table whose inheritance is
+   resolved at compile time so a lookup never walks parents. PropertyValue::FurnType becomes
+   PropertyValue::Class under the reserved key class, query.rs renames with_furntype_under to
+   with_class_under, assignment rejects a code the registry does not know while loading keeps
+   an unknown number. A test compares the registry with the table in docs/domain/classes.md.
+   The schema is bumped because the stored serde tag changes, and ADR 0096 means no migration.
+  Done: Tests: lookup and inheritance per level; a contradictory override is rejected; an
+   unknown code is refused on set and kept on load; the document table equals the registry row
+   for row; no code literal is compared outside a test; cargo xtask ci is green.
+  `files: crates/model/src/class.rs, crates/model/src/properties.rs, crates/model/src/query.rs` — `de739a0`
 
 - `[x]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
   Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
