@@ -347,6 +347,7 @@ icons!(Bodies, "bodies", Model, bodies {
 });
 
 icons!(Scene, "scene", Scene, scene {
+    PRODUCT => "product",
     PANEL => "panel",
     ASSEMBLY => "assembly",
     CAMERA => "camera",
@@ -1159,7 +1160,7 @@ mod tests {
                 assert!(seen.insert(icon.uri()), "duplicate icon uri {}", icon.uri());
             }
         }
-        assert_eq!(seen.len(), 100);
+        assert_eq!(seen.len(), 101);
     }
 
     #[test]

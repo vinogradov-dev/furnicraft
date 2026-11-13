@@ -100,19 +100,45 @@ impl Selection {
 /// ribbon, so there is exactly one place a new node starts. `AddChild` only arms a container for the
 /// next creation, which is a view-state decision, not a second creation path (ADR 0056).
 ///
-/// The four view entries are session state, not document edits (ADR 0065): the editor applies them
-/// without a command, and they leave no undo entry.
+/// The view entries and the product open/close are session state, not document edits (ADR 0065,
+/// ADR 0098): the editor applies them without a command, and they leave no undo entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TreeAction {
-    AddChild { parent: Id },
-    Duplicate { node: Id },
-    Delete { node: Id },
-    Group { nodes: Vec<Id> },
-    Ungroup { node: Id },
-    ConvertToGroup { node: Id },
-    SetHidden { node: Id, hidden: bool },
-    SetLocked { node: Id, locked: bool },
-    Isolate { node: Id },
+    AddChild {
+        parent: Id,
+    },
+    /// Makes this product the session's one open working product.
+    OpenProduct {
+        node: Id,
+    },
+    /// Leaves the open product, so no product receives new parts.
+    CloseProduct,
+    Duplicate {
+        node: Id,
+    },
+    Delete {
+        node: Id,
+    },
+    Group {
+        nodes: Vec<Id>,
+    },
+    Ungroup {
+        node: Id,
+    },
+    ConvertToGroup {
+        node: Id,
+    },
+    SetHidden {
+        node: Id,
+        hidden: bool,
+    },
+    SetLocked {
+        node: Id,
+        locked: bool,
+    },
+    Isolate {
+        node: Id,
+    },
     ShowAll,
 }
 
@@ -128,34 +154,51 @@ pub(crate) fn show(
     flags: &mut ViewFlags,
 ) -> Vec<TreeAction> {
     let project = session.project();
+    let active = session.active_product();
     let mut actions = Vec::new();
     let group = (selection.ids().len() >= 2 && project.validate_group(selection.ids()).is_ok())
         .then(|| selection.ids().to_vec());
     let group = group.as_deref().unwrap_or(&[]);
-    show_container(ui, project, project.root(), selection, flags, &mut actions, group, 0);
+    show_container(ui, project, project.root(), active, selection, flags, &mut actions, group, 0);
     actions
 }
 
-fn container_label(ui: &Ui, project: &Project, container: &Container) -> (RichText, Option<String>) {
+fn container_label(
+    ui: &Ui,
+    project: &Project,
+    container: &Container,
+    active: Option<Id>,
+) -> (RichText, Option<String>) {
     let name = container.name();
     if container.id() == project.root().id() {
         return (RichText::new(name).strong(), None);
     }
-    if !container.is_component() {
-        return (RichText::new(name), None);
-    }
     let lang = crate::language(ui.ctx());
-    let (badge, tooltip) = match project.class(container.id()) {
-        Some(class) if !class.is_unclassified() => {
-            let code = class.to_string();
-            // The row says what the digits mean; the code stays one hover away, because the digits
-            // are what an export and a conversation with the shop use.
-            let label = class.label().map(|label| label.text(lang)).unwrap_or(&code);
-            (label.to_owned(), Some(code))
+    let (mut text, mut tooltip) = if !container.is_component() {
+        (RichText::new(name), None)
+    } else {
+        match project.class(container.id()) {
+            Some(class) if !class.is_unclassified() => {
+                let code = class.to_string();
+                // The row says what the digits mean; the code stays one hover away, because the
+                // digits are what an export and a conversation with the shop use.
+                let label = class.label().map(|label| label.text(lang)).unwrap_or(&code);
+                (RichText::new(format!("{name}  [{label}]")), Some(code))
+            }
+            _ => (RichText::new(format!("{name}  [{}]", Message::TreeBadgeComponent.text(lang))), None),
         }
-        _ => (Message::TreeBadgeComponent.text(lang).to_owned(), None),
     };
-    (RichText::new(format!("{name}  [{badge}]")), tooltip)
+    if active == Some(container.id()) {
+        // The working product reads stronger than the closed pieces around it: new parts land in
+        // it, so the tree says which piece is open without a second badge.
+        text = text.strong();
+        let hint = Message::TreeActiveProduct.text(lang).to_owned();
+        tooltip = Some(match tooltip {
+            Some(code) => format!("{hint}  ·  {code}"),
+            None => hint,
+        });
+    }
+    (text, tooltip)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -163,6 +206,7 @@ fn show_container(
     ui: &mut Ui,
     project: &Project,
     container: &Container,
+    active: Option<Id>,
     selection: &mut Selection,
     flags: &mut ViewFlags,
     actions: &mut Vec<TreeAction>,
@@ -172,13 +216,14 @@ fn show_container(
     let id = container.id();
     let is_root = id == project.root().id();
     let is_component = container.is_component();
+    let is_product = container.is_product();
     let state_id = ui.make_persistent_id(("scene_container", id.get()));
     let state = CollapsingState::load_with_default_open(ui.ctx(), state_id, depth < 2);
-    let label = container_label(ui, project, container);
+    let label = container_label(ui, project, container, active);
     let (_toggle, header, _) =
         state.show_header(ui, |ui| row(ui, id, label.0, selection.contains(id), flags, !is_root)).body(|ui| {
             for child in container.children() {
-                show_node(ui, project, child, selection, flags, actions, group, depth.saturating_add(1));
+                show_node(ui, project, child, active, selection, flags, actions, group, depth.saturating_add(1));
             }
         });
     let mut header = header.inner;
@@ -187,13 +232,18 @@ fn show_container(
     }
     if header.clicked() {
         select(ui, selection, id);
+        // A click on a product row opens that product: the tree is the second half of the
+        // double-click rule, and it is a view operation, never a document command (ADR 0098).
+        if is_product {
+            actions.push(TreeAction::OpenProduct { node: id });
+        }
     }
     // The row drew its own toggles a moment ago, so the menu captions read the flags as they are
     // now instead of a copy taken before the row.
     let hidden = flags.is_hidden(id);
     let locked = flags.is_locked(id);
     header.context_menu(|ui| {
-        container_menu(ui, id, is_root, is_component, hidden, locked, group, actions);
+        container_menu(ui, id, is_root, is_component, is_product, active == Some(id), hidden, locked, group, actions);
     });
 }
 
@@ -202,6 +252,7 @@ fn show_node(
     ui: &mut Ui,
     project: &Project,
     node: &Node,
+    active: Option<Id>,
     selection: &mut Selection,
     flags: &mut ViewFlags,
     actions: &mut Vec<TreeAction>,
@@ -210,7 +261,7 @@ fn show_node(
 ) {
     match node {
         Node::Container(container) => {
-            show_container(ui, project, container, selection, flags, actions, group, depth);
+            show_container(ui, project, container, active, selection, flags, actions, group, depth);
         }
         Node::Panel(panel) => show_panel(ui, panel, selection, flags, actions, group),
         Node::Object(object) => show_object(ui, object, selection, flags, actions, group),
@@ -336,6 +387,8 @@ fn container_menu(
     id: Id,
     is_root: bool,
     is_component: bool,
+    is_product: bool,
+    active: bool,
     hidden: bool,
     locked: bool,
     group: &[Id],
@@ -343,6 +396,17 @@ fn container_menu(
 ) {
     group_entry(ui, group, actions);
     view_menu(ui, id, hidden, locked, is_root, actions);
+    if is_product {
+        let (caption, action) = if active {
+            (Message::TreeCloseProduct, TreeAction::CloseProduct)
+        } else {
+            (Message::TreeOpenProduct, TreeAction::OpenProduct { node: id })
+        };
+        if ui.button(caption.text(crate::language(ui.ctx()))).clicked() {
+            actions.push(action);
+            ui.close();
+        }
+    }
     if !is_root {
         if ui
             .button(Message::TreeAddChild.text(crate::language(ui.ctx())))

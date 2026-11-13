@@ -14,7 +14,7 @@
 #![allow(clippy::expect_used)]
 
 use eframe::egui;
-use furnicraft_model::Id;
+use furnicraft_model::{ClassCode, Envelope, Id};
 use furnicraft_scene::Camera;
 use furnicraft_text::{Lang, Message};
 
@@ -417,4 +417,56 @@ fn no_chrome_gesture_writes_a_revision() {
     assert_eq!(harness.revision(), revision, "no chrome gesture writes the document");
     assert!(!harness.app.tabs.active().is_dirty(), "and none of them marks the scene unsaved");
     assert!(!harness.app.tabs.active().can_undo(), "and none of them adds an undo entry");
+}
+
+#[test]
+fn each_tab_keeps_its_own_open_product() {
+    // Openness is session view state (ADR 0098), and a tab owns its session: a new tab starts with
+    // every product closed, and the first tab still works in the frame it opened.
+    let mut harness = Harness::new("frame-product-tabs");
+    harness.settle();
+    let first_tab = harness.app.tabs.active_id();
+    let draft = furnicraft_ui::product_card::ProductDraft {
+        envelope: Envelope::new(
+            furnicraft_testkit::millimetres(600),
+            furnicraft_testkit::millimetres(560),
+            furnicraft_testkit::millimetres(720),
+        )
+        .expect("a valid box"),
+        class: ClassCode::GENERAL_PRODUCT,
+    };
+    harness.app.tabs.active_mut().create_product(draft, Lang::En).expect("create the frame");
+    let first = harness.app.tabs.active().session.active_product().expect("the first tab works in it");
+
+    harness.app.new_tab().expect("a new tab");
+    let second_tab = harness.app.tabs.active_id();
+    assert_ne!(first_tab, second_tab);
+    assert_eq!(harness.app.tabs.active().session.active_product(), None, "a new tab opens no product");
+
+    assert!(harness.app.tabs.activate(first_tab));
+    assert_eq!(harness.app.tabs.active().session.active_product(), Some(first), "the first tab kept it");
+    assert!(harness.app.tabs.activate(second_tab));
+    assert_eq!(harness.app.tabs.active().session.active_product(), None);
+}
+
+#[test]
+fn the_product_card_creates_a_frame_that_is_open_and_receives_the_next_part() {
+    let mut harness = Harness::new("frame-product-card");
+    harness.settle();
+    let before = harness.revision();
+    harness.app.product_card.start();
+    harness.settle();
+    assert!(harness.app.product_card.is_open(), "the card is up");
+
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    let document = harness.app.tabs.active();
+    let product = document.session.active_product().expect("the card created a frame and opened it");
+    assert!(document.session.project().container(product).is_some_and(|product| product.is_product()));
+    assert_eq!(harness.revision().get(), before.get() + 1, "a frame is one command");
+    assert!(!harness.app.product_card.is_open(), "the confirmed card closed");
+    assert_eq!(
+        document.editor.creation_target(document.session.project()),
+        product,
+        "the next part lands inside the new frame"
+    );
 }

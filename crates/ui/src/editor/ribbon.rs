@@ -83,6 +83,7 @@ impl Editor {
                     self.start_drawing_with(tool, sides);
                     outcome.started_drawing = true;
                 }
+                ToolAction::CreateProductCard => outcome.open_product_card = true,
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,
                 ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(kind, size)?,

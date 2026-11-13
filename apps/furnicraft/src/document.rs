@@ -266,6 +266,10 @@ pub(crate) struct Document {
     /// The preview overlay's version the frame was built from. A previewing operation shows a node
     /// the document does not hold yet, so the frame follows the overlay as it follows the revision.
     scene_preview: u64,
+    /// The open product the frame was built from. Openness is session view state, not a revision
+    /// (ADR 0098), so the rebuild watches it here: opening a piece repaints its envelope ink
+    /// without touching the document.
+    scene_product: Option<Id>,
     /// How the last rebuild cost, so a scene that takes more than a frame announces the next one.
     rebuild: Rebuild,
     /// The rectangle the command bar drew last frame, so a press on it is chrome and never a pick.
@@ -319,7 +323,7 @@ impl Document {
     ) -> Result<Self, String> {
         let mut kernel = TruckKernel::new();
         let mut cache = EvaluationCache::new();
-        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), None)?;
+        let evaluated = evaluate(&mut cache, &mut kernel, &session, &ViewFlags::default(), session.active_product())?;
         let scene_bounds = evaluated.bounds;
         let fit = home_camera(scene_bounds)?;
         let layout = Layout::new(fit, settings.viewport.opening_view, settings.viewport.style);
@@ -343,6 +347,7 @@ impl Document {
             scene_revision: session.project().revision(),
             scene_visibility: 0,
             scene_preview: session.preview_version(),
+            scene_product: session.active_product(),
             rebuild: Rebuild::default(),
             command_bar_rect: None,
             #[cfg(test)]
@@ -651,6 +656,7 @@ impl Document {
             || self.session.project().revision() != self.scene_revision
             || self.editor.visibility_revision() != self.scene_visibility
             || self.session.preview_version() != self.scene_preview
+            || self.session.active_product() != self.scene_product
     }
 
     /// Takes the window's display state and rebuilds the frame when the document moved.
@@ -692,7 +698,12 @@ impl Document {
         let revision = self.session.project().revision();
         let visibility = self.editor.visibility_revision();
         let preview = self.session.preview_version();
-        if revision == self.scene_revision && visibility == self.scene_visibility && preview == self.scene_preview {
+        let product = self.session.active_product();
+        if revision == self.scene_revision
+            && visibility == self.scene_visibility
+            && preview == self.scene_preview
+            && product == self.scene_product
+        {
             return Ok(());
         }
         // A delete or an undo can take a flag with it; pruning before the rebuild keeps a stale
@@ -700,7 +711,7 @@ impl Document {
         self.editor.retain_flags(self.session.project());
         let visibility = self.editor.visibility_revision();
         let started = Instant::now();
-        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags(), None)?;
+        let evaluated = evaluate(&mut self.cache, &mut self.kernel, &self.session, self.editor.flags(), product)?;
         self.scene_bounds = evaluated.bounds;
         let mut scene = evaluated.frame;
         self.layout.apply_frame_style(&mut scene);
@@ -710,6 +721,7 @@ impl Document {
         self.scene_revision = revision;
         self.scene_visibility = visibility;
         self.scene_preview = preview;
+        self.scene_product = product;
         let uploaded = self.upload_scene();
         self.rebuild.record(started.elapsed());
         uploaded
@@ -1549,12 +1561,20 @@ impl Document {
             } else {
                 let hit = mesh_pick::pick_scene(rect, &self.scene, pointer);
                 if response.double_clicked() {
-                    self.editor.enter_viewport_level(self.session.project(), hit);
+                    // Opening a product repaints its envelope without a document revision, so the
+                    // scene is rebuilt here instead of waiting a frame for the next sync.
+                    if self.editor.enter_viewport_level(&mut self.session, hit) {
+                        if let Err(error) = self.refresh() {
+                            self.last_error = Some(error);
+                        }
+                    } else if let Err(error) = self.upload_scene() {
+                        self.last_error = Some(error);
+                    }
                 } else {
                     self.editor.select_viewport_hit(self.session.project(), hit);
-                }
-                if let Err(error) = self.upload_scene() {
-                    self.last_error = Some(error);
+                    if let Err(error) = self.upload_scene() {
+                        self.last_error = Some(error);
+                    }
                 }
             }
         }
@@ -1885,19 +1905,33 @@ impl Document {
         }
     }
 
+    /// Creates the product frame the card describes and opens it.
+    ///
+    /// The card is window chrome, so the shell hands the draft here: this tab dispatches
+    /// `product.create` through its editor, which then opens the frame as a session view operation
+    /// (ADR 0098, ADR 0100).
+    pub(crate) fn create_product(
+        &mut self,
+        draft: furnicraft_ui::product_card::ProductDraft,
+        lang: furnicraft_ui::Lang,
+    ) -> Result<(), String> {
+        self.editor.create_product(&mut self.session, draft, lang)
+    }
+
     /// The ribbon over the design space: the tabs and the tool groups of the active tab.
     ///
     /// The strip floats on the middle layer instead of taking height from the viewport, so the scene
     /// image runs under it and a translucent ribbon blends with the furniture (U51, ADR 0080). It is
     /// anchored to `design` — the window below the header — so resizing a side panel never reflows
-    /// it; the side panels are inset by [`Self::ribbon_inset`] instead.
+    /// it; the side panels are inset by [`Self::ribbon_inset`] instead. Returns whether the ribbon
+    /// asked for the product-frame card, which the window owns.
     pub(crate) fn show_ribbon(
         &mut self,
         ui: &mut egui::Ui,
         design: egui::Rect,
         shell: &mut Shell,
         settings: &Settings,
-    ) {
+    ) -> bool {
         let view = furnicraft_ui::RibbonView {
             perspective: matches!(
                 crate::scene_build::scene_camera(self.session.project(), self.layout.active_camera()).projection(),
@@ -1927,7 +1961,9 @@ impl Document {
         if rect.is_some() {
             shell.ribbon_rect = rect;
         }
+        let mut open_product_card = false;
         if let Some(outcome) = outcome {
+            open_product_card = outcome.open_product_card;
             if outcome.started_drawing {
                 self.draw_gizmo.reset();
                 self.cancel_extrude();
@@ -1958,6 +1994,7 @@ impl Document {
                 None => {}
             }
         }
+        open_product_card
     }
 
     /// Reads the keys a running tool owns and leaves the rest to the shell.

@@ -83,6 +83,12 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
                 action,
             }
         }
+        ToolKind::Product => Ready {
+            enabled: true,
+            armed: false,
+            hint: tool_hint(tool.label.text(lang), tool.shortcut),
+            action: Some(ToolAction::CreateProductCard),
+        },
         ToolKind::Panel => Ready {
             enabled: has_panel_material,
             armed: false,

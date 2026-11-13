@@ -210,6 +210,44 @@ fn visible_rows<'a>(rows: &'a [ClassRow], query: &str, lang: Lang) -> Vec<Family
     families
 }
 
+/// The product classes a query leaves, as the product card lists them.
+///
+/// A row is a product when its traits name the role `level = Product` (ADR 0097), so the list
+/// grows by adding a registry row and never by editing the card. A matching family, type or
+/// variant brings its relatives with it, exactly as the tree picker does, and a retired row is not
+/// offered.
+///
+/// Returns each class with the text a row draws (its code and label) and its depth for indenting:
+/// `1` for a type and `2` for a variant.
+pub(crate) fn product_rows(query: &str, lang: Lang) -> Vec<(ClassCode, String, u8)> {
+    product_rows_in(furnicraft_model::registry(), query, lang)
+}
+
+fn product_rows_in(rows: &[ClassRow], query: &str, lang: Lang) -> Vec<(ClassCode, String, u8)> {
+    let products = rows
+        .iter()
+        .filter(|row| row.is_assignable())
+        .filter_map(|row| Some((ClassCode::from_code(row.code())?, row)))
+        .filter(|(code, _row)| code.is_product_class())
+        .collect::<Vec<_>>();
+    let matching =
+        products.iter().filter(|(_code, row)| matches(row, query, lang)).map(|(code, _row)| *code).collect::<Vec<_>>();
+    let mut listed = Vec::new();
+    for (code, row) in products {
+        let related =
+            matching.iter().any(|matched| matched.is_ancestor_or_self(code) || code.is_ancestor_or_self(*matched));
+        if !related {
+            continue;
+        }
+        let depth = match row.parent() {
+            Some(parent) if !parent.parent().is_unclassified() => 2,
+            _ => 1,
+        };
+        listed.push((code, format!("{code}   {}", row.label().text(lang)), depth));
+    }
+    listed
+}
+
 /// Whether `row` answers `query` by its label in either language, its slug, an alias or its code.
 fn matches(row: &ClassRow, query: &str, lang: Lang) -> bool {
     let query = query.trim().to_lowercase();

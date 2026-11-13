@@ -75,6 +75,8 @@ pub enum ToolAction {
         /// The side count the polygon tool uses.
         sides: u32,
     },
+    /// Opens the product-frame card; the card dispatches `product.create`.
+    CreateProductCard,
     /// Creates a panel at the scene root.
     CreatePanel,
     /// Creates an assembly at the scene root.
@@ -266,6 +268,11 @@ pub struct RibbonOutcome {
     /// The shell starts the pull arrow on that body; the height is session view state, so the next
     /// extrusion starts here instead of at the default.
     pub extruded: Option<(Id, Length)>,
+    /// The *Product frame* cell asked for its card.
+    ///
+    /// The card belongs to the window, like Settings and the File dialogs, so the ribbon reports
+    /// the request and the shell draws it (ADR 0100).
+    pub open_product_card: bool,
 }
 
 /// What the ribbon reads from the scene, the pointer and the view camera while it draws.
@@ -813,7 +820,7 @@ mod tests {
                     "Sphere: click the work plane",
                 ],
             ),
-            ("furniture", &["Panel"]),
+            ("furniture", &["Panel", "Product frame"]),
             ("scene", &["Assembly", "Camera", "Light"]),
             ("view", &["Frame all  (F)", "Grid snap  (G)", "Switch the projection  (O)"]),
         ];

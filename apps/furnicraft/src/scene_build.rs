@@ -208,8 +208,8 @@ pub fn sample_catalog() -> Result<Catalog, String> {
 /// move, a rename or an unrelated edit rebuilds no mesh.
 ///
 /// `open_product` is the session's one open product (ADR 0098), which only decides the ink of its
-/// envelope; until the open/close operations land (N3) the shell passes `None` and every product is
-/// drawn as closed. It is view state, never document data.
+/// envelope and whether the frame shows while its parts are closed (ADR 0100). The shell passes
+/// `Session::active_product`; it is view state, never document data.
 pub fn evaluate(
     cache: &mut EvaluationCache,
     kernel: &mut TruckKernel,

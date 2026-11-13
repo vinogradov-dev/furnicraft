@@ -15,15 +15,18 @@
 use furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID;
 use furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID;
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
+use furnicraft_engine::product_cmds::{PRODUCT_CREATE_ID, ProductCreate};
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{CameraProjection, Id, LightKind, Placement, Project};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
 use crate::command::{dispatch, json};
+use crate::product_card::ProductDraft;
 use crate::target::creation_target;
 
 /// A primitive waiting for its work-plane click.
@@ -57,6 +60,25 @@ impl Editor {
     /// Drops the arm; the next creation lands at the scene root again.
     pub fn clear_creation_parent(&mut self) {
         self.creation_parent = None;
+    }
+
+    /// Opens a product as the session's working product and arms it for the next creation.
+    ///
+    /// Opening is a session view operation, never a document edit (ADR 0098); the arm is the
+    /// editor's own view state, so the next panel, assembly or fitting lands inside the product
+    /// without another gesture. Returns whether the id was a product at all.
+    pub fn open_product(&mut self, session: &mut Session, id: Id) -> bool {
+        if !session.open_product(id) {
+            return false;
+        }
+        self.arm_creation(session.project(), id);
+        true
+    }
+
+    /// Leaves the open product and drops the arm, so nothing is armed to receive a part.
+    pub fn close_product(&mut self, session: &mut Session) {
+        session.close_product();
+        self.clear_creation_parent();
     }
 
     /// Drops an arm whose container no longer exists.
@@ -102,6 +124,36 @@ impl Editor {
         })?;
         let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// Creates the product frame the card describes and opens it, in one user action.
+    ///
+    /// The command is `product.create`; opening the new frame is a session view operation that
+    /// follows it (ADR 0098, ADR 0100). The frame lands at the deterministic product placement —
+    /// the origin in an empty scene, else beside the nearest piece and clear of every envelope —
+    /// and the container is armed, so the next part is born inside it without another gesture.
+    /// A frame is a top-level piece, so its parent is the scene root.
+    pub fn create_product(&mut self, session: &mut Session, draft: ProductDraft, lang: Lang) -> Result<(), String> {
+        let project = session.project();
+        let root = project.root().id();
+        let placement = project.product_placement(draft.envelope);
+        let name = draft
+            .class
+            .label()
+            .map(|label| label.text(lang))
+            .unwrap_or(Message::CmdCreateProduct.text(lang))
+            .to_owned();
+        let params =
+            json(&ProductCreate { parent: root, name, class: Some(draft.class), envelope: draft.envelope, placement })?;
+        let outcome = dispatch(session, PRODUCT_CREATE_ID, &params)?;
+        let Some(id) = outcome.created_id() else {
+            return Ok(());
+        };
+        session.open_product(id);
+        self.arm_creation(session.project(), id);
+        self.selection.replace(id);
+        self.initialized = true;
         Ok(())
     }
 

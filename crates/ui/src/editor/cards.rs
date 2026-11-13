@@ -145,6 +145,10 @@ impl Editor {
             TreeAction::AddChild { parent } => {
                 self.arm_creation(session.project(), parent);
             }
+            TreeAction::OpenProduct { node } => {
+                self.open_product(session, node);
+            }
+            TreeAction::CloseProduct => self.close_product(session),
             TreeAction::Duplicate { node } => {
                 let params = json(&NodeDuplicate { node })?;
                 let outcome = dispatch(session, NODE_DUPLICATE_ID, &params)?;

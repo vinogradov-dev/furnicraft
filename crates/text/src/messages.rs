@@ -652,6 +652,17 @@ messages! {
     TreeIsolateHint = ["Hide every other branch of the scene", "Скрыть все остальные ветви сцены"],
     TreeShowAll = ["Show all", "Показать всё"],
     TreeShowAllHint = ["Show every hidden node again", "Снова показать все скрытые узлы"],
+    TreeOpenProduct = ["Open the product", "Открыть изделие"],
+    TreeCloseProduct = ["Close the product", "Закрыть изделие"],
+    TreeActiveProduct = ["Open for parts", "Открыто для деталей"],
+
+    // ── Product card ────────────────────────────────────────────────────────
+    ProductCardTitle = ["New product frame", "Новый каркас изделия"],
+    ProductCardHint = [
+        "The frame is created open, ready for parts on the floor beside the other pieces.",
+        "Каркас создаётся открытым, готовым для деталей на полу рядом с другими изделиями."
+    ],
+    Height = ["Height", "Высота"],
 
     // ── Container card ──────────────────────────────────────────────────────
     ContainerRoleComponent = ["Component", "Компонент"],
@@ -788,6 +799,7 @@ messages! {
     GroupPrimitives = ["Primitives", "Примитивы"],
     GroupFaces = ["Faces", "Грани"],
     GroupBodies = ["Bodies", "Тела"],
+    GroupProduct = ["Product", "Изделие"],
     GroupPanels = ["Panels", "Панели"],
     GroupMachining = ["Machining", "Обработка"],
     GroupFasteners = ["Fasteners", "Крепёж"],
@@ -802,6 +814,7 @@ messages! {
     GroupNavigation = ["Navigation", "Навигация"],
 
     // The ribbon's tools (U68); a planned row is named here before its command exists.
+    ToolProductFrame = ["Product frame", "Каркас изделия"],
     ToolPanel = ["Panel", "Панель"],
     ToolContourPanel = ["Panel from contour", "Панель по контуру"],
     ToolAssembly = ["Assembly", "Сборка"],

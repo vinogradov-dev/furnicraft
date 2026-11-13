@@ -36,6 +36,7 @@ mod palette;
 mod panel_card;
 mod pivot_card;
 mod placement_card;
+pub mod product_card;
 mod properties_card;
 mod scene_tree;
 mod scrub;
