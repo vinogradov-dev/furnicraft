@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=T4 state=doing base=5c44817 updated=2026-11-13
+STATE: milestone=M7 phase=T task=N1 state=idle base=173acb4 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-T4 gates the editor on the class traits: a worktop resizes by its length only, a hinge offers no
-resize or banding, a fitting never nests, and mounting checks the host.
+N1 puts the product into the document: a container with a class of level Product and an authored
+envelope, created by product.create, with product_of walking the tree once.
 
 ## Index
 

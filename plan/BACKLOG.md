@@ -25,19 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
-  Why: Traits only matter if the program refuses what the class forbids. Without this the class
-   table is documentation: a worktop still stretches across its width, a hinge still offers
-   resize, and the cutting list still has no flag to read.
-  Shape: The enabled check reads extent, operations and host: panel.resize and the mesh
-   commands refuse a LengthOnly or None class on the forbidden axis, edge banding refuses a
-   class without EdgeBand, cutouts refuse a class without Cutout, and mounting checks host. The
-   gizmo offers free, length-only or no handles from the same accessor. One accessor exposes
-   nesting and measure for the cutting list and the export that follow.
-  Done: Tests: a worktop resizes by length only, a hinge offers no resize and no banding, a
-   fitting never enters nesting, and changing a class row flips the behaviour without touching
-   the command; no code path compares a class literal outside a test.
-  `files: crates/engine/src/class_rules.rs, crates/engine/src/commands.rs, crates/engine/src/node_cmds.rs, apps/furnicraft/src/gizmo_math.rs`
 - `[ ]` **N1** the product entity: a container with a class and an authored envelope, created by a command
   Why: Reports, the export and the creation guard all need the same answer — which piece is
    this part in and how big is that piece — and today nothing in the document carries it. ADR
@@ -317,6 +304,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
+  Why: Traits only matter if the program refuses what the class forbids. Without this the class
+   table is documentation: a worktop still stretches across its width, a hinge still offers
+   resize, and the cutting list still has no flag to read.
+  Shape: The enabled check reads extent, operations and host: panel.resize and the mesh
+   commands refuse a LengthOnly or None class on the forbidden axis, edge banding refuses a
+   class without EdgeBand, cutouts refuse a class without Cutout, and mounting checks host. The
+   gizmo offers free, length-only or no handles from the same accessor. One accessor exposes
+   nesting and measure for the cutting list and the export that follow.
+  Done: Tests: a worktop resizes by length only, a hinge offers no resize and no banding, a
+   fitting never enters nesting, and changing a class row flips the behaviour without touching
+   the command; no code path compares a class literal outside a test.
+  `files: crates/engine/src/class_rules.rs, crates/engine/src/commands.rs, crates/engine/src/node_cmds.rs, apps/furnicraft/src/gizmo_math.rs` — `173acb4`
 
 - `[x]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
   Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
