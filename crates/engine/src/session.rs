@@ -304,6 +304,7 @@ mod tests {
     };
     use furnicraft_units::Length;
 
+    use crate::class_rules::{ClassRefusal, Dimension};
     use crate::node_cmds::{
         AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeOriginRebase,
         NodePivotCenter, NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodePlacementWorldZero,
@@ -2336,5 +2337,183 @@ mod tests {
         assert!(matches!(error, CommandError::Model(ProjectError::PanelPivotIsDerived { panel: id }) if id == panel));
         assert_eq!(session.project().pivot_local(panel), Some(PivotLocal::ZERO));
         assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
+    }
+    /// The sample shelf (id 2) classed as `code`, in a session whose root has no class.
+    fn classed_shelf(code: &str) -> (Session, Id) {
+        let mut session = sample_session();
+        let shelf = Id::new(2).expect("id");
+        let class: ClassCode = code.parse().expect("a class code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: shelf,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
+                }),
+            )
+            .expect("assign the class");
+        (session, shelf)
+    }
+
+    fn resize_request(panel: Id, length_mm: i64, width_mm: i64) -> Value {
+        let nominal_size = furnicraft_model::PanelNominalSize::new(
+            Length::from_millimetres(length_mm).expect("length"),
+            Length::from_millimetres(width_mm).expect("width"),
+        )
+        .expect("a valid size");
+        json_params(&PanelResize { panel, nominal_size })
+    }
+
+    #[test]
+    fn a_worktop_resizes_by_length_only() {
+        let (mut session, panel) = classed_shelf("70.01");
+        let registry = CommandRegistry::new();
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let revision = session.project().revision();
+
+        let longer = resize_request(panel, 900, 500);
+        assert!(resize.enabled(&session, &longer), "a worktop grows along its length");
+        session.dispatch("panel.resize", &longer).expect("resize along the length");
+        assert_eq!(
+            session.project().panel(panel).expect("panel").nominal_size().length(),
+            Length::from_millimetres(900).expect("length")
+        );
+
+        let wider = resize_request(panel, 900, 600);
+        assert!(!resize.enabled(&session, &wider), "a worktop never stretches across its width");
+        let error = session.dispatch("panel.resize", &wider).expect_err("the width is fixed");
+        assert!(matches!(
+            error,
+            CommandError::ClassRefused { command: "panel.resize", refusal: ClassRefusal::Dimension(Dimension::Width) }
+        ));
+        assert_eq!(
+            session.project().panel(panel).expect("panel").nominal_size().width(),
+            Length::from_millimetres(500).expect("width"),
+            "the refused resize changes nothing"
+        );
+        assert!(session.project().revision() > revision);
+    }
+
+    #[test]
+    fn changing_the_class_flips_the_same_resize_command() {
+        let (mut session, panel) = classed_shelf("30.11");
+        let registry = CommandRegistry::new();
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let wider = resize_request(panel, 700, 600);
+        assert!(resize.enabled(&session, &wider), "a horizontal panel resizes freely");
+        session.dispatch("panel.resize", &wider).expect("widen the shelf");
+
+        let class: ClassCode = "70.01".parse().expect("the worktop code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: panel,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
+                }),
+            )
+            .expect("reclass the same panel");
+        let even_wider = resize_request(panel, 700, 700);
+        assert!(!resize.enabled(&session, &even_wider), "the same command now refuses the width");
+        assert!(matches!(
+            session.dispatch("panel.resize", &even_wider).expect_err("the width is fixed"),
+            CommandError::ClassRefused { command: "panel.resize", .. }
+        ));
+    }
+
+    #[test]
+    fn a_hinge_offers_no_resize_and_no_banding() {
+        let (mut session, hinge) = classed_shelf("50.02.01");
+        let registry = CommandRegistry::new();
+        let revision = session.project().revision();
+
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let bigger = resize_request(hinge, 800, 500);
+        assert!(!resize.enabled(&session, &bigger), "a hinge is never resized");
+        assert!(matches!(
+            session.dispatch("panel.resize", &bigger).expect_err("a hinge keeps its size"),
+            CommandError::ClassRefused { command: "panel.resize", refusal: ClassRefusal::Dimension(_) }
+        ));
+
+        let band = registry.get("panel.edge_banding.set").expect("edge banding is registered");
+        let params = json_params(&PanelEdgeBandingSet {
+            panel: hinge,
+            edge: RectEdge::Top.id(),
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        });
+        assert!(!band.enabled(&session, &params), "a fitting is never banded");
+        assert!(matches!(
+            session.dispatch("panel.edge_banding.set", &params).expect_err("no banding on a hinge"),
+            CommandError::ClassRefused { command: "panel.edge_banding.set", refusal: ClassRefusal::Operation(_) }
+        ));
+        assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
+    }
+
+    #[test]
+    fn a_class_without_cutouts_refuses_a_cutout() {
+        let (mut session, plinth) = classed_shelf("70.02");
+        let shape = CutoutShape::Rectangle(sample_cutout_rect());
+        let params = json_params(&cutout_request(plinth, shape, CutoutDepth::Through, FaceSide::A));
+        let registry = CommandRegistry::new();
+        let add = registry.get("panel.machining.add").expect("machining add is registered");
+        assert!(!add.enabled(&session, &params), "a plinth admits no cutout");
+        assert!(matches!(
+            session.dispatch("panel.machining.add", &params).expect_err("no cutout in a plinth"),
+            CommandError::ClassRefused { command: "panel.machining.add", refusal: ClassRefusal::Operation(_) }
+        ));
+
+        let (mut session, worktop) = classed_shelf("70.01");
+        let params = json_params(&cutout_request(
+            worktop,
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        ));
+        assert!(add.enabled(&session, &params), "a worktop takes a sink cutout");
+        session.dispatch("panel.machining.add", &params).expect("a cutout in a worktop");
+    }
+
+    #[test]
+    fn mounting_checks_the_host_class_on_assignment() {
+        let mut session = sample_session();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let worktop: ClassCode = "70.01".parse().expect("the worktop code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: drawer,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(worktop),
+                }),
+            )
+            .expect("class the host");
+
+        let hinge: ClassCode = "50.02".parse().expect("the cup hinge code");
+        let refused = json_params(&NodePropertySet {
+            node: front,
+            key: SYSTEM_CLASS.to_owned(),
+            value: PropertyValue::class(hinge),
+        });
+        let registry = CommandRegistry::new();
+        let set = registry.get("node.property.set").expect("property set is registered");
+        assert!(!set.enabled(&session, &refused), "a hinge does not sit in a worktop");
+        assert!(matches!(
+            session.dispatch("node.property.set", &refused).expect_err("a hinge does not sit in a worktop"),
+            CommandError::ClassRefused { command: "node.property.set", refusal: ClassRefusal::Host { host } } if host == worktop
+        ));
+
+        let sink: ClassCode = "60.01".parse().expect("the sink code");
+        let allowed = json_params(&NodePropertySet {
+            node: front,
+            key: SYSTEM_CLASS.to_owned(),
+            value: PropertyValue::class(sink),
+        });
+        assert!(set.enabled(&session, &allowed), "a sink sits in a worktop");
+        session.dispatch("node.property.set", &allowed).expect("assign the sink");
     }
 }

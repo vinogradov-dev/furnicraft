@@ -209,3 +209,17 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   there; the cluster waits for the same treatment.
 
 · `[ui]` The inspector's widest rows — the name field beside its *Rename* button and the property rows — need about 355 pt, so a 226 pt floating panel draws them clipped or scrolled sideways (`side_panels::scroll_body`). The rows should reflow to the panel width (a wrapping label, a narrower field) so the horizontal scrollbar goes away; the panel keeps its rectangle either way (U73).
+
+- `[engine]` The mounting gate checks `host` when a class is assigned, but no command reparents a
+  classed node: `node.group`, `node.ungroup` and a future move can put a hinge under a host its row
+  does not name. The same check belongs on the reparent once one exists, or the gate is half a rule
+  (T4).
+- `[engine]` Holes, grooves, cup bores and mounting patterns have no machining kind yet, so
+  `Operation::Holes`, `Grooves`, `CupBore` and `MountPattern` have no command to refuse. The hardware
+  commands must read `NodeRules::admits` when they land, as T4 did for contour, edge banding and
+  cutouts.
+- `[ui]` The panel card's size fields, banding menu, shape section and machining add menu name the
+  class's reason when it forbids them, but the class picker still offers every row: a person can
+  choose a class whose host the assignment then refuses and reads the engine's English sentence in
+  the status bar. The picker should filter its rows by `host`, the way it already filters a query
+  (T3, T4).

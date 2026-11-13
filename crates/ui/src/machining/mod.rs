@@ -16,7 +16,8 @@ use std::collections::HashSet;
 use egui::{ComboBox, RichText, Ui};
 use furnicraft_engine::panel_cmds::{MACHINING_ADD_ID, MACHINING_MOVE_ID, MACHINING_REMOVE_ID, MACHINING_UPDATE_ID};
 use furnicraft_engine::{
-    PanelDiagnostic, PanelMachiningAdd, PanelMachiningMove, PanelMachiningRemove, PanelMachiningUpdate, Session,
+    NodeRules, PanelDiagnostic, PanelMachiningAdd, PanelMachiningMove, PanelMachiningRemove, PanelMachiningUpdate,
+    Session, operation_of,
 };
 use furnicraft_model::{
     EdgeId, EdgeRef, FaceSide, Id, MACHINING_DESCRIPTORS, Machining, MachiningAnchor, MachiningCapabilities,
@@ -68,6 +69,7 @@ impl MachiningSection {
         diagnostics: &[PanelDiagnostic],
         contour_target: Option<ContourTarget>,
         single_selection: bool,
+        rules: NodeRules,
         actions: &mut Vec<MachiningAction>,
     ) -> Option<MachiningId> {
         self.retain_existing(panel);
@@ -95,7 +97,7 @@ impl MachiningSection {
         }
 
         ui.add_space(4.0);
-        self.show_add_menu(ui, panel_id, panel, actions);
+        self.show_add_menu(ui, panel_id, panel, rules, actions);
         contour_request
     }
 
@@ -256,12 +258,24 @@ impl MachiningSection {
     }
 
     /// Draws the add menu from the descriptor table, grouped by category.
-    fn show_add_menu(&mut self, ui: &mut Ui, panel_id: Id, panel: &Panel, actions: &mut Vec<MachiningAction>) {
+    fn show_add_menu(
+        &mut self,
+        ui: &mut Ui,
+        panel_id: Id,
+        panel: &Panel,
+        rules: NodeRules,
+        actions: &mut Vec<MachiningAction>,
+    ) {
+        let groups = admitted_groups(rules);
+        if groups.is_empty() {
+            ui.label(Message::MachiningClassNotAdmitted.text(crate::language(ui.ctx())));
+            return;
+        }
         ui.horizontal(|ui| {
             ComboBox::from_id_salt(("machining_add", panel_id.get()))
                 .selected_text(Message::AddOperation.text(crate::language(ui.ctx())))
                 .show_ui(ui, |ui| {
-                    for (category, kinds) in add_menu_groups() {
+                    for (category, kinds) in groups {
                         ui.label(
                             RichText::new(machining_category_label(category).text(crate::language(ui.ctx()))).weak(),
                         );
@@ -337,6 +351,17 @@ fn bound_messages(diagnostics: &[PanelDiagnostic], id: MachiningId, lang: Lang) 
 }
 
 /// The add-menu groups in table order: a category with the kinds that belong to it.
+fn admitted_groups(rules: NodeRules) -> Vec<(MachiningCategory, Vec<MachiningKind>)> {
+    add_menu_groups()
+        .into_iter()
+        .filter_map(|(category, kinds)| {
+            let kinds: Vec<MachiningKind> =
+                kinds.into_iter().filter(|kind| rules.admits(operation_of(*kind))).collect();
+            (!kinds.is_empty()).then_some((category, kinds))
+        })
+        .collect()
+}
+
 fn add_menu_groups() -> Vec<(MachiningCategory, Vec<MachiningKind>)> {
     let mut groups: Vec<(MachiningCategory, Vec<MachiningKind>)> = Vec::new();
     for descriptor in MACHINING_DESCRIPTORS {
@@ -480,7 +505,10 @@ mod tests {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 480.0))),
                 ..Default::default()
             },
-            |ui| request = section.show(ui, panel_id(), panel, thickness, &diagnostics, None, true, &mut actions),
+            |ui| {
+                let rules = NodeRules::of(session.project(), panel_id());
+                request = section.show(ui, panel_id(), panel, thickness, &diagnostics, None, true, rules, &mut actions);
+            },
         );
         output.textures_delta.clear();
         assert!(request.is_none(), "no frame presses Edit contour");
@@ -499,6 +527,21 @@ mod tests {
             assert!(!kinds.is_empty(), "category {} is empty", category.label());
             assert!(!category.label().is_empty());
         }
+    }
+
+    #[test]
+    fn the_add_menu_lists_only_the_operations_the_class_admits() {
+        use furnicraft_model::ClassCode;
+
+        let free = NodeRules::of_code(ClassCode::UNCLASSIFIED);
+        assert_eq!(admitted_groups(free).iter().map(|(_, kinds)| kinds.len()).sum::<usize>(), MachiningKind::ALL.len());
+
+        let plinth: ClassCode = "70.02".parse().expect("the plinth code");
+        assert!(admitted_groups(NodeRules::of_code(plinth)).is_empty(), "a plinth admits no cutout");
+
+        let worktop: ClassCode = "70.01".parse().expect("the worktop code");
+        let groups = admitted_groups(NodeRules::of_code(worktop));
+        assert_eq!(groups.iter().flat_map(|(_, kinds)| kinds).copied().collect::<Vec<_>>(), MachiningKind::ALL);
     }
 
     #[test]

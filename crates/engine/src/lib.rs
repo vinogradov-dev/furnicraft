@@ -14,6 +14,7 @@
     clippy::unreachable
 )]
 
+mod class_rules;
 mod commands;
 mod diagnostics;
 pub mod mesh_cmds;
@@ -25,6 +26,7 @@ mod resolve;
 pub mod scene_cmds;
 mod session;
 
+pub use class_rules::{ClassRefusal, Dimension, NodeRules, operation_of};
 pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
 pub use mesh_cmds::{MESH_VERTICES_MOVE_ID, MESH_VERTICES_MOVE_LABEL, MeshVertexMove, MeshVerticesMove};

@@ -14,11 +14,14 @@
 //! It does not do: the edge and corner trims (`banding.rs`), the machining records
 //! (`machining.rs`), or any geometry derivation.
 
-use furnicraft_model::{Catalog, Contour, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError};
+use furnicraft_model::{
+    Catalog, Contour, Id, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
+};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::class_rules::{Dimension, NodeRules};
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 use furnicraft_text::Message;
@@ -224,11 +227,13 @@ fn outline_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelOutlineSet::parse(params) else {
         return false;
     };
-    session.project().validate_panel_outline(params.panel, &params.contour).is_ok()
+    class_allows_contour(session.project(), params.panel, OUTLINE_SET_ID).is_ok()
+        && session.project().validate_panel_outline(params.panel, &params.contour).is_ok()
 }
 
 fn outline_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelOutlineSet::parse(params)?;
+    class_allows_contour(project, params.panel, OUTLINE_SET_ID)?;
     project.set_panel_outline(params.panel, params.contour)?;
     Ok(CommandOutcome::changed())
 }
@@ -266,7 +271,8 @@ fn outline_contour_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelOutlineToContour::parse(params) else {
         return false;
     };
-    session.project().validate_panel_contour_conversion(params.panel).is_ok()
+    class_allows_contour(session.project(), params.panel, OUTLINE_CONTOUR_ID).is_ok()
+        && session.project().validate_panel_contour_conversion(params.panel).is_ok()
 }
 
 fn outline_contour_run(
@@ -275,6 +281,7 @@ fn outline_contour_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelOutlineToContour::parse(params)?;
+    class_allows_contour(project, params.panel, OUTLINE_CONTOUR_ID)?;
     project.convert_panel_to_contour(params.panel)?;
     Ok(CommandOutcome::changed())
 }
@@ -384,13 +391,43 @@ fn resize_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelResize::parse(params) else {
         return false;
     };
-    session.project().validate_panel_resize(params.panel, params.nominal_size).is_ok()
+    class_allows_resize(session.project(), params.panel, params.nominal_size).is_ok()
+        && session.project().validate_panel_resize(params.panel, params.nominal_size).is_ok()
 }
 
 fn resize_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelResize::parse(params)?;
+    class_allows_resize(project, params.panel, params.nominal_size)?;
     project.set_panel_nominal_size(params.panel, params.nominal_size)?;
     Ok(CommandOutcome::changed())
+}
+
+/// The class gate of a nominal-size change: only the dimensions the class leaves free may move.
+///
+/// A no-op resize is always allowed, so a field that reports the current size does not fail. An
+/// unclassified panel is free, and the model still checks the geometry and the machining.
+fn class_allows_resize(project: &Project, panel: Id, nominal_size: PanelNominalSize) -> Result<(), CommandError> {
+    let Some(current) = project.panel(panel) else {
+        return Ok(());
+    };
+    let rules = NodeRules::of(project, panel);
+    let changes = [
+        (Dimension::Length, nominal_size.length() != current.nominal_size().length()),
+        (Dimension::Width, nominal_size.width() != current.nominal_size().width()),
+    ];
+    for (dimension, changed) in changes {
+        if changed {
+            rules.allow_resize(dimension).map_err(|refusal| CommandError::class(RESIZE_ID, refusal))?;
+        }
+    }
+    Ok(())
+}
+
+/// The class gate of a panel outline edit: a class that admits no contour admits no reshaping.
+fn class_allows_contour(project: &Project, panel: Id, command: &'static str) -> Result<(), CommandError> {
+    NodeRules::of(project, panel)
+        .allow_operation(Operation::Contour)
+        .map_err(|refusal| CommandError::class(command, refusal))
 }
 
 /// Stable id of the panel material command.

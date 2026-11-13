@@ -5,6 +5,7 @@ use furnicraft_text::Message;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::class_rules::ClassRefusal;
 use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
@@ -193,6 +194,14 @@ pub enum CommandError {
     /// The document rejected the change.
     #[error(transparent)]
     Model(#[from] ProjectError),
+    /// The node's class forbids what the command would do.
+    #[error("`{command}` is not allowed for this object: {refusal}")]
+    ClassRefused {
+        /// The stable command id.
+        command: &'static str,
+        /// What the class forbids.
+        refusal: ClassRefusal,
+    },
     /// Deriving geometry for the command failed.
     #[error("cannot evaluate `{command}`: {message}")]
     Evaluation {
@@ -213,6 +222,13 @@ pub enum CommandError {
     /// There is no undone command to reapply.
     #[error("nothing to redo")]
     NothingToRedo,
+}
+
+impl CommandError {
+    /// A class gate's refusal, tagged with the command that asked it.
+    pub(crate) fn class(command: &'static str, refusal: ClassRefusal) -> Self {
+        Self::ClassRefused { command, refusal }
+    }
 }
 
 #[cfg(test)]

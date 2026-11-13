@@ -559,8 +559,10 @@ table, not from our digits.
 - Whether an object may carry more than one class (hardware that is also a fitting family) is still
   open; a second class would need a rule for which one an algorithm reads.
 - `host` is written as a code prefix, so `30.2` means every facade and `30.01` every cabinet form.
-  Whether a rule needs an exact class rather than a prefix — a runner on a drawer box and not on a
-  shelf, for example — is decided when the mounting check is written (T4).
+  The mounting gate (T4) decides by prefix (`ClassCode::is_hosted_in`): a hinge sits on any facade
+  and a runner under any drawer box, and a row that must not accept a sibling narrows its prefix
+  (`30.30` is the made drawer box alone) rather than gaining a second field. A prefix has proven
+  enough; no rule needs an exact class yet.
 - A product kind beyond the ones listed (a sideboard, a shoe cabinet, a corner cabinet) takes its row
   when its rules or its report line differ from an existing row; a corner cabinet is a ruled
   difference of the envelope, not a class difference, so it may never need one.

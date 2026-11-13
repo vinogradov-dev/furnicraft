@@ -11,12 +11,14 @@
 use std::collections::HashSet;
 
 use furnicraft_model::{
-    Catalog, FrameAnchor, Id, PivotLocal, Placement, Project, ProjectError, PropertyChange, PropertyValue,
+    Catalog, ClassCode, FrameAnchor, Id, PivotLocal, Placement, Project, ProjectError, PropertyChange, PropertyValue,
+    SYSTEM_CLASS,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::class_rules::NodeRules;
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 use furnicraft_text::Message;
@@ -548,11 +550,14 @@ fn property_set_enabled(session: &Session, params: &Value) -> bool {
         return false;
     };
     let project = session.project();
-    params.node != project.root().id() && project.contains_node(params.node)
+    params.node != project.root().id()
+        && project.contains_node(params.node)
+        && class_allows_parent(project, params.node, &params.key, &params.value, NODE_PROPERTY_SET_ID).is_ok()
 }
 
 fn property_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePropertySet>(params, NODE_PROPERTY_SET_ID)?;
+    class_allows_parent(project, params.node, &params.key, &params.value, NODE_PROPERTY_SET_ID)?;
     project.set_property(params.node, &params.key, params.value)?;
     Ok(CommandOutcome::changed())
 }
@@ -597,7 +602,10 @@ fn property_set_many_enabled(session: &Session, params: &Value) -> bool {
     let mut seen = HashSet::new();
     !params.properties.is_empty()
         && params.properties.iter().all(|entry| {
-            seen.insert((entry.node, entry.key.as_str())) && entry.node != root && project.contains_node(entry.node)
+            seen.insert((entry.node, entry.key.as_str()))
+                && entry.node != root
+                && project.contains_node(entry.node)
+                && class_allows_parent(project, entry.node, &entry.key, &entry.value, NODE_PROPERTY_SET_MANY_ID).is_ok()
         })
 }
 
@@ -607,6 +615,9 @@ fn property_set_many_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = parse::<NodePropertySetMany>(params, NODE_PROPERTY_SET_MANY_ID)?;
+    for entry in &params.properties {
+        class_allows_parent(project, entry.node, &entry.key, &entry.value, NODE_PROPERTY_SET_MANY_ID)?;
+    }
     let changes: Vec<PropertyChange> = params
         .properties
         .into_iter()
@@ -681,6 +692,32 @@ fn component_convert_to_group_run(
     let params = parse::<NodeComponentConvertToGroup>(params, NODE_COMPONENT_CONVERT_TO_GROUP_ID)?;
     project.convert_to_group(params.node)?;
     Ok(CommandOutcome::changed())
+}
+
+/// The mounting gate: a class may only be assigned where its row says the object may sit.
+///
+/// The class arrives after the node, so assignment is the moment the host rule becomes checkable:
+/// a sink is assigned under a worktop and a hinge under a door, and a row that names no such host
+/// is refused with the reason. They key is read before the value, so an edit of any other property
+/// is untouched, and an unclassified or unknown host never refuses (see [`NodeRules`]).
+fn class_allows_parent(
+    project: &Project,
+    node: Id,
+    key: &str,
+    value: &PropertyValue,
+    command: &'static str,
+) -> Result<(), CommandError> {
+    if key != SYSTEM_CLASS {
+        return Ok(());
+    }
+    let PropertyValue::Class { value: class } = value else {
+        return Ok(());
+    };
+    let Some(parent) = project.parent_of(node) else {
+        return Ok(());
+    };
+    let host = project.class(parent).unwrap_or(ClassCode::UNCLASSIFIED);
+    NodeRules::of_code(*class).allow_host(host).map_err(|refusal| CommandError::class(command, refusal))
 }
 
 pub(crate) fn parse<T: serde::de::DeserializeOwned>(params: &Value, command: &'static str) -> Result<T, CommandError> {

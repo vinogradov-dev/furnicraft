@@ -15,12 +15,13 @@
 
 use furnicraft_model::{
     Catalog, ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeBow, EdgeId, Id,
-    MaterialId, Project, ProjectError, RingBanding, VertexId,
+    MaterialId, Operation, Project, ProjectError, RingBanding, VertexId,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::class_rules::NodeRules;
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 use furnicraft_text::Message;
@@ -68,7 +69,8 @@ fn edge_banding_set_enabled(session: &Session, params: &Value) -> bool {
     let Some(band) = params.band(session.catalog()) else {
         return false;
     };
-    session.project().validate_edge_banding(params.panel, band).is_ok()
+    class_allows(session.project(), params.panel, EDGE_BANDING_SET_ID, Operation::EdgeBand).is_ok()
+        && session.project().validate_edge_banding(params.panel, band).is_ok()
 }
 
 fn edge_banding_set_run(
@@ -77,6 +79,7 @@ fn edge_banding_set_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelEdgeBandingSet::parse(params)?;
+    class_allows(project, params.panel, EDGE_BANDING_SET_ID, Operation::EdgeBand)?;
     let Some(material) = catalog.edge_material(params.material) else {
         return Err(CommandError::UnknownMaterial { material: params.material });
     };
@@ -186,7 +189,8 @@ fn corner_banding_set_enabled(session: &Session, params: &Value) -> bool {
     let Some(band) = params.band(session.catalog()) else {
         return false;
     };
-    session.project().validate_corner_banding(params.panel, band).is_ok()
+    class_allows(session.project(), params.panel, CORNER_BANDING_SET_ID, Operation::EdgeBand).is_ok()
+        && session.project().validate_corner_banding(params.panel, band).is_ok()
 }
 
 fn corner_banding_set_run(
@@ -195,6 +199,7 @@ fn corner_banding_set_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelCornerBandingSet::parse(params)?;
+    class_allows(project, params.panel, CORNER_BANDING_SET_ID, Operation::EdgeBand)?;
     let Some(material) = catalog.edge_material(params.material) else {
         return Err(CommandError::UnknownMaterial { material: params.material });
     };
@@ -304,7 +309,8 @@ fn ring_banding_set_enabled(session: &Session, params: &Value) -> bool {
     let Some(band) = params.band(session.catalog()) else {
         return false;
     };
-    session.project().validate_ring_banding(params.panel, band).is_ok()
+    class_allows(session.project(), params.panel, RING_BANDING_SET_ID, Operation::EdgeBand).is_ok()
+        && session.project().validate_ring_banding(params.panel, band).is_ok()
 }
 
 fn ring_banding_set_run(
@@ -313,6 +319,7 @@ fn ring_banding_set_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelRingBandingSet::parse(params)?;
+    class_allows(project, params.panel, RING_BANDING_SET_ID, Operation::EdgeBand)?;
     let Some(material) = catalog.edge_material(params.material) else {
         return Err(CommandError::UnknownMaterial { material: params.material });
     };
@@ -423,11 +430,13 @@ fn corner_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(feature) = params.feature() else {
         return false;
     };
-    session.project().validate_corner_feature(params.panel, feature).is_ok()
+    class_allows(session.project(), params.panel, CORNER_SET_ID, Operation::Contour).is_ok()
+        && session.project().validate_corner_feature(params.panel, feature).is_ok()
 }
 
 fn corner_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelCornerSet::parse(params)?;
+    class_allows(project, params.panel, CORNER_SET_ID, Operation::Contour)?;
     project.set_corner_feature(params.panel, params.feature()?)?;
     Ok(CommandOutcome::changed())
 }
@@ -517,11 +526,13 @@ fn bow_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(bow) = params.bow() else {
         return false;
     };
-    session.project().validate_edge_bow(params.panel, bow).is_ok()
+    class_allows(session.project(), params.panel, BOW_SET_ID, Operation::Contour).is_ok()
+        && session.project().validate_edge_bow(params.panel, bow).is_ok()
 }
 
 fn bow_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelBowSet::parse(params)?;
+    class_allows(project, params.panel, BOW_SET_ID, Operation::Contour)?;
     project.set_edge_bow(params.panel, params.bow()?)?;
     Ok(CommandOutcome::changed())
 }
@@ -572,4 +583,12 @@ fn is_rect_corner(corner: VertexId) -> bool {
 
 fn is_rect_edge(edge: EdgeId) -> bool {
     (1..=4).contains(&edge.get())
+}
+
+/// The class gate of one trim change: the class states which machining it admits.
+///
+/// Only the set commands ask; clearing a trim is always allowed, because taking a band off never
+/// contradicts the class and a hostile file may hold a trim the row no longer admits.
+fn class_allows(project: &Project, panel: Id, command: &'static str, operation: Operation) -> Result<(), CommandError> {
+    NodeRules::of(project, panel).allow_operation(operation).map_err(|refusal| CommandError::class(command, refusal))
 }

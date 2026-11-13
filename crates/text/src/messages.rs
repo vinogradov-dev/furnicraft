@@ -246,6 +246,10 @@ messages! {
 
     // ── Machining ───────────────────────────────────────────────────────────
     NoMachining = ["No machining.", "Обработок нет."],
+    MachiningClassNotAdmitted = [
+        "The class does not allow this machining.",
+        "Класс не допускает эту обработку."
+    ],
     MachiningCutout = ["Cutout", "Вырез"],
     MachiningCategoryCut = ["Cut", "Вырезание"],
     ShowHideOperation = ["Show or hide this operation", "Показать или скрыть операцию"],
@@ -379,6 +383,14 @@ messages! {
         "The contour ring sets the length and width.",
         "Длину и ширину задаёт контурное кольцо."
     ],
+    PanelClassLengthOnly = [
+        "The class fixes the width: this object resizes by length only.",
+        "Класс фиксирует ширину: этот объект меняется только по длине."
+    ],
+    PanelClassSizeFixed = [
+        "The class fixes the size: this object is not resized.",
+        "Класс фиксирует размер: этот объект не изменяется."
+    ],
     Length = ["Length", "Длина"],
     Width = ["Width", "Ширина"],
     LengthField = ["Length: {}", "Длина: {}"],
@@ -387,6 +399,8 @@ messages! {
     SectionMaterial = ["Material", "Материал"],
     SectionShape = ["Shape", "Форма"],
     SectionBanding = ["Banding", "Кромка"],
+    PanelClassNoBanding = ["The class does not allow edge banding.", "Класс не допускает кромление."],
+    PanelClassNoContour = ["The class does not allow outline edits.", "Класс не допускает редактирование контура."],
     SectionMachining = ["Machining", "Обработка"],
     SectionDiagnostics = ["Diagnostics", "Диагностика"],
     PanelMaterialMissingCatalogue = [

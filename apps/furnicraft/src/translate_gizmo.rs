@@ -16,8 +16,8 @@ use furnicraft_model::Id;
 use furnicraft_scene::MAX_DISTANCE_MM;
 
 use crate::gizmo_math::{
-    Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_translation, hit_axis, paint_axis_handles,
-    ray_to,
+    ALL_AXES, Axis, MoveTarget, PlacementCommit, Preview, PreviewKey, Target, commit_translation, hit_axis,
+    paint_axis_handles, ray_to,
 };
 
 /// One continuous axis drag.
@@ -126,7 +126,7 @@ impl TranslateGizmo {
         let Some(pointer) = response.hover_pos() else {
             return Ok(None);
         };
-        let Some(axis) = hit_axis(target.camera, viewport, origin_world, pointer) else {
+        let Some(axis) = hit_axis(target.camera, viewport, origin_world, pointer, ALL_AXES) else {
             return Ok(None);
         };
         self.hover = Some(axis);
@@ -173,6 +173,7 @@ impl TranslateGizmo {
             origin_world,
             self.hover,
             self.drag.as_ref().map(|drag| drag.axis),
+            ALL_AXES,
         );
     }
 }
