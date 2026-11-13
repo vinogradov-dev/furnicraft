@@ -22,7 +22,10 @@ niche's ceiling, and edge 1 becomes the top edge. Nothing is visibly broken unti
 The owner described the behaviour he expects as one chain of quarter-turns through the three positions
 a panel takes in a cabinet: the back wall, the post and the shelf. A chain fixes the answer: if the
 shelf turned one way is the post and the wall turned the other way is the post, then a half-turn or a
-reflection is not the post, and which corner is vertex 1 follows instead of being a habit.
+reflection is not the post, and which corner is vertex 1 follows instead of being a habit. His
+reference for the behaviour is K3-Mebel, read as behaviour and not as a specification: the shelf is
+the base, the post is the shelf turned to the right about `Y`, and the wall is the post turned about
+`Z`.
 
 ## Decision
 
@@ -32,6 +35,12 @@ wall is the post turned `−90°` about `+Z`. Read in the direction the position
 wall turned `+90°` about `+Z` is the post, and the post turned `+90°` about `+Y` is the shelf. The
 turns are right-hand rotations about the positive world axis, that is counter-clockwise seen from that
 axis' own `+` side.
+
+**The base position is the shelf, because that is what a panel is.** A panel is a flat contour in its
+own `XY` plane with face `B` at `z = 0`, and its thickness is the material extruded along `+Z`; the
+shelf is that contour unturned, the post is it turned a quarter-turn to the right about `+Y` (contour
+in `YZ`, material extruded towards `−X`), and the wall is the post turned a quarter-turn to the right
+about `+Z` (contour in `XZ`, material towards `+Y`).
 
 | Stance | Local `+X` (length) | Local `+Y` (width) | Local `+Z` (thickness) | Face `A` points | Vertex 1 |
 |---|---|---|---|---|---|
@@ -60,6 +69,11 @@ placements.
 - The fill tool's post is created as the stance, so its origin moves from the niche's ceiling to its
   floor and its edge 1 is the bottom edge. The ghost, the distance fields and the tests follow the same
   placement; no document field changes, so no schema moves.
+- A node sits on its base face, so a post hangs one thickness into `−X` from its zero corner: a tool
+  that keeps the board out of the negative side puts the node at `x = thickness`, while a shelf and a
+  wall need no offset. A tool that stands a part therefore has to know the stance's extrusion
+  direction instead of assuming its node is the low corner of the board — which is exactly the
+  assumption that made the old post hang from the ceiling.
 - A creation tool has one rule to satisfy instead of one decision to reinvent: a back panel, a facade
   or a drawer front that arrives later derives its placement from the same table.
 - Banding, corner treatments and machining written by id mean the same thing on a shelf, a post and a

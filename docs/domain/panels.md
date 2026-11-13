@@ -103,6 +103,21 @@ Read the other way, which is how the positions chain in speech: the **wall turne
 about `+Z` is the post**, and the **post turned counter-clockwise about `+Y` is the shelf**. A left
 and a right side panel are one stance at two placements, not two stances.
 
+**The base position is the shelf.** A panel is a flat contour in its own `XY` plane with face `B` at
+`z = 0`, and its thickness is the material extruded along `+Z`; the shelf is exactly that, unturned.
+Every other stance is the same contour and the same extrusion turned: the post is the shelf turned a
+quarter-turn to the right about `+Y` — its contour lies in the plane `YZ` and the material is
+extruded towards `−X` — and the wall is the post turned a quarter-turn to the right about `+Z` — its
+contour lies in `XZ` and the material is extruded towards `+Y`. The three words name a position; none
+of them is panel data.
+
+**The node sits on the base face, so a standing board is offset by its thickness.** The contour's zero
+corner is the node's origin and the material grows along the panel's own `+Z` from it. A shelf grows
+upward and a wall forward, so neither needs an offset; a post grows towards `−X`, so a post whose
+grain faces the plane `x = 0` has its node at `x = thickness` — 18 mm for an 18 mm board. A tool that
+stands a part composes the stance's turn with the corner it measured, and the board's own extent is
+what keeps it inside the void.
+
 **What the maker sees.** The front view looks along `−Y`, so the screen's right is world `−X` and its
 up is `+Z` ([0023](../decisions/0023-fasad-furniture-and-standard-views.md)):
 
