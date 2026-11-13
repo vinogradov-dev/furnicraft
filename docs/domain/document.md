@@ -230,7 +230,10 @@ no alias for a previous field name, no older golden file. The first release flip
 recorded decision restores compatibility for released users only.
 
 - A field that is optional in the *current* layout uses `#[serde(default)]`. A default that exists
-  only so a previous layout can load is a defect and leaves with the migration.
+  only so a previous layout can load is a defect; the tree has none left.
+- The loader converts nothing. A field an earlier layout stored — the panel `size`, a container
+  `assembly` or `group` tag, a `pivot` named `pivot_local`, a tagged `cutout` record, a contour
+  `points` list — is an unknown field and a readable error.
 - Unknown required fields or unknown enum variants are a readable error, never a silent
   interpretation.
 - The version-by-version history of pre-release schemas is not kept in this document; `git log` and

@@ -95,7 +95,7 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 1. Read the bytes and parse the envelope.
 2. Reject a missing or different `format`, and a `format_version` newer than this build, with a
    readable error.
-3. Migrate the document from its `schema` to the current one (section 7).
+3. Refuse a document `schema` that is not the current one (section 7).
 4. Validate the document: ids, placements, `pivot_local` offsets, finite values, mesh and feature limits.
 5. Resolve materials and banding against the catalogue; a missing material is a diagnostic, never a
    load failure ([document.md](document.md) §4–5).
@@ -132,9 +132,9 @@ Rules:
 
 **Before `1.0` the document has no past**
 ([0096](../decisions/0096-before-the-first-release-the-format-has-no-past.md)). A schema bump changes
-the layout and deletes the old loader in the same change: there is no migration pass and no golden
-file for an older schema. The format-cleanup task removes the machinery this section used to
-describe; the rules below are what stays.
+the layout and deletes the old loader in the same change: there is no migration pass, no alias for a
+field an earlier layout used and no golden file for an older schema. The tree carries none of them —
+one loader, one golden, one error.
 
 - Bump `document.schema` when the document layout changes; bump `format_version` only when the
   framing changes.
@@ -170,7 +170,8 @@ At minimum:
 - a round trip of a scene with a container, a panel, a geometry object, a camera and a light;
 - an unknown top-level section survives a load and save cycle;
 - an unknown field inside `document` is a readable error;
-- a newer `format_version` and a newer `schema` are readable errors;
+- a `format_version` newer than this build and a `schema` other than the current one — older or
+  newer — are readable errors;
 - a saved file contains no catalogue, no derived mesh, no diagnostic and no undo history;
 - a failed write leaves the previous file intact;
 - a scene with no camera and no light loads and renders with the built-in defaults;
