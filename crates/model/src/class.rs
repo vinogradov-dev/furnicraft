@@ -64,6 +64,20 @@ impl ClassCode {
     /// one (ADR 0097); a test proves it is the `80.01.00` registry row with `level = Product`.
     pub const GENERAL_PRODUCT: Self = Self(800_100);
 
+    /// The `vertical panel` row, «вертикальная панель» / vertical panel, the class a post fills a
+    /// niche with (ADR 0099).
+    ///
+    /// The fill tool is bound to the row, and the row's `fill` trait decides that a post takes the
+    /// niche's height and depth. A test proves the constant still names that row.
+    pub const VERTICAL_PANEL: Self = Self(301_000);
+
+    /// The `horizontal panel` row, «горизонтальная панель» / horizontal panel, the class a shelf
+    /// fills a niche with (ADR 0099).
+    ///
+    /// A shelf takes the niche's width and depth; the row's `fill` trait is the one statement of
+    /// that rule.
+    pub const HORIZONTAL_PANEL: Self = Self(301_100);
+
     /// The largest assignable code.
     pub const MAX: Self = Self(CLASS_MAX_CODE);
 
@@ -1759,6 +1773,23 @@ mod tests {
         assert_eq!(class("30").value(), 300_000);
         assert_eq!(format!("{}", class("30")), "30");
         assert_eq!(format!("{}", ClassCode::UNCLASSIFIED), "0");
+    }
+
+    #[test]
+    fn the_fill_classes_are_the_rows_they_name() {
+        let post = ClassCode::VERTICAL_PANEL;
+        let row = post.row().expect("the post class is a registry row");
+        assert_eq!(row.slug(), "vertical-panel");
+        assert_eq!(row.label(), Message::ClassVerticalPanel);
+        assert_eq!(row.traits().expect("traits").fill(), Some(Fill::HeightAndDepth));
+        assert!(post.is_assignable());
+
+        let shelf = ClassCode::HORIZONTAL_PANEL;
+        let row = shelf.row().expect("the shelf class is a registry row");
+        assert_eq!(row.slug(), "horizontal-panel");
+        assert_eq!(row.label(), Message::ClassHorizontalPanel);
+        assert_eq!(row.traits().expect("traits").fill(), Some(Fill::WidthAndDepth));
+        assert!(shelf.is_assignable());
     }
 
     #[test]

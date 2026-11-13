@@ -1731,3 +1731,104 @@ fn a_caret_click_opens_the_list_and_writes_no_revision() {
     assert_eq!(session.project().revision(), revision, "opening the list is view state, not an edit");
     assert!(editor.pinned_variants().is_empty(), "opening the list pins nothing");
 }
+
+/// A session whose only product is open, ready for a fill.
+fn fill_session() -> (Session, Id) {
+    let (project, _panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("create the frame");
+    let product = session.active_product().expect("the frame is open");
+    (session, product)
+}
+
+#[test]
+fn the_empty_space_tool_arms_only_a_class_whose_trait_fills_a_void() {
+    let (session, _product) = fill_session();
+    let mut editor = Editor::new();
+
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("a post fills a void");
+    assert_eq!(
+        editor.fill_arm(),
+        Some(FillArm { class: ClassCode::VERTICAL_PANEL, fill: furnicraft_model::Fill::HeightAndDepth }),
+        "a post takes the niche's height and depth"
+    );
+
+    editor.arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En).expect("a shelf fills a void");
+    assert_eq!(
+        editor.fill_arm().map(|arm| arm.fill),
+        Some(furnicraft_model::Fill::WidthAndDepth),
+        "a shelf takes the niche's width and depth"
+    );
+
+    let back: ClassCode = "30.12.00".parse().expect("a back panel");
+    let refusal = editor.arm_fill(&session, back, crate::Lang::En).expect_err("a back panel does not fill a void");
+    assert!(refusal.contains(furnicraft_text::Message::FillNeedsFillTrait.text(crate::Lang::En)), "{refusal}");
+    assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL), "a refusal keeps the arm");
+}
+
+#[test]
+fn the_empty_space_tool_refuses_without_an_open_product() {
+    let (project, _panel) = contour_panel_project();
+    let session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    let refusal = editor
+        .arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En)
+        .expect_err("no product offers no niche");
+    assert!(refusal.contains(furnicraft_text::Message::FillNeedsProduct.text(crate::Lang::En)), "{refusal}");
+    assert!(editor.fill_arm().is_none());
+}
+
+#[test]
+fn arming_the_empty_space_tool_leaves_the_other_pointer_modes() {
+    let (session, _product) = fill_session();
+    let mut editor = Editor::new();
+    editor.start_drawing(DrawTool::Line);
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post");
+    assert!(editor.drawing().is_none(), "a fill replaces the running draft");
+    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm a cube");
+    assert!(editor.fill_arm().is_none(), "a primitive replaces the fill");
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post again");
+    assert!(editor.pending_primitive().is_none(), "the fill replaces the primitive");
+    editor.cancel_fill();
+    assert!(editor.fill_arm().is_none());
+}
+
+#[test]
+fn a_second_click_on_the_armed_cell_drops_the_empty_space_tool() {
+    let (mut session, _product) = fill_session();
+    let mut editor = Editor::new();
+    let action = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL };
+    editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the first click arms");
+    assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL));
+    editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the second click drops");
+    assert!(editor.fill_arm().is_none(), "the cell toggles the tool");
+}
+
+#[test]
+fn a_fill_creates_a_classed_panel_of_exactly_the_ghost_size() {
+    let (mut session, product) = fill_session();
+    let mut editor = Editor::new();
+    let size = furnicraft_model::PanelNominalSize::new(millimetres(560), millimetres(500)).expect("a size");
+    let placement =
+        Placement::IDENTITY.with_translation(millimetres(20), millimetres(30), millimetres(350)).expect("a placement");
+
+    editor
+        .create_panel_sized(
+            &mut session,
+            product,
+            "Shelf".to_owned(),
+            size,
+            placement,
+            Some(ClassCode::HORIZONTAL_PANEL),
+        )
+        .expect("create the shelf");
+    let id = editor.selected_node().expect("the created panel is selected");
+    let panel = session.project().panel(id).expect("a panel");
+    assert_eq!(panel.nominal_size(), size, "the created part is exactly the ghost's size");
+    assert_eq!(panel.placement(), placement, "and exactly the ghost's placement");
+    assert_eq!(session.project().class(id), Some(ClassCode::HORIZONTAL_PANEL), "the class travels with it");
+
+    session.undo().expect("one entry");
+    assert!(session.project().panel(id).is_none(), "one undo takes the whole fill back");
+}

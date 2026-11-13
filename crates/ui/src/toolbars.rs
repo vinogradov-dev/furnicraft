@@ -39,7 +39,7 @@ use std::collections::BTreeMap;
 
 use egui::Ui;
 use furnicraft_engine::PrimitiveKind;
-use furnicraft_model::Id;
+use furnicraft_model::{ClassCode, Id};
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
@@ -79,6 +79,11 @@ pub enum ToolAction {
     CreateProductCard,
     /// Creates a panel at the scene root.
     CreatePanel,
+    /// Arms the empty-space tool with the class whose `fill` trait picks the axis pair.
+    Fill {
+        /// The class a post or a shelf fills the void with.
+        class: ClassCode,
+    },
     /// Creates an assembly at the scene root.
     CreateAssembly,
     /// Creates a primitive at the scene root once the work plane is clicked.
@@ -136,18 +141,25 @@ pub enum ToolActivity {
     Draw(DrawTool),
     /// A primitive is waiting for its work-plane click.
     Primitive(PrimitiveKind),
+    /// The empty-space tool is armed with a fill class.
+    Fill(ClassCode),
 }
 
 /// The activity whose button is pressed, from what the editor holds.
 ///
-/// The arguments are the two sources of an armed tool, not a decision: a running draft names its
-/// tool and a pending primitive names its kind, and neither outranks the other because the editor
-/// never holds both at once.
-pub fn tool_activity(drawing: Option<DrawTool>, primitive: Option<PrimitiveKind>) -> Option<ToolActivity> {
-    match (drawing, primitive) {
-        (Some(tool), _) => Some(ToolActivity::Draw(tool)),
-        (None, Some(kind)) => Some(ToolActivity::Primitive(kind)),
-        (None, None) => None,
+/// The arguments are the three sources of an armed tool, not a decision: a running draft names its
+/// tool, a pending primitive names its kind and a fill arm names its class, and none outranks
+/// another because the editor never holds two at once.
+pub fn tool_activity(
+    drawing: Option<DrawTool>,
+    primitive: Option<PrimitiveKind>,
+    fill: Option<ClassCode>,
+) -> Option<ToolActivity> {
+    match (drawing, primitive, fill) {
+        (Some(tool), _, _) => Some(ToolActivity::Draw(tool)),
+        (None, Some(kind), _) => Some(ToolActivity::Primitive(kind)),
+        (None, None, Some(class)) => Some(ToolActivity::Fill(class)),
+        (None, None, None) => None,
     }
 }
 
@@ -159,6 +171,7 @@ fn is_armed(activity: Option<ToolActivity>, kind: ToolKind) -> bool {
     match (activity, kind) {
         (Some(ToolActivity::Draw(armed)), ToolKind::Draw(tool)) => armed == tool,
         (Some(ToolActivity::Primitive(armed)), ToolKind::Primitive(kind)) => armed == kind,
+        (Some(ToolActivity::Fill(armed)), ToolKind::Fill(class)) => armed == class,
         _ => false,
     }
 }
@@ -284,6 +297,8 @@ pub struct RibbonOutcome {
 pub struct RibbonContext {
     /// The catalogue has at least one panel material.
     pub has_panel_material: bool,
+    /// A product is open, so a niche is offered (ADR 0098).
+    pub product_open: bool,
     /// The primary selection, if any.
     pub selected: Option<Id>,
     /// Whether the selection is a path, and whether that path is closed.
@@ -683,6 +698,7 @@ mod tests {
     fn full_context() -> RibbonContext {
         RibbonContext {
             has_panel_material: true,
+            product_open: true,
             selected: None,
             selected_path: None,
             active: None,
@@ -820,7 +836,7 @@ mod tests {
                     "Sphere: click the work plane",
                 ],
             ),
-            ("furniture", &["Panel", "Product frame"]),
+            ("furniture", &["Panel", "Post", "Product frame", "Shelf"]),
             ("scene", &["Assembly", "Camera", "Light"]),
             ("view", &["Frame all  (F)", "Grid snap  (G)", "Switch the projection  (O)"]),
         ];
@@ -1007,14 +1023,20 @@ mod tests {
 
     #[test]
     fn only_the_arming_tool_owns_the_next_click() {
+        let post = ClassCode::VERTICAL_PANEL;
         let cases = [
-            (None, None, None),
-            (Some(DrawTool::Line), None, Some(ToolActivity::Draw(DrawTool::Line))),
-            (None, Some(PrimitiveKind::Cube), Some(ToolActivity::Primitive(PrimitiveKind::Cube))),
-            (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), Some(ToolActivity::Draw(DrawTool::Arc))),
+            (None, None, None, None),
+            (Some(DrawTool::Line), None, None, Some(ToolActivity::Draw(DrawTool::Line))),
+            (None, Some(PrimitiveKind::Cube), None, Some(ToolActivity::Primitive(PrimitiveKind::Cube))),
+            (None, None, Some(post), Some(ToolActivity::Fill(post))),
+            (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), None, Some(ToolActivity::Draw(DrawTool::Arc))),
         ];
-        for (drawing, primitive, expected) in cases {
-            assert_eq!(tool_activity(drawing, primitive), expected, "drawing={drawing:?} primitive={primitive:?}");
+        for (drawing, primitive, fill, expected) in cases {
+            assert_eq!(
+                tool_activity(drawing, primitive, fill),
+                expected,
+                "drawing={drawing:?} primitive={primitive:?} fill={fill:?}"
+            );
         }
     }
 
@@ -1206,6 +1228,29 @@ mod tests {
         let context = RibbonContext { has_panel_material: false, ..full_context() };
         let (_, _, actions) = draw(&mut state, context);
         assert!(actions.is_empty(), "the Panel tool is disabled without a material");
+    }
+
+    #[test]
+    fn the_empty_space_tool_arms_a_fill_class_only_inside_an_open_product() {
+        let state = Toolbars::new();
+        let closed = RibbonContext { product_open: false, ..full_context() };
+        for tool_id in ["furniture.panels.post", "furniture.panels.shelf"] {
+            let tool = tool(tool_id);
+            let kind = tool.primary().expect("a live tool");
+            let cell = ready(kind, tool, &state, closed, Lang::En);
+            assert!(!cell.enabled, "{tool_id} cannot fill a void with no product open");
+            assert!(cell.hint.contains(Message::FillNeedsProduct.text(Lang::En)), "got {}", cell.hint);
+            assert_eq!(cell.action, None);
+        }
+
+        let post = tool("furniture.panels.post");
+        let cell = ready(post.primary().expect("a live tool"), post, &state, full_context(), Lang::En);
+        assert!(cell.enabled, "an open piece offers its niche");
+        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::VERTICAL_PANEL }));
+
+        let shelf = tool("furniture.panels.shelf");
+        let cell = ready(shelf.primary().expect("a live tool"), shelf, &state, full_context(), Lang::En);
+        assert_eq!(cell.action, Some(ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL }));
     }
 
     #[test]

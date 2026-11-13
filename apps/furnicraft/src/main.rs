@@ -24,6 +24,7 @@ mod document;
 mod draw_gizmo;
 mod extrude_gizmo;
 mod file_menu;
+mod fill_gizmo;
 /// The shell's frame, asserted without a window (U78).
 #[cfg(test)]
 mod frame_tests;

@@ -47,10 +47,12 @@ impl Editor {
         let active = toolbars::tool_activity(
             self.drawing.as_ref().map(|draft| draft.tool()),
             self.pending_primitive.map(|pending| pending.kind),
+            self.fill_arm().map(|arm| arm.class),
         );
         let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));
         let context = toolbars::RibbonContext {
             has_panel_material,
+            product_open: session.active_product().is_some(),
             selected,
             selected_path,
             active,
@@ -85,6 +87,15 @@ impl Editor {
                 }
                 ToolAction::CreateProductCard => outcome.open_product_card = true,
                 ToolAction::CreatePanel => self.create_panel(session, target)?,
+                ToolAction::Fill { class } => {
+                    // A second click on the armed cell drops the tool; the arm is a mode, not a
+                    // one-shot, because a maker places several posts in one piece.
+                    if self.fill_arm().is_some_and(|arm| arm.class == class) {
+                        self.cancel_fill();
+                    } else {
+                        self.arm_fill(session, class, lang)?;
+                    }
+                }
                 ToolAction::CreateAssembly => self.create_assembly(session, target)?,
                 ToolAction::CreatePrimitive { kind, size } => self.arm_primitive(kind, size)?,
                 ToolAction::CreateCamera => self.create_camera(session, target)?,

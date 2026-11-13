@@ -470,3 +470,62 @@ fn the_product_card_creates_a_frame_that_is_open_and_receives_the_next_part() {
         "the next part lands inside the new frame"
     );
 }
+
+#[test]
+fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step() {
+    let mut harness = Harness::new("frame-fill");
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    let (product, before, pointer) = {
+        let document = harness.app.tabs.active_mut();
+        let product = document.session.active_product().expect("the card opens the frame");
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let placement = project.world_placement(product).expect("a frame");
+        let centre = placement.transform_point(size * 0.5);
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let camera = document.camera();
+        let pointer = gizmo_math::screen_point(camera, rect, centre).expect("the frame is on screen");
+        assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+        document
+            .editor
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .expect("the shelf fill arms inside the open frame");
+        (product, harness.revision(), pointer)
+    };
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let created = {
+        let document = harness.app.tabs.active();
+        // The ghost the click used is still on screen: it moved with the pointer, so the part that
+        // was created is exactly what the maker was looking at, not a second measurement.
+        let ghost = document.fill_gizmo.ghost().cloned().expect("the ghost that the click created");
+        let created = document.editor.selected_node().expect("the new part is selected");
+        let panel = document.session.project().panel(created).expect("the click created a panel");
+        assert_eq!(panel.nominal_size(), ghost.nominal_size, "the part is exactly the ghost's size");
+        assert_eq!(panel.placement(), ghost.placement, "and exactly the ghost's placement");
+        assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+        assert_eq!(
+            document.session.project().class(created),
+            Some(ClassCode::HORIZONTAL_PANEL),
+            "the tool's class travels with the same command"
+        );
+        created
+    };
+    assert!(harness.revision() > before, "the click writes the document once");
+
+    // One undo takes the whole fill back, class and all: the click was one entry, not two.
+    let document = harness.app.tabs.active_mut();
+    assert!(document.session.can_undo());
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the part");
+}

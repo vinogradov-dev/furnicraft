@@ -52,7 +52,7 @@ pub use command_bar::{CommandBar, CommandBarAction};
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};
 pub use draw::{DrawDraft, DrawDraftError, DrawTool, DrawnPath};
-pub use editor::Editor;
+pub use editor::{Editor, FillArm};
 pub use furnicraft_text::{Counted, Lang, Message};
 pub use mesh_edit::{MeshEdit, MeshElement};
 pub use palette::{Palette, PaletteContext, PaletteKey};

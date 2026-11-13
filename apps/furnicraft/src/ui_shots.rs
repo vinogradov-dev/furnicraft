@@ -382,3 +382,82 @@ fn the_interface_renders_offscreen_to_one_png_per_cell() {
         "the chrome reaches {differing} pixels at {MIN_PANEL_OPACITY} % but {MAX_PANEL_OPACITY} % draws the same picture"
     );
 }
+
+/// Draws the empty-space tool's ghost into one picture, so its accent and callouts can be looked at.
+///
+/// The matrix above varies the window's look; this shot varies the tool. It arms the shelf fill
+/// inside an open product, moves the pointer onto the piece and renders the real frame offscreen, so
+/// the ghost's wireframe and its three sizes are checked as pixels and not only as shapes.
+#[test]
+#[ignore = "needs a GPU adapter; writes target/ui-shots/fill-ghost.png"]
+fn the_empty_space_ghost_is_painted_offscreen() {
+    let render_state = match render_state() {
+        Ok(render_state) => render_state,
+        Err(reason) => {
+            println!("{reason}");
+            return;
+        }
+    };
+    let ctx = egui::Context::default();
+    let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("fill-workspace.json");
+    let (project, product) = furnicraft_testkit::sample_product_project();
+    let mut session = furnicraft_engine::Session::with_catalog(project, furnicraft_testkit::sample_catalog());
+    assert!(session.open_product(product), "the fixture product opens");
+    let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
+        .expect("the application builds");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
+    let _ = settle(&mut app, &ctx, &render_state, screen);
+
+    let pointer = {
+        let document = app.tabs.active_mut();
+        document
+            .editor
+            .arm_fill(&document.session, furnicraft_model::ClassCode::HORIZONTAL_PANEL, furnicraft_text::Lang::En)
+            .expect("the shelf fill arms inside the open product");
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let placement = project.world_placement(product).expect("a frame");
+        let centre = placement.transform_point(size * 0.5);
+        let rect = document.scene_rect().expect("the settled frame gives the scene a rectangle");
+        crate::gizmo_math::screen_point(document.camera(), rect, centre).expect("the piece is on screen")
+    };
+
+    let mut jobs = Vec::new();
+    for frame in 0..SETTLE_FRAMES {
+        let events = if frame == 0 { vec![egui::Event::PointerMoved(pointer)] } else { Vec::new() };
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+            app.frame(ui);
+        });
+        let mut delta = std::mem::take(&mut output.textures_delta);
+        {
+            let mut renderer = render_state.renderer.write();
+            for (id, images) in &delta.set {
+                for image in images {
+                    renderer.update_texture(&render_state.device, &render_state.queue, *id, image);
+                }
+            }
+            for id in &delta.free {
+                renderer.free_texture(id);
+            }
+        }
+        delta.clear();
+        jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+    assert!(app.tabs.active().fill_gizmo.ghost().is_some(), "the pointer measured a ghost to draw");
+    let pixels_per_point = ctx.pixels_per_point();
+    let size =
+        [(WINDOW.x * pixels_per_point).round().max(1.0) as u32, (WINDOW.y * pixels_per_point).round().max(1.0) as u32];
+    let rgba = paint(&render_state, &jobs, size, pixels_per_point).expect("the frame paints");
+    let directory = furnicraft_testkit::ui_shots_dir().expect("the shots directory is created");
+    let path = directory.join("fill-ghost.png");
+    furnicraft_testkit::write_png(&path, size[0], size[1], &rgba).expect("the picture is written");
+    app.tabs.active_mut().release_target();
+    let picture = Picture { width: size[0], height: size[1], rgba };
+    assert!(!picture.is_flat(), "{} draws less than one colour", path.display());
+    println!("the fill ghost is in {}", path.display());
+}

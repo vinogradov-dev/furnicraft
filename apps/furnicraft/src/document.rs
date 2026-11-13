@@ -47,6 +47,7 @@ use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::{DrawAction, DrawGizmo, DrawModifiers};
 use crate::extrude_gizmo::{ExtrudeEvent, ExtrudeGizmo};
 use crate::file_menu::{FileAction, FileMenu, PreservedSections};
+use crate::fill_gizmo::{self, FillGizmo};
 use crate::gizmo;
 use crate::gizmo_math;
 use crate::gizmo_math::{PlacementCommit, Preview, PreviewKey, WorkPlane};
@@ -292,6 +293,8 @@ pub(crate) struct Document {
     pub(crate) contour_gizmo: ContourGizmo,
     pub(crate) draw_gizmo: DrawGizmo,
     pub(crate) extrude_gizmo: ExtrudeGizmo,
+    /// The empty-space tool's ghost; armed by the ribbon, it follows the pointer and creates a part.
+    pub(crate) fill_gizmo: FillGizmo,
     /// The corner orientation widget, which owns the roll-ring drag across frames.
     gizmo: gizmo::Gizmo,
     highlighted: Vec<Id>,
@@ -368,6 +371,7 @@ impl Document {
             contour_gizmo: ContourGizmo::default(),
             draw_gizmo: DrawGizmo::new(),
             extrude_gizmo: ExtrudeGizmo::default(),
+            fill_gizmo: FillGizmo::default(),
             gizmo: gizmo::Gizmo::default(),
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -929,6 +933,75 @@ impl Document {
         }
     }
 
+    /// Measures the void under the pointer and keeps the ghost the next click would create.
+    ///
+    /// The model answers the measurement; the shell only maps the pointer to the face of the open
+    /// product it points at. A pointer that leaves the scene drops the ghost, and a still pointer
+    /// re-measures nothing.
+    fn update_fill(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        rect: egui::Rect,
+        arm: Option<furnicraft_ui::FillArm>,
+    ) {
+        let Some(arm) = arm else {
+            self.fill_gizmo.reset();
+            return;
+        };
+        let Some(product) = self.session.active_product() else {
+            // A closed, deleted or undone product ends the tool: a niche is only offered inside the
+            // open piece (ADR 0098), so the arm would have nothing to point at.
+            self.editor.cancel_fill();
+            self.fill_gizmo.reset();
+            return;
+        };
+        let Some(thickness) = self.fill_thickness() else {
+            self.fill_gizmo.reset();
+            return;
+        };
+        let point = response.hover_pos().or_else(|| response.interact_pointer_pos()).and_then(|pointer| {
+            let ray = gizmo_math::ray_to(pointer, rect, self.scene.camera);
+            let (min, max) = fill_gizmo::envelope_box(self.session.project(), product)?;
+            fill_gizmo::envelope_entry(ray, min, max)
+        });
+        let Some(point) = point else {
+            self.fill_gizmo.reset();
+            return;
+        };
+        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness) {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// The thickness a filled part takes: the catalogue's first panel material.
+    fn fill_thickness(&self) -> Option<Length> {
+        self.session.catalog().panel_materials().first().map(|material| material.nominal_thickness())
+    }
+
+    /// Creates the ghost's part through one `panel.create`, class included.
+    ///
+    /// The parameters are the ghost's own size and placement, so the part the maker sees is exactly
+    /// the part the history records, and the command is the only write of the gesture. The tool
+    /// stays armed, because a piece usually needs several posts.
+    fn create_fill(&mut self, lang: furnicraft_ui::Lang) -> Result<(), String> {
+        let arm = self.editor.fill_arm().ok_or_else(|| "The empty-space tool is not armed.".to_owned())?;
+        let ghost = self
+            .fill_gizmo
+            .ghost()
+            .cloned()
+            .ok_or_else(|| "Point at the empty space inside the open product.".to_owned())?;
+        let name = arm.class.label().map_or_else(|| Message::ToolPanel.text(lang), |label| label.text(lang)).to_owned();
+        self.editor.create_panel_sized(
+            &mut self.session,
+            ghost.parent,
+            name,
+            ghost.nominal_size,
+            ghost.placement,
+            Some(arm.class),
+        )
+    }
+
     /// Draws the command bar of the previewing operation and applies what it asked for.
     ///
     /// The bar is the one surface a previewing operation talks to: its field drives the preview
@@ -1189,16 +1262,28 @@ impl Document {
         // placement or a sub-object mode takes the pointer from it, so the arrow never competes
         // with a grip, a point or a cube for the same click.
         if self.extrude_gizmo.is_active()
-            && (contour_editing || drawing || placing || self.editor.mesh_edit().is_some())
+            && (contour_editing
+                || drawing
+                || placing
+                || self.editor.mesh_edit().is_some()
+                || self.editor.fill_arm().is_some())
         {
             self.cancel_extrude();
         }
         let pulling = interactive && self.extrude_gizmo.is_active();
+        // The empty-space tool owns the pointer while it is armed: the next click creates the part
+        // the ghost shows, not a selection. It yields to a live contour or sub-object edit.
+        let fill_arm = if interactive && self.editor.contour_edit().is_none() && self.editor.mesh_edit().is_none() {
+            self.editor.fill_arm()
+        } else {
+            None
+        };
+        let filling = fill_arm.is_some() && !pointer_on_chrome;
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = shell.cluster.navigation;
-        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling;
-        let mesh_object = if !interactive || contour_editing || drawing || placing || pulling {
+        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling && !filling;
+        let mesh_object = if !interactive || contour_editing || drawing || placing || pulling || filling {
             None
         } else {
             self.editor.mesh_edit().map(|edit| edit.object())
@@ -1343,6 +1428,19 @@ impl Document {
             }
         }
 
+        if filling {
+            self.update_fill(ui, &response, rect, fill_arm);
+            if response.clicked_by(egui::PointerButton::Primary)
+                && !pointer_over_widget
+                && !pointer_on_chrome
+                && let Err(error) = self.create_fill(furnicraft_ui::language(ui.ctx()))
+            {
+                self.last_error = Some(error);
+            }
+        } else {
+            self.fill_gizmo.reset();
+        }
+
         let target = gizmo_math::Target {
             camera: self.scene.camera,
             project: self.session.project(),
@@ -1357,6 +1455,7 @@ impl Document {
             || drawing
             || placing
             || pulling
+            || filling
             || navigating
             || mesh_object.is_some()
             || locked_selection.is_some()
@@ -1392,7 +1491,7 @@ impl Document {
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing || drawing || placing || pulling {
+        let consumed_click = if contour_editing || drawing || placing || pulling || filling {
             true
         } else if mesh_object.is_some() {
             self.vertex_gizmo.consumed_click()
@@ -1483,7 +1582,7 @@ impl Document {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
         } else if pulling {
             ui.ctx().set_cursor_icon(self.extrude_gizmo.cursor());
-        } else if placing {
+        } else if placing || filling {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
         } else if navigating {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
@@ -1697,6 +1796,8 @@ impl Document {
             self.vertex_gizmo.paint(ui, rect, target);
         } else if pulling {
             self.extrude_gizmo.paint(ui, rect, self.scene.camera, self.session.project());
+        } else if filling {
+            self.fill_gizmo.paint(ui, rect, self.scene.camera);
         } else if navigating || locked_selection.is_some() {
             // The navigation gesture owns the viewport, and a locked selection owns nothing: an
             // axis under the pointer would compete with the camera drag, and a locked node draws no
@@ -2076,6 +2177,11 @@ impl Document {
                 shell.cluster.navigation = None;
             } else if self.editor.mesh_edit().is_some() {
                 self.editor.end_mesh_edit();
+            } else if self.editor.fill_arm().is_some() {
+                // Escape leaves the empty-space tool before it leaves a container level: the tool is
+                // the mode the next click uses.
+                self.editor.cancel_fill();
+                self.fill_gizmo.reset();
             } else if self.editor.creation_parent().is_some() {
                 // The arm outranks leaving a container level: it is the mode the next creation uses,
                 // and the chip names it until Escape or ✕ clears it (ADR 0056).

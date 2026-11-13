@@ -20,7 +20,7 @@ use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{CameraProjection, Id, LightKind, Placement, Project};
+use furnicraft_model::{CameraProjection, ClassCode, Id, LightKind, PanelNominalSize, Placement, Project};
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
@@ -79,6 +79,7 @@ impl Editor {
     pub fn close_product(&mut self, session: &mut Session) {
         session.close_product();
         self.clear_creation_parent();
+        self.cancel_fill();
     }
 
     /// Drops an arm whose container no longer exists.
@@ -108,21 +109,32 @@ impl Editor {
 
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
     pub(super) fn create_panel(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
+        let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
+        self.create_panel_sized(session, parent, "Panel".to_owned(), nominal_size, Placement::IDENTITY, None)
+    }
+
+    /// Dispatches `panel.create` for a part of exactly this size, placement and class.
+    ///
+    /// The empty-space tool measures the void and hands the answer here, so the panel that is
+    /// created is exactly the ghost the maker saw; the class travels with the same command, so the
+    /// click is one undo entry rather than a create followed by an assignment. The material stays
+    /// the catalogue's first, as it is for every created panel.
+    pub fn create_panel_sized(
+        &mut self,
+        session: &mut Session,
+        parent: Id,
+        name: String,
+        nominal_size: PanelNominalSize,
+        placement: Placement,
+        class: Option<ClassCode>,
+    ) -> Result<(), String> {
         let material = session
             .catalog()
             .panel_materials()
             .first()
             .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
             .id();
-        let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
-        let params = json(&PanelCreate {
-            parent,
-            name: "Panel".to_owned(),
-            nominal_size,
-            material,
-            placement: Placement::IDENTITY,
-            class: None,
-        })?;
+        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class })?;
         let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
         Ok(())
@@ -179,6 +191,7 @@ impl Editor {
         self.mesh_edit = None;
         self.contour_edit = None;
         self.drawing = None;
+        self.fill = None;
         self.pending_primitive = Some(PendingPrimitive { kind, size });
         Ok(())
     }

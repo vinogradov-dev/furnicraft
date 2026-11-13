@@ -805,6 +805,9 @@ messages! {
     GroupFasteners = ["Fasteners", "Крепёж"],
     GroupHardware = ["Hardware", "Фурнитура"],
     GroupChecks = ["Checks", "Проверка"],
+    FillNeedsProduct = ["Open a product first", "Сначала откройте изделие"],
+    FillNeedsMaterial = ["Add a panel material first", "Сначала добавьте материал панели"],
+    FillNeedsFillTrait = ["This class does not fill a void", "Этот класс не заполняет пустоту"],
     GroupObjects = ["Objects", "Объекты"],
     GroupViews = ["Views", "Виды"],
     GroupMaterials = ["Materials", "Материалы"],
@@ -816,6 +819,8 @@ messages! {
     // The ribbon's tools (U68); a planned row is named here before its command exists.
     ToolProductFrame = ["Product frame", "Каркас изделия"],
     ToolPanel = ["Panel", "Панель"],
+    ToolPost = ["Post", "Стойка"],
+    ToolShelf = ["Shelf", "Полка"],
     ToolContourPanel = ["Panel from contour", "Панель по контуру"],
     ToolAssembly = ["Assembly", "Сборка"],
     ToolGroupNode = ["Group", "Группа"],

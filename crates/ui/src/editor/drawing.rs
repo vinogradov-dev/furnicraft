@@ -43,6 +43,7 @@ impl Editor {
         self.mesh_edit = None;
         self.contour_edit = None;
         self.pending_primitive = None;
+        self.fill = None;
         self.drawing = Some(DrawDraft::with_sides(tool, sides));
     }
 
