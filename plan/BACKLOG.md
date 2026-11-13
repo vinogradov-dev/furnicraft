@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
+- `[~]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
   Why: The current translate tool moves anything anywhere, which is right for geometry and
    wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
    other. The mount trait exists for exactly this and today has no consumer.
@@ -41,7 +41,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    product can; a drag that would intersect another product stops at contact; snapping lands on
    the grid and on a face; one undo restores the whole drag. The frame and the class attributes
    drive the behaviour without a code literal check.
-  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/query.rs`
+  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/project/move_query.rs`
 - `[ ]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
   Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
    feature the program is built around: the niche is the space the frame reserves, a post is
