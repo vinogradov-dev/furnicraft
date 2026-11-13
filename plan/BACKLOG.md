@@ -109,6 +109,134 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A package carries a per-sheet cutting plan for one material and a price per line; the
    columns are additive; the golden file records them; cargo xtask ci is green.
   `files: crates/model/src/catalog.rs`
+- `[ ]` **N9** the niche is a convex cell of wall planes, so boards turned in space are measured
+  Why: The owner reports that a niche bounded by panels turned out of the vertical gives no
+   size and no shape, so neither a post nor a shelf is built; the N7 trapezoid only works when
+   every side board stands plumb. Measured on this tree: a back wall leaned 15 degrees answers
+   `NicheRefusal::Unrepresentable` at every cursor height, a ceiling leaned 10 degrees is
+   measured at the cursor alone (696, 651 and 605 mm of height at y = 20, 280 and 540, so a
+   shelf would cut into it), and a product turned 45 degrees is refused with
+   `NicheRefusal::Turned` although the section is taken in the product's own frame. The cause
+   is the N7 query: four rays along the product's axes are cut with the section plane at the
+   cursor's height and the result is extruded along the height, which is exact only while every
+   wall is vertical and the floor and ceiling are horizontal.
+  Shape: The free space is the intersection of half-spaces. `Project::niche` builds a convex
+   cell in the product's frame: it starts from the envelope's six planes, probes from the point
+   along every current face normal and every cell vertex (plus the envelope's 26 axis, edge and
+   corner directions in the first round), clips the cell by each met face's plane, and repeats
+   until a round adds no plane, with a capped loop that refuses instead of spinning. Each
+   face's plane must still be a surface over the face's extent, which is the current `covered`
+   check run at every face vertex and at the face's middle rather than only at the void's floor
+   and ceiling; no other surface's box corner may lie strictly inside the cell, which is what
+   refuses a void that holds an obstacle, a notch, or two boards meeting halfway. The query
+   reports the product frame's supporting planes (unit free-side normal and offset) and the
+   cell's vertices; `local_min` and `size` stay the box around the cell for the callouts, and a
+   turned product is measured in its own frame, so the `Turned` refusal is deleted. The fill
+   keeps building a board that fits: a shelf takes the cell's section clipped over its
+   thickness, each wall's half-plane evaluated at the far face, as a rectangle or a contour,
+   and a post takes the same section in its own board plane (the panel's local XY against the
+   product's ZY), so a splayed case offers a post again with the depth the slab really has. The
+   box cases answer exactly as they do today. A curved boundary is measured by the box around
+   its body, which is conservative, so a part fits with a gap and never cuts in; an exact
+   curved section needs a surface query that can meet a curved face and is not part of this
+   task.
+  Done: Tests: a leaned wall gives a cell and a shelf that fits it; a leaned ceiling gives the
+   true height over its footprint, not the cursor's; a 45-degree turned product answers instead
+   of `Turned`; the splayed pair, the box, the shelf-split and the half-wall cases keep their
+   current answers, the half wall still refusing; a post stands in the splayed case with the
+   slab's depth; a body standing inside the cell is refused; the ghost equals the created panel
+   in every case; `cargo xtask ci` is green. A new ADR records the cell and the refusal of a
+   non-convex void, and `docs/domain/products.md` section 4 describes it.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, docs/domain/products.md, docs/decisions/README.md`
+- `[ ]` **N10** the fill has two modes and prefers a standard panel when the section allows one
+  Why: The owner asks for two behaviours: the part takes the niche's minimal size so it fits
+   without cutting in, or it takes the whole shape the walls allow. Today there is one shape
+   and no choice, and a post or a shelf is measured only one way. He also asks the program to
+   decide whether the shape can be a standard panel with corner cuts or radii before it falls
+   back to a contour: a contour panel loses `panel.resize`, the rectangle card and its nominal
+   fields (ADR 0042), so the standard path is the one to prefer when it is exact.
+  Shape: `Project` answers one fill plan for the class's `Fill` pair, a material thickness and
+   a mode, and both modes start from the N9 section. Fit returns the largest rectangle with
+   sides on the panel's own axes that lies inside the section, computed exactly from the convex
+   polygon's breakpoints, as a nominal rectangle, and a rectangular section gives itself. Shape
+   returns the section as the panel outline. Before the panel is chosen, a classifier generates
+   the candidate rectangle rings and compares them with the section vertex by vertex within a
+   micrometre: the nominal rectangle stays `PanelOutline::Rect`; a rectangle with asymmetric
+   corner chamfers, the existing `CornerFeatureKind::Chamfer { incoming, outgoing }` with a
+   positive clear length left on every edge, becomes `Rect` with those features; a ring with
+   corner radii becomes `Rect` with `Radius` features; only a section that matches nothing is a
+   contour. The classifier is a pure model function over a ring, so the radius path is tested
+   directly even though the plane-only cell cannot produce an arc until a curved surface query
+   exists. The mode is a method of the fill cell through the ribbon's existing split list: the
+   primary method is Fit, the variant is Shape, the pinned method is the session's choice, and
+   `ToolAction::Fill` carries the mode into `FillArm`. The post and the shelf both offer both
+   modes, and the ghost, the distance fields and `panel.create` read the same plan. A section
+   that is degenerate, not convex, or has no rectangle of a usable size is refused with a
+   sentence.
+  Done: Tests: a trapezoid gives the largest rectangle in Fit and the trapezoid ring in Shape;
+   a plain box gives the same rectangle in both modes; the fit rectangle lies inside every wall
+   over the whole thickness; a rectangle with one asymmetric corner cut becomes `Rect` with one
+   chamfer; a rounded ring given to the classifier directly becomes a radius; a section whose
+   cut would consume an edge is a contour; the mode survives a tool switch and is the one the
+   ghost and the panel carry; a click is one undo entry; `cargo xtask ci` is green.
+  `files: crates/model/src/project/, crates/model/src/lib.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/toolbars/spec.rs, crates/ui/src/toolbars.rs, crates/ui/src/toolbars/ready.rs, crates/ui/src/editor/fill.rs, crates/ui/src/editor/ribbon.rs, apps/furnicraft/src/document.rs, crates/text/src/messages.rs, docs/domain/products.md`
+- `[ ]` **N11** a panel's end can be given a bevel angle about its edge
+  Why: A board that butts a wall turned in two planes cannot meet it with a square end: its end
+   face must lie in the wall's plane. The panel is one region extruded along its thickness, so
+   every end face is perpendicular to the two large faces and the only angle it can express is
+   in its own plane; a contour cannot hold the skew. The owner named this as the second
+   difficulty, and without the parameter the fill can only leave a gap or cut in.
+  Shape: `Panel` stores an optional bevel per outline edge: a signed angle in millidegrees
+   about the edge's line, tilting the end face across the thickness. The outline is the edge on
+   face B; face A's edge is set back by `thickness * tan beta`, so a positive angle removes
+   material and the board never grows past its outline, which keeps its nominal size its stock
+   size. The record is keyed by a stable source, an `EdgeId` of the nominal rectangle or a
+   `ContourSegmentId` of a ring, one per source, line segments only, with the angle capped
+   below 89 degrees and the resolved body required to keep one piece and a positive thickness.
+   `param` folds one `PlanStep::Difference` per bevel with a wedge cutter: a small triangle in
+   the plane across the edge, from the B edge to the A edge, extruded along the segment with
+   the usual 1 µm overshoot through `extrusion_plan`; the core region, the analytic rectangle
+   path, the cutouts and the other edges' bands are untouched. A beveled edge cannot carry a
+   band, because the band would follow the nominal edge, so `panel.bevel.set` refuses a banded
+   edge and the banding command refuses a beveled one, each with a sentence. The card gains the
+   angle field and a clear action; the commands are `panel.bevel.set` and `panel.bevel.clear`;
+   the schema moves to 24 and the goldens follow (ADR 0096); a new ADR records the parameter
+   and why the outline is the B face.
+  Done: Tests: a 45-degree bevel on a 100 x 50 x 18 panel removes the expected wedge and keeps
+   the nominal size; a second bevel on another edge accumulates; an arc segment, a duplicate
+   source, a banded edge and an angle at or past the cap are refused with typed errors; banding
+   a beveled edge is refused; the card writes and clears the value; a save/load golden carries
+   the record and a schema other than 24 is a readable error; one command is one undo entry;
+   `cargo xtask ci` is green.
+  `files: crates/model/src/panel/mod.rs, crates/model/src/panel_features.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/panel_cmds/mod.rs, crates/engine/src/commands.rs, crates/param/src/lib.rs, crates/param/src/machining.rs, crates/ui/src/panel_card.rs, crates/text/src/messages.rs, crates/project/tests/golden, crates/project/tests/scene_file.rs, docs/domain/panels.md, docs/decisions/README.md`
+- `[ ]` **N12** the shaped fill bevels its ends onto the walls, so a board meets a joined panel flush
+  Why: This is the point of the bevel: once a part takes the niche's shape, a shelf or a post
+   in a niche bounded by boards turned in space must meet those boards with its end face in
+   their plane, or it stands with a gap. Fit mode is safe but loose; Shape with a square end
+   either cuts in or leaves a wedge of air, which is exactly where the owner saw the failure.
+  Shape: The fill plan of N10, in Shape mode, takes the section at the board's reference face B
+   and gives each outline edge the bevel its wall asks for: with `n` the wall's free-side unit
+   normal in the panel's frame, the wall's rise across the thickness gives `beta = atan(-n_z /
+   abs(n_xy))`, positive for the cut that lands the A edge in the wall, and a wall
+   perpendicular to the board gives zero and no record. Because a bevel only removes material,
+   B must be the wide face: the plan reads the sign of every wall's n_z in the panel's frame,
+   turns the board about its length axis when the wide face is the other side, which is a
+   placement and not a new stance, and refuses a cell whose walls disagree in sign, where no
+   flat board can fill the void. A wall nearly parallel to the board, a floor or a ceiling
+   crossing the slab, makes the void a wedge no flat board can fill: Shape refuses with a
+   sentence and Fit remains. When no edge needs a bevel and the section classifies as a
+   rectangle or a chamfered rectangle, the fill uses the standard path of N10; a beveled board
+   is a contour with bevel records. `panel.create` gains an optional bevel list, so a fill
+   stays one command and one undo entry; the ghost draws the beveled A rim and the wall it
+   meets.
+  Done: Tests: a shelf against a wall leaned 10 degrees gets the exact angle and the wall
+   plane's distance at both ends of the A edge is zero within a micrometre; the same wall
+   leaned the other way turns the board and still meets it; a plumb case gives no bevel and the
+   rectangle panel; a wedge void is refused; the trapezoid of two angled posts stays a contour
+   with no bevels, since the walls are vertical; the ghost's far rim equals the panel's; a
+   click is one undo entry; `cargo xtask ci` is green. A new ADR records the reverse placement
+   and the wedge refusal.
+  `files: crates/model/src/project/, crates/engine/src/panel_cmds/panel.rs, apps/furnicraft/src/fill_gizmo.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/document.rs, docs/domain/products.md, docs/decisions/README.md`
 
 ## Done
 

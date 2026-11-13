@@ -229,3 +229,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   the whole span: two boards that meet in the middle with the envelope behind them would pass as one
   wall. The union of the coplanar faces' extents would close it; the samples are one micrometre apart
   and no furniture case this tree builds has such a gap (N7).
+- `[gizmo]` A niche bounded by a curved surface — a bent panel, a rounded body, a cylinder — is
+  measured by the box around that body: the cell is conservative, so a part fits with a gap and never
+  cuts in, but it does not follow the curve. An exact curved section needs a surface query that can
+  meet a curved face and a section that can hold arcs; the cell, the fill and the bevel are planes
+  only (N9, N12).
