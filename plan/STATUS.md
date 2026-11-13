@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N7 state=doing base=13a42ad updated=2026-11-13
+STATE: milestone=M7 phase=T task=V2 state=idle base=0efd3b4 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N7 shapes the niche: the six probes report faces, so an angled pair of posts gives a trapezoid
-extruded along the depth and the shelf takes that outline through the contour path (ADR 0099). N6
-answers the box and the fill; N7 widens the answer to a region.
+V2 turns the cube into a cuboid: three sizes, a drawn base and a pulled height, edited by corner,
+face and card (ADR 0101).
 
 ## Index
 

@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
-  Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
-   two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
-   instead of a box that does not fit. The six probes already report faces, so the outline is a
-   consequence of the query, not a new concept (ADR 0099).
-  Shape: The niche query returns the probed faces as well as the distances, builds the
-   cross-section of the free space in the vertical plane facing the viewer and extrudes it
-   along the depth into a geom::Region, so a slanted boundary becomes a polygon and not a
-   bounding box. The shelf fill takes that region as the panel outline through the existing
-   contour conversion (ADR 0042), and the ghost shows the polygon before the click. A piece
-   whose free section cannot be described by one extruded polygon is refused with a sentence
-   rather than approximated.
-  Done: Tests: two angled posts give a trapezoid region with the expected vertices; a shelf
-   created in it has the contour outline, not a rectangle; a rectangular case still produces
-   the rectangle through the same path; an unrepresentable section is a readable refusal; the
-   preview and the created panel agree; cargo xtask ci is green.
-  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, apps/furnicraft/src/fill_gizmo.rs, crates/engine/src/panel_cmds/panel.rs, crates/ui/src/editor/creation.rs`
 - `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
   Why: The only solid primitive is a cube with one size for three edges, which nothing in
    cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
@@ -186,6 +169,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
+  Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
+   two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
+   instead of a box that does not fit. The six probes already report faces, so the outline is a
+   consequence of the query, not a new concept (ADR 0099).
+  Shape: The niche query returns the probed faces as well as the distances, builds the
+   cross-section of the free space in the vertical plane facing the viewer and extrudes it
+   along the depth into a geom::Region, so a slanted boundary becomes a polygon and not a
+   bounding box. The shelf fill takes that region as the panel outline through the existing
+   contour conversion (ADR 0042), and the ghost shows the polygon before the click. A piece
+   whose free section cannot be described by one extruded polygon is refused with a sentence
+   rather than approximated.
+  Done: Tests: two angled posts give a trapezoid region with the expected vertices; a shelf
+   created in it has the contour outline, not a rectangle; a rectangular case still produces
+   the rectangle through the same path; an unrepresentable section is a readable refusal; the
+   preview and the created panel agree; cargo xtask ci is green.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, apps/furnicraft/src/fill_gizmo.rs, crates/engine/src/panel_cmds/panel.rs, crates/ui/src/editor/creation.rs` — `0efd3b4`
 
 - `[x]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
   Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
