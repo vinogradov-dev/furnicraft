@@ -566,6 +566,83 @@ mod tests {
         assert!(!session.can_undo(), "the assignment was exactly one undo entry");
     }
 
+    /// The centre of the first drawn text that contains `needle`, in screen points.
+    fn text_center(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<egui::Pos2> {
+        use egui::epaint::Shape;
+        fn walk(shape: &Shape, needle: &str, found: &mut Option<egui::Pos2>) {
+            match shape {
+                Shape::Text(text) if text.galley.text().contains(needle) => {
+                    let min = text.pos;
+                    let size = text.galley.size();
+                    *found = Some(min + size * 0.5);
+                }
+                Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, needle, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = None;
+        for clipped in shapes {
+            walk(&clipped.shape, needle, &mut found);
+        }
+        found
+    }
+
+    /// Draws one card frame with `events` and returns the shapes this frame painted.
+    fn card_frame(
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        session: &mut Session,
+        card: &mut PropertiesCard,
+        node: Id,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| card.show(ui, session, node));
+        let shapes = output.shapes.clone();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    #[test]
+    fn a_click_on_a_picker_row_assigns_the_class_and_one_undo_returns_it() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let drawer = Id::new(3).expect("drawer id");
+        let mut card = PropertiesCard::default();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::set_language(&ctx, Lang::Ru);
+
+        // The first frame selects the node; a node change closes the picker.
+        card_frame(&ctx, Vec::new(), &mut session, &mut card, drawer);
+        card.class_picker.start();
+        card_frame(&ctx, Vec::new(), &mut session, &mut card, drawer);
+        let shapes = card_frame(&ctx, vec![egui::Event::Text("полка".to_owned())], &mut session, &mut card, drawer);
+        let pos = text_center(&shapes, "Горизонтальная панель").expect("the horizontal panel row is drawn");
+
+        card_frame(&ctx, vec![egui::Event::PointerMoved(pos)], &mut session, &mut card, drawer);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        card_frame(&ctx, vec![button(true)], &mut session, &mut card, drawer);
+        card_frame(&ctx, vec![button(false)], &mut session, &mut card, drawer);
+
+        let shelf: ClassCode = "30.11".parse().expect("the horizontal panel code");
+        assert_eq!(session.project().class(drawer), Some(shelf), "the click assigns the row under the pointer");
+        session.undo().expect("one undo returns the previous class");
+        assert_eq!(session.project().class(drawer), Some(ClassCode::UNCLASSIFIED));
+        assert!(!session.can_undo(), "the click left exactly one undo entry");
+    }
+
     #[test]
     fn a_length_is_drawn_as_a_number_with_the_unit_outside_it() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
