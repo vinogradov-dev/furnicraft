@@ -647,9 +647,11 @@ mod tests {
     /// A standing post whose inner face runs through `through`, angled so that face's normal
     /// pointing into the free space is `normal` (both in the product's XY plane, millimetres).
     ///
-    /// The post is 720 mm tall, 18 mm thick and wide enough to cross the whole depth: the panel's
-    /// local X runs down the height, its local Y along the depth and its local Z through the
-    /// thickness, so a rotation about Y stands it up and a rotation about Z splays it.
+    /// The post is 720 mm tall, 18 mm thick and wide enough to cross the whole depth. It stands in
+    /// the post's stance (ADR 0105): the panel's local X runs up the height, its local Y along the
+    /// depth, and its local Z through the thickness away from the free space, so a quarter-turn about
+    /// Y stands it up and a rotation about Z splays it. The face the free space touches is the
+    /// board's own `z = 0` face and the node's base corner sits on the void's floor.
     fn angled_post(project: &mut Project, parent: Id, through: (f64, f64), normal: (f64, f64)) -> Id {
         let direction = (-normal.1, normal.0);
         // The panel is 1200 mm wide, so the start of its local Y is placed to centre that span on
@@ -657,8 +659,8 @@ mod tests {
         let start_y = 280.0 - 600.0 * direction.1;
         let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
         let angle = normal.1.atan2(normal.0);
-        let rotation = DQuat::from_rotation_z(angle) * DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-        let translation = DVec3::new(start_x, start_y, 720.0) - DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+        let rotation = DQuat::from_rotation_z(angle) * DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        let translation = DVec3::new(start_x, start_y, 0.0);
         let placement = Placement::new(translation, rotation).expect("a placement");
         let nominal = PanelNominalSize::new(millimetres(720), millimetres(1200)).expect("a post size");
         project.add_panel(parent, "Post", nominal, None, millimetres(18), placement).expect("add a post")
@@ -802,11 +804,11 @@ mod tests {
         // A post that reaches only 300 mm up does not bound one extruded shape, so a point beside it
         // has no niche the tool could cut a shelf to.
         let (mut project, piece) = empty_piece();
-        // A standing panel 300 mm tall, 18 mm thick: local X runs down its height, so a rotation
-        // about Y stands it up with its face across the case.
+        // A standing panel 300 mm tall, 18 mm thick, in the post's stance: local X runs up its
+        // height, so a quarter-turn about Y stands it up with its face across the case.
         let nominal = PanelNominalSize::new(millimetres(300), millimetres(560)).expect("a short post");
-        let rotation = furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
-        let placement = Placement::new(DVec3::new(300.0, 0.0, 300.0), rotation).expect("a place");
+        let rotation = furnicraft_geom::DQuat::from_rotation_y(-std::f64::consts::FRAC_PI_2);
+        let placement = Placement::new(DVec3::new(318.0, 0.0, 0.0), rotation).expect("a place");
         project.add_panel(piece, "Stub", nominal, None, millimetres(18), placement).expect("add a stub");
         let refusal = project.niche(DVec3::new(150.0, 280.0, 200.0)).expect_err("half a wall is not a wall");
         assert_eq!(refusal, NicheRefusal::Unrepresentable);

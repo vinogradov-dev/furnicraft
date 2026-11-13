@@ -8,10 +8,10 @@
 //!
 //! `Fill::HeightAndDepth` stands a part up as a post — the niche's height becomes the panel's
 //! length, its depth the width, and the material's thickness runs along the free axis, where the
-//! pointer sits. `Fill::WidthAndDepth` lays a part down as a shelf — the niche's width and depth
-//! become the panel's sides and the pointer picks the height. The free-axis position moves in whole
-//! millimetres; the other sides are the measured void exactly, so a part is flush with the walls it
-//! was cut to.
+//! pointer sits, away from the face it measured (the post's stance, ADR 0105). `Fill::WidthAndDepth`
+//! lays a part down as a shelf — the niche's width and depth become the panel's sides and the pointer
+//! picks the height. The free-axis position moves in whole millimetres; the other sides are the
+//! measured void exactly, so a part is flush with the walls it was cut to.
 //!
 //! A shelf in a splayed niche takes the niche's section as its outline (ADR 0099): the model answers
 //! a polygon and the click creates a contour panel with exactly that ring, through the same
@@ -50,23 +50,34 @@ pub(crate) struct FillGhost {
     pub(crate) niche: Niche,
     /// The panel's three extents, in millimetres, for the callouts.
     pub(crate) size_mm: DVec3,
+    /// The panel's span along the free axis, in the parent frame and millimetres.
+    ///
+    /// The free axis is the panel's own thickness axis, so the two values are the base face and the
+    /// far face. Which of them is the smaller one depends on the stance: a shelf grows upward from
+    /// its base face, a post grows away from it, so a tool that assumes the translation is the low
+    /// face is right for one stance and wrong for the other (ADR 0105).
+    pub(crate) free_low: f64,
+    /// The larger end of the panel along the free axis, in the parent frame and millimetres.
+    pub(crate) free_high: f64,
     /// The outline's corners on the panel's base face, in world millimetres.
     world: Vec<DVec3>,
     /// The same corners on the panel's far face.
     top: Vec<DVec3>,
+    /// The midpoints of the two faces the distance fields measure, low end first.
+    faces: [Option<DVec3>; 2],
     /// The panel's own length and width directions in the world, for the callouts.
     axes: [DVec3; 2],
 }
 
 impl FillGhost {
-    /// The midpoint of the panel's low face along its thickness axis, in world millimetres.
+    /// The midpoint of the panel's face at the free axis' low end, in world millimetres.
     pub(crate) fn low_face(&self) -> Option<DVec3> {
-        midpoint(&self.world)
+        self.faces[0]
     }
 
-    /// The midpoint of the panel's far face along its thickness axis, in world millimetres.
+    /// The midpoint of the panel's face at the free axis' high end, in world millimetres.
     pub(crate) fn high_face(&self) -> Option<DVec3> {
-        midpoint(&self.top)
+        self.faces[1]
     }
 }
 
@@ -301,7 +312,30 @@ pub(crate) fn plan_at(
         return Err("The part cannot be placed in the open product.".to_owned());
     }
     let axes = [world_placement.transform_vector(DVec3::X), world_placement.transform_vector(DVec3::Y)];
-    Ok(FillGhost { parent: product, outline, nominal_size, placement, niche, size_mm, world, top, axes })
+    // The free axis is the panel's own thickness axis, so the marker it measures is the board's base
+    // face or its far face, whichever the stance puts lower; the placement alone does not say which.
+    let axis = free_axis(fill);
+    let parent_base = placement.translation();
+    let parent_far = parent_base + placement.transform_vector(DVec3::Z) * gap;
+    let base_is_low = parent_base[axis] <= parent_far[axis];
+    let (free_low, free_high) =
+        if base_is_low { (parent_base[axis], parent_far[axis]) } else { (parent_far[axis], parent_base[axis]) };
+    let (base_centre, far_centre) = (midpoint(&world), midpoint(&top));
+    let faces = if base_is_low { [base_centre, far_centre] } else { [far_centre, base_centre] };
+    Ok(FillGhost {
+        parent: product,
+        outline,
+        nominal_size,
+        placement,
+        niche,
+        size_mm,
+        free_low,
+        free_high,
+        world,
+        top,
+        faces,
+        axes,
+    })
 }
 
 /// The shelf a click would create: the void's section as its outline, the pointer as its height.
@@ -350,6 +384,9 @@ fn shelf(
 
 /// The post a click would create: the void's height and depth, the pointer along its width.
 ///
+/// The board stands in the post's stance (ADR 0105), so its length runs up from the void's floor and
+/// its zero corner is the base corner one thickness to the `+X` side of the face the pointer measured.
+///
 /// A post is a flat board across the depth, so a section that is not a rectangle — two posts standing
 /// at an angle, for instance — offers no face for it to stand against. The tool refuses that void
 /// instead of cutting a board into the walls.
@@ -370,10 +407,12 @@ fn post(
         return Err("The void is narrower than the material.".to_owned());
     }
     let x = free.map_or_else(|| follow(local.x, low, high), |free| free.clamp(low, high));
-    // Local X points down the standing panel and local Z is its thickness, so the panel is placed
-    // with its top corner on the void's ceiling and its near face on the pointer.
-    let rotation = DQuat::from_rotation_y(FRAC_PI_2);
-    let translation = DVec3::new(x, minimum.y, maximum.z);
+    // The post is the shelf turned a quarter-turn to the right about `+Y` (ADR 0105): its length runs
+    // up, its width towards the front, and its thickness away from the pointer's plane, which is the
+    // board's own `z = 0` face. The node therefore sits one thickness to the `+X` side of the face
+    // the pointer measured, and the board still lands inside the void.
+    let rotation = DQuat::from_rotation_y(-FRAC_PI_2);
+    let translation = DVec3::new(x + gap, minimum.y, minimum.z);
     let placement =
         Placement::new(translation, rotation).map_err(|_| "The post cannot be placed in the void.".to_owned())?;
     let nominal_size = PanelNominalSize::new(
@@ -539,7 +578,7 @@ mod tests {
     }
 
     /// Two standing posts whose inner faces run from `(100, 0)` to `(200, 560)` and from
-    /// `(500, 0)` to `(400, 560)`, both 720 mm tall and 1200 mm wide.
+    /// `(500, 0)` to `(400, 560)`, both 720 mm tall and 1200 mm wide, in the post's stance.
     fn splayed_piece() -> (Project, Id) {
         let (mut project, product) = piece();
         let slant = 100.0 / 560.0_f64.hypot(100.0);
@@ -548,8 +587,10 @@ mod tests {
             let direction = (-normal.1, normal.0);
             let start_y = 280.0 - 600.0 * direction.1;
             let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
-            let rotation = DQuat::from_rotation_z(normal.1.atan2(normal.0)) * DQuat::from_rotation_y(FRAC_PI_2);
-            let translation = DVec3::new(start_x, start_y, 720.0) - DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+            // The stance: the length runs up from the floor, the thickness runs away from the free
+            // space, and the node sits on the face the free space touches (ADR 0105).
+            let rotation = DQuat::from_rotation_z(normal.1.atan2(normal.0)) * DQuat::from_rotation_y(-FRAC_PI_2);
+            let translation = DVec3::new(start_x, start_y, 0.0);
             let placement = Placement::new(translation, rotation).expect("a placement");
             let nominal = PanelNominalSize::new(millimetres(720), millimetres(1200)).expect("a post size");
             project.add_panel(product, "Post", nominal, None, millimetres(18), placement).expect("add a post");
@@ -572,6 +613,8 @@ mod tests {
         assert_eq!(ghost.world[0], DVec3::new(0.0, 0.0, 351.0));
         assert_eq!(ghost.world[2], DVec3::new(600.0, 560.0, 351.0));
         assert_eq!(ghost.top[2], DVec3::new(600.0, 560.0, 369.0));
+        // A shelf grows upward from its base face, so that face is the low end of the free axis.
+        assert_eq!((ghost.free_low, ghost.free_high), (351.0, 369.0));
     }
 
     #[test]
@@ -582,18 +625,24 @@ mod tests {
         assert_eq!(ghost.nominal_size.length(), millimetres(720), "the void height is the post's length");
         assert_eq!(ghost.nominal_size.width(), millimetres(560), "and the void depth its width");
         assert_eq!(ghost.size_mm, DVec3::new(720.0, 560.0, 18.0));
-        // The post's near face is on the pointer's whole-millimetre plane, its thickness runs +X.
-        assert_eq!(ghost.placement.translation(), DVec3::new(251.0, 0.0, 720.0));
-        assert_eq!(ghost.world[0], DVec3::new(251.0, 0.0, 720.0), "the top corner stands on the ceiling");
+        // The post is the shelf turned to the right: its length runs up from the void's floor, so the
+        // node is the base corner, one thickness to the +X side of the face the pointer measured.
+        let near = |point: DVec3, wanted: DVec3| (point - wanted).length() < 1e-9;
+        assert!(near(ghost.placement.translation(), DVec3::new(269.0, 0.0, 0.0)), "{:?}", ghost.placement);
+        assert!(near(ghost.world[0], DVec3::new(269.0, 0.0, 0.0)), "the first corner is the base corner");
+        assert!(near(ghost.world[1], DVec3::new(269.0, 0.0, 720.0)), "the second stands directly above it");
         assert!(
-            ghost
-                .world
-                .iter()
-                .chain(ghost.top.iter())
-                .any(|corner| (*corner - DVec3::new(269.0, 0.0, 0.0)).length() < 1e-9),
-            "the post's thickness runs +X from its near face: {:?}",
-            ghost.world
+            near(ghost.world[1] - ghost.world[0], DVec3::new(0.0, 0.0, 720.0)),
+            "so edge 1 is the bottom-to-top edge of the board, not the far face's"
         );
+        assert!(
+            ghost.world.iter().chain(ghost.top.iter()).any(|corner| near(*corner, DVec3::new(251.0, 0.0, 0.0))),
+            "the post's thickness runs -X from its face on the pointer: {:?}",
+            ghost.top
+        );
+        assert!(ghost.low_face().is_some_and(|face| (face.x - 251.0).abs() < 1e-9), "the fields measure the -X face");
+        assert!((ghost.free_low - 251.0).abs() < 1e-9, "and the low end is that same face");
+        assert!((ghost.free_high - 269.0).abs() < 1e-9, "with the board inside the void");
     }
 
     #[test]

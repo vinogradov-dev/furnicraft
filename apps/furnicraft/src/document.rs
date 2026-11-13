@@ -1133,8 +1133,8 @@ impl Document {
         let unit = axis_unit(axis);
         let low_wall = ghost.niche.local_min[axis];
         let high_wall = ghost.niche.local_max()[axis];
-        let low_face = ghost.placement.translation()[axis];
-        let high_face = low_face + thickness.millimetres_f64();
+        let low_face = ghost.free_low;
+        let high_face = ghost.free_high;
         let mut distances = match self.distances.take() {
             Some(mut measured) => {
                 measured.sync(Some(low_wall), Some(high_wall), low_face, high_face);
