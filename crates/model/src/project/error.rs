@@ -18,6 +18,12 @@ pub enum ProjectError {
         /// The version supported by this build.
         supported: u32,
     },
+    /// The root of a loaded document carries a pivot offset, but the root defines the world frame.
+    #[error("the root's pivot must be zero, found {found:?}")]
+    RootPivotNotZero {
+        /// The offset found in the file.
+        found: PivotLocal,
+    },
     /// Two nodes in the tree use the same id.
     #[error("duplicate document id {0}")]
     DuplicateId(Id),
@@ -334,12 +340,6 @@ pub enum ProjectError {
     #[error("cutout on panel {panel} would split the core into disconnected pieces")]
     CutoutSplitsCore {
         /// The panel that owns the cutouts.
-        panel: Id,
-    },
-    /// A machining coordinate overflows while a legacy document is migrated.
-    #[error("machining on panel {panel} overflows while migrating to the nominal frame")]
-    MachiningCoordinateOverflow {
-        /// The panel whose machining could not be translated.
         panel: Id,
     },
     /// A panel has no machining record with this id.

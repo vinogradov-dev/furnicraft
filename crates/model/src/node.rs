@@ -1,22 +1,16 @@
 //! A child of a container: a nested container, a panel, a geometry object, a camera or a light.
 //!
-//! The enum is the only place that decides what a node kind is. Version-6 files used separate
-//! `assembly` and `group` tags; this module accepts them on load and normalizes an assembly to a
-//! component container.
+//! The enum is the only place that decides what a node kind is, and it is stored as one externally
+//! tagged object — `{"panel": …}`, `{"container": …}` — with exactly one kind per node.
 
-use std::fmt;
-
-use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::{CameraNode, Container, Id, LightNode, Object, Panel, Placement, Properties};
 
 /// A child of a container.
 ///
-/// A container is a group or a furniture component; a panel is an atomic leaf. Version-6 files
-/// used separate `assembly` and `group` tags; [`Node`] accepts them on load and normalizes an
-/// assembly to a component container.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// A container is a group or a furniture component; a panel is an atomic leaf.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
     /// A group or furniture component with children.
@@ -29,93 +23,6 @@ pub enum Node {
     Camera(CameraNode),
     /// An authored light.
     Light(LightNode),
-}
-
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_map(NodeVisitor)
-    }
-}
-
-/// Accepts current `container`/`panel` nodes and version-6 `assembly`/`group` nodes.
-struct NodeVisitor;
-
-impl<'de> Visitor<'de> for NodeVisitor {
-    type Value = Node;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a node object")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        const FIELDS: &[&str] = &["container", "assembly", "group", "panel", "object", "camera", "light"];
-        let mut container: Option<Container> = None;
-        let mut panel: Option<Panel> = None;
-        let mut object: Option<Object> = None;
-        let mut camera: Option<CameraNode> = None;
-        let mut light: Option<LightNode> = None;
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "container" | "assembly" | "group" => {
-                    if container.is_some() {
-                        return Err(de::Error::custom("a node must not have two container entries"));
-                    }
-                    let mut decoded = map.next_value::<Container>()?;
-                    if key == "assembly" {
-                        decoded.set_component_marker(true).map_err(de::Error::custom)?;
-                    }
-                    container = Some(decoded);
-                }
-                "panel" => {
-                    if panel.is_some() {
-                        return Err(de::Error::custom("a node must not have two panel entries"));
-                    }
-                    panel = Some(map.next_value()?);
-                }
-                "object" => {
-                    if object.is_some() {
-                        return Err(de::Error::custom("a node must not have two object entries"));
-                    }
-                    object = Some(map.next_value()?);
-                }
-                "camera" => {
-                    if camera.is_some() {
-                        return Err(de::Error::custom("a node must not have two camera entries"));
-                    }
-                    camera = Some(map.next_value()?);
-                }
-                "light" => {
-                    if light.is_some() {
-                        return Err(de::Error::custom("a node must not have two light entries"));
-                    }
-                    light = Some(map.next_value()?);
-                }
-                _ => return Err(de::Error::unknown_field(&key, FIELDS)),
-            }
-        }
-        let present = usize::from(container.is_some())
-            + usize::from(panel.is_some())
-            + usize::from(object.is_some())
-            + usize::from(camera.is_some())
-            + usize::from(light.is_some());
-        if present > 1 {
-            return Err(de::Error::custom("a node must have exactly one kind"));
-        }
-        match (container, panel, object, camera, light) {
-            (Some(container), None, None, None, None) => Ok(Self::Value::Container(container)),
-            (None, Some(panel), None, None, None) => Ok(Self::Value::Panel(panel)),
-            (None, None, Some(object), None, None) => Ok(Self::Value::Object(object)),
-            (None, None, None, Some(camera), None) => Ok(Self::Value::Camera(camera)),
-            (None, None, None, None, Some(light)) => Ok(Self::Value::Light(light)),
-            _ => Err(de::Error::custom("a node must be a container, a panel, an object, a camera or a light")),
-        }
-    }
 }
 
 impl From<Container> for Node {

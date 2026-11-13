@@ -23,7 +23,7 @@ pub struct Container {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     children: Vec<Node>,
     #[serde(default)]

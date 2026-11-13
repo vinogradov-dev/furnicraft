@@ -571,13 +571,6 @@ mod tests {
             {"kind":"line","start":[10000,10000],"end":[0,10000]}
         ]}"#;
         assert!(serde_json::from_str::<Contour>(open).is_err(), "an open ring cannot load");
-        let old_points = r#"{"points":[[0,0],[10000,0],[10000,10000]]}"#;
-        let legacy = serde_json::from_str::<Contour>(old_points).expect("a version 10 point list still loads");
-        assert_eq!(legacy.segments().len(), 3, "the point list becomes a ring of lines");
-        assert!(
-            !serde_json::to_string(&legacy).expect("serialize").contains("\"points\""),
-            "a loaded point list is saved as segments"
-        );
     }
 
     #[test]
@@ -712,24 +705,6 @@ mod tests {
     }
 
     #[test]
-    fn a_version_eleven_ring_loads_with_fresh_ids() {
-        let json = r#"{"segments":[
-            {"kind":"line","start":[0,0],"end":[100000,0]},
-            {"kind":"line","start":[100000,0],"end":[100000,50000]},
-            {"kind":"line","start":[100000,50000],"end":[0,50000]},
-            {"kind":"line","start":[0,50000],"end":[0,0]}
-        ]}"#;
-        let contour: Contour = serde_json::from_str(json).expect("a version 11 ring loads");
-        let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
-        assert_eq!(ids, vec![1, 2, 3, 4], "a ring without ids gets them in travel order");
-        assert_eq!(contour.next_segment_id().get(), 5);
-        assert!(
-            serde_json::to_string(&contour).expect("serialize").contains("\"next_segment_id\":5"),
-            "a migrated ring is saved with its ids"
-        );
-    }
-
-    #[test]
     fn a_ring_with_broken_ids_is_a_readable_error() {
         let no_counter = r#"{"segments":[
             {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
@@ -738,7 +713,7 @@ mod tests {
             {"id":4,"kind":"line","start":[0,50000],"end":[0,0]}
         ]}"#;
         let error = serde_json::from_str::<Contour>(no_counter).expect_err("ids without a counter are rejected");
-        assert!(error.to_string().contains("next segment id"), "error was {error}");
+        assert!(error.to_string().contains("next_segment_id"), "error was {error}");
 
         let repeated = r#"{"next_segment_id":5,"segments":[
             {"id":1,"kind":"line","start":[0,0],"end":[100000,0]},
@@ -1389,8 +1364,8 @@ mod tests {
         let unknown = r#"{"segments":[{"id":1,"kind":"line","start":[0,0],"end":[10000,0]},
             {"id":2,"kind":"line","start":[10000,0],"end":[10000,10000]},
             {"id":3,"kind":"line","start":[10000,10000],"end":[0,0]}],"next_segment_id":4,"closed":true}"#;
-        let untagged: Path = serde_json::from_str(unknown).expect("a version 18 path has no tag");
-        assert_eq!(untagged.shape(), None, "an older path loads without a shape");
+        let untagged: Path = serde_json::from_str(unknown).expect("a path without a constraint tag loads");
+        assert_eq!(untagged.shape(), None, "a drawn chain carries no constraint set");
         let bad = unknown.replace("\"closed\":true", "\"closed\":true,\"shape\":\"blob\"");
         assert!(serde_json::from_str::<Path>(&bad).is_err(), "an unknown shape is an error");
     }
@@ -1485,7 +1460,7 @@ mod tests {
             {"kind":"line","start":[0,0],"end":[100000,0]}
         ]}"#;
         let error = serde_json::from_str::<Path>(no_ids).expect_err("a path needs ids");
-        assert!(error.to_string().contains("id for every segment"), "error was {error}");
+        assert!(error.to_string().contains("missing field `id`"), "error was {error}");
     }
 
     #[test]
@@ -1631,43 +1606,24 @@ pub const MAX_CONTOUR_SEGMENTS: usize = 256;
 pub const MAX_CONTOUR_COORDINATE: Length = Length::from_micrometres(10_000_000);
 
 /// Serialized form of [`Contour`]; validation happens in its `TryFrom` implementation.
-///
-/// A version 10 file stored the ring as a point list and a version 11 file stored segments without
-/// ids. Both still load: the point list as a ring of lines, the id-less ring with ids `1..n`.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ContourWire {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    segments: Option<Vec<ContourSegmentEntryWire>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    next_segment_id: Option<ContourSegmentId>,
-    #[serde(default, skip_serializing)]
-    points: Option<Vec<[Length; 2]>>,
+    segments: Vec<ContourSegmentEntryWire>,
+    next_segment_id: ContourSegmentId,
 }
 
-/// Serialized form of one ring element; the id is optional so a version 11 ring still loads.
+/// Serialized form of one ring element: the curve and its stable id.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ContourSegmentEntryWire {
-    Line {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<ContourSegmentId>,
-        start: [Length; 2],
-        end: [Length; 2],
-    },
-    Arc {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        id: Option<ContourSegmentId>,
-        center: [Length; 2],
-        radius: Length,
-        start_angle: Degrees,
-        sweep: Degrees,
-    },
+    Line { id: ContourSegmentId, start: [Length; 2], end: [Length; 2] },
+    Arc { id: ContourSegmentId, center: [Length; 2], radius: Length, start_angle: Degrees, sweep: Degrees },
 }
 
 impl ContourSegmentEntryWire {
-    /// The id the file carried, if it carried one.
-    const fn id(self) -> Option<ContourSegmentId> {
+    /// The stable id the file carries.
+    const fn id(self) -> ContourSegmentId {
         match self {
             Self::Line { id, .. } | Self::Arc { id, .. } => id,
         }
@@ -1686,7 +1642,7 @@ impl ContourSegmentEntryWire {
 
 impl From<ContourSegmentEntry> for ContourSegmentEntryWire {
     fn from(entry: ContourSegmentEntry) -> Self {
-        let id = Some(entry.id());
+        let id = entry.id();
         match entry.segment() {
             ContourSegment::Line { start, end } => Self::Line { id, start, end },
             ContourSegment::Arc { center, radius, start_angle, sweep } => {
@@ -2967,10 +2923,7 @@ impl TryFrom<PathWire> for Path {
     fn try_from(wire: PathWire) -> Result<Self, Self::Error> {
         let mut entries = Vec::with_capacity(wire.segments.len());
         for segment in wire.segments {
-            let Some(id) = segment.id() else {
-                return Err(PathError::AmbiguousSegmentIds);
-            };
-            entries.push(ContourSegmentEntry::new(id, segment.segment()?));
+            entries.push(ContourSegmentEntry::new(segment.id(), segment.segment()?));
         }
         let path = Self::assemble(entries, wire.next_segment_id, wire.closed)?;
         if let Some(shape) = wire.shape
@@ -2997,59 +2950,19 @@ impl TryFrom<ContourWire> for Contour {
     type Error = ContourError;
 
     fn try_from(wire: ContourWire) -> Result<Self, Self::Error> {
-        let ContourWire { segments, next_segment_id, points } = wire;
-        match (segments, points) {
-            (Some(segments), None) => from_wire_segments(segments, next_segment_id),
-            (None, Some(points)) => {
-                if next_segment_id.is_some() {
-                    return Err(ContourError::AmbiguousSegmentIds);
-                }
-                Self::from_polygon(points)
-            }
-            (Some(_), Some(_)) => Err(ContourError::AmbiguousWire),
-            (None, None) => Err(ContourError::MissingRing),
+        let mut entries = Vec::with_capacity(wire.segments.len());
+        for segment in wire.segments {
+            entries.push(ContourSegmentEntry::new(segment.id(), segment.segment()?));
         }
+        Self::assemble(entries, wire.next_segment_id)
     }
 }
 
 impl From<Contour> for ContourWire {
     fn from(contour: Contour) -> Self {
         Self {
-            segments: Some(contour.entries.iter().map(|entry| ContourSegmentEntryWire::from(*entry)).collect()),
-            next_segment_id: Some(contour.next_segment_id),
-            points: None,
-        }
-    }
-}
-
-/// Reads a stored segment ring, with ids when the file has them and `1..n` when it is a version 11
-/// ring, which carried none.
-fn from_wire_segments(
-    segments: Vec<ContourSegmentEntryWire>,
-    next_segment_id: Option<ContourSegmentId>,
-) -> Result<Contour, ContourError> {
-    let mut curves = Vec::with_capacity(segments.len());
-    let mut ids = Vec::with_capacity(segments.len());
-    for wire in segments {
-        ids.push(wire.id());
-        curves.push(wire.segment()?);
-    }
-    match next_segment_id {
-        Some(next_segment_id) => {
-            let mut entries = Vec::with_capacity(curves.len());
-            for (id, segment) in ids.into_iter().zip(curves) {
-                let Some(id) = id else {
-                    return Err(ContourError::AmbiguousSegmentIds);
-                };
-                entries.push(ContourSegmentEntry::new(id, segment));
-            }
-            Contour::assemble(entries, next_segment_id)
-        }
-        None => {
-            if ids.iter().any(Option::is_some) {
-                return Err(ContourError::AmbiguousSegmentIds);
-            }
-            Contour::new(curves)
+            segments: contour.entries.iter().map(|entry| ContourSegmentEntryWire::from(*entry)).collect(),
+            next_segment_id: contour.next_segment_id,
         }
     }
 }

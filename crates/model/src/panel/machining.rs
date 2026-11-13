@@ -10,8 +10,8 @@ use furnicraft_geom::{DVec2, Rect, Region, RegionError, subtract_regions};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
-    Contour, ContourSegmentId, EdgeId, FaceSide, Id, Length, MachiningId, Panel, PanelGeometry, PanelRect,
-    ProjectError, panel::geometry::DEFAULT_CUTOUT_RECT,
+    Contour, ContourSegmentId, EdgeId, FaceSide, Length, MachiningId, Panel, PanelGeometry, PanelRect, ProjectError,
+    panel::geometry::DEFAULT_CUTOUT_RECT,
 };
 
 /// One machining operation owned by a panel.
@@ -479,61 +479,21 @@ pub(crate) fn core_violation_of(
     }
 }
 
-/// The file form of one machining record.
-///
-/// The current form is a record with an id, an anchor and tagged parameters. The legacy form is the
-/// externally tagged `{"cutout": {"id", "shape", "depth", "entry"}}` record that schemas up to 15
-/// wrote; it loads as a face-anchored cutout with the same id, so an old scene keeps every hole in
-/// place.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum MachiningWire {
-    Current(CurrentMachining),
-    Legacy(LegacyMachining),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CurrentMachining {
-    id: MachiningId,
-    anchor: MachiningAnchor,
-    params: MachiningParams,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum LegacyMachining {
-    Cutout(LegacyCutout),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyCutout {
-    id: Id,
-    shape: CutoutShape,
-    depth: CutoutDepth,
-    entry: FaceSide,
-}
-
-impl From<MachiningWire> for Machining {
-    fn from(wire: MachiningWire) -> Self {
-        match wire {
-            MachiningWire::Current(current) => Self { id: current.id, anchor: current.anchor, params: current.params },
-            MachiningWire::Legacy(LegacyMachining::Cutout(cutout)) => Self {
-                id: MachiningId::from_id(cutout.id),
-                anchor: MachiningAnchor::face(cutout.entry),
-                params: MachiningParams::Cutout(Cutout::new(cutout.shape, cutout.depth)),
-            },
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for Machining {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        MachiningWire::deserialize(deserializer).map(Self::from)
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            id: MachiningId,
+            anchor: MachiningAnchor,
+            params: MachiningParams,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self { id: wire.id, anchor: wire.anchor, params: wire.params })
     }
 }
 
@@ -668,26 +628,6 @@ mod tests {
         assert_eq!(decoded, machining);
         assert_eq!(decoded.id(), MachiningId::new(5).expect("id"));
         assert_eq!(decoded.anchor().as_face(), Some(FaceSide::B));
-    }
-
-    #[test]
-    fn a_legacy_cutout_record_loads_as_a_face_anchored_cutout() {
-        let legacy = serde_json::json!({
-            "cutout": {
-                "id": 5,
-                "shape": {"rectangle": {"x": 10_000, "y": 10_000, "width": 100_000, "height": 50_000}},
-                "depth": "through",
-                "entry": "A"
-            }
-        });
-        let machining: Machining = serde_json::from_value(legacy).expect("legacy cutout");
-        assert_eq!(machining.id(), MachiningId::new(5).expect("id"));
-        assert_eq!(machining.anchor().as_face(), Some(FaceSide::A));
-        let Some(cutout) = machining.cutout() else {
-            panic!("a legacy record is a cutout");
-        };
-        assert_eq!(cutout.shape(), &CutoutShape::Rectangle(sample_rect(10, 10, 100, 50)));
-        assert_eq!(cutout.depth(), CutoutDepth::Through);
     }
 
     fn panel_with_ring(shape: Contour) -> Panel {

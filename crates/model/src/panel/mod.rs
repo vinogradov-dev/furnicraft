@@ -581,69 +581,6 @@ impl Panel {
         Ok(())
     }
 
-    /// Translates version-2 core-local cutouts into the nominal panel frame.
-    ///
-    /// The legacy core origin is derived from the included bottom and left banding fallbacks. A
-    /// panel with a shaped contour has no stored core origin, so its machining is left unchanged.
-    pub(crate) fn migrate_machining_from_core(&mut self) -> Result<(), ProjectError> {
-        if self.machining.is_empty() || self.has_shaped_outline() {
-            return Ok(());
-        }
-        let mut core_x = Length::ZERO;
-        let mut core_y = Length::ZERO;
-        for band in &self.edge_banding {
-            if !band.included_in_size() {
-                continue;
-            }
-            match band.edge().get() {
-                1 => {
-                    core_y = core_y
-                        .checked_add(band.last_known_thickness())
-                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-                }
-                4 => {
-                    core_x = core_x
-                        .checked_add(band.last_known_thickness())
-                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-                }
-                _ => {}
-            }
-        }
-        if core_x == Length::ZERO && core_y == Length::ZERO {
-            return Ok(());
-        }
-        for machining in &mut self.machining {
-            let Some(cutout) = machining.cutout_mut() else {
-                continue;
-            };
-            let shape = match cutout.shape() {
-                CutoutShape::Rectangle(rect) => {
-                    let x = rect
-                        .x()
-                        .checked_add(core_x)
-                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-                    let y = rect
-                        .y()
-                        .checked_add(core_y)
-                        .ok_or(ProjectError::MachiningCoordinateOverflow { panel: self.id })?;
-                    CutoutShape::Rectangle(
-                        PanelRect::new(x, y, rect.width(), rect.height())
-                            .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?,
-                    )
-                }
-                // A version-2 file predates contour cutouts; a ring that somehow carries one keeps
-                // its place in the nominal frame.
-                CutoutShape::Contour(contour) => CutoutShape::Contour(
-                    contour
-                        .translated([core_x, core_y])
-                        .map_err(|_| ProjectError::MachiningCoordinateOverflow { panel: self.id })?,
-                ),
-            };
-            cutout.set_shape(shape);
-        }
-        Ok(())
-    }
-
     pub(crate) fn upsert_corner_feature(&mut self, feature: CornerFeature) {
         let PanelOutline::Rect { corner_features, .. } = &mut self.outline else {
             return;
@@ -702,18 +639,6 @@ impl Panel {
 /// Why a serialized panel cannot be read as the current schema.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum PanelError {
-    /// A current panel is missing its nominal size.
-    #[error("panel has no nominal size")]
-    MissingNominalSize,
-    /// A current panel is missing its fallback thickness.
-    #[error("panel has no last_known_thickness")]
-    MissingThickness,
-    /// A panel mixes the legacy `size` field with current fields.
-    #[error("panel mixes the legacy size field with the current schema")]
-    AmbiguousSize,
-    /// A panel stores contour features both in its outline and in the legacy top-level fields.
-    #[error("panel stores corner features both in its outline and in the legacy top-level fields")]
-    AmbiguousOutlineFeatures,
     /// A stored dimension is not usable.
     #[error(transparent)]
     Dimension(#[from] PanelDimensionError),
@@ -775,9 +700,6 @@ pub enum PanelError {
         /// The size of the ring's bounds.
         contour: PanelNominalSize,
     },
-    /// A contour panel stored corner features or bows, which describe a rectangle.
-    #[error("a contour panel cannot carry corner features or bows")]
-    ContourWithFeatures,
     /// A contour panel stored edge or corner banding, which belongs to a rectangle.
     #[error("a contour panel cannot carry edge or corner banding, only ring banding")]
     ContourWithBanding,
@@ -806,22 +728,20 @@ pub enum PanelError {
     },
 }
 
-/// Serialized form of [`Panel`]; it accepts the v1 `size` field for migration.
+/// Serialized form of [`Panel`]: the current layout, and nothing else.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PanelWire {
     id: Id,
     name: String,
-    #[serde(default)]
-    nominal_size: Option<PanelNominalSize>,
+    nominal_size: PanelNominalSize,
     #[serde(default)]
     outline: PanelOutline,
     #[serde(default)]
     material: Option<MaterialId>,
-    #[serde(default)]
-    last_known_thickness: Option<Length>,
+    last_known_thickness: Length,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     machining: Vec<Machining>,
@@ -833,84 +753,26 @@ pub(crate) struct PanelWire {
     ring_banding: Vec<RingBanding>,
     #[serde(default)]
     band_order: Vec<SegmentSource>,
-    /// Legacy layout: corner features lived on the panel, not in the outline.
-    #[serde(default)]
-    corner_features: Vec<CornerFeature>,
-    /// Legacy layout: bowed edges lived on the panel, not in the outline.
-    #[serde(default)]
-    edge_bows: Vec<EdgeBow>,
     #[serde(default)]
     properties: Properties,
-    #[serde(default)]
-    size: Option<LegacyPanelSize>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyPanelSize {
-    length: Length,
-    width: Length,
-    thickness: Length,
 }
 
 impl TryFrom<PanelWire> for Panel {
     type Error = PanelError;
 
     fn try_from(wire: PanelWire) -> Result<Self, Self::Error> {
-        let (nominal_size, material, thickness, edge_banding) = match wire.size {
-            Some(size) => {
-                if wire.nominal_size.is_some()
-                    || wire.material.is_some()
-                    || wire.last_known_thickness.is_some()
-                    || !wire.edge_banding.is_empty()
-                    || !wire.corner_banding.is_empty()
-                    || !wire.ring_banding.is_empty()
-                    || !wire.band_order.is_empty()
-                    || !wire.corner_features.is_empty()
-                    || !wire.edge_bows.is_empty()
-                    || wire.outline != PanelOutline::default()
-                {
-                    return Err(PanelError::AmbiguousSize);
-                }
-                let nominal_size = PanelNominalSize::new(size.length, size.width)?;
-                (nominal_size, None, size.thickness, Vec::new())
-            }
-            None => {
-                let nominal_size = wire.nominal_size.ok_or(PanelError::MissingNominalSize)?;
-                let thickness = wire.last_known_thickness.ok_or(PanelError::MissingThickness)?;
-                (nominal_size, wire.material, thickness, wire.edge_banding)
-            }
-        };
-
-        let outline = match wire.outline {
-            PanelOutline::Rect { mut corner_features, mut edge_bows } => {
-                if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
-                    if !corner_features.is_empty() || !edge_bows.is_empty() {
-                        return Err(PanelError::AmbiguousOutlineFeatures);
-                    }
-                    corner_features = wire.corner_features;
-                    edge_bows = wire.edge_bows;
-                }
-                PanelOutline::Rect { corner_features, edge_bows }
-            }
-            PanelOutline::Contour { contour } => {
-                if !wire.corner_features.is_empty() || !wire.edge_bows.is_empty() {
-                    return Err(PanelError::ContourWithFeatures);
-                }
-                PanelOutline::Contour { contour }
-            }
-        };
+        let outline = wire.outline;
         validate_contour_features(outline.corner_features(), outline.edge_bows())?;
         validate_corner_banding(&wire.corner_banding)?;
         match &outline {
             PanelOutline::Contour { contour } => {
-                if !edge_banding.is_empty() || !wire.corner_banding.is_empty() {
+                if !wire.edge_banding.is_empty() || !wire.corner_banding.is_empty() {
                     return Err(PanelError::ContourWithBanding);
                 }
                 validate_ring_banding(contour, &wire.ring_banding)?;
                 let contour_size = contour_nominal_size(contour)?;
-                if contour_size != nominal_size {
-                    return Err(PanelError::ContourSizeMismatch { stored: nominal_size, contour: contour_size });
+                if contour_size != wire.nominal_size {
+                    return Err(PanelError::ContourSizeMismatch { stored: wire.nominal_size, contour: contour_size });
                 }
             }
             PanelOutline::Rect { .. } => {
@@ -919,12 +781,13 @@ impl TryFrom<PanelWire> for Panel {
                 }
             }
         }
-        let mut panel = Self::new(wire.id, wire.name, nominal_size, material, thickness, wire.placement)?;
+        let mut panel =
+            Self::new(wire.id, wire.name, wire.nominal_size, wire.material, wire.last_known_thickness, wire.placement)?;
         validate_machining_records(&wire.machining)?;
         panel.outline = outline;
         panel.pivot_local = wire.pivot_local;
         panel.machining = wire.machining;
-        panel.edge_banding = edge_banding;
+        panel.edge_banding = wire.edge_banding;
         panel.corner_banding = wire.corner_banding;
         panel.ring_banding = wire.ring_banding;
         panel.band_order =
@@ -1167,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn a_contour_panel_refuses_the_rectangle_controls_on_load() {
+    fn a_contour_panel_refuses_a_foreign_size_and_rectangle_banding() {
         let panel = Panel::new_contour(
             Id::new(2).expect("id"),
             "Shelf",
@@ -1184,12 +1047,6 @@ mod tests {
         sized["nominal_size"]["length"] = serde_json::json!(800_000);
         let error = serde_json::from_value::<Panel>(sized).expect_err("the size must match the ring");
         assert!(error.to_string().contains("contour bounds"), "error was {error}");
-
-        let mut shaped = value.clone();
-        shaped["corner_features"] =
-            serde_json::json!([{ "corner": 2, "feature": { "kind": "radius", "radius": 25_000 } }]);
-        let error = serde_json::from_value::<Panel>(shaped).expect_err("a ring has no corners to shape");
-        assert!(error.to_string().contains("corner features or bows"), "error was {error}");
 
         let mut banded = value;
         banded["edge_banding"] = serde_json::json!([{

@@ -98,7 +98,7 @@ pub struct CameraNode {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
@@ -218,7 +218,7 @@ struct CameraNodeWire {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
