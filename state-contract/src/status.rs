@@ -48,7 +48,9 @@ pub fn render_with_detail(summary: &Summary, detail: Option<&str>) -> String {
     let current = state.current().and_then(|id| summary.tasks.iter().position(|task| task.id == id));
     let from = current.unwrap_or(0);
     let upcoming = summary.tasks.iter().skip(from).filter(|task| task.status != TaskStatus::Done);
-    for (offset, task) in upcoming.take(if scheduled { 4 } else { 3 }).enumerate() {
+    // Four entries either way: the block is one screen, and with an empty order the reader sees the
+    // sentence and the parked work in the same glance.
+    for (offset, task) in upcoming.take(4).enumerate() {
         let arrow = if scheduled && offset == 0 { "->" } else { "  " };
         // The lead sentence, not the whole entry: the fields are one command away.
         let _ = write!(text, "{arrow} {} {} · {}", task.status.marker(), task.id, task.lead);
