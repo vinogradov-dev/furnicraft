@@ -40,6 +40,12 @@ pub struct Session {
     next_scope: u64,
     /// The overlay a previewing operation fills; see [`Preview`].
     preview: Preview,
+    /// The one product the user is working in, or `None` while every product is closed.
+    ///
+    /// Openness is view state per session (ADR 0098, ADR 0029): it is opened and closed by a view
+    /// operation, never by a command and never written to the scene file. A tab owns its session,
+    /// so two tabs keep two different products open.
+    active_product: Option<Id>,
 }
 
 impl Session {
@@ -61,6 +67,46 @@ impl Session {
             edit: None,
             next_scope: 0,
             preview: Preview::new(),
+            active_product: None,
+        }
+    }
+
+    /// The one open product, or `None` when every product is closed (ADR 0098).
+    ///
+    /// This is view state: it is never serialised with the document, and a tab that is closed
+    /// forgets it with its session.
+    pub fn active_product(&self) -> Option<Id> {
+        self.active_product
+    }
+
+    /// Opens `id` as the working product, replacing whichever product was open.
+    ///
+    /// This is a view operation, not a command: it writes no document field, moves no revision and
+    /// leaves no undo entry. Only a container whose class plays the product role can be opened; a
+    /// part, a group or the root changes nothing and returns `false` (ADR 0098, ADR 0100).
+    pub fn open_product(&mut self, id: Id) -> bool {
+        if !self.project.container(id).is_some_and(|container| container.is_product()) {
+            return false;
+        }
+        self.active_product = Some(id);
+        true
+    }
+
+    /// Closes the open product, so no product is being worked in.
+    pub fn close_product(&mut self) {
+        self.active_product = None;
+    }
+
+    /// Drops the open product when the document no longer holds it as a product.
+    ///
+    /// A delete, a conversion to a group or an undo can take the product away; the session must not
+    /// keep pointing at a node that is gone or has stopped being a product.
+    fn retain_active_product(&mut self) {
+        if self
+            .active_product
+            .is_some_and(|id| !self.project.container(id).is_some_and(|container| container.is_product()))
+        {
+            self.active_product = None;
         }
     }
 
@@ -202,6 +248,7 @@ impl Session {
         }
         self.redo.clear();
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         true
     }
 
@@ -214,6 +261,7 @@ impl Session {
         let (outcome, previous) = self.run(id, params)?;
         self.edit = None;
         self.record(previous);
+        self.retain_active_product();
         Ok(outcome)
     }
 
@@ -225,6 +273,7 @@ impl Session {
     /// history it does not own.
     pub fn dispatch_in(&mut self, scope: EditScope, id: &str, params: &Value) -> Result<CommandOutcome, CommandError> {
         let (outcome, previous) = self.run(id, params)?;
+        self.retain_active_product();
         match self.edit {
             Some(open) if open.scope == scope && open.snapshot_pushed && !self.undo.is_empty() => {
                 // The entry already holds the state before the edit; `previous` is a step inside it.
@@ -267,6 +316,7 @@ impl Session {
         }
         self.redo.push(current);
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         Ok(())
     }
 
@@ -281,6 +331,7 @@ impl Session {
         }
         self.undo.push(current);
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         Ok(())
     }
 }
@@ -2515,5 +2566,108 @@ mod tests {
         });
         assert!(set.enabled(&session, &allowed), "a sink sits in a worktop");
         session.dispatch("node.property.set", &allowed).expect("assign the sink");
+    }
+}
+
+#[cfg(test)]
+mod product_tests {
+    #![allow(clippy::expect_used)]
+
+    use furnicraft_model::{ClassCode, Envelope};
+    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
+
+    use crate::product_cmds::{PRODUCT_CREATE_ID, ProductCreate};
+    use crate::session::Session;
+
+    fn json_params<T: serde::Serialize>(value: &T) -> serde_json::Value {
+        serde_json::to_value(value).expect("params serialize")
+    }
+
+    fn box_() -> Envelope {
+        Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid envelope")
+    }
+
+    /// A session with two products, created through the one creation command.
+    fn session_with_two_products() -> (Session, furnicraft_model::Id, furnicraft_model::Id) {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        let mut create = |name: &str| {
+            let placement = session.project().product_placement(box_());
+            let params = json_params(&ProductCreate {
+                parent: root,
+                name: name.to_owned(),
+                class: Some(ClassCode::GENERAL_PRODUCT),
+                envelope: box_(),
+                placement,
+            });
+            session.dispatch(PRODUCT_CREATE_ID, &params).expect("create product").created_id().expect("created id")
+        };
+        let first = create("Base cabinet");
+        let second = create("Wall cabinet");
+        (session, first, second)
+    }
+
+    #[test]
+    fn a_product_is_opened_and_replaced_by_the_next_one_opened() {
+        let (mut session, first, second) = session_with_two_products();
+        assert_eq!(session.active_product(), None, "a fresh session works in no product");
+
+        assert!(session.open_product(first));
+        assert_eq!(session.active_product(), Some(first));
+        assert!(session.open_product(second), "opening another product replaces the first");
+        assert_eq!(session.active_product(), Some(second));
+
+        session.close_product();
+        assert_eq!(session.active_product(), None, "closing leaves no product open");
+    }
+
+    #[test]
+    fn opening_is_a_view_operation_and_writes_no_document_state() {
+        let (mut session, first, _second) = session_with_two_products();
+        let revision = session.project().revision();
+        let undo_depth = session.can_undo();
+
+        assert!(session.open_product(first));
+        session.close_product();
+        assert!(session.open_product(first));
+
+        assert_eq!(session.project().revision(), revision, "opening moves no revision");
+        assert_eq!(session.can_undo(), undo_depth, "opening is not an undo entry");
+    }
+
+    #[test]
+    fn only_a_product_container_can_be_opened() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        let panel = furnicraft_model::Id::new(2).expect("the sample panel");
+        assert!(!session.open_product(root), "the root is a frame, not a product");
+        assert!(!session.open_product(panel), "a panel is not a product");
+        assert_eq!(session.active_product(), None);
+    }
+
+    #[test]
+    fn the_open_product_is_not_written_to_the_scene_file() {
+        let (mut session, first, _second) = session_with_two_products();
+        assert!(session.open_product(first));
+
+        let text = serde_json::to_string(session.project()).expect("serialize the scene");
+        assert!(!text.contains("active_product"), "openness never reaches the file: {text}");
+        assert!(!text.contains("\"open\""), "no open flag is stored on a node");
+
+        let reloaded = serde_json::from_str::<furnicraft_model::Project>(&text).expect("load the scene");
+        let next = Session::with_catalog(reloaded, sample_catalog());
+        assert_eq!(next.active_product(), None, "a reloaded scene starts with every product closed");
+    }
+
+    #[test]
+    fn a_deleted_or_undone_product_is_no_longer_open() {
+        let (mut session, first, _second) = session_with_two_products();
+        assert!(session.open_product(first));
+
+        session.undo().expect("undo the second product");
+        assert_eq!(session.active_product(), Some(first), "the first product is still there");
+
+        session.undo().expect("undo the first product");
+        assert_eq!(session.active_product(), None, "the open product left with the undo");
     }
 }
