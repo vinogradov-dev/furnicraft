@@ -58,13 +58,39 @@ pub(crate) struct FillGhost {
     axes: [DVec3; 2],
 }
 
+impl FillGhost {
+    /// The midpoint of the panel's low face along its thickness axis, in world millimetres.
+    pub(crate) fn low_face(&self) -> Option<DVec3> {
+        midpoint(&self.world)
+    }
+
+    /// The midpoint of the panel's far face along its thickness axis, in world millimetres.
+    pub(crate) fn high_face(&self) -> Option<DVec3> {
+        midpoint(&self.top)
+    }
+}
+
+/// The average of a ring's corners, or `None` when it is empty or not finite.
+fn midpoint(points: &[DVec3]) -> Option<DVec3> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut sum = DVec3::ZERO;
+    for point in points {
+        sum += *point;
+    }
+    let middle = sum / points.len() as f64;
+    middle.is_finite().then_some(middle)
+}
+
 /// The empty-space tool's live state: the ghost, or the reason there is none.
 #[derive(Debug, Default)]
 pub(crate) struct FillGizmo {
     ghost: Option<FillGhost>,
     refusal: Option<String>,
-    /// The point and the fill the ghost was measured at, so a still pointer re-measures nothing.
-    measured: Option<(Id, DVec3, Fill, Length)>,
+    /// The point, the fill and the exact free coordinate the ghost was measured at, so a still
+    /// pointer re-measures nothing.
+    measured: Option<(Id, DVec3, Fill, Length, Option<f64>)>,
 }
 
 impl FillGizmo {
@@ -80,6 +106,14 @@ impl FillGizmo {
         self.ghost.as_ref()
     }
 
+    /// The point the ghost was last measured at, or `None` when nothing was.
+    ///
+    /// A distance field floats over the scene, and a pointer on it is chrome: the ghost keeps the
+    /// point it was measured at instead of jumping to the field's own position.
+    pub(crate) fn measured_point(&self) -> Option<DVec3> {
+        self.measured.map(|(_, point, ..)| point)
+    }
+
     /// Measures the void around `point` and records the ghost, unless nothing moved.
     ///
     /// Returns whether the ghost or the refusal changed, so the caller can ask for a repaint.
@@ -90,17 +124,21 @@ impl FillGizmo {
         point: DVec3,
         fill: Fill,
         thickness: Length,
+        free: Option<f64>,
     ) -> bool {
-        if self.measured.is_some_and(|(measured_product, measured_point, measured_fill, measured_thickness)| {
-            measured_product == product
-                && measured_fill == fill
-                && measured_thickness == thickness
-                && (measured_point - point).length() < MEASURE_STEP_MM
-        }) {
+        if self.measured.is_some_and(
+            |(measured_product, measured_point, measured_fill, measured_thickness, measured_free)| {
+                measured_product == product
+                    && measured_fill == fill
+                    && measured_thickness == thickness
+                    && measured_free == free
+                    && (measured_point - point).length() < MEASURE_STEP_MM
+            },
+        ) {
             return false;
         }
-        self.measured = Some((product, point, fill, thickness));
-        match plan(project, product, point, fill, thickness) {
+        self.measured = Some((product, point, fill, thickness, free));
+        match plan_at(project, product, point, fill, thickness, free) {
             Ok(ghost) => {
                 self.ghost = Some(ghost);
                 self.refusal = None;
@@ -190,12 +228,39 @@ fn widest_edge(points: &[DVec3], axis: DVec3) -> Option<usize> {
 /// The point has to be inside `product`, which is the open piece: a niche belongs to the working
 /// product (ADR 0098). The measurement is the model's ([`Project::niche`]); the free-axis position
 /// is the only number this function rounds, because it follows the pointer in whole millimetres.
+#[cfg(test)]
 pub(crate) fn plan(
     project: &Project,
     product: Id,
     point: DVec3,
     fill: Fill,
     thickness: Length,
+) -> Result<FillGhost, String> {
+    plan_at(project, product, point, fill, thickness, None)
+}
+
+/// The axis of the open product's frame the fill's free position runs along.
+///
+/// A shelf's height and a post's place across the void both lie on the panel's own thickness axis,
+/// so the distance fields measure the two faces the ghost draws (`world` and `top`).
+pub(crate) const fn free_axis(fill: Fill) -> usize {
+    match fill {
+        Fill::WidthAndDepth => 2,
+        Fill::HeightAndDepth => 0,
+    }
+}
+
+/// Measures the void at `point` with the free position fixed at `free`, in the product's frame.
+///
+/// `free` is `None` while the pointer picks the position. A typed distance pins it, so the ghost
+/// lands exactly there instead of following the next pointer movement (ADR 0103).
+pub(crate) fn plan_at(
+    project: &Project,
+    product: Id,
+    point: DVec3,
+    fill: Fill,
+    thickness: Length,
+    free: Option<f64>,
 ) -> Result<FillGhost, String> {
     let niche = project.niche(point).map_err(refusal_sentence)?;
     if niche.product != product {
@@ -212,8 +277,8 @@ pub(crate) fn plan(
     }
 
     let (outline, nominal_size, placement) = match fill {
-        Fill::WidthAndDepth => shelf(&niche, local, minimum, maximum, gap)?,
-        Fill::HeightAndDepth => post(&niche, local, minimum, maximum, gap)?,
+        Fill::WidthAndDepth => shelf(&niche, local, minimum, maximum, gap, free)?,
+        Fill::HeightAndDepth => post(&niche, local, minimum, maximum, gap, free)?,
     };
     let size_mm = DVec3::new(nominal_size.length().millimetres_f64(), nominal_size.width().millimetres_f64(), gap);
     let length = size_mm.x;
@@ -250,13 +315,14 @@ fn shelf(
     minimum: DVec3,
     maximum: DVec3,
     gap: f64,
+    free: Option<f64>,
 ) -> Result<(Option<Contour>, PanelNominalSize, Placement), String> {
     let low = minimum.z;
     let high = maximum.z - gap;
     if high < low {
         return Err("The void is thinner than the material.".to_owned());
     }
-    let z = follow(local.z, low, high);
+    let z = free.map_or_else(|| follow(local.z, low, high), |free| free.clamp(low, high));
     let Some(ring) = niche.section() else {
         let translation = DVec3::new(minimum.x, minimum.y, z);
         let placement = Placement::new(translation, DQuat::IDENTITY)
@@ -293,6 +359,7 @@ fn post(
     minimum: DVec3,
     maximum: DVec3,
     gap: f64,
+    free: Option<f64>,
 ) -> Result<(Option<Contour>, PanelNominalSize, Placement), String> {
     if niche.section().is_some() {
         return Err("The empty space is not a rectangle; a post does not fit it.".to_owned());
@@ -302,7 +369,7 @@ fn post(
     if high < low {
         return Err("The void is narrower than the material.".to_owned());
     }
-    let x = follow(local.x, low, high);
+    let x = free.map_or_else(|| follow(local.x, low, high), |free| free.clamp(low, high));
     // Local X points down the standing panel and local Z is its thickness, so the panel is placed
     // with its top corner on the void's ceiling and its near face on the pointer.
     let rotation = DQuat::from_rotation_y(FRAC_PI_2);
@@ -626,7 +693,14 @@ mod tests {
     fn the_ghost_paints_its_wireframe_and_three_sizes_offscreen() {
         let (project, product) = piece();
         let mut gizmo = FillGizmo::default();
-        assert!(gizmo.hover(&project, product, DVec3::new(300.0, 280.0, 360.0), Fill::WidthAndDepth, millimetres(18),));
+        assert!(gizmo.hover(
+            &project,
+            product,
+            DVec3::new(300.0, 280.0, 360.0),
+            Fill::WidthAndDepth,
+            millimetres(18),
+            None
+        ));
         let drawn = paint_ghost(&mut gizmo);
         for size in ["600", "560", "18"] {
             assert!(drawn.0.iter().any(|text| text == size), "the {size} mm callout is missing: {:?}", drawn.0);
@@ -638,7 +712,14 @@ mod tests {
     fn a_shaped_ghost_paints_its_polygon_offscreen() {
         let (project, product) = splayed_piece();
         let mut gizmo = FillGizmo::default();
-        assert!(gizmo.hover(&project, product, DVec3::new(300.0, 280.0, 360.0), Fill::WidthAndDepth, millimetres(18),));
+        assert!(gizmo.hover(
+            &project,
+            product,
+            DVec3::new(300.0, 280.0, 360.0),
+            Fill::WidthAndDepth,
+            millimetres(18),
+            None
+        ));
         let drawn = paint_ghost(&mut gizmo);
         for size in ["400", "560", "18"] {
             assert!(drawn.0.iter().any(|text| text == size), "the {size} mm callout is missing: {:?}", drawn.0);

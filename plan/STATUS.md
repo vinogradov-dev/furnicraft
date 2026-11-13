@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=V2 state=idle base=0efd3b4 updated=2026-11-13
+STATE: milestone=M7 phase=T task=N8 state=doing base=0efd3b4 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-V2 turns the cube into a cuboid: three sizes, a drawn base and a pulled height, edited by corner,
-face and card (ADR 0101).
+N8 is next: the exact-distance fields, typed, locked and centred, with the keyboard
 
 ## Index
 

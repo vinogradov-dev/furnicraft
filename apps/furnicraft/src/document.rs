@@ -37,8 +37,8 @@ use furnicraft_scene::{
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{
-    CommandBar, CommandBarAction, ContourGrip, DrawDraft, Editor, GripValue, MeshElement, Message, PaletteContext,
-    ViewFlags, command_bar,
+    CommandBar, CommandBarAction, ContourGrip, DistanceFields, DistanceOutcome, Distances, DrawDraft, Editor,
+    FieldPlacement, GripValue, MeshElement, Message, PaletteContext, Side, ViewFlags, command_bar,
 };
 use furnicraft_units::Length;
 
@@ -295,6 +295,12 @@ pub(crate) struct Document {
     pub(crate) extrude_gizmo: ExtrudeGizmo,
     /// The empty-space tool's ghost; armed by the ribbon, it follows the pointer and creates a part.
     pub(crate) fill_gizmo: FillGizmo,
+    /// The exact-distance fields of the running fill gesture: their pins, locks and keyboard.
+    pub(crate) distance_fields: DistanceFields,
+    /// The measurement the fields draw, rebuilt from the ghost every frame (ADR 0103).
+    pub(crate) distances: Option<Distances>,
+    /// The plates the fields drew last frame, so a press on one is chrome and never a pick.
+    pub(crate) distance_rects: Vec<egui::Rect>,
     /// The corner orientation widget, which owns the roll-ring drag across frames.
     gizmo: gizmo::Gizmo,
     highlighted: Vec<Id>,
@@ -372,6 +378,9 @@ impl Document {
             draw_gizmo: DrawGizmo::new(),
             extrude_gizmo: ExtrudeGizmo::default(),
             fill_gizmo: FillGizmo::default(),
+            distance_fields: DistanceFields::default(),
+            distances: None,
+            distance_rects: Vec::new(),
             gizmo: gizmo::Gizmo::default(),
             highlighted: Vec::new(),
             selected_chains: Vec::new(),
@@ -940,38 +949,134 @@ impl Document {
     /// re-measures nothing.
     fn update_fill(
         &mut self,
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         response: &egui::Response,
         rect: egui::Rect,
         arm: Option<furnicraft_ui::FillArm>,
+        opacity: u32,
     ) {
         let Some(arm) = arm else {
-            self.fill_gizmo.reset();
+            self.reset_fill();
             return;
         };
         let Some(product) = self.session.active_product() else {
             // A closed, deleted or undone product ends the tool: a niche is only offered inside the
             // open piece (ADR 0098), so the arm would have nothing to point at.
             self.editor.cancel_fill();
-            self.fill_gizmo.reset();
+            self.reset_fill();
             return;
         };
         let Some(thickness) = self.fill_thickness() else {
-            self.fill_gizmo.reset();
+            self.reset_fill();
             return;
         };
-        let point = response.hover_pos().or_else(|| response.interact_pointer_pos()).and_then(|pointer| {
+        // A press or a hover on a field is chrome, so the viewport's own response calls it a miss;
+        // the field still belongs to this gesture, so the raw pointer measures through it.
+        let on_field = |pointer: egui::Pos2| self.distance_rects.iter().any(|rect| rect.contains(pointer));
+        let pointer = response
+            .hover_pos()
+            .or_else(|| response.interact_pointer_pos())
+            .or_else(|| ui.input(|input| input.pointer.hover_pos()).filter(|pointer| on_field(*pointer)));
+        let point = pointer.and_then(|pointer| {
             let ray = gizmo_math::ray_to(pointer, rect, self.scene.camera);
             let (min, max) = fill_gizmo::envelope_box(self.session.project(), product)?;
             fill_gizmo::envelope_entry(ray, min, max)
         });
-        let Some(point) = point else {
-            self.fill_gizmo.reset();
+        let Some(point) = point.or_else(|| {
+            // The field sits outside the envelope's silhouette now and then; the gesture keeps the
+            // point it was measured at rather than dropping the ghost under the maker's cursor.
+            ui.input(|input| input.pointer.hover_pos())
+                .filter(|pointer| on_field(*pointer))
+                .and_then(|_| self.fill_gizmo.measured_point())
+        }) else {
+            self.reset_fill();
             return;
         };
-        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness) {
+        // A number typed into a field pins the free position; the pointer drives it otherwise.
+        let free = self.distances.as_ref().and_then(Distances::pinned_low);
+        if self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness, free) {
             ui.ctx().request_repaint();
         }
+        let Some(ghost) = self.fill_gizmo.ghost().cloned() else {
+            self.distances = None;
+            self.distance_rects.clear();
+            return;
+        };
+        let Some(parent_world) = self.session.project().world_placement(product) else {
+            self.distances = None;
+            self.distance_rects.clear();
+            return;
+        };
+        let axis = fill_gizmo::free_axis(arm.fill);
+        let unit = axis_unit(axis);
+        let low_wall = ghost.niche.local_min[axis];
+        let high_wall = ghost.niche.local_max()[axis];
+        let low_face = ghost.placement.translation()[axis];
+        let high_face = low_face + thickness.millimetres_f64();
+        let mut distances = match self.distances.take() {
+            Some(mut measured) => {
+                measured.sync(Some(low_wall), Some(high_wall), low_face, high_face);
+                measured
+            }
+            None => {
+                let Some(measured) = Distances::new(Some(low_wall), Some(high_wall), low_face, high_face) else {
+                    self.distance_rects.clear();
+                    return;
+                };
+                measured
+            }
+        };
+        let (Some(low_point), Some(high_point)) = (ghost.low_face(), ghost.high_face()) else {
+            self.distances = Some(distances);
+            self.distance_rects.clear();
+            return;
+        };
+        let axis_world = parent_world.transform_vector(unit);
+        let mut placements = Vec::new();
+        let painter = ui.painter().with_clip_rect(rect);
+        for (side, face, face_scalar) in [(Side::Low, low_point, low_face), (Side::High, high_point, high_face)] {
+            let wall = if side == Side::Low { low_wall } else { high_wall };
+            let wall_point = face + axis_world * (wall - face_scalar);
+            let middle = (face + wall_point) * 0.5;
+            let (Some(face_screen), Some(wall_screen), Some(middle_screen)) = (
+                gizmo_math::screen_point(self.scene.camera, rect, face),
+                gizmo_math::screen_point(self.scene.camera, rect, wall_point),
+                gizmo_math::screen_point(self.scene.camera, rect, middle),
+            ) else {
+                continue;
+            };
+            painter
+                .line_segment([face_screen, wall_screen], egui::Stroke::new(1.0, furnicraft_ui::theme::text_dim(ui)));
+            placements.push(FieldPlacement { side, position: middle_screen });
+        }
+        let outcome: DistanceOutcome = self.distance_fields.show(ui, &mut distances, &placements, opacity);
+        self.distance_rects = outcome.rects;
+        if let Some(message) = self.distance_fields.error() {
+            self.last_error = Some(message.text(furnicraft_ui::language(ui.ctx())).to_owned());
+        }
+        let pinned = distances.pinned_low();
+        if outcome.changed {
+            // The typed number or the midpoint moved the ghost: measure it again at that exact
+            // coordinate before the frame paints, so the picture and the field agree.
+            self.fill_gizmo.hover(self.session.project(), product, point, arm.fill, thickness, pinned);
+            ui.ctx().request_repaint();
+        }
+        self.distances = Some(distances);
+    }
+
+    /// Drops the empty-space ghost and the exact-distance fields that measured it.
+    fn reset_fill(&mut self) {
+        self.fill_gizmo.reset();
+        self.distance_fields.reset();
+        self.distances = None;
+        self.distance_rects.clear();
+    }
+
+    /// Whether this frame's press landed on a distance field rather than on the scene.
+    fn distance_covers(&self, response: &egui::Response) -> bool {
+        response
+            .interact_pointer_pos()
+            .is_some_and(|pointer| self.distance_rects.iter().any(|rect| rect.contains(pointer)))
     }
 
     /// The thickness a filled part takes: the catalogue's first panel material.
@@ -1430,16 +1535,24 @@ impl Document {
         }
 
         if filling {
-            self.update_fill(ui, &response, rect, fill_arm);
+            self.update_fill(ui, &response, rect, fill_arm, opacity);
             if response.clicked_by(egui::PointerButton::Primary)
                 && !pointer_over_widget
                 && !pointer_on_chrome
-                && let Err(error) = self.create_fill(furnicraft_ui::language(ui.ctx()))
+                && !self.distance_covers(&response)
             {
-                self.last_error = Some(error);
+                match self.create_fill(furnicraft_ui::language(ui.ctx())) {
+                    Ok(()) => {
+                        // The next void is a fresh gesture: its fields may take the keyboard again.
+                        self.distance_fields.reset();
+                        self.distances = None;
+                        self.distance_rects.clear();
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
             }
         } else {
-            self.fill_gizmo.reset();
+            self.reset_fill();
         }
 
         let target = gizmo_math::Target {
@@ -2169,6 +2282,9 @@ impl Document {
             && !self.rotate_gizmo.is_dragging()
             && !self.vertex_gizmo.is_dragging()
             && !ui.ctx().text_edit_focused()
+            // The exact-distance field owns Escape while it is active: the key returns that
+            // direction to the pointer, and the armed tool stays armed (ADR 0103).
+            && !self.distances.as_ref().is_some_and(Distances::is_active)
         {
             if modals {
                 // The modal owns Escape for this frame and closes itself.
@@ -2182,7 +2298,7 @@ impl Document {
                 // Escape leaves the empty-space tool before it leaves a container level: the tool is
                 // the mode the next click uses.
                 self.editor.cancel_fill();
-                self.fill_gizmo.reset();
+                self.reset_fill();
             } else if self.editor.creation_parent().is_some() {
                 // The arm outranks leaving a container level: it is the mode the next creation uses,
                 // and the chip names it until Escape or ✕ clears it (ADR 0056).
@@ -2265,6 +2381,15 @@ fn viewport_owns_view(project: &Project) -> bool {
 /// click to the scene.
 fn widget_placement(cluster: &ViewCluster, view: egui::Rect, chrome: &Chrome) -> Option<egui::Rect> {
     if cluster.widget_visible() { gizmo::widget_rect(view, chrome) } else { None }
+}
+
+/// The world axis a product-frame axis index names.
+fn axis_unit(axis: usize) -> furnicraft_geom::DVec3 {
+    match axis {
+        0 => furnicraft_geom::DVec3::X,
+        1 => furnicraft_geom::DVec3::Y,
+        _ => furnicraft_geom::DVec3::Z,
+    }
 }
 
 /// Whether a finish still has to write the height.

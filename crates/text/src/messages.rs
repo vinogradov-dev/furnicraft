@@ -727,6 +727,16 @@ messages! {
     PivotNotEditable = ["The stored pivot is not editable.", "Сохранённый пивот нельзя редактировать."],
     Center = ["Center", "Центр"],
 
+    // ── Exact-distance fields ───────────────────────────────────────────────
+    DistanceCentred = ["Centred", "По центру"],
+    DistanceNoNeighbour = ["No surface in this direction", "В этом направлении нет поверхности"],
+    DistanceOutOfVoid = ["The distance does not fit the void", "Расстояние не помещается в пустоту"],
+    DistanceLockedFace = [
+        "The opposite face is locked; this distance would resize the part",
+        "Противоположная грань закреплена: это расстояние изменит размер детали"
+    ],
+    DistanceLocked = ["Locked at {} mm", "Закреплено: {} мм"],
+
     // ── Home ────────────────────────────────────────────────────────────────
     HomeClose = ["Close  (Esc)", "Закрыть  (Esc)"],
     HomeStartScene = ["Start a scene", "Начните сцену"],

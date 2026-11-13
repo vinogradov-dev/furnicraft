@@ -600,3 +600,80 @@ fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
     document.session.undo().expect("one undo step");
     assert!(document.session.project().panel(created).is_none(), "one undo removes the shaped part");
 }
+
+#[test]
+fn a_typed_distance_places_the_fill_exactly_and_the_click_creates_it() {
+    let mut harness = Harness::new("frame-fill-typed");
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    let (product, pointer, away) = {
+        let document = harness.app.tabs.active_mut();
+        let product = document.session.active_product().expect("the card opens the frame");
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let placement = project.world_placement(product).expect("a frame");
+        let centre = placement.transform_point(size * 0.5);
+        // A point inside the void, off the centre line the two distance fields sit on, so the
+        // creating click never lands on a plate.
+        let away = placement.transform_point(furnicraft_geom::DVec3::new(size.x * 0.2, size.y * 0.2, size.z * 0.5));
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let camera = document.camera();
+        let pointer = gizmo_math::screen_point(camera, rect, centre).expect("the frame is on screen");
+        let away = gizmo_math::screen_point(camera, rect, away).expect("the left face is on screen");
+        assert!(rect.contains(pointer) && rect.contains(away), "{away:?} in {rect:?}");
+        document
+            .editor
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .expect("the shelf fill arms inside the open frame");
+        (product, pointer, away)
+    };
+    assert_eq!(product, harness.app.tabs.active().session.active_product().expect("the open frame"));
+
+    // The pointer measures the void and the low field takes the keyboard without a click.
+    harness.run(vec![egui::Event::PointerMoved(pointer)]);
+    harness.settle();
+    let low = harness.app.tabs.active().distance_rects.first().copied().expect("the low distance field drew");
+    assert!(screen().contains_rect(low), "the field is on screen: {low:?}");
+    // Aiming at the low field makes it the nearest one, so it owns the keyboard without a click.
+    harness.run(vec![egui::Event::PointerMoved(low.center())]);
+    harness.settle();
+    harness.run(vec![egui::Event::Text("120".to_owned())]);
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    // Typing and Enter pinned the low face at 120 mm: no document write has happened yet.
+    let (before, ghost) = {
+        let document = harness.app.tabs.active();
+        let ghost = document.fill_gizmo.ghost().cloned().expect("the ghost is still measured");
+        assert!((ghost.placement.translation().z - 120.0).abs() < 1.0e-9, "{:?}", ghost.placement);
+        (harness.revision(), ghost)
+    };
+    let document = harness.app.tabs.active();
+    assert_eq!(document.session.project().revision(), before, "the overlay writes nothing");
+
+    // Moving the pointer away does not follow it: the pinned face stays where the number put it.
+    harness.run(vec![egui::Event::PointerMoved(away)]);
+    let still = harness.app.tabs.active().fill_gizmo.ghost().cloned().expect("the ghost stays");
+    assert!((still.placement.translation().z - 120.0).abs() < 1.0e-9, "{:?}", still.placement);
+    assert_eq!(still.placement, ghost.placement, "a pinned distance holds the pointer out");
+
+    harness.click(away, egui::PointerButton::Primary);
+    let document = harness.app.tabs.active();
+    let created = document.editor.selected_node().expect("the click created a part");
+    let panel = document.session.project().panel(created).expect("it is a panel");
+    assert!((panel.placement().translation().z - 120.0).abs() < 1.0e-9, "{:?}", panel.placement());
+    assert_eq!(panel.placement(), ghost.placement, "the click writes exactly the pinned ghost");
+    assert_eq!(document.session.project().parent_of(created), Some(product));
+    assert!(harness.revision() > before, "the click is the one write of the gesture");
+
+    let document = harness.app.tabs.active_mut();
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the pinned part");
+}
