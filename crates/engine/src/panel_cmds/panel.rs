@@ -15,14 +15,14 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{
-    Catalog, Contour, Id, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
+    Catalog, Contour, Id, Level, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::class_rules::{Dimension, NodeRules};
-use crate::commands::{CommandError, CommandOutcome, CommandSpec};
+use crate::class_rules::{Dimension, NodeRules, allow_creation};
+use crate::commands::{CommandError, CommandOutcome, CommandSpec, Creation};
 use crate::session::Session;
 use furnicraft_text::Message;
 
@@ -92,7 +92,16 @@ fn invalid_default(message: &str) -> CommandError {
 }
 
 /// The `panel.create` command.
-pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL, create_enabled, create_run);
+pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL, create_enabled, create_run)
+    .creating(Creation::new(Level::Part, created_parent));
+
+/// The parent a creating command's parameters name, or `None` when the parameters do not parse.
+///
+/// A malformed request is left to the command's own parser, which reports it as invalid parameters;
+/// the guard only speaks about a request that already names a container (ADR 0098).
+fn created_parent(params: &Value) -> Option<Id> {
+    PanelCreate::parse(params).ok().map(|params| params.parent)
+}
 
 /// Stable id of the contour-panel creation command.
 pub const CONTOUR_CREATE_ID: &str = "panel.contour.create";
@@ -141,13 +150,21 @@ impl PanelContourCreate {
 
 /// The `panel.contour.create` command.
 pub(crate) const CONTOUR_CREATE: CommandSpec =
-    CommandSpec::new(CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, contour_create_enabled, contour_create_run);
+    CommandSpec::new(CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, contour_create_enabled, contour_create_run)
+        .creating(Creation::new(Level::Part, contour_created_parent));
+
+/// The parent a contour-panel request names, or `None` when the parameters do not parse.
+fn contour_created_parent(params: &Value) -> Option<Id> {
+    PanelContourCreate::parse(params).ok().map(|params| params.parent)
+}
 
 fn contour_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelContourCreate::parse(params) else {
         return false;
     };
     params.validate_name().is_ok()
+        && session.project().is_container(params.parent)
+        && allow_creation(session.project(), params.parent, session.active_product()).is_ok()
         && session.catalog().panel_material(params.material).is_some()
         && session.project().validate_panel_contour(params.parent, params.source).is_ok()
 }
@@ -292,6 +309,7 @@ fn create_enabled(session: &Session, params: &Value) -> bool {
     };
     params.validate_name().is_ok()
         && session.project().is_container(params.parent)
+        && allow_creation(session.project(), params.parent, session.active_product()).is_ok()
         && session.catalog().panel_material(params.material).is_some()
 }
 

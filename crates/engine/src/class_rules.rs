@@ -17,7 +17,8 @@
 
 use std::fmt;
 
-use furnicraft_model::{ClassCode, Extent, Id, MachiningKind, Measure, Nesting, Operation, Project, TraitSet};
+use furnicraft_model::{ClassCode, Extent, Id, Level, MachiningKind, Measure, Nesting, Operation, Project, TraitSet};
+use furnicraft_text::{Lang, Message};
 
 /// One local dimension of a node: the pair the `extent` trait gates.
 ///
@@ -95,6 +96,60 @@ impl fmt::Display for ClassRefusal {
 }
 
 impl std::error::Error for ClassRefusal {}
+
+/// Whether a class level is furniture, and therefore born only inside the open product.
+///
+/// The line is between a piece and its parts and everything else: a [`Level::Part`] or a
+/// [`Level::Fitting`] belongs to a cabinet, while a primitive, a drawn figure, a mesh object or a
+/// hardware model is an object of the scene (ADR 0098).
+pub const fn is_furniture(level: Level) -> bool {
+    matches!(level, Level::Part | Level::Fitting)
+}
+
+/// Why a furniture object may not be created where a command wants it (ADR 0098).
+///
+/// The reason is a value with its sentence in the message table, so the command, the palette and a
+/// future assistant say the same thing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreationRefusal {
+    /// No product is open, so there is no piece to add a part to.
+    NoProductOpen,
+    /// The target parent is not inside the one open product, so the piece is closed to it.
+    ProductClosed,
+}
+
+impl CreationRefusal {
+    /// The sentence the interface shows for this refusal.
+    pub const fn message(self) -> Message {
+        match self {
+            Self::NoProductOpen => Message::CreationNeedsProduct,
+            Self::ProductClosed => Message::CreationProductClosed,
+        }
+    }
+}
+
+impl fmt::Display for CreationRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message().text(Lang::En))
+    }
+}
+
+impl std::error::Error for CreationRefusal {}
+
+/// `Ok` when a furniture object may be created under `parent`, or the refusal.
+///
+/// The target must lie inside the one open product: a nested group is inside it, while the root,
+/// another product and a group of another piece are not. Openness is session state, so the caller
+/// passes `open` instead of this function reading a document field (ADR 0098, ADR 0029).
+pub fn allow_creation(project: &Project, parent: Id, open: Option<Id>) -> Result<(), CreationRefusal> {
+    let Some(open) = open else {
+        return Err(CreationRefusal::NoProductOpen);
+    };
+    match project.product_of(parent) {
+        Some(product) if product == open => Ok(()),
+        _ => Err(CreationRefusal::ProductClosed),
+    }
+}
 
 /// The rules a node's class imposes on the editor.
 ///

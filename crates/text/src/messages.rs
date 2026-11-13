@@ -1050,6 +1050,11 @@ messages! {
     CmdSetLightParameters = ["Set light parameters", "Задать параметры света"],
     CmdCreateAssembly = ["Create assembly", "Создать сборку"],
     CmdCreateProduct = ["Create product frame", "Создать каркас изделия"],
+    CreationNeedsProduct = ["Create a product first.", "Сначала создайте изделие."],
+    CreationProductClosed = [
+        "The product is closed; open it before adding a part.",
+        "Изделие закрыто; откройте его, прежде чем добавлять деталь."
+    ],
     CmdSetProductEnvelope = ["Set product frame size", "Задать габарит изделия"],
     CmdRename = ["Rename", "Переименовать"],
     CmdDelete = ["Delete", "Удалить"],

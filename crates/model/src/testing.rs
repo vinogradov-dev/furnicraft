@@ -8,7 +8,7 @@
 //!
 //! Nothing here is product code; the feature is off in a release build.
 
-use crate::{Container, Id, Panel, PanelNominalSize, Path, Placement, Project};
+use crate::{ClassCode, Container, Envelope, Id, Panel, PanelNominalSize, Path, Placement, Project};
 use furnicraft_units::Length;
 
 /// Whole millimetres as an exact length; the unit every fixture is written in.
@@ -41,4 +41,20 @@ pub fn sample_project() -> Project {
         vec![shelf.into(), drawer.into()],
     );
     Project::new(root).expect("sample project is valid")
+}
+
+/// The sample project with one product beside its other nodes, and that product's id.
+///
+/// The product is a 600 x 560 x 720 mm box with the placeholder class and no children yet, so a
+/// test opens it and creates furniture inside it (ADR 0098). Every other fixture and id stays the
+/// same, which keeps the guard's change to the tests that create parts in one place.
+#[allow(clippy::expect_used)]
+pub fn sample_product_project() -> (Project, Id) {
+    let mut project = sample_project();
+    let root = project.root().id();
+    let envelope = Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid box");
+    let product = project
+        .add_product(root, "Cabinet", ClassCode::GENERAL_PRODUCT, envelope, Placement::IDENTITY)
+        .expect("a product beside the sample nodes");
+    (project, product)
 }

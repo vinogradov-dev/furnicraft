@@ -589,7 +589,7 @@ fn every_new_tool_commits_its_path_and_opens_the_edit() {
 }
 
 #[test]
-fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
+fn free_creation_tools_land_at_the_root_beside_a_selected_nested_assembly() {
     let (project, panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let root = session.project().root().id();
@@ -605,11 +605,6 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     let drawn =
         editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(root), "a drawing lands at the root");
-
-    editor.select_node(Some(inner));
-    editor.create_panel(&mut session, root).expect("create the panel");
-    let created_panel = editor.selected_node().expect("the new panel");
-    assert_eq!(session.project().parent_of(created_panel), Some(root), "a panel lands at the root");
 
     editor.select_node(Some(inner));
     editor.create_assembly(&mut session, root).expect("create the assembly");
@@ -631,9 +626,26 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     let created_light = editor.selected_node().expect("the new light");
     assert_eq!(session.project().parent_of(created_light), Some(root), "a light lands at the root");
 
-    for created in [created_panel, created_assembly, created_primitive, created_camera, created_light] {
+    for created in [created_assembly, created_primitive, created_camera, created_light] {
         assert_ne!(session.project().parent_of(created), Some(inner), "the selected container receives nothing");
     }
+    assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
+}
+
+#[test]
+fn a_panel_at_the_root_is_refused_because_no_product_is_open() {
+    let (project, panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let root = session.project().root().id();
+    let mut editor = Editor::new();
+
+    let refusal = editor.create_panel(&mut session, root).expect_err("a panel needs an open product");
+    assert!(
+        refusal.contains(furnicraft_text::Message::CreationNeedsProduct.text(crate::Lang::En)),
+        "the refusal names the missing product: {refusal}"
+    );
+    assert_eq!(session.project().root().children().len(), 1, "nothing is written");
+    assert!(!session.can_undo(), "a refusal records no history");
     assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
 }
 
@@ -641,9 +653,10 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
 fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
     let (project, _panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
-    let root = session.project().root().id();
-    let assembly = create_assembly_under(&mut session, root, "Frame");
     let mut editor = Editor::new();
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("create the frame");
+    let product = session.active_product().expect("the frame is open");
+    let assembly = create_assembly_under(&mut session, product, "Frame");
     assert!(editor.arm_creation(session.project(), assembly), "a container can be armed");
     assert_eq!(editor.creation_parent_name(session.project()), Some("Frame"));
     assert_eq!(editor.creation_target(session.project()), assembly, "the armed container is the target");

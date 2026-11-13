@@ -567,6 +567,7 @@ mod tests {
     #[test]
     fn every_primitive_kind_stores_its_parameters() {
         let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        assert_eq!(session.active_product(), None, "a primitive is a scene object, not a furniture part");
         let size = Length::from_millimetres(100).expect("length");
         let cases = [
             (PrimitiveKind::Cube, 8, 6),

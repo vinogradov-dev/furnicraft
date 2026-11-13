@@ -1,11 +1,11 @@
 //! Command metadata, the static registry and dispatch errors.
 
-use furnicraft_model::{Catalog, Id, MachiningId, MaterialId, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, Level, MachiningId, MaterialId, Project, ProjectError};
 use furnicraft_text::Message;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::class_rules::ClassRefusal;
+use crate::class_rules::{self, ClassRefusal, CreationRefusal};
 use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
@@ -48,6 +48,30 @@ impl CommandOutcome {
     }
 }
 
+/// What a creating command adds, and where its parameters say it lands.
+///
+/// The level is the class trait the guard reads: a furniture part or fitting is born only inside
+/// the one open product, while a free scene object is not gated (ADR 0098). A command that creates
+/// nothing declares no [`Creation`], and a parameter set that does not name a parent is left to the
+/// command's own parser so a malformed request still reports its parameters.
+#[derive(Clone, Copy, Debug)]
+pub struct Creation {
+    level: Level,
+    parent_of: fn(&Value) -> Option<Id>,
+}
+
+impl Creation {
+    /// Declares the level of the created node and the parameter that names its parent.
+    pub const fn new(level: Level, parent_of: fn(&Value) -> Option<Id>) -> Self {
+        Self { level, parent_of }
+    }
+
+    /// The class level of the node the command creates.
+    pub const fn level(self) -> Level {
+        self.level
+    }
+}
+
 /// Metadata and implementation of one document command.
 ///
 /// The id is lowercase `<area>.<verb>` and stable forever. The label is a [`Message`], so the
@@ -58,6 +82,7 @@ pub struct CommandSpec {
     label: Message,
     enabled_fn: fn(&Session, &Value) -> bool,
     run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
+    creation: Option<Creation>,
 }
 
 impl CommandSpec {
@@ -68,7 +93,13 @@ impl CommandSpec {
         enabled_fn: fn(&Session, &Value) -> bool,
         run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
     ) -> Self {
-        Self { id, label, enabled_fn, run_fn }
+        Self { id, label, enabled_fn, run_fn, creation: None }
+    }
+
+    /// Declares what the command creates, so the session can apply ADR 0098's guard.
+    pub const fn creating(mut self, creation: Creation) -> Self {
+        self.creation = Some(creation);
+        self
     }
 
     /// The stable command id.
@@ -86,6 +117,26 @@ impl CommandSpec {
     /// This is a pure check for menus, toolbars and enabled state. It never mutates the document.
     pub fn enabled(self, session: &Session, params: &Value) -> bool {
         (self.enabled_fn)(session, params)
+    }
+
+    /// Why the command may not create its node in this session, or `Ok` when it creates nothing
+    /// gated (ADR 0098).
+    ///
+    /// The session asks this after a command has run on a copy and before that copy replaces the
+    /// document, so a refusal writes nothing and leaves the history untouched. The command's own
+    /// `enabled` check asks [`crate::allow_creation`] directly, so the button, the palette and a
+    /// future assistant agree about the refusal.
+    pub(crate) fn creation_refusal(self, session: &Session, params: &Value) -> Result<(), CreationRefusal> {
+        let Some(creation) = self.creation else {
+            return Ok(());
+        };
+        if !class_rules::is_furniture(creation.level()) {
+            return Ok(());
+        }
+        let Some(parent) = (creation.parent_of)(params) else {
+            return Ok(());
+        };
+        class_rules::allow_creation(session.project(), parent, session.active_product())
     }
 
     pub(crate) fn run(
@@ -205,6 +256,14 @@ pub enum CommandError {
         /// What the class forbids.
         refusal: ClassRefusal,
     },
+    /// A furniture part may not be created outside the open product.
+    #[error("`{command}` cannot create furniture here: {refusal}")]
+    CreationRefused {
+        /// The stable command id.
+        command: &'static str,
+        /// What the session or the target parent refuses.
+        refusal: CreationRefusal,
+    },
     /// Deriving geometry for the command failed.
     #[error("cannot evaluate `{command}`: {message}")]
     Evaluation {
@@ -231,6 +290,11 @@ impl CommandError {
     /// A class gate's refusal, tagged with the command that asked it.
     pub(crate) fn class(command: &'static str, refusal: ClassRefusal) -> Self {
         Self::ClassRefused { command, refusal }
+    }
+
+    /// The creation guard's refusal, tagged with the command that asked it (ADR 0098).
+    pub(crate) fn creation(command: &'static str, refusal: CreationRefusal) -> Self {
+        Self::CreationRefused { command, refusal }
     }
 }
 

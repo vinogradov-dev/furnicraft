@@ -27,8 +27,10 @@ mod resolve;
 pub mod scene_cmds;
 mod session;
 
-pub use class_rules::{ClassRefusal, Dimension, NodeRules, operation_of};
-pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
+pub use class_rules::{
+    ClassRefusal, CreationRefusal, Dimension, NodeRules, allow_creation, is_furniture, operation_of,
+};
+pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec, Creation};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
 pub use mesh_cmds::{MESH_VERTICES_MOVE_ID, MESH_VERTICES_MOVE_LABEL, MeshVertexMove, MeshVerticesMove};
 pub use node_cmds::{
