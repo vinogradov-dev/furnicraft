@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
+- `[~]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
   Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
    serde aliases for renamed fields, a separate error path for a newer schema, and a
    version-by-version history in two domain documents — all of it protecting files no user has
