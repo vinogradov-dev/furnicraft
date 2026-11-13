@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **T1** the class table is written down and approved, so the registry has content before it has code
+- `[~]` **T1** the class table is written down and approved, so the registry has content before it has code
   Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with
    nothing to say, and every later task reads the table (the model, the picker, the trait
    gates, the export). Until the rows are written and approved, none of them can start without
