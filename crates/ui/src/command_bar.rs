@@ -90,7 +90,7 @@ pub fn show(ui: &mut Ui, viewport: Rect, bar: CommandBar<'_>, opacity: u32) -> C
                     let outcome =
                         Scrub::new(value).speed(0.5).range(range).decimals(decimals).unit(unit).focus(focus).show(ui);
                     if let Some(error) = outcome.error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, error.text(lang));
+                        ui.colored_label(theme::danger(ui), error.text(lang));
                     }
                     ui.add_space(4.0);
                     if icon_button(ui, actions::CONFIRM, Message::ApplyEnter.text(lang)).clicked() {

@@ -1,7 +1,9 @@
-//! Acceptance tests for the scene-file envelope, its golden files and atomic saving.
+//! Acceptance tests for the scene-file envelope, its golden file and atomic saving.
 //!
-//! The checked-in goldens are the compatibility contract: a version 7 file has no objects, a
-//! version 8 file has one, and both must keep loading as the schema moves on.
+//! One golden file carries the current schema: it is written by this build and must keep loading
+//! after a change to the code. A file with any other schema number is a readable error, never a
+//! migration — before the first release the format has no past (ADR 0096). Regenerate the golden
+//! with `cargo test -p furnicraft-project --test make_golden -- --ignored`.
 
 #![allow(clippy::expect_used)]
 
@@ -10,19 +12,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use furnicraft_model::{Geometry, Id, NodeQuery, Project, StructuralKind};
+use furnicraft_model::{Container, Id, LightKind, NodeQuery, Placement, Project, StructuralKind};
 use furnicraft_project::{MAX_SCENE_BYTES, SceneFile, SceneFileError};
 use furnicraft_units::Length;
 
-const V7: &str = include_str!("golden/scene-v7.fcs");
-const V8: &str = include_str!("golden/scene-v8.fcs");
-const V9: &str = include_str!("golden/scene-v9.fcs");
-const V10: &str = include_str!("golden/scene-v10.fcs");
-const V11: &str = include_str!("golden/scene-v11.fcs");
-const V12: &str = include_str!("golden/scene-v12.fcs");
-const V14: &str = include_str!("golden/scene-v14.fcs");
-const V18: &str = include_str!("golden/scene-v18.fcs");
-const V20: &str = include_str!("golden/scene-v20.fcs");
+const GOLDEN: &str = include_str!("golden/scene.fcs");
 
 /// A unique directory under the system temporary directory, removed on drop.
 struct TempDir(PathBuf);
@@ -52,182 +46,74 @@ impl Drop for TempDir {
     }
 }
 
-#[test]
-fn every_golden_file_loads_and_round_trips() {
-    for (name, text) in [
-        ("version 7", V7),
-        ("version 8", V8),
-        ("version 9", V9),
-        ("version 10", V10),
-        ("version 11", V11),
-        ("version 12", V12),
-        ("version 14", V14),
-        ("version 18", V18),
-        ("version 20", V20),
-    ] {
-        let scene = SceneFile::parse(text).expect(name);
-        assert_eq!(
-            scene.document().schema_version(),
-            Project::CURRENT_SCHEMA_VERSION,
-            "{name} must migrate to the current schema"
-        );
-        let rewritten = scene.to_json().expect(name);
-        let again = SceneFile::parse(&rewritten).expect(name);
-        assert_eq!(again.document(), scene.document(), "{name} document must survive a round trip");
-        assert_eq!(again.extra(), scene.extra(), "{name} extra sections must survive a round trip");
-    }
+/// An id that the golden scene uses.
+fn id(value: u64) -> Id {
+    Id::new(value).expect("a non-zero id")
 }
 
 #[test]
-fn a_version_fourteen_panel_moves_its_features_into_the_outline() {
-    let scene = SceneFile::parse(V14).expect("version 14");
-
-    let panel = scene.document().panel(Id::new(2).expect("id")).expect("the panel must load");
-    assert_eq!(panel.corner_features().len(), 1, "a top-level corner feature moves into the outline");
-    assert_eq!(panel.edge_bows().len(), 1, "a top-level bow moves into the outline");
-    assert!(panel.has_contour_features());
+fn the_golden_file_loads_at_the_current_schema_and_round_trips() {
+    let scene = SceneFile::parse(GOLDEN).expect("the golden loads");
+    assert_eq!(
+        scene.document().schema_version(),
+        Project::CURRENT_SCHEMA_VERSION,
+        "the golden is written by this build"
+    );
 
     let rewritten = scene.to_json().expect("serialize");
-    let again = SceneFile::parse(&rewritten).expect("reload");
-    let panel = again.document().panel(Id::new(2).expect("id")).expect("the panel must reload");
-    assert_eq!(panel.corner_features().len(), 1);
-    assert_eq!(panel.edge_bows().len(), 1);
+    let again = SceneFile::parse(&rewritten).expect("the rewritten scene loads");
+    assert_eq!(again.document(), scene.document(), "the document survives a round trip");
+    assert_eq!(again.extra(), scene.extra(), "the unknown section survives a round trip");
+    assert_eq!(rewritten, GOLDEN, "the golden is exactly what this build writes");
 }
 
 #[test]
-fn a_version_seven_file_loads_with_a_panel_and_no_objects() {
-    let scene = SceneFile::parse(V7).expect("version 7");
+fn the_golden_file_carries_every_node_kind() {
+    let scene = SceneFile::parse(GOLDEN).expect("the golden loads");
+    let document = scene.document();
 
-    let panel = Id::new(3).expect("id");
-    assert!(scene.document().panel(panel).is_some(), "the panel must load");
-    let objects = scene.document().query(&NodeQuery::any().with_kind(StructuralKind::Object));
-    assert!(objects.is_empty(), "a version 7 file has no geometry objects");
+    let panel = document.panel(id(2)).expect("the shelf loads");
+    assert_eq!(panel.machining().len(), 1, "the shelf carries one machining record");
+    assert_eq!(panel.edge_banding().len(), 1, "the shelf carries one banding strip");
+    assert_eq!(panel.nominal_size().length(), Length::from_millimetres(700).expect("length"));
+
+    let top = document.object(id(3)).expect("the extrusion loads");
+    let constructive = top.geometry().as_constructive().expect("a constructive payload");
+    assert_eq!(constructive.contour().expect("the ring").segments().len(), 4);
+    assert_eq!(constructive.height(), Some(Length::from_millimetres(18).expect("height")));
+
+    let sketch = document.object(id(4)).expect("the drawn path loads");
+    let path = sketch.geometry().as_path().expect("a path payload");
+    assert_eq!(path.entries().len(), 1, "the chain keeps its segment");
+    assert!(!path.is_closed(), "the drawn chain is open");
+
+    let ball = document.object(id(5)).expect("the primitive loads");
+    assert!(ball.geometry().as_primitive().is_some(), "a primitive stores its parameters");
+
+    let camera = document.camera(id(6)).expect("the camera loads");
+    assert_eq!(document.active_camera(), Some(camera.id()), "the file names its active camera");
+    let light = document.light(id(7)).expect("the light loads");
+    assert_eq!(light.kind(), LightKind::Sun);
+
+    let drawer = document.container(id(8)).expect("the component loads");
+    assert!(drawer.is_component(), "a container with a class is a component");
+    assert!(document.panel(id(9)).is_some(), "the component holds its panel");
 }
 
 #[test]
-fn a_version_eight_file_loads_the_object_and_preserves_unknown_sections() {
-    let scene = SceneFile::parse(V8).expect("version 8");
-
-    let object = scene.document().object(Id::new(4).expect("id")).expect("the object must load");
-    assert_eq!(object.name(), "Bracket");
-    assert!(matches!(object.geometry(), Geometry::Mesh(_)));
+fn the_golden_file_preserves_an_unknown_top_level_section() {
+    let scene = SceneFile::parse(GOLDEN).expect("the golden loads");
     assert!(scene.extra().contains_key("generator"), "an unknown top-level section is preserved");
 
     let rewritten = scene.to_json().expect("serialize");
-    assert!(rewritten.contains("\"generator\""), "the unknown section must be written back");
-}
-
-#[test]
-fn a_version_nine_file_loads_cameras_lights_and_the_active_camera() {
-    let scene = SceneFile::parse(V9).expect("version 9");
-    let document = scene.document();
-
-    let camera = document.camera(Id::new(2).expect("id")).expect("the camera must load");
-    assert_eq!(camera.name(), "Presentation");
-    assert_eq!(document.active_camera(), Some(camera.id()));
-    let light = document.light(Id::new(3).expect("id")).expect("the light must load");
-    assert_eq!(light.name(), "Key");
-    assert_eq!(light.kind(), furnicraft_model::LightKind::Sun);
-    assert_eq!(light.intensity(), 2.0);
-}
-
-#[test]
-fn a_version_ten_file_loads_a_constructive_object_with_a_line_ring() {
-    let scene = SceneFile::parse(V10).expect("version 10");
-    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
-    assert_eq!(object.name(), "Countertop");
-    let constructive = object.geometry().as_constructive().expect("a constructive payload");
-    let contour = constructive.contour().expect("the contour");
-    assert_eq!(contour.segments().len(), 4, "the point list migrates to a ring of lines");
-    assert!(contour.is_line_only(), "a version 10 contour has no arcs");
-    assert_eq!(contour.sampled_points(50.0).expect("the corners").len(), 4);
-    assert_eq!(constructive.height(), Some(furnicraft_units::Length::from_millimetres(18).expect("height")));
-    assert!(object.geometry().as_mesh().is_none(), "the mesh of a constructive object is derived, not stored");
-
-    let rewritten = scene.to_json().expect("serialize");
-    let again = SceneFile::parse(&rewritten).expect("the rewritten version 10 file loads");
-    assert_eq!(again.document(), scene.document());
-}
-
-#[test]
-fn a_version_eleven_file_loads_a_contour_with_an_arc() {
-    let scene = SceneFile::parse(V11).expect("version 11");
-    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
-    let contour =
-        object.geometry().as_constructive().expect("a constructive payload").contour().expect("the contour must load");
-    assert_eq!(contour.segments().len(), 5, "four lines and one round corner");
-    assert_eq!(contour.segments().filter(|segment| segment.is_arc()).count(), 1);
-    assert!(!contour.is_line_only(), "the arc survives the load");
-
-    let rewritten = scene.to_json().expect("serialize");
-    assert!(rewritten.contains("\"arc\""), "the arc is written back as a segment");
-    assert!(rewritten.contains("\"id\": 1"), "a version 11 ring is saved with fresh segment ids");
-    let again = SceneFile::parse(&rewritten).expect("the rewritten version 11 file loads");
-    assert_eq!(again.document(), scene.document());
-}
-
-#[test]
-fn a_version_twelve_file_loads_segment_ids_and_their_counter() {
-    let scene = SceneFile::parse(V12).expect("version 12");
-    let object = scene.document().object(Id::new(2).expect("id")).expect("the object must load");
-    let contour =
-        object.geometry().as_constructive().expect("a constructive payload").contour().expect("the contour must load");
-    let ids = contour.entries().iter().map(|entry| entry.id().get()).collect::<Vec<_>>();
-    assert_eq!(ids, vec![1, 2, 3, 4, 5], "the stored ids are kept, not renumbered");
-    assert_eq!(contour.next_segment_id().get(), 6);
-    assert!(contour.segment(furnicraft_model::ContourSegmentId::new(3).expect("id")).is_some_and(|s| s.is_arc()));
-
-    let rewritten = scene.to_json().expect("serialize");
-    assert!(rewritten.contains("\"next_segment_id\": 6"), "the counter survives a save");
-    let again = SceneFile::parse(&rewritten).expect("the rewritten version 12 file loads");
-    assert_eq!(again.document(), scene.document());
-}
-
-#[test]
-fn a_version_eighteen_file_loads_parametric_primitives() {
-    let scene = SceneFile::parse(V18).expect("version 18");
-    let document = scene.document();
-
-    let ball = document.object(Id::new(2).expect("id")).expect("the sphere must load");
-    let sphere = ball.geometry().as_primitive().expect("a parametric payload");
-    assert_eq!(
-        sphere,
-        &furnicraft_model::Primitive::sphere(Length::from_millimetres(50).expect("radius"), 32, 16).expect("sphere")
-    );
-    assert!(ball.geometry().as_mesh().is_none(), "a primitive stores parameters, not a mesh");
-
-    let block = document.object(Id::new(3).expect("id")).expect("the cube must load");
-    let cube = block.geometry().as_primitive().expect("a parametric payload");
-    assert_eq!(cube.kind(), furnicraft_model::PrimitiveKind::Cube);
-    assert_eq!(cube.bounds_micrometres(), ([-50_000; 3], [50_000; 3]));
-
-    let rewritten = scene.to_json().expect("serialize");
-    assert!(rewritten.contains("\"kind\": \"primitive\""), "the geometry tag is written");
-    assert!(rewritten.contains("\"shape\": \"sphere\""), "the shape is written as the inner tag");
-    let again = SceneFile::parse(&rewritten).expect("the rewritten version 18 file loads");
-    assert_eq!(again.document(), scene.document());
-}
-
-#[test]
-fn a_version_seventeen_file_still_loads_without_primitives() {
-    let text = V18.replacen("\"schema_version\": 18,", "\"schema_version\": 17,", 1);
-    assert_ne!(text, V18, "the fixture must carry the schema line");
-    let scene = SceneFile::parse(&text).expect("a version 17 file loads");
-    assert_eq!(scene.document().schema_version(), Project::CURRENT_SCHEMA_VERSION, "it migrates forward");
-    assert!(scene.document().object(Id::new(2).expect("id")).is_some(), "the payload still loads");
-}
-
-#[test]
-fn a_version_eight_file_has_no_active_camera() {
-    let scene = SceneFile::parse(V8).expect("version 8");
-    assert_eq!(scene.document().active_camera(), None);
-    assert!(scene.document().query(&NodeQuery::any().with_kind(StructuralKind::Camera)).is_empty());
-    assert!(scene.document().query(&NodeQuery::any().with_kind(StructuralKind::Light)).is_empty());
+    assert!(rewritten.contains("\"generator\""), "the unknown section is written back");
+    let again = SceneFile::parse(&rewritten).expect("the rewritten scene loads");
+    assert_eq!(again.extra(), scene.extra());
 }
 
 #[test]
 fn a_scene_saved_from_a_document_keeps_the_sections_it_was_loaded_with() {
-    let loaded = SceneFile::parse(V8).expect("version 8");
+    let loaded = SceneFile::parse(GOLDEN).expect("the golden loads");
     let saved = SceneFile::new(loaded.document().clone()).with_extra(loaded.extra().clone());
 
     assert_eq!(saved.extra(), loaded.extra());
@@ -236,37 +122,41 @@ fn a_scene_saved_from_a_document_keeps_the_sections_it_was_loaded_with() {
 
 #[test]
 fn an_unknown_field_inside_the_document_is_a_readable_error() {
-    let text = V8.replacen("\"schema_version\": 8,", "\"schema_version\": 8,\n    \"future_field\": 1,", 1);
-    assert_ne!(text, V8, "the fixture must contain the schema line");
+    let text = GOLDEN.replacen("\"revision\":", "\"future_field\": 1,\n    \"revision\":", 1);
+    assert_ne!(text, GOLDEN, "the fixture must carry the revision line");
     let error = SceneFile::parse(&text).expect_err("an unknown document field must be rejected");
     assert!(error.to_string().contains("unknown field"), "error was {error}");
 }
 
 #[test]
 fn a_newer_format_version_is_a_readable_error() {
-    let text = V8.replacen("\"format_version\": 1", "\"format_version\": 2", 1);
-    assert_ne!(text, V8);
+    let text = GOLDEN.replacen("\"format_version\": 1", "\"format_version\": 2", 1);
+    assert_ne!(text, GOLDEN);
     let error = SceneFile::parse(&text).expect_err("a newer envelope must be rejected");
     assert!(matches!(error, SceneFileError::UnsupportedFormatVersion { found: 2, .. }), "error was {error}");
 }
 
 #[test]
-fn a_newer_document_schema_is_a_readable_error() {
-    let newer = Project::CURRENT_SCHEMA_VERSION + 1;
-    let text = V8.replacen("\"schema_version\": 8", &format!("\"schema_version\": {newer}"), 1);
-    assert_ne!(text, V8);
-    let error = SceneFile::parse(&text).expect_err("a newer document must be rejected");
-    assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
+fn any_other_document_schema_is_the_same_readable_error() {
+    let current = Project::CURRENT_SCHEMA_VERSION;
+    for other in [current + 1, current - 1] {
+        let text =
+            GOLDEN.replacen(&format!("\"schema_version\": {current}"), &format!("\"schema_version\": {other}"), 1);
+        assert_ne!(text, GOLDEN, "the fixture must carry the schema line");
+        let error = SceneFile::parse(&text).expect_err("another schema is refused");
+        assert!(error.to_string().contains("unsupported schema version"), "error was {error}");
+        assert!(error.to_string().contains(&other.to_string()), "the error names the number found");
+    }
 }
 
 #[test]
 fn a_missing_or_foreign_format_is_a_readable_error() {
-    let missing = V8.replacen("\"format\": \"furnicraft.scene\",", "", 1);
-    assert_ne!(missing, V8);
+    let missing = GOLDEN.replacen("\"format\": \"furnicraft.scene\",", "", 1);
+    assert_ne!(missing, GOLDEN);
     assert!(matches!(SceneFile::parse(&missing), Err(SceneFileError::MissingFormat)));
 
-    let foreign = V8.replacen("\"format\": \"furnicraft.scene\"", "\"format\": \"another.app\"", 1);
-    assert_ne!(foreign, V8);
+    let foreign = GOLDEN.replacen("\"format\": \"furnicraft.scene\"", "\"format\": \"another.app\"", 1);
+    assert_ne!(foreign, GOLDEN);
     assert!(matches!(
         SceneFile::parse(&foreign),
         Err(SceneFileError::WrongFormat { found, expected: "furnicraft.scene" }) if found == "another.app"
@@ -274,10 +164,21 @@ fn a_missing_or_foreign_format_is_a_readable_error() {
 }
 
 #[test]
+fn the_old_pivot_field_and_the_old_container_tags_are_unknown() {
+    let pivot = GOLDEN.replacen("\"pivot_local\"", "\"pivot\"", 1);
+    assert_ne!(pivot, GOLDEN, "the fixture must carry a pivot");
+    assert!(SceneFile::parse(&pivot).is_err(), "the old field name is not accepted");
+
+    let assembly = GOLDEN.replacen("\"container\": {", "\"assembly\": {", 1);
+    assert_ne!(assembly, GOLDEN, "the fixture must carry a container");
+    assert!(SceneFile::parse(&assembly).is_err(), "the old container tag is not accepted");
+}
+
+#[test]
 fn saving_and_reading_a_file_round_trips_the_document() {
     let dir = TempDir::new("round-trip");
     let target = dir.path().join("scene.fcs");
-    let scene = SceneFile::parse(V8).expect("version 8");
+    let scene = SceneFile::parse(GOLDEN).expect("the golden loads");
 
     scene.write(&target).expect("write");
     let loaded = SceneFile::read(&target).expect("read");
@@ -291,14 +192,15 @@ fn saving_and_reading_a_file_round_trips_the_document() {
 fn a_failed_write_leaves_the_previous_file_intact() {
     let dir = TempDir::new("atomic");
     let target = dir.path().join("scene.fcs");
-    let original = SceneFile::parse(V8).expect("version 8");
+    let original = SceneFile::parse(GOLDEN).expect("the golden loads");
     original.write(&target).expect("first write");
     let before = fs::read_to_string(&target).expect("read the saved file");
 
     // A directory on the temporary path makes the write fail after the target already exists.
     fs::create_dir(dir.path().join("scene.fcs.tmp")).expect("create the blocking directory");
-    let replacement = SceneFile::parse(V7).expect("version 7");
-    let error = replacement.write(&target).expect_err("the write must fail");
+    let mut replacement = original.document().clone();
+    replacement.set_active_camera(None).expect("clear the camera");
+    let error = SceneFile::new(replacement).write(&target).expect_err("the write must fail");
 
     assert!(matches!(error, SceneFileError::Write { .. }), "error was {error}");
     assert_eq!(fs::read_to_string(&target).expect("read the old file"), before);
@@ -306,7 +208,7 @@ fn a_failed_write_leaves_the_previous_file_intact() {
 
 #[test]
 fn a_saved_file_holds_only_the_envelope_and_the_document() {
-    let scene = SceneFile::parse(V8).expect("version 8");
+    let scene = SceneFile::parse(GOLDEN).expect("the golden loads");
     let text = scene.to_json().expect("serialize");
     let value: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
     let object = value.as_object().expect("the envelope is an object");
@@ -333,4 +235,20 @@ fn a_file_above_the_size_limit_is_rejected_before_it_is_read() {
 
     let error = SceneFile::read(&target).expect_err("an oversized file must be rejected");
     assert!(matches!(error, SceneFileError::TooLarge { .. }), "error was {error}");
+}
+
+#[test]
+fn an_empty_scene_has_no_camera_or_light() {
+    let mut document =
+        Project::new(Container::new(id(1), "Root", Placement::IDENTITY, Vec::new())).expect("an empty scene");
+    document.set_active_camera(None).expect("no camera");
+    let scene = SceneFile::new(document);
+    let text = scene.to_json().expect("serialize");
+    let again = SceneFile::parse(&text).expect("reload");
+
+    assert_eq!(again.document().active_camera(), None);
+    assert!(again.document().query(&NodeQuery::any().with_kind(StructuralKind::Camera)).is_empty());
+    assert!(again.document().query(&NodeQuery::any().with_kind(StructuralKind::Light)).is_empty());
+    assert!(again.document().query(&NodeQuery::any().with_kind(StructuralKind::Object)).is_empty());
+    assert!(again.document().root().children().is_empty(), "the empty scene holds no nodes");
 }

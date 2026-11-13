@@ -33,11 +33,13 @@ use crate::toolbars;
 use crate::view_flags::ViewFlags;
 
 use self::creation::PendingPrimitive;
+pub use self::fill::FillArm;
 
 mod cards;
 mod contour;
 mod creation;
 mod drawing;
+mod fill;
 mod mesh;
 mod ribbon;
 mod selection;
@@ -61,6 +63,8 @@ pub struct Editor {
     contour_edit: Option<ContourEdit>,
     drawing: Option<DrawDraft>,
     pending_primitive: Option<PendingPrimitive>,
+    /// The class the next click fills a niche with, when the empty-space tool is armed.
+    fill: Option<FillArm>,
     /// The container the next created nodes land in, or `None` for the scene root.
     creation_parent: Option<Id>,
     toolbars: toolbars::Toolbars,

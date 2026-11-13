@@ -18,6 +18,12 @@ pub enum ProjectError {
         /// The version supported by this build.
         supported: u32,
     },
+    /// The root of a loaded document carries a pivot offset, but the root defines the world frame.
+    #[error("the root's pivot must be zero, found {found:?}")]
+    RootPivotNotZero {
+        /// The offset found in the file.
+        found: PivotLocal,
+    },
     /// Two nodes in the tree use the same id.
     #[error("duplicate document id {0}")]
     DuplicateId(Id),
@@ -75,6 +81,42 @@ pub enum ProjectError {
     /// The root container cannot be deleted, moved, grouped, ungrouped or dissolved.
     #[error("root container {id} cannot be changed this way")]
     RootImmutable {
+        /// The root container id.
+        id: Id,
+    },
+    /// A container carries a product envelope but its class is not a product.
+    #[error("container {node} carries a product envelope but its class is not a product")]
+    EnvelopeWithoutProductClass {
+        /// The container that carries the box.
+        node: Id,
+    },
+    /// A container has a product class but stores no envelope.
+    #[error("container {node} has a product class but no product envelope")]
+    ProductClassWithoutEnvelope {
+        /// The container that lacks the box.
+        node: Id,
+    },
+    /// The requested node is not a product.
+    #[error("node {id} is not a product")]
+    NotAProduct {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The requested class does not play the product role.
+    #[error("class {class} is not a product class")]
+    NotAProductClass {
+        /// The rejected class.
+        class: ClassCode,
+    },
+    /// A product would become a descendant of another product.
+    #[error("product {product} cannot sit inside another product")]
+    ProductInsideProduct {
+        /// The product that would be nested.
+        product: Id,
+    },
+    /// The root container cannot be a product.
+    #[error("the root container {id} cannot be a product")]
+    RootIsAProduct {
         /// The root container id.
         id: Id,
     },
@@ -334,12 +376,6 @@ pub enum ProjectError {
     #[error("cutout on panel {panel} would split the core into disconnected pieces")]
     CutoutSplitsCore {
         /// The panel that owns the cutouts.
-        panel: Id,
-    },
-    /// A machining coordinate overflows while a legacy document is migrated.
-    #[error("machining on panel {panel} overflows while migrating to the nominal frame")]
-    MachiningCoordinateOverflow {
-        /// The panel whose machining could not be translated.
         panel: Id,
     },
     /// A panel has no machining record with this id.

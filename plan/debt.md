@@ -101,7 +101,8 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
 - `[gizmo]` The screen-space overlays over the viewport — the contour grips, the drawing draft and
   the size label — still carry fixed dark-theme colours, so on the light workspace a near-white grip
   and the pale draft line read weakly against the paper. They are `egui` paint, not frame ink, so
-  they are the leftover of X8 (ADR 0087).
+  they are the leftover of X8 (ADR 0087). `cargo xtask ui-rules` reads `crates/ui/src` only, so the
+  shell's gizmo inks are outside it until this entry is paid; the rule then covers them too.
 - `[gizmo]` An extrusion pull previews its new height as a wireframe prism, not a shaded solid. A
   solid preview needs the evaluation cache to accept a previewed height without a document write.
 - `[panel]` The core outline at a line-arc or arc-arc joint still joins per-segment offsets with a
@@ -208,3 +209,25 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   there; the cluster waits for the same treatment.
 
 · `[ui]` The inspector's widest rows — the name field beside its *Rename* button and the property rows — need about 355 pt, so a 226 pt floating panel draws them clipped or scrolled sideways (`side_panels::scroll_body`). The rows should reflow to the panel width (a wrapping label, a narrower field) so the horizontal scrollbar goes away; the panel keeps its rectangle either way (U73).
+
+- `[engine]` The mounting gate checks `host` when a class is assigned, but no command reparents a
+  classed node: `node.group`, `node.ungroup` and a future move can put a hinge under a host its row
+  does not name. The same check belongs on the reparent once one exists, or the gate is half a rule
+  (T4).
+- `[engine]` Holes, grooves, cup bores and mounting patterns have no machining kind yet, so
+  `Operation::Holes`, `Grooves`, `CupBore` and `MountPattern` have no command to refuse. The hardware
+  commands must read `NodeRules::admits` when they land, as T4 did for contour, edge banding and
+  cutouts.
+- `[ui]` The panel card's size fields, banding menu, shape section and machining add menu name the
+  class's reason when it forbids them, but the class picker still offers every row: a person can
+  choose a class whose host the assignment then refuses and reads the engine's English sentence in
+  the status bar. The picker should filter its rows by `host`, the way it already filters a query
+  (T3, T4).
+- `[gizmo]` The empty-space tool refuses a post in a splayed niche, although a post spans the depth as a
+  rectangle: the free x-range it may stand in is the intersection of the section's width over the whole
+  depth, which the trapezoid's two wall lines answer exactly, and the model could hand that range to
+  the post. Until then a maker fills a splayed niche with shelves only (N7).
+- `[gizmo]` A shaped niche's walls are checked for height at the void's floor and ceiling, not along
+  the whole span: two boards that meet in the middle with the envelope behind them would pass as one
+  wall. The union of the coplanar faces' extents would close it; the samples are one micrometre apart
+  and no furniture case this tree builds has such a gap (N7).

@@ -13,14 +13,21 @@ mod camera_light_cmds;
 mod error;
 #[cfg(test)]
 mod frame_contract;
+mod move_query;
+mod niche;
 mod node_cmds;
 mod object_cmds;
 mod panel_cmds;
+mod product_cmds;
 mod property_cmds;
 mod query;
+mod surface;
 mod wire;
 
 pub use error::ProjectError;
+pub use move_query::{MoveAxis, MoveLimit, MoveRule};
+pub use niche::{Niche, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit};
+pub use surface::SurfaceKind;
 pub(crate) use wire::ProjectWire;
 
 use crate::*;
@@ -43,29 +50,12 @@ pub struct Project {
 }
 
 impl Project {
-    /// The schema version written by this build.
+    /// The schema version written by this build, and the only one it reads.
     ///
-    /// Version 3 moved panel-owned machining from core-local to nominal panel-local coordinates.
-    /// Version 5 split assembly components from organisational groups. Version 6 stores the
-    /// manipulation pivot on every node. Version 7 replaces the two container kinds with one
-    /// `Container` that carries typed properties: an old assembly becomes a component container
-    /// and an old group an ordinary one. Version 8 adds the geometry object node with a baked mesh;
-    /// older files simply contain none. Version 9 adds authored camera and light nodes and the
-    /// document's active camera; older files simply contain none. Version 10 adds the constructive
-    /// geometry payload, a contour with a feature history whose mesh is derived; a version 9 object
-    /// still loads as a baked mesh. Version 11 stores the contour as directed line and arc segments;
-    /// a version 10 point list loads as a ring of lines, so the shape is unchanged. Version 12 gives
-    /// every contour segment a stable id and the ring a next-segment counter; a version 11 ring loads
-    /// with ids `1..n`. Version 16 replaces the tagged `Machining` enum with one ordered list of
-    /// records, each carrying a stable id, a face or edge anchor and tagged parameters; a version-15
-    /// cutout loads as a face-anchored cutout with the same id. Version 17 adds a flat path payload,
-    /// an open or closed chain of drawn segments; a version 16 file contains none. Version 18 adds
-    /// the parametric primitive payload, a shape and its parameters whose mesh is derived; a version
-    /// 17 file contains only baked meshes. Version 19 adds the shape tag a closed path carries, so a
-    /// figure the user drew keeps the constraint set its grips apply; a version 18 path loads with no
-    /// tag. Version 20 renames the stored pivot field to `pivot_local`; a version 19 file loads
-    /// through a serde alias and no world point moves.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 20;
+    /// A file with any other number is refused with one readable sentence, older and newer alike:
+    /// before the first release the format has no past, so there is no migration and no alias for a
+    /// field an earlier layout used (ADR 0096). Bumping this number is the whole procedure.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 22;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -192,8 +182,8 @@ impl Project {
 fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
     let mut seen = HashSet::new();
     let mut max_id = 0u64;
-    let mut stack = vec![(root, 1u32)];
-    while let Some((container, depth)) = stack.pop() {
+    let mut stack = vec![(root, 1u32, false)];
+    while let Some((container, depth, inside_product)) = stack.pop() {
         if depth > Project::MAX_ASSEMBLY_DEPTH {
             return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
         }
@@ -202,10 +192,21 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
             return Err(ProjectError::DuplicateId(id));
         }
         max_id = max_id.max(id.get());
+        let is_product = container.is_product();
+        if depth == 1 && is_product {
+            return Err(ProjectError::RootIsAProduct { id });
+        }
+        match (is_product, container.envelope()) {
+            (true, None) => return Err(ProjectError::ProductClassWithoutEnvelope { node: id }),
+            (true, Some(_)) if inside_product => return Err(ProjectError::ProductInsideProduct { product: id }),
+            (false, Some(_)) => return Err(ProjectError::EnvelopeWithoutProductClass { node: id }),
+            _ => {}
+        }
+        let inside_product = inside_product || is_product;
         for child in container.children() {
             match child {
                 Node::Container(container) => {
-                    stack.push((container, depth.saturating_add(1)));
+                    stack.push((container, depth.saturating_add(1), inside_product));
                 }
                 Node::Panel(panel) => {
                     if !seen.insert(panel.id().get()) {
@@ -368,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn a_loaded_panel_with_an_authored_pivot_is_a_readable_error() {
+    fn the_old_pivot_field_name_is_an_unknown_field() {
         let project = sample_project();
         let mut wire = serde_json::to_value(&project).expect("serialize project");
         let panel = &mut wire["root"]["children"][0]["panel"];
@@ -376,8 +377,8 @@ mod tests {
         fields.remove("pivot_local");
         fields.insert("pivot".to_owned(), serde_json::json!([1_000, 0, 0]));
 
-        let error = serde_json::from_value::<Project>(wire).expect_err("a panel pivot cannot be authored");
-        assert!(error.to_string().contains("pivot is derived"), "error was {error}");
+        let error = serde_json::from_value::<Project>(wire).expect_err("the old name is not accepted");
+        assert!(error.to_string().contains("unknown field"), "error was {error}");
     }
 
     #[test]

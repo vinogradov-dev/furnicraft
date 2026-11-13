@@ -15,15 +15,20 @@
 use furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID;
 use furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID;
 use furnicraft_engine::panel_cmds::CREATE_ID as PANEL_CREATE_ID;
+use furnicraft_engine::product_cmds::{PRODUCT_CREATE_ID, ProductCreate};
 use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{CameraProjection, Id, LightKind, Placement, Project};
+use furnicraft_model::{
+    CameraProjection, ClassCode, Contour, Id, LightKind, MaterialId, PanelNominalSize, Placement, Project,
+};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
 use crate::command::{dispatch, json};
+use crate::product_card::ProductDraft;
 use crate::target::creation_target;
 
 /// A primitive waiting for its work-plane click.
@@ -59,6 +64,26 @@ impl Editor {
         self.creation_parent = None;
     }
 
+    /// Opens a product as the session's working product and arms it for the next creation.
+    ///
+    /// Opening is a session view operation, never a document edit (ADR 0098); the arm is the
+    /// editor's own view state, so the next panel, assembly or fitting lands inside the product
+    /// without another gesture. Returns whether the id was a product at all.
+    pub fn open_product(&mut self, session: &mut Session, id: Id) -> bool {
+        if !session.open_product(id) {
+            return false;
+        }
+        self.arm_creation(session.project(), id);
+        true
+    }
+
+    /// Leaves the open product and drops the arm, so nothing is armed to receive a part.
+    pub fn close_product(&mut self, session: &mut Session) {
+        session.close_product();
+        self.clear_creation_parent();
+        self.cancel_fill();
+    }
+
     /// Drops an arm whose container no longer exists.
     ///
     /// Deleting the container, deleting an ancestor, or undoing the container's creation all take
@@ -86,22 +111,74 @@ impl Editor {
 
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
     pub(super) fn create_panel(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
-        let material = session
+        let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
+        self.create_panel_sized(session, parent, "Panel".to_owned(), nominal_size, None, Placement::IDENTITY, None)
+    }
+
+    /// Dispatches `panel.create` for a part of exactly this size, placement and class.
+    ///
+    /// The empty-space tool measures the void and hands the answer here, so the panel that is
+    /// created is exactly the ghost the maker saw; the class travels with the same command, so the
+    /// click is one undo entry rather than a create followed by an assignment. The material stays
+    /// the catalogue's first, as it is for every created panel.
+    ///
+    /// A ring makes the part a contour panel whose outline is that ring, which is how a shelf takes
+    /// the trapezoid a splayed niche reserves (ADR 0042, ADR 0099); a rectangle panel carries none.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_panel_sized(
+        &mut self,
+        session: &mut Session,
+        parent: Id,
+        name: String,
+        nominal_size: PanelNominalSize,
+        outline: Option<Contour>,
+        placement: Placement,
+        class: Option<ClassCode>,
+    ) -> Result<(), String> {
+        let material = Self::panel_material(session)?;
+        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class, outline })?;
+        let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
+    /// The material every created panel takes: the catalogue's first panel material.
+    fn panel_material(session: &Session) -> Result<MaterialId, String> {
+        session
             .catalog()
             .panel_materials()
             .first()
-            .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
-            .id();
-        let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
-        let params = json(&PanelCreate {
-            parent,
-            name: "Panel".to_owned(),
-            nominal_size,
-            material,
-            placement: Placement::IDENTITY,
-        })?;
-        let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
-        self.select_created(outcome.created_id());
+            .map(|material| material.id())
+            .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())
+    }
+
+    /// Creates the product frame the card describes and opens it, in one user action.
+    ///
+    /// The command is `product.create`; opening the new frame is a session view operation that
+    /// follows it (ADR 0098, ADR 0100). The frame lands at the deterministic product placement —
+    /// the origin in an empty scene, else beside the nearest piece and clear of every envelope —
+    /// and the container is armed, so the next part is born inside it without another gesture.
+    /// A frame is a top-level piece, so its parent is the scene root.
+    pub fn create_product(&mut self, session: &mut Session, draft: ProductDraft, lang: Lang) -> Result<(), String> {
+        let project = session.project();
+        let root = project.root().id();
+        let placement = project.product_placement(draft.envelope);
+        let name = draft
+            .class
+            .label()
+            .map(|label| label.text(lang))
+            .unwrap_or(Message::CmdCreateProduct.text(lang))
+            .to_owned();
+        let params =
+            json(&ProductCreate { parent: root, name, class: Some(draft.class), envelope: draft.envelope, placement })?;
+        let outcome = dispatch(session, PRODUCT_CREATE_ID, &params)?;
+        let Some(id) = outcome.created_id() else {
+            return Ok(());
+        };
+        session.open_product(id);
+        self.arm_creation(session.project(), id);
+        self.selection.replace(id);
+        self.initialized = true;
         Ok(())
     }
 
@@ -126,6 +203,7 @@ impl Editor {
         self.mesh_edit = None;
         self.contour_edit = None;
         self.drawing = None;
+        self.fill = None;
         self.pending_primitive = Some(PendingPrimitive { kind, size });
         Ok(())
     }

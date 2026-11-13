@@ -10,7 +10,7 @@
 //! origin (offset 0)* read-only. A read-only *Pivot (world)* row prints `Project::pivot_world`; the
 //! card never turns the point itself.
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use furnicraft_engine::node_cmds::{NODE_PIVOT_CENTER_ID, NODE_PIVOT_SET_ID};
 use furnicraft_engine::{EditScope, NodePivotCenter, NodePivotSet, Session};
 use furnicraft_model::{Id, PivotLocal, Project};
@@ -20,6 +20,7 @@ use crate::command::{dispatch, json};
 use crate::coords;
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// Persistent state of the pivot card.
 #[derive(Debug, Default)]
@@ -94,7 +95,7 @@ impl PivotCard {
         ui.label(Message::PivotInNodeFrame.text(lang));
 
         let Some(draft) = self.draft.as_mut() else {
-            ui.colored_label(Color32::LIGHT_RED, Message::PivotNotEditable.text(lang));
+            ui.colored_label(theme::danger(ui), Message::PivotNotEditable.text(lang));
             return;
         };
 
@@ -135,7 +136,7 @@ impl PivotCard {
             None => ui.label(Message::PivotWorldOutOfRange.text(lang)),
         };
         if let Some(message) = refused {
-            ui.colored_label(Color32::LIGHT_RED, message.text(lang));
+            ui.colored_label(theme::danger(ui), message.text(lang));
         }
 
         for scope in cancelled {
@@ -155,7 +156,7 @@ impl PivotCard {
         }
 
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         if edits.is_empty() {
             return;

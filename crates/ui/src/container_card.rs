@@ -1,11 +1,11 @@
 //! The selected-container card.
 //!
 //! A container is either an ordinary group or a furniture component. The difference is data, not a
-//! separate node kind: a component carries a non-zero `furntype`, a `prototype.id` or
+//! separate node kind: a component carries a non-zero `class`, a `prototype.id` or
 //! `component = true`. Both own children and are renamed through `node.rename`. Grouping and
 //! ungrouping live in the scene tree so the same action covers several selected nodes.
 
-use egui::{Color32, RichText, TextEdit, Ui};
+use egui::{RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::{NodeRename, Session};
 use furnicraft_model::{Id, Project};
@@ -13,6 +13,7 @@ use furnicraft_text::Message;
 
 use crate::command::{dispatch, json};
 use crate::section::section;
+use crate::theme;
 
 /// Persistent state of the container card.
 #[derive(Debug, Default)]
@@ -149,7 +150,7 @@ impl ContainerCard {
 
         if let Some(error) = &self.error {
             ui.separator();
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         action
     }

@@ -470,6 +470,8 @@ fn params_for(id: &str, session: &Session, context: &PaletteContext, lang: Lang)
                 nominal_size: PanelCreate::default_nominal_size().map_err(|error| error.to_string())?,
                 material,
                 placement: Placement::IDENTITY,
+                class: None,
+                outline: None,
             })
         }
         furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID => json(&AssemblyCreate {

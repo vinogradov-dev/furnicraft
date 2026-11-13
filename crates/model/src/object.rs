@@ -63,30 +63,19 @@ pub enum Feature {
     Extrude(Extrude),
 }
 
-/// Serialized form of [`Feature`], which also reads an extrusion written before the path moved out.
-///
-/// Version 18 stored `contour` inside the extrusion; see [`ConstructiveWire`] for the migration.
+/// Serialized form of [`Feature`]: an extrusion of the constructive path.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum FeatureWire {
-    Extrude {
-        height: Length,
-        #[serde(default)]
-        contour: Option<Contour>,
-    },
+    Extrude { height: Length },
 }
 
 /// Serialized form of [`Constructive`]; validation happens in its `TryFrom` implementation.
-///
-/// Version 18 stored the contour inside the extrusion feature. A file written by that version is
-/// read here: its `extrude.contour` becomes the constructive `path`, and the stored feature keeps
-/// only its height. A file that carries both, or two legacy contours, is a readable error rather
-/// than a silent pick.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConstructiveWire {
+    path: Path,
     #[serde(default)]
-    path: Option<Path>,
     features: Vec<FeatureWire>,
 }
 
@@ -185,27 +174,12 @@ impl TryFrom<ConstructiveWire> for Constructive {
     type Error = ConstructiveError;
 
     fn try_from(wire: ConstructiveWire) -> Result<Self, Self::Error> {
-        let mut legacy = None;
         let mut features = Vec::with_capacity(wire.features.len());
         for feature in wire.features {
-            match feature {
-                FeatureWire::Extrude { height, contour } => {
-                    if let Some(contour) = contour
-                        && legacy.replace(contour).is_some()
-                    {
-                        return Err(ConstructiveError::AmbiguousPath);
-                    }
-                    features.push(Feature::Extrude(Extrude::new(height)?));
-                }
-            }
+            let FeatureWire::Extrude { height } = feature;
+            features.push(Feature::Extrude(Extrude::new(height)?));
         }
-        let path = match (wire.path, legacy) {
-            (Some(path), None) => path,
-            (None, Some(contour)) => Path::from(contour),
-            (None, None) => return Err(ConstructiveError::MissingPath),
-            (Some(_), Some(_)) => return Err(ConstructiveError::AmbiguousPath),
-        };
-        Self::new(path, features)
+        Self::new(wire.path, features)
     }
 }
 
@@ -240,12 +214,6 @@ pub enum ConstructiveError {
     /// The path is an open chain, which encloses no ring to extrude.
     #[error("a constructive object needs a closed path, not an open chain")]
     OpenPath,
-    /// Neither the constructive path nor a legacy extrusion contour was stored.
-    #[error("a constructive object stores no path")]
-    MissingPath,
-    /// The file names its path twice: as the constructive path and as a legacy extrusion contour.
-    #[error("a constructive object stores both a path and a legacy extrusion contour")]
-    AmbiguousPath,
 }
 
 /// The geometry payload of an object node.
@@ -347,7 +315,7 @@ pub struct Object {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
@@ -825,35 +793,10 @@ mod tests {
     }
 
     #[test]
-    fn a_version_eighteen_extrusion_contour_becomes_the_constructive_path() {
-        let path =
-            Path::rectangle([millimetres(0), millimetres(0)], [millimetres(100), millimetres(50)]).expect("rectangle");
-        let contour = path.to_contour().expect("ring");
-        let legacy = serde_json::json!({
-            "features": [{ "kind": "extrude", "contour": contour, "height": 18_000 }]
-        });
-        let loaded: Constructive = serde_json::from_value(legacy).expect("a version 18 body loads");
-        assert_eq!(loaded.height(), Some(millimetres(18)));
-        assert_eq!(loaded.contour().expect("ring"), contour, "the contour is the path now");
-
-        let saved = serde_json::to_value(&loaded).expect("serialize");
-        assert!(saved.get("path").is_some(), "the path is written at the body: {saved}");
-        assert!(!saved.to_string().contains("contour"), "the contour copy is gone: {saved}");
-
-        let both = serde_json::json!({
-            "path": path,
-            "features": [{ "kind": "extrude", "contour": contour, "height": 18_000 }]
-        });
-        let reason = serde_json::from_value::<Constructive>(both)
-            .map_err(|error| error.to_string())
-            .expect_err("a file naming its path twice is refused");
-        assert!(reason.contains("legacy extrusion contour"), "the reason names the clash: {reason}");
-
+    fn a_constructive_body_without_a_path_is_a_readable_error() {
         let missing = serde_json::json!({ "features": [{ "kind": "extrude", "height": 18_000 }] });
-        let reason = serde_json::from_value::<Constructive>(missing)
-            .map_err(|error| error.to_string())
-            .expect_err("a body without a path is refused");
-        assert!(reason.contains("stores no path"), "the reason names the gap: {reason}");
+        let error = serde_json::from_value::<Constructive>(missing).expect_err("a body without a path is refused");
+        assert!(error.to_string().contains("missing field `path`"), "error was {error}");
     }
 
     #[test]

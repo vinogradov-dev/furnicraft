@@ -13,8 +13,8 @@ use crate::toolbars::{ToolAction, spec};
 use furnicraft_engine::{PanelCreate, PrimitiveKind, Session};
 use furnicraft_model::Contour;
 use furnicraft_model::{
-    Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, EulerAngles, FaceSide, Geometry,
-    MachiningAnchor, MachiningParams, Mesh, Panel, PivotLocal, Placement,
+    ClassCode, Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, Envelope, EulerAngles,
+    FaceSide, Geometry, MachiningAnchor, MachiningParams, Mesh, Panel, PivotLocal, Placement,
 };
 use furnicraft_model::{Path, PathCorner, Project};
 use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
@@ -589,7 +589,7 @@ fn every_new_tool_commits_its_path_and_opens_the_edit() {
 }
 
 #[test]
-fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
+fn free_creation_tools_land_at_the_root_beside_a_selected_nested_assembly() {
     let (project, panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let root = session.project().root().id();
@@ -605,11 +605,6 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     let drawn =
         editor.commit_drawing(&mut session, Placement::IDENTITY, furnicraft_text::Lang::En).expect("commit the line");
     assert_eq!(session.project().parent_of(drawn.object), Some(root), "a drawing lands at the root");
-
-    editor.select_node(Some(inner));
-    editor.create_panel(&mut session, root).expect("create the panel");
-    let created_panel = editor.selected_node().expect("the new panel");
-    assert_eq!(session.project().parent_of(created_panel), Some(root), "a panel lands at the root");
 
     editor.select_node(Some(inner));
     editor.create_assembly(&mut session, root).expect("create the assembly");
@@ -631,9 +626,26 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
     let created_light = editor.selected_node().expect("the new light");
     assert_eq!(session.project().parent_of(created_light), Some(root), "a light lands at the root");
 
-    for created in [created_panel, created_assembly, created_primitive, created_camera, created_light] {
+    for created in [created_assembly, created_primitive, created_camera, created_light] {
         assert_ne!(session.project().parent_of(created), Some(inner), "the selected container receives nothing");
     }
+    assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
+}
+
+#[test]
+fn a_panel_at_the_root_is_refused_because_no_product_is_open() {
+    let (project, panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let root = session.project().root().id();
+    let mut editor = Editor::new();
+
+    let refusal = editor.create_panel(&mut session, root).expect_err("a panel needs an open product");
+    assert!(
+        refusal.contains(furnicraft_text::Message::CreationNeedsProduct.text(crate::Lang::En)),
+        "the refusal names the missing product: {refusal}"
+    );
+    assert_eq!(session.project().root().children().len(), 1, "nothing is written");
+    assert!(!session.can_undo(), "a refusal records no history");
     assert!(session.project().panel(panel).is_some(), "the rest of the document is untouched");
 }
 
@@ -641,9 +653,10 @@ fn every_creation_tool_lands_at_the_root_beside_a_selected_nested_assembly() {
 fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
     let (project, _panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
-    let root = session.project().root().id();
-    let assembly = create_assembly_under(&mut session, root, "Frame");
     let mut editor = Editor::new();
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("create the frame");
+    let product = session.active_product().expect("the frame is open");
+    let assembly = create_assembly_under(&mut session, product, "Frame");
     assert!(editor.arm_creation(session.project(), assembly), "a container can be armed");
     assert_eq!(editor.creation_parent_name(session.project()), Some("Frame"));
     assert_eq!(editor.creation_target(session.project()), assembly, "the armed container is the target");
@@ -1222,45 +1235,160 @@ fn a_viewport_click_selects_the_outermost_closed_container() {
     assert_eq!(editor.selected_node(), None);
 }
 
+/// A project holding one product with a shelf inside it.
+fn product_project() -> (Project, Id, Id) {
+    let mut project = sample_project();
+    let root = project.root().id();
+    let product = project
+        .add_product(
+            root,
+            "Base cabinet",
+            ClassCode::GENERAL_PRODUCT,
+            Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid box"),
+            Placement::IDENTITY,
+        )
+        .expect("add the product");
+    let shelf = project
+        .add_panel(
+            product,
+            "Shelf",
+            PanelCreate::default_nominal_size().expect("a size"),
+            None,
+            sample_panel_thickness(),
+            Placement::IDENTITY,
+        )
+        .expect("add the shelf");
+    (project, product, shelf)
+}
+
+fn product_draft() -> crate::product_card::ProductDraft {
+    crate::product_card::ProductDraft {
+        envelope: Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid box"),
+        class: ClassCode::GENERAL_PRODUCT,
+    }
+}
+
+#[test]
+fn creating_a_frame_opens_it_and_the_next_panel_lands_inside() {
+    let mut session = Session::with_catalog(sample_project(), sample_catalog());
+    let mut editor = Editor::new();
+
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("create the frame");
+    let product = session.active_product().expect("the new frame is open");
+    assert_eq!(session.project().products(), vec![product]);
+    let container = session.project().container(product).expect("the product is a container");
+    assert_eq!(container.name(), "General product", "the placeholder class names the piece");
+    assert_eq!(container.class(), ClassCode::GENERAL_PRODUCT);
+    assert_eq!(container.placement().translation().length(), 0.0, "the first frame stands at the origin");
+    assert_eq!(
+        container.envelope(),
+        Some(Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid box"))
+    );
+    assert_eq!(editor.selected_node(), Some(product), "the new frame is selected");
+    assert_eq!(editor.creation_target(session.project()), product, "the frame is armed for parts");
+
+    let target = editor.creation_target(session.project());
+    editor.create_panel(&mut session, target).expect("create the next panel");
+    let panel = editor.selected_node().expect("the new panel is selected");
+    assert_eq!(session.project().parent_of(panel), Some(product), "the part is born inside the open product");
+}
+
+#[test]
+fn a_second_frame_stands_beside_the_first_one_and_opens_in_turn() {
+    let mut session = Session::with_catalog(sample_project(), sample_catalog());
+    let mut editor = Editor::new();
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("the first frame");
+    let first = session.active_product().expect("the first frame is open");
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("the second frame");
+    let second = session.active_product().expect("the second frame is open");
+    assert_ne!(first, second);
+    assert_eq!(session.active_product(), Some(second), "opening another product replaces the first");
+
+    let first_box = session.project().container(first).and_then(Container::envelope).expect("the first box");
+    let second_box = session.project().container(second).and_then(Container::envelope).expect("the second box");
+    assert_eq!(first_box, second_box);
+    assert_eq!(
+        session.project().container(second).expect("the product").placement().translation().x,
+        600.0,
+        "the second frame stands beside the first, clear of it"
+    );
+}
+
+#[test]
+fn a_double_click_opens_the_product_that_owns_the_hit_and_a_loose_part_opens_none() {
+    let (project, product, shelf) = product_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+
+    assert!(editor.enter_viewport_level(&mut session, Some(shelf)), "a click in the product opens it");
+    assert_eq!(session.active_product(), Some(product));
+    assert_eq!(editor.creation_target(session.project()), product, "the product receives the next part");
+
+    // A part that belongs to no product selects itself and opens nothing.
+    let loose = Session::with_catalog(sample_project(), sample_catalog());
+    let mut loose = loose;
+    let mut editor = Editor::new();
+    assert!(!editor.enter_viewport_level(&mut loose, Some(Id::new(2).expect("the sample panel"))));
+    assert_eq!(loose.active_product(), None, "a loose part never opens a product");
+}
+
+#[test]
+fn the_tree_click_opens_and_closes_the_working_product() {
+    let (project, product, _shelf) = product_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+
+    editor.run_action(&mut session, TreeAction::OpenProduct { node: product }, crate::Lang::En).expect("open");
+    assert_eq!(session.active_product(), Some(product));
+    assert_eq!(editor.creation_target(session.project()), product);
+
+    editor.run_action(&mut session, TreeAction::CloseProduct, crate::Lang::En).expect("close");
+    assert_eq!(session.active_product(), None);
+    assert_eq!(editor.creation_target(session.project()), session.project().root().id());
+}
+
 #[test]
 fn double_click_enters_one_level_and_reveals_the_child_under_the_pointer() {
     let (project, group, drawer, front) = grouped_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
 
-    editor.enter_viewport_level(&project, Some(front));
+    assert!(!editor.enter_viewport_level(&mut session, Some(front)), "a group opens no product");
     assert_eq!(editor.selected_node(), Some(drawer));
     assert!(editor.open.contains(&group));
 
-    editor.enter_viewport_level(&project, Some(front));
+    editor.enter_viewport_level(&mut session, Some(front));
     assert_eq!(editor.selected_node(), Some(front));
     assert!(editor.open.contains(&drawer));
 
-    editor.enter_viewport_level(&project, Some(front));
+    editor.enter_viewport_level(&mut session, Some(front));
     assert_eq!(editor.selected_node(), Some(front), "a panel has no level to enter");
 }
 
 #[test]
 fn escape_closes_one_level_and_returns_to_the_parent_container() {
     let (project, group, drawer, front) = grouped_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
+    let project = session.project();
 
-    editor.exit_level(&project);
+    editor.exit_level(project);
     assert_eq!(editor.selected_node(), None, "nothing is open yet");
 
-    editor.enter_viewport_level(&project, Some(front));
-    editor.enter_viewport_level(&project, Some(front));
+    editor.enter_viewport_level(&mut session, Some(front));
+    editor.enter_viewport_level(&mut session, Some(front));
     assert_eq!(editor.selected_node(), Some(front));
 
-    editor.exit_level(&project);
+    editor.exit_level(session.project());
     assert_eq!(editor.selected_node(), Some(drawer));
     assert!(!editor.open.contains(&drawer));
     assert!(editor.open.contains(&group));
 
-    editor.exit_level(&project);
+    editor.exit_level(session.project());
     assert_eq!(editor.selected_node(), Some(group));
     assert!(!editor.open.contains(&group));
 
-    editor.exit_level(&project);
+    editor.exit_level(session.project());
     assert_eq!(editor.selected_node(), Some(group), "the top level stays selected");
 }
 
@@ -1602,4 +1730,106 @@ fn a_caret_click_opens_the_list_and_writes_no_revision() {
     assert!(editor.variant_list_open(), "a click on the caret opens the list");
     assert_eq!(session.project().revision(), revision, "opening the list is view state, not an edit");
     assert!(editor.pinned_variants().is_empty(), "opening the list pins nothing");
+}
+
+/// A session whose only product is open, ready for a fill.
+fn fill_session() -> (Session, Id) {
+    let (project, _panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    editor.create_product(&mut session, product_draft(), crate::Lang::En).expect("create the frame");
+    let product = session.active_product().expect("the frame is open");
+    (session, product)
+}
+
+#[test]
+fn the_empty_space_tool_arms_only_a_class_whose_trait_fills_a_void() {
+    let (session, _product) = fill_session();
+    let mut editor = Editor::new();
+
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("a post fills a void");
+    assert_eq!(
+        editor.fill_arm(),
+        Some(FillArm { class: ClassCode::VERTICAL_PANEL, fill: furnicraft_model::Fill::HeightAndDepth }),
+        "a post takes the niche's height and depth"
+    );
+
+    editor.arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En).expect("a shelf fills a void");
+    assert_eq!(
+        editor.fill_arm().map(|arm| arm.fill),
+        Some(furnicraft_model::Fill::WidthAndDepth),
+        "a shelf takes the niche's width and depth"
+    );
+
+    let back: ClassCode = "30.12.00".parse().expect("a back panel");
+    let refusal = editor.arm_fill(&session, back, crate::Lang::En).expect_err("a back panel does not fill a void");
+    assert!(refusal.contains(furnicraft_text::Message::FillNeedsFillTrait.text(crate::Lang::En)), "{refusal}");
+    assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL), "a refusal keeps the arm");
+}
+
+#[test]
+fn the_empty_space_tool_refuses_without_an_open_product() {
+    let (project, _panel) = contour_panel_project();
+    let session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    let refusal = editor
+        .arm_fill(&session, ClassCode::HORIZONTAL_PANEL, crate::Lang::En)
+        .expect_err("no product offers no niche");
+    assert!(refusal.contains(furnicraft_text::Message::FillNeedsProduct.text(crate::Lang::En)), "{refusal}");
+    assert!(editor.fill_arm().is_none());
+}
+
+#[test]
+fn arming_the_empty_space_tool_leaves_the_other_pointer_modes() {
+    let (session, _product) = fill_session();
+    let mut editor = Editor::new();
+    editor.start_drawing(DrawTool::Line);
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post");
+    assert!(editor.drawing().is_none(), "a fill replaces the running draft");
+    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm a cube");
+    assert!(editor.fill_arm().is_none(), "a primitive replaces the fill");
+    editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post again");
+    assert!(editor.pending_primitive().is_none(), "the fill replaces the primitive");
+    editor.cancel_fill();
+    assert!(editor.fill_arm().is_none());
+}
+
+#[test]
+fn a_second_click_on_the_armed_cell_drops_the_empty_space_tool() {
+    let (mut session, _product) = fill_session();
+    let mut editor = Editor::new();
+    let action = ToolAction::Fill { class: ClassCode::HORIZONTAL_PANEL };
+    editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the first click arms");
+    assert_eq!(editor.fill_arm().map(|arm| arm.class), Some(ClassCode::HORIZONTAL_PANEL));
+    editor.apply_ribbon_actions(&mut session, vec![action], crate::Lang::En).expect("the second click drops");
+    assert!(editor.fill_arm().is_none(), "the cell toggles the tool");
+}
+
+#[test]
+fn a_fill_creates_a_classed_panel_of_exactly_the_ghost_size() {
+    let (mut session, product) = fill_session();
+    let mut editor = Editor::new();
+    let size = furnicraft_model::PanelNominalSize::new(millimetres(560), millimetres(500)).expect("a size");
+    let placement =
+        Placement::IDENTITY.with_translation(millimetres(20), millimetres(30), millimetres(350)).expect("a placement");
+
+    editor
+        .create_panel_sized(
+            &mut session,
+            product,
+            "Shelf".to_owned(),
+            size,
+            None,
+            placement,
+            Some(ClassCode::HORIZONTAL_PANEL),
+        )
+        .expect("create the shelf");
+    let id = editor.selected_node().expect("the created panel is selected");
+    let panel = session.project().panel(id).expect("a panel");
+    assert_eq!(panel.nominal_size(), size, "the created part is exactly the ghost's size");
+    assert_eq!(panel.placement(), placement, "and exactly the ghost's placement");
+    assert_eq!(session.project().class(id), Some(ClassCode::HORIZONTAL_PANEL), "the class travels with it");
+
+    session.undo().expect("one entry");
+    assert!(session.project().panel(id).is_none(), "one undo takes the whole fill back");
 }

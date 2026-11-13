@@ -3,7 +3,8 @@
 //! A saved scene is UTF-8 JSON with the extension `.fcs`. The envelope owns the format identity
 //! and its version, carries the serialized [`Project`] as its only payload, and preserves
 //! top-level sections it does not understand so an older build never destroys a newer build's
-//! data. The document keeps its own schema version and migrations in [`furnicraft_model`].
+//! data. The document keeps its own schema version in [`furnicraft_model`], and that version is the
+//! only one this build reads: a file from any other build is a readable error, never a migration.
 //!
 //! The crate is deliberately below `engine` and `ui`: saving and loading are file operations on
 //! data, and a headless job or the assistant needs them without a window. The contract is
@@ -139,7 +140,7 @@ impl SceneFile {
 
     /// Parses and checks a scene file's text.
     ///
-    /// The document is migrated and validated by its own deserializer; this function checks the
+    /// The document is validated by its own deserializer; this function checks the
     /// envelope: the format identity, the framing version and the preserved sections.
     pub fn parse(text: &str) -> Result<Self, SceneFileError> {
         let envelope: Envelope = serde_json::from_str(text)?;

@@ -92,7 +92,7 @@ Tests must not need a GPU or a window. Use `furnicraft-testkit` fixtures rather 
 ### 8. Update the documentation
 
 - `PROJECT.md` — if the command changes the product surface or the crate map.
-- Command reference — when `docs/commands.md` exists, add a row: id, label, params, since-version.
+- Command reference — when a command reference document exists, add a row: id, label, params, since-version.
 - `AGENTS.md` — only if the command introduces a new rule, not for every command.
 
 ### 9. Run the final gate

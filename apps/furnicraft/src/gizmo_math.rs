@@ -11,8 +11,9 @@ use std::f64::consts::FRAC_PI_2;
 
 use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
+use furnicraft_engine::{Dimension, NodeRules};
 use furnicraft_geom::{DMat4, DQuat, DVec2, DVec3};
-use furnicraft_model::{Id, Placement, Project};
+use furnicraft_model::{Id, MoveAxis, Placement, Project};
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection, Ray};
 use furnicraft_units::Length;
 
@@ -27,6 +28,9 @@ const ORIGIN_DEAD_ZONE: f32 = 10.0;
 
 /// Axes closer than this to the view direction are not drawn.
 const VIEW_ALIGNMENT_LIMIT: f64 = 0.985;
+
+/// Every local axis a handle may name, for a gizmo that is not gated by a class.
+pub(crate) const ALL_AXES: [bool; 3] = [true, true, true];
 
 /// The work-plane grid step, in millimetres.
 pub(crate) const SNAP_GRID_MM: f64 = 10.0;
@@ -76,6 +80,33 @@ impl Axis {
         }
     }
 
+    /// Its index in a node's local frame, where X is the length, Y the width and Z the thickness.
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::X => 0,
+            Self::Y => 1,
+            Self::Z => 2,
+        }
+    }
+
+    /// The world axis a translate drag of this handle runs along.
+    pub(crate) const fn move_axis(self) -> MoveAxis {
+        match self {
+            Self::X => MoveAxis::X,
+            Self::Y => MoveAxis::Y,
+            Self::Z => MoveAxis::Z,
+        }
+    }
+
+    /// The local dimension this axis changes, for the class gate.
+    pub(crate) const fn dimension(self) -> Dimension {
+        match self {
+            Self::X => Dimension::Length,
+            Self::Y => Dimension::Width,
+            Self::Z => Dimension::Thickness,
+        }
+    }
+
     /// The gamma-space colour of this axis.
     pub(crate) fn color(self) -> Color32 {
         match self {
@@ -117,10 +148,16 @@ impl Target<'_> {
         self.project.pivot_world(self.anchor()?)
     }
 
-    /// Every drawable that moves with the selection, in target order.
+    /// Every scene item that moves with the selection, in target order.
+    ///
+    /// A panel, an object and a path carry their own id. A product's dashed envelope does too, so
+    /// the frame follows a furniture drag instead of staying behind until the release.
     pub(crate) fn drawables(&self) -> Vec<Id> {
         let mut drawables = Vec::new();
         for target in self.move_targets() {
+            if self.project.container(target.node).is_some_and(|container| container.envelope().is_some()) {
+                drawables.push(target.node);
+            }
             drawables.extend(self.project.geometry_ids_under(target.node).unwrap_or_default());
         }
         drawables
@@ -691,12 +728,40 @@ pub(crate) struct AxisHandle {
     pub(crate) direction: Vec2,
 }
 
-/// The projected handles of a gizmo at `origin_world`, skipping axes that point at the camera.
-pub(crate) fn axis_handles(camera: Camera, viewport: egui::Rect, origin_world: DVec3, origin: Pos2) -> Vec<AxisHandle> {
+/// Which local axes a node's class lets a gizmo change, in [`Axis::index`] order.
+///
+/// The vertex gizmo edits geometry, so it offers the handles the class's `extent` allows: a free
+/// class all three, a linear stock part only the length, a bought fitting none. An unclassified
+/// node is free, which is what keeps the tool usable before a class is assigned.
+pub(crate) fn editable_axes(project: &Project, node: Id) -> [bool; 3] {
+    let rules = NodeRules::of(project, node);
+    let mut axes = ALL_AXES;
+    for axis in Axis::ALL {
+        if let Some(slot) = axes.get_mut(axis.index()) {
+            *slot = rules.may_resize(axis.dimension());
+        }
+    }
+    axes
+}
+
+/// Whether a handle list lets `axis` be drawn and hit.
+fn axis_allowed(axes: [bool; 3], axis: Axis) -> bool {
+    axes.get(axis.index()).copied().unwrap_or(true)
+}
+
+/// The projected handles of a gizmo at `origin_world`, skipping axes that point at the camera and
+/// the axes the class does not let change.
+pub(crate) fn axis_handles(
+    camera: Camera,
+    viewport: egui::Rect,
+    origin_world: DVec3,
+    origin: Pos2,
+    axes: [bool; 3],
+) -> Vec<AxisHandle> {
     let step = (camera.distance() * 0.01).max(1.0);
     let mut handles = Vec::with_capacity(Axis::ALL.len());
     for axis in Axis::ALL {
-        if axis.direction().dot(camera.forward()).abs() > VIEW_ALIGNMENT_LIMIT {
+        if !axis_allowed(axes, axis) || axis.direction().dot(camera.forward()).abs() > VIEW_ALIGNMENT_LIMIT {
             continue;
         }
         let Some(end) = screen_point(camera, viewport, origin_world + axis.direction() * step) else {
@@ -711,13 +776,19 @@ pub(crate) fn axis_handles(camera: Camera, viewport: egui::Rect, origin_world: D
 }
 
 /// The axis whose handle is nearest to `pointer`, ignoring the dead zone around the origin.
-pub(crate) fn hit_axis(camera: Camera, viewport: egui::Rect, origin_world: DVec3, pointer: Pos2) -> Option<Axis> {
+pub(crate) fn hit_axis(
+    camera: Camera,
+    viewport: egui::Rect,
+    origin_world: DVec3,
+    pointer: Pos2,
+    axes: [bool; 3],
+) -> Option<Axis> {
     let origin = screen_point(camera, viewport, origin_world)?;
     if !viewport.expand(64.0).contains(origin) {
         return None;
     }
     let mut best: Option<(f32, Axis)> = None;
-    for handle in axis_handles(camera, viewport, origin_world, origin) {
+    for handle in axis_handles(camera, viewport, origin_world, origin, axes) {
         let distance = distance_to_handle(pointer, origin, handle.tip);
         let Some(distance) = distance else {
             continue;
@@ -755,14 +826,18 @@ pub(crate) fn paint_axis_handles(
     origin_world: DVec3,
     hover: Option<Axis>,
     active: Option<Axis>,
+    axes: [bool; 3],
 ) {
+    if !axes.iter().any(|allowed| *allowed) {
+        return;
+    }
     let Some(origin) = screen_point(camera, viewport, origin_world) else {
         return;
     };
     if !viewport.expand(64.0).contains(origin) {
         return;
     }
-    let handles = axis_handles(camera, viewport, origin_world, origin);
+    let handles = axis_handles(camera, viewport, origin_world, origin, axes);
     let painter = ui.painter().with_clip_rect(viewport);
     let center_tone = if active.is_some() { Color32::from_gray(140) } else { Color32::from_gray(220) };
     painter.circle_filled(origin, 3.0, center_tone);
@@ -799,8 +874,11 @@ pub(crate) fn paint_axis_handles(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{CameraProjection, Container, LightKind, Panel, Project};
-    use furnicraft_testkit::{sample_panel_nominal_size, sample_panel_thickness, sample_project};
+    use furnicraft_model::{
+        CameraProjection, ClassCode, Container, Envelope, Geometry, LightKind, Mesh, Panel, Project, PropertyValue,
+        SYSTEM_CLASS,
+    };
+    use furnicraft_testkit::{millimetres, sample_panel_nominal_size, sample_panel_thickness, sample_project};
 
     use super::*;
 
@@ -857,7 +935,7 @@ mod tests {
     #[test]
     fn the_default_view_draws_three_distinct_handles() {
         let camera = Camera::default();
-        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera));
+        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera), ALL_AXES);
         assert_eq!(handles.len(), 3);
         for handle in &handles {
             assert!(handle.tip.is_finite());
@@ -872,7 +950,7 @@ mod tests {
     fn a_view_aligned_axis_has_no_handle() {
         let mut camera = Camera::default();
         camera.look_from(DVec3::Z);
-        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera));
+        let handles = axis_handles(camera, viewport(), camera.target(), origin_screen(camera), ALL_AXES);
         assert!(handles.iter().all(|handle| handle.axis != Axis::Z), "handles were {handles:?}");
         assert_eq!(handles.len(), 2);
     }
@@ -882,12 +960,12 @@ mod tests {
         let camera = Camera::default();
         let origin_world = camera.target();
         let origin = origin_screen(camera);
-        let handles = axis_handles(camera, viewport(), origin_world, origin);
+        let handles = axis_handles(camera, viewport(), origin_world, origin, ALL_AXES);
         let x = handles.iter().find(|handle| handle.axis == Axis::X).expect("X handle");
         let pointer = origin + (x.tip - origin) * 0.6;
-        assert_eq!(hit_axis(camera, viewport(), origin_world, pointer), Some(Axis::X));
-        assert_eq!(hit_axis(camera, viewport(), origin_world, origin), None);
-        assert_eq!(hit_axis(camera, viewport(), origin_world, origin + Vec2::new(300.0, 300.0)), None);
+        assert_eq!(hit_axis(camera, viewport(), origin_world, pointer, ALL_AXES), Some(Axis::X));
+        assert_eq!(hit_axis(camera, viewport(), origin_world, origin, ALL_AXES), None);
+        assert_eq!(hit_axis(camera, viewport(), origin_world, origin + Vec2::new(300.0, 300.0), ALL_AXES), None);
     }
 
     #[test]
@@ -1325,5 +1403,74 @@ mod tests {
         assert_eq!(distance_to_segment(Pos2::new(0.0, 3.0), Pos2::ZERO, Pos2::new(10.0, 0.0)), Some(3.0));
         assert!(screen_direction(Vec2::ZERO).is_none());
         assert_eq!(screen_direction(Vec2::new(0.0, 4.0)), Some(Vec2::new(0.0, 1.0)));
+    }
+    /// A sample project with one classed cube at the root, and the cube's id.
+    fn classed_cube(code: &str) -> (Project, Id) {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let mesh = Mesh::cube(millimetres(100)).expect("cube");
+        let object = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("object");
+        if !code.is_empty() {
+            project
+                .set_property(object, SYSTEM_CLASS, PropertyValue::class(code.parse().expect("class code")))
+                .expect("class the cube");
+        }
+        (project, object)
+    }
+
+    #[test]
+    fn a_product_drag_carries_its_envelope_in_the_preview() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let envelope = Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid envelope");
+        let class: ClassCode = "30.01.01".parse().expect("a base cabinet");
+        let product = project.add_product(root, "Cabinet", class, envelope, Placement::IDENTITY).expect("a product");
+        let selection = [product];
+        assert!(
+            target(&project, &selection).drawables().contains(&product),
+            "the dashed frame is a scene item of the product's own id and must follow the drag"
+        );
+
+        // A loose panel carries its own id too; a panel is a drawable, not an envelope.
+        let panel = Id::new(2).expect("id");
+        let loose = [panel];
+        assert_eq!(target(&project, &loose).drawables(), vec![panel]);
+    }
+
+    #[test]
+    fn the_gizmo_offers_the_handles_the_class_allows() {
+        let (project, cube) = classed_cube("");
+        assert_eq!(editable_axes(&project, cube), ALL_AXES, "an unclassified mesh is free");
+        let camera = Camera::default();
+        let origin = origin_screen(camera);
+        assert_eq!(axis_handles(camera, viewport(), camera.target(), origin, ALL_AXES).len(), 3);
+
+        let (project, worktop) = classed_cube("70.01");
+        let axes = editable_axes(&project, worktop);
+        assert_eq!(axes, [true, false, false], "a worktop changes its length only");
+        let handles = axis_handles(camera, viewport(), camera.target(), origin, axes);
+        assert_eq!(handles.len(), 1);
+        assert_eq!(handles.first().map(|handle| handle.axis), Some(Axis::X));
+
+        let (project, hinge) = classed_cube("50.02.01");
+        assert_eq!(editable_axes(&project, hinge), [false; 3], "a hinge is never resized");
+        assert!(axis_handles(camera, viewport(), camera.target(), origin, editable_axes(&project, hinge)).is_empty());
+    }
+
+    #[test]
+    fn a_fixed_class_cannot_grab_a_handle() {
+        let (project, hinge) = classed_cube("50.02.01");
+        let camera = Camera::default();
+        let origin_world = camera.target();
+        let origin = origin_screen(camera);
+        let free = axis_handles(camera, viewport(), origin_world, origin, ALL_AXES);
+        let x = free.iter().find(|handle| handle.axis == Axis::X).expect("X handle");
+        let pointer = origin + (x.tip - origin) * 0.6;
+        assert_eq!(hit_axis(camera, viewport(), origin_world, pointer, ALL_AXES), Some(Axis::X));
+        assert_eq!(
+            hit_axis(camera, viewport(), origin_world, pointer, editable_axes(&project, hinge)),
+            None,
+            "a class with no extent offers no handle to grab"
+        );
     }
 }

@@ -40,6 +40,12 @@ pub struct Session {
     next_scope: u64,
     /// The overlay a previewing operation fills; see [`Preview`].
     preview: Preview,
+    /// The one product the user is working in, or `None` while every product is closed.
+    ///
+    /// Openness is view state per session (ADR 0098, ADR 0029): it is opened and closed by a view
+    /// operation, never by a command and never written to the scene file. A tab owns its session,
+    /// so two tabs keep two different products open.
+    active_product: Option<Id>,
 }
 
 impl Session {
@@ -61,6 +67,46 @@ impl Session {
             edit: None,
             next_scope: 0,
             preview: Preview::new(),
+            active_product: None,
+        }
+    }
+
+    /// The one open product, or `None` when every product is closed (ADR 0098).
+    ///
+    /// This is view state: it is never serialised with the document, and a tab that is closed
+    /// forgets it with its session.
+    pub fn active_product(&self) -> Option<Id> {
+        self.active_product
+    }
+
+    /// Opens `id` as the working product, replacing whichever product was open.
+    ///
+    /// This is a view operation, not a command: it writes no document field, moves no revision and
+    /// leaves no undo entry. Only a container whose class plays the product role can be opened; a
+    /// part, a group or the root changes nothing and returns `false` (ADR 0098, ADR 0100).
+    pub fn open_product(&mut self, id: Id) -> bool {
+        if !self.project.container(id).is_some_and(|container| container.is_product()) {
+            return false;
+        }
+        self.active_product = Some(id);
+        true
+    }
+
+    /// Closes the open product, so no product is being worked in.
+    pub fn close_product(&mut self) {
+        self.active_product = None;
+    }
+
+    /// Drops the open product when the document no longer holds it as a product.
+    ///
+    /// A delete, a conversion to a group or an undo can take the product away; the session must not
+    /// keep pointing at a node that is gone or has stopped being a product.
+    fn retain_active_product(&mut self) {
+        if self
+            .active_product
+            .is_some_and(|id| !self.project.container(id).is_some_and(|container| container.is_product()))
+        {
+            self.active_product = None;
         }
     }
 
@@ -202,6 +248,7 @@ impl Session {
         }
         self.redo.clear();
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         true
     }
 
@@ -214,6 +261,7 @@ impl Session {
         let (outcome, previous) = self.run(id, params)?;
         self.edit = None;
         self.record(previous);
+        self.retain_active_product();
         Ok(outcome)
     }
 
@@ -225,6 +273,7 @@ impl Session {
     /// history it does not own.
     pub fn dispatch_in(&mut self, scope: EditScope, id: &str, params: &Value) -> Result<CommandOutcome, CommandError> {
         let (outcome, previous) = self.run(id, params)?;
+        self.retain_active_product();
         match self.edit {
             Some(open) if open.scope == scope && open.snapshot_pushed && !self.undo.is_empty() => {
                 // The entry already holds the state before the edit; `previous` is a step inside it.
@@ -240,11 +289,14 @@ impl Session {
     /// Runs one command on a copy of the document and installs the result.
     ///
     /// Returns the command's outcome and the document as it was before it, which is what the history
-    /// keeps; a failed command leaves the current document untouched.
+    /// keeps; a failed command leaves the current document untouched. The creation guard is asked
+    /// after the command ran on the copy and before the copy is installed, so a furniture part that
+    /// no open product may receive writes nothing and records no history (ADR 0098).
     fn run(&mut self, id: &str, params: &Value) -> Result<(CommandOutcome, Project), CommandError> {
         let spec = CommandRegistry::new().get(id).ok_or_else(|| CommandError::UnknownCommand { id: id.to_owned() })?;
         let mut working = self.project.clone();
         let outcome = spec.run(&mut working, &self.catalog, params)?;
+        spec.creation_refusal(self, params).map_err(|refusal| CommandError::creation(spec.id(), refusal))?;
         let previous = std::mem::replace(&mut self.project, working);
         Ok((outcome, previous))
     }
@@ -267,6 +319,7 @@ impl Session {
         }
         self.redo.push(current);
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         Ok(())
     }
 
@@ -281,6 +334,7 @@ impl Session {
         }
         self.undo.push(current);
         self.dirty = !self.project.same_content(&self.saved_project);
+        self.retain_active_product();
         Ok(())
     }
 }
@@ -290,20 +344,21 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
-        EdgeBandingMaterial, EdgeId, FaceSide, FrameAnchor, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
-        PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
-        Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
+        Catalog, ClassCode, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth,
+        CutoutShape, EdgeBandingMaterial, EdgeId, Envelope, FaceSide, FrameAnchor, Geometry, Id, MachiningAnchor,
+        MachiningParams, PanelContourError, PanelMaterial, PanelNominalSize, PivotLocal, Placement, ProjectError,
+        PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
         sample_edge_cutout_rect, sample_edge_material_id, sample_material_id, sample_narrow_panel_nominal_size,
         sample_notch_cutout_rect, sample_outside_cutout_rect, sample_overlapping_cutout_rect,
-        sample_panel_nominal_size, sample_panel_thickness, sample_project, sample_resized_panel_nominal_size,
-        sample_thin_panel_thickness, sample_wide_band_thickness,
+        sample_panel_nominal_size, sample_panel_thickness, sample_product_project, sample_project,
+        sample_resized_panel_nominal_size, sample_thin_panel_thickness, sample_wide_band_thickness,
     };
     use furnicraft_units::Length;
 
+    use crate::class_rules::{ClassRefusal, CreationRefusal, Dimension};
     use crate::node_cmds::{
         AssemblyCreate, NodeComponentConvertToGroup, NodeDelete, NodeDuplicate, NodeGroup, NodeOriginRebase,
         NodePivotCenter, NodePivotSet, NodePlacement, NodePlacementSet, NodePlacementSetMany, NodePlacementWorldZero,
@@ -320,13 +375,23 @@ mod tests {
         Session::with_catalog(sample_project(), sample_catalog())
     }
 
+    /// The sample scene with one product open, so a furniture command has somewhere to build.
+    fn product_session() -> Session {
+        let (project, product) = sample_product_project();
+        let mut session = Session::with_catalog(project, sample_catalog());
+        assert!(session.open_product(product), "the fixture product is open");
+        session
+    }
+
     fn panel_create(session: &Session, name: &str) -> PanelCreate {
         PanelCreate {
-            parent: session.project().root().id(),
+            parent: session.active_product().unwrap_or_else(|| session.project().root().id()),
             name: name.to_owned(),
             nominal_size: sample_panel_nominal_size(),
             material: sample_material_id(),
             placement: Placement::IDENTITY,
+            class: None,
+            outline: None,
         }
     }
 
@@ -338,9 +403,9 @@ mod tests {
         }
     }
 
-    /// A session whose root holds a constructive object with a 700 x 500 rectangular contour.
+    /// A session whose open product holds a constructive object with a 700 x 500 rectangular contour.
     fn session_with_contour_source() -> (Session, Id) {
-        let mut project = sample_project();
+        let (mut project, product) = sample_product_project();
         let width = Length::from_millimetres(700).expect("width");
         let height = Length::from_millimetres(500).expect("height");
         let contour = Contour::from_polygon(vec![
@@ -353,14 +418,16 @@ mod tests {
         let constructive =
             Constructive::extrude(contour.into(), sample_panel_thickness()).expect("constructive object");
         let source = project
-            .add_object(project.root().id(), "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
+            .add_object(product, "Counter", Placement::IDENTITY, Geometry::Constructive(constructive))
             .expect("contour source");
-        (Session::with_catalog(project, sample_catalog()), source)
+        let mut session = Session::with_catalog(project, sample_catalog());
+        assert!(session.open_product(product), "the fixture product is open");
+        (session, source)
     }
 
     fn contour_panel_create(session: &Session, source: Id, name: &str) -> PanelContourCreate {
         PanelContourCreate {
-            parent: session.project().root().id(),
+            parent: session.active_product().expect("a product is open"),
             name: name.to_owned(),
             source,
             material: sample_material_id(),
@@ -390,15 +457,179 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_panel_create_changes_the_document_once() {
+    fn a_furniture_part_needs_the_open_product_and_names_why_not() {
+        // No product at all: the editor asks for one first.
         let mut session = sample_session();
+        let before = session.project().revision();
+        let params = json_params(&panel_create(&session, "Back"));
+        assert!(!CommandRegistry::new().get("panel.create").expect("registered").enabled(&session, &params));
+        assert!(matches!(
+            session.dispatch("panel.create", &params),
+            Err(CommandError::CreationRefused { command: "panel.create", refusal: CreationRefusal::NoProductOpen })
+        ));
+        assert_eq!(session.project().revision(), before, "a refusal writes nothing");
+        assert!(!session.can_undo(), "a refusal records no history");
+
+        // The open product does not own the root: the target is outside it.
+        let mut session = product_session();
+        let root = session.project().root().id();
+        let at_root = json_params(&PanelCreate { parent: root, ..panel_create(&session, "Back") });
+        assert!(!CommandRegistry::new().get("panel.create").expect("registered").enabled(&session, &at_root));
+        assert!(matches!(
+            session.dispatch("panel.create", &at_root),
+            Err(CommandError::CreationRefused { command: "panel.create", refusal: CreationRefusal::ProductClosed })
+        ));
+        assert!(!session.can_undo(), "a refusal records no history");
+
+        // A second product is closed while the first is open, so its parts wait too.
+        let (mut project, first) = sample_product_project();
+        let root = project.root().id();
+        let envelope = Envelope::new(
+            Length::from_millimetres(600).expect("width"),
+            Length::from_millimetres(560).expect("depth"),
+            Length::from_millimetres(720).expect("height"),
+        )
+        .expect("a valid box");
+        let second = project
+            .add_product(root, "Other", ClassCode::GENERAL_PRODUCT, envelope, Placement::IDENTITY)
+            .expect("a second product");
+        let mut session = Session::with_catalog(project, sample_catalog());
+        assert!(session.open_product(second), "the second product is open");
+        let closed = json_params(&PanelCreate { parent: first, ..panel_create(&session, "Back") });
+        assert!(matches!(
+            session.dispatch("panel.create", &closed),
+            Err(CommandError::CreationRefused { refusal: CreationRefusal::ProductClosed, .. })
+        ));
+        assert!(!session.can_undo(), "a refusal records no history");
+
+        // The contour panel is a part through the same gate.
+        let (mut session, source) = session_with_contour_source();
+        let contour = json_params(&contour_panel_create(&session, source, "Top"));
+        session.close_product();
+        assert!(matches!(
+            session.dispatch("panel.contour.create", &contour),
+            Err(CommandError::CreationRefused {
+                command: "panel.contour.create",
+                refusal: CreationRefusal::NoProductOpen
+            })
+        ));
+        assert!(!session.can_undo(), "a refusal records no history");
+    }
+
+    #[test]
+    fn a_furniture_part_is_born_inside_the_open_product_and_its_groups() {
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let group = session
+            .dispatch(
+                "assembly.create",
+                &json_params(&AssemblyCreate {
+                    parent: product,
+                    name: "Case".to_owned(),
+                    placement: Placement::IDENTITY,
+                }),
+            )
+            .expect("a group inside the product")
+            .created_id()
+            .expect("a group id");
+        let spec = CommandRegistry::new().get("panel.create").expect("registered");
+        for parent in [product, group] {
+            let params = json_params(&PanelCreate { parent, ..panel_create(&session, "Side") });
+            assert!(spec.enabled(&session, &params), "the parent is inside the open product");
+            let created =
+                session.dispatch("panel.create", &params).expect("create the part").created_id().expect("a panel id");
+            assert_eq!(session.project().parent_of(created), Some(parent));
+        }
+    }
+
+    #[test]
+    fn a_classed_panel_lands_in_one_undo_step() {
+        // The fill tool names the class whose trait chose the axis pair, and the class is written by
+        // the same command: a click is one entry, not a create followed by an assignment.
+        let mut session = product_session();
+        let mut request = panel_create(&session, "Shelf");
+        request.class = Some("30.11".parse::<ClassCode>().expect("a shelf class"));
+        let params = json_params(&request);
+        let before = session.project().revision();
+
+        let outcome = session.dispatch("panel.create", &params).expect("create the shelf");
+        let id = outcome.created_id().expect("an id");
+        let shelf = "30.11".parse::<ClassCode>().expect("a shelf class");
+        assert_eq!(session.project().class(id), Some(shelf));
+        assert!(session.project().revision() > before, "the class is part of the same creation");
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole creation back");
+    }
+
+    #[test]
+    fn a_shaped_panel_is_born_from_its_ring_in_one_undo_step() {
+        // A shelf in a splayed niche arrives as a ring: the command creates a contour panel anchored
+        // at its own zero corner, with the tool's class, and one undo takes the whole part back.
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [Length::from_millimetres(400).expect("a length"), Length::ZERO],
+            [Length::from_millimetres(300).expect("a length"), Length::from_millimetres(560).expect("a width")],
+            [Length::from_millimetres(100).expect("a length"), Length::from_millimetres(560).expect("a width")],
+        ])
+        .expect("a trapezoid");
+        let size = PanelNominalSize::new(
+            Length::from_millimetres(400).expect("a length"),
+            Length::from_millimetres(560).expect("a width"),
+        )
+        .expect("a size");
+        let fill = "30.11".parse::<ClassCode>().expect("a shelf class");
+        let request = PanelCreate {
+            parent: product,
+            name: "Shelf".to_owned(),
+            nominal_size: size,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY
+                .with_translation(millimetres_length(100), Length::ZERO, millimetres_length(350))
+                .expect("a placement"),
+            class: Some(fill),
+            outline: Some(ring.clone()),
+        };
+        let params = json_params(&request);
+        let before = session.project().revision();
+
+        let id = session.dispatch("panel.create", &params).expect("create the shelf").created_id().expect("an id");
+        let panel = session.project().panel(id).expect("a panel");
+        assert!(panel.is_contour(), "the shaped shelf stores its ring, not a rectangle");
+        assert_eq!(panel.nominal_size(), size, "the ring's bounds are the panel's size");
+        assert_eq!(
+            panel.placement().translation_lengths(),
+            Some([millimetres_length(100), Length::ZERO, millimetres_length(350)]),
+            "anchored at its zero corner"
+        );
+        assert_eq!(panel.outline_contour().map(|stored| stored.bounds_micrometres()), Some(ring.bounds_micrometres()));
+        assert_eq!(session.project().class(id), Some(fill), "the tool's class travels with the same command");
+        assert!(session.project().revision() > before);
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole part back");
+    }
+
+    /// A whole millimetre as the document's length.
+    fn millimetres_length(value: i64) -> Length {
+        Length::from_millimetres(value).expect("whole millimetres fit")
+    }
+
+    #[test]
+    fn dispatch_panel_create_changes_the_document_once() {
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
         let params = json_params(&panel_create(&session, "Back"));
 
         let outcome = session.dispatch("panel.create", &params).expect("create panel");
 
-        assert_eq!(outcome.created_id(), Some(Id::new(5).expect("id")));
-        assert_eq!(session.project().revision().get(), 1);
+        assert_eq!(outcome.created_id(), Some(Id::new(6).expect("id")));
+        assert_eq!(session.project().revision().get(), 2);
         assert_eq!(session.project().root().children().len(), 3);
+        assert_eq!(session.project().parent_of(outcome.created_id().expect("id")), Some(product));
+        assert_eq!(session.project().container(product).expect("product").children().len(), 1);
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
@@ -460,7 +691,7 @@ mod tests {
         use furnicraft_units::Degrees;
 
         let mm = |value: i64| Length::from_millimetres(value).expect("millimetres");
-        let mut project = sample_project();
+        let (mut project, product) = sample_product_project();
         let root = project.root().id();
         let ring = Contour::from_polygon(vec![
             [Length::ZERO, Length::ZERO],
@@ -481,8 +712,9 @@ mod tests {
             .expect("translation")
             .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(40_000), ..EulerAngles::default() })
             .expect("rotation");
-        let parent = project.add_component(root, "Frame", parent_world).expect("container");
+        let parent = project.add_component(product, "Frame", parent_world).expect("container");
         let mut session = Session::with_catalog(project, sample_catalog());
+        assert!(session.open_product(product), "the fixture product is open");
 
         let create = PanelContourCreate {
             parent,
@@ -719,22 +951,25 @@ mod tests {
 
     #[test]
     fn undo_and_redo_restore_the_document_and_ids() {
-        let mut session = sample_session();
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
         let params = json_params(&panel_create(&session, "Back"));
         session.dispatch("panel.create", &params).expect("create panel");
 
         session.undo().expect("undo");
-        assert_eq!(session.project().revision().get(), 2);
-        assert_eq!(session.project().root().children().len(), 2);
-        assert_eq!(session.project().next_id().get(), 6);
+        assert_eq!(session.project().revision().get(), 3);
+        assert_eq!(session.project().root().children().len(), 3);
+        assert_eq!(session.project().container(product).expect("product").children().len(), 0);
+        assert_eq!(session.project().next_id().get(), 7);
         assert!(!session.can_undo());
         assert!(session.can_redo());
         assert!(!session.is_dirty());
 
         session.redo().expect("redo");
-        assert_eq!(session.project().revision().get(), 3);
+        assert_eq!(session.project().revision().get(), 4);
         assert_eq!(session.project().root().children().len(), 3);
-        assert_eq!(session.project().next_id().get(), 6);
+        assert_eq!(session.project().container(product).expect("product").children().len(), 1);
+        assert_eq!(session.project().next_id().get(), 7);
         assert!(session.can_undo());
         assert!(!session.can_redo());
         assert!(session.is_dirty());
@@ -844,7 +1079,7 @@ mod tests {
 
     #[test]
     fn a_plain_dispatch_closes_the_open_edit() {
-        let mut session = sample_session();
+        let mut session = product_session();
         let panel_id = Id::new(2).expect("id");
         let scope = session.begin_edit();
         let params = json_params(&PanelResize { panel: panel_id, nominal_size: sample_resized_panel_nominal_size() });
@@ -863,7 +1098,7 @@ mod tests {
             sample_resized_panel_nominal_size()
         );
         session.undo().expect("undo the plain command");
-        assert_eq!(session.project().root().children().len(), 2);
+        assert_eq!(session.project().root().children().len(), 3);
     }
 
     #[test]
@@ -1628,7 +1863,7 @@ mod tests {
 
     #[test]
     fn mark_saved_tracks_content() {
-        let mut session = sample_session();
+        let mut session = product_session();
         assert!(!session.is_dirty());
 
         let params = json_params(&panel_create(&session, "Back"));
@@ -1644,7 +1879,7 @@ mod tests {
 
     #[test]
     fn new_command_clears_redo() {
-        let mut session = sample_session();
+        let mut session = product_session();
         let params = json_params(&panel_create(&session, "Back"));
         session.dispatch("panel.create", &params).expect("create panel");
         session.undo().expect("undo");
@@ -1729,7 +1964,7 @@ mod tests {
 
     #[test]
     fn enabled_rejects_wrong_state_and_params() {
-        let session = sample_session();
+        let session = product_session();
         let registry = CommandRegistry::new();
         let spec = registry.get("panel.create").expect("panel.create is registered");
 
@@ -1989,17 +2224,17 @@ mod tests {
         assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!convert.enabled(&session, &json_params(&NodeComponentConvertToGroup { node: group_id })));
 
-        let furntype: FurnType = "12.03.02".parse().expect("furntype");
+        let class: ClassCode = "30.11".parse().expect("class");
         session
             .dispatch(
                 "node.property.set",
                 &json_params(&NodePropertySet {
                     node: group_id,
-                    key: SYSTEM_FURNTYPE.to_owned(),
-                    value: PropertyValue::furn_type(furntype),
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
                 }),
             )
-            .expect("type the container");
+            .expect("class the container");
         assert!(session.project().is_component(group_id));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));
@@ -2336,5 +2571,286 @@ mod tests {
         assert!(matches!(error, CommandError::Model(ProjectError::PanelPivotIsDerived { panel: id }) if id == panel));
         assert_eq!(session.project().pivot_local(panel), Some(PivotLocal::ZERO));
         assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
+    }
+    /// The sample shelf (id 2) classed as `code`, in a session whose root has no class.
+    fn classed_shelf(code: &str) -> (Session, Id) {
+        let mut session = sample_session();
+        let shelf = Id::new(2).expect("id");
+        let class: ClassCode = code.parse().expect("a class code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: shelf,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
+                }),
+            )
+            .expect("assign the class");
+        (session, shelf)
+    }
+
+    fn resize_request(panel: Id, length_mm: i64, width_mm: i64) -> Value {
+        let nominal_size = furnicraft_model::PanelNominalSize::new(
+            Length::from_millimetres(length_mm).expect("length"),
+            Length::from_millimetres(width_mm).expect("width"),
+        )
+        .expect("a valid size");
+        json_params(&PanelResize { panel, nominal_size })
+    }
+
+    #[test]
+    fn a_worktop_resizes_by_length_only() {
+        let (mut session, panel) = classed_shelf("70.01");
+        let registry = CommandRegistry::new();
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let revision = session.project().revision();
+
+        let longer = resize_request(panel, 900, 500);
+        assert!(resize.enabled(&session, &longer), "a worktop grows along its length");
+        session.dispatch("panel.resize", &longer).expect("resize along the length");
+        assert_eq!(
+            session.project().panel(panel).expect("panel").nominal_size().length(),
+            Length::from_millimetres(900).expect("length")
+        );
+
+        let wider = resize_request(panel, 900, 600);
+        assert!(!resize.enabled(&session, &wider), "a worktop never stretches across its width");
+        let error = session.dispatch("panel.resize", &wider).expect_err("the width is fixed");
+        assert!(matches!(
+            error,
+            CommandError::ClassRefused { command: "panel.resize", refusal: ClassRefusal::Dimension(Dimension::Width) }
+        ));
+        assert_eq!(
+            session.project().panel(panel).expect("panel").nominal_size().width(),
+            Length::from_millimetres(500).expect("width"),
+            "the refused resize changes nothing"
+        );
+        assert!(session.project().revision() > revision);
+    }
+
+    #[test]
+    fn changing_the_class_flips_the_same_resize_command() {
+        let (mut session, panel) = classed_shelf("30.11");
+        let registry = CommandRegistry::new();
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let wider = resize_request(panel, 700, 600);
+        assert!(resize.enabled(&session, &wider), "a horizontal panel resizes freely");
+        session.dispatch("panel.resize", &wider).expect("widen the shelf");
+
+        let class: ClassCode = "70.01".parse().expect("the worktop code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: panel,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
+                }),
+            )
+            .expect("reclass the same panel");
+        let even_wider = resize_request(panel, 700, 700);
+        assert!(!resize.enabled(&session, &even_wider), "the same command now refuses the width");
+        assert!(matches!(
+            session.dispatch("panel.resize", &even_wider).expect_err("the width is fixed"),
+            CommandError::ClassRefused { command: "panel.resize", .. }
+        ));
+    }
+
+    #[test]
+    fn a_hinge_offers_no_resize_and_no_banding() {
+        let (mut session, hinge) = classed_shelf("50.02.01");
+        let registry = CommandRegistry::new();
+        let revision = session.project().revision();
+
+        let resize = registry.get("panel.resize").expect("panel.resize is registered");
+        let bigger = resize_request(hinge, 800, 500);
+        assert!(!resize.enabled(&session, &bigger), "a hinge is never resized");
+        assert!(matches!(
+            session.dispatch("panel.resize", &bigger).expect_err("a hinge keeps its size"),
+            CommandError::ClassRefused { command: "panel.resize", refusal: ClassRefusal::Dimension(_) }
+        ));
+
+        let band = registry.get("panel.edge_banding.set").expect("edge banding is registered");
+        let params = json_params(&PanelEdgeBandingSet {
+            panel: hinge,
+            edge: RectEdge::Top.id(),
+            material: sample_edge_material_id(),
+            included_in_size: false,
+        });
+        assert!(!band.enabled(&session, &params), "a fitting is never banded");
+        assert!(matches!(
+            session.dispatch("panel.edge_banding.set", &params).expect_err("no banding on a hinge"),
+            CommandError::ClassRefused { command: "panel.edge_banding.set", refusal: ClassRefusal::Operation(_) }
+        ));
+        assert_eq!(session.project().revision(), revision, "the refused commands change nothing");
+    }
+
+    #[test]
+    fn a_class_without_cutouts_refuses_a_cutout() {
+        let (mut session, plinth) = classed_shelf("70.02");
+        let shape = CutoutShape::Rectangle(sample_cutout_rect());
+        let params = json_params(&cutout_request(plinth, shape, CutoutDepth::Through, FaceSide::A));
+        let registry = CommandRegistry::new();
+        let add = registry.get("panel.machining.add").expect("machining add is registered");
+        assert!(!add.enabled(&session, &params), "a plinth admits no cutout");
+        assert!(matches!(
+            session.dispatch("panel.machining.add", &params).expect_err("no cutout in a plinth"),
+            CommandError::ClassRefused { command: "panel.machining.add", refusal: ClassRefusal::Operation(_) }
+        ));
+
+        let (mut session, worktop) = classed_shelf("70.01");
+        let params = json_params(&cutout_request(
+            worktop,
+            CutoutShape::Rectangle(sample_cutout_rect()),
+            CutoutDepth::Through,
+            FaceSide::A,
+        ));
+        assert!(add.enabled(&session, &params), "a worktop takes a sink cutout");
+        session.dispatch("panel.machining.add", &params).expect("a cutout in a worktop");
+    }
+
+    #[test]
+    fn mounting_checks_the_host_class_on_assignment() {
+        let mut session = sample_session();
+        let drawer = Id::new(3).expect("drawer id");
+        let front = Id::new(4).expect("front id");
+        let worktop: ClassCode = "70.01".parse().expect("the worktop code");
+        session
+            .dispatch(
+                "node.property.set",
+                &json_params(&NodePropertySet {
+                    node: drawer,
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(worktop),
+                }),
+            )
+            .expect("class the host");
+
+        let hinge: ClassCode = "50.02".parse().expect("the cup hinge code");
+        let refused = json_params(&NodePropertySet {
+            node: front,
+            key: SYSTEM_CLASS.to_owned(),
+            value: PropertyValue::class(hinge),
+        });
+        let registry = CommandRegistry::new();
+        let set = registry.get("node.property.set").expect("property set is registered");
+        assert!(!set.enabled(&session, &refused), "a hinge does not sit in a worktop");
+        assert!(matches!(
+            session.dispatch("node.property.set", &refused).expect_err("a hinge does not sit in a worktop"),
+            CommandError::ClassRefused { command: "node.property.set", refusal: ClassRefusal::Host { host } } if host == worktop
+        ));
+
+        let sink: ClassCode = "60.01".parse().expect("the sink code");
+        let allowed = json_params(&NodePropertySet {
+            node: front,
+            key: SYSTEM_CLASS.to_owned(),
+            value: PropertyValue::class(sink),
+        });
+        assert!(set.enabled(&session, &allowed), "a sink sits in a worktop");
+        session.dispatch("node.property.set", &allowed).expect("assign the sink");
+    }
+}
+
+#[cfg(test)]
+mod product_tests {
+    #![allow(clippy::expect_used)]
+
+    use furnicraft_model::{ClassCode, Envelope};
+    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
+
+    use crate::product_cmds::{PRODUCT_CREATE_ID, ProductCreate};
+    use crate::session::Session;
+
+    fn json_params<T: serde::Serialize>(value: &T) -> serde_json::Value {
+        serde_json::to_value(value).expect("params serialize")
+    }
+
+    fn box_() -> Envelope {
+        Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid envelope")
+    }
+
+    /// A session with two products, created through the one creation command.
+    fn session_with_two_products() -> (Session, furnicraft_model::Id, furnicraft_model::Id) {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        let mut create = |name: &str| {
+            let placement = session.project().product_placement(box_());
+            let params = json_params(&ProductCreate {
+                parent: root,
+                name: name.to_owned(),
+                class: Some(ClassCode::GENERAL_PRODUCT),
+                envelope: box_(),
+                placement,
+            });
+            session.dispatch(PRODUCT_CREATE_ID, &params).expect("create product").created_id().expect("created id")
+        };
+        let first = create("Base cabinet");
+        let second = create("Wall cabinet");
+        (session, first, second)
+    }
+
+    #[test]
+    fn a_product_is_opened_and_replaced_by_the_next_one_opened() {
+        let (mut session, first, second) = session_with_two_products();
+        assert_eq!(session.active_product(), None, "a fresh session works in no product");
+
+        assert!(session.open_product(first));
+        assert_eq!(session.active_product(), Some(first));
+        assert!(session.open_product(second), "opening another product replaces the first");
+        assert_eq!(session.active_product(), Some(second));
+
+        session.close_product();
+        assert_eq!(session.active_product(), None, "closing leaves no product open");
+    }
+
+    #[test]
+    fn opening_is_a_view_operation_and_writes_no_document_state() {
+        let (mut session, first, _second) = session_with_two_products();
+        let revision = session.project().revision();
+        let undo_depth = session.can_undo();
+
+        assert!(session.open_product(first));
+        session.close_product();
+        assert!(session.open_product(first));
+
+        assert_eq!(session.project().revision(), revision, "opening moves no revision");
+        assert_eq!(session.can_undo(), undo_depth, "opening is not an undo entry");
+    }
+
+    #[test]
+    fn only_a_product_container_can_be_opened() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let root = session.project().root().id();
+        let panel = furnicraft_model::Id::new(2).expect("the sample panel");
+        assert!(!session.open_product(root), "the root is a frame, not a product");
+        assert!(!session.open_product(panel), "a panel is not a product");
+        assert_eq!(session.active_product(), None);
+    }
+
+    #[test]
+    fn the_open_product_is_not_written_to_the_scene_file() {
+        let (mut session, first, _second) = session_with_two_products();
+        assert!(session.open_product(first));
+
+        let text = serde_json::to_string(session.project()).expect("serialize the scene");
+        assert!(!text.contains("active_product"), "openness never reaches the file: {text}");
+        assert!(!text.contains("\"open\""), "no open flag is stored on a node");
+
+        let reloaded = serde_json::from_str::<furnicraft_model::Project>(&text).expect("load the scene");
+        let next = Session::with_catalog(reloaded, sample_catalog());
+        assert_eq!(next.active_product(), None, "a reloaded scene starts with every product closed");
+    }
+
+    #[test]
+    fn a_deleted_or_undone_product_is_no_longer_open() {
+        let (mut session, first, _second) = session_with_two_products();
+        assert!(session.open_product(first));
+
+        session.undo().expect("undo the second product");
+        assert_eq!(session.active_product(), Some(first), "the first product is still there");
+
+        session.undo().expect("undo the first product");
+        assert_eq!(session.active_product(), None, "the open product left with the undo");
     }
 }

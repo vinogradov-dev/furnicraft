@@ -658,48 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_three_banding_migrates_to_an_ordered_segment_list() {
-        let value = serde_json::json!({
-            "schema_version": 3,
-            "revision": 0,
-            "next_id": 20,
-            "root": {
-                "id": 1,
-                "name": "Root",
-                "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
-                "children": [{"panel": {
-                    "id": 2,
-                    "name": "Panel",
-                    "nominal_size": {"length": 700000, "width": 500000},
-                    "last_known_thickness": 18000,
-                    "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
-                    "edge_banding": [{
-                        "edge": 1,
-                        "material": 1,
-                        "included_in_size": true,
-                        "last_known_thickness": 2000,
-                        "last_known_width": 22000
-                    }],
-                    "corner_banding": [{
-                        "corner": 2,
-                        "material": 1,
-                        "included_in_size": false,
-                        "last_known_thickness": 2000,
-                        "last_known_width": 22000
-                    }],
-                    "corner_features": [{"corner": 2, "feature": {"kind": "chamfer", "incoming": 10000, "outgoing": 15000}}]
-                }}]
-            }
-        });
-        let project: Project = serde_json::from_value(value).expect("v3 project loads");
-        let panel = project.panel(Id::new(2).expect("id")).expect("panel");
-        assert_eq!(
-            panel.band_order(),
-            &[SegmentSource::Edge(RectEdge::Bottom.id()), SegmentSource::Corner(RectCorner::BottomRight.id())]
-        );
-    }
-
-    #[test]
     fn a_partially_banded_path_is_reported() {
         let mut panel = sample_panel(Id::new(2).expect("id"), "Shaped");
         panel.upsert_corner_feature(
@@ -727,7 +685,7 @@ mod tests {
                 "nominal_size": {"length": 700000, "width": 500000},
                 "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
                 "last_known_thickness": 18000,
-                "corner_features": corner_features,
+                "outline": {"kind": "rect", "corner_features": corner_features},
                 "corner_banding": corner_banding,
             })
         };

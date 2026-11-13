@@ -43,7 +43,7 @@ to trust a feeling. Values are the floor for a desktop tool at 100 % scale; they
   every preset (ADR 0089).
 - **Translucency**: a floating panel keeps its own surface legible over the brightest and the
   darkest thing in the scene. The panel opacity range is
-  [`MIN_PANEL_OPACITY`](../../../crates/ui/src/settings.rs) — test at its two ends, never at 100 %
+  [`MIN_PANEL_OPACITY`](../../../../crates/ui/src/settings.rs) — test at its two ends, never at 100 %
   only.
 
 ## Cognition: deciding and remembering

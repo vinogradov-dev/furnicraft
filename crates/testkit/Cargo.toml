@@ -11,3 +11,5 @@ workspace = true
 [dependencies]
 furnicraft-model = { workspace = true, features = ["testing"] }
 furnicraft-units = { workspace = true }
+# The interface shots are pictures; `png` is already in the tree through `epaint` (U81).
+png = { workspace = true }

@@ -3,20 +3,20 @@
 //! The card renders session state and turns edits into engine commands. Text fields commit on Enter,
 //! on losing focus or through an explicit button; combo boxes and checkboxes dispatch immediately.
 
-use egui::{Color32, ComboBox, TextEdit, Ui};
+use egui::{ComboBox, TextEdit, Ui};
 use furnicraft_engine::panel_cmds::{
     BOW_CLEAR_ID, BOW_SET_ID, CORNER_BANDING_CLEAR_ID, CORNER_BANDING_SET_ID, CORNER_CLEAR_ID, CORNER_SET_ID,
     EDGE_BANDING_CLEAR_ID, EDGE_BANDING_SET_ID, MATERIAL_SET_ID, OUTLINE_CONTOUR_ID, RENAME_ID, RESIZE_ID,
     RING_BANDING_CLEAR_ID, RING_BANDING_SET_ID,
 };
 use furnicraft_engine::{
-    EditScope, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet, PanelCornerClear,
-    PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
+    Dimension, EditScope, NodeRules, PanelBowClear, PanelBowSet, PanelCornerBandingClear, PanelCornerBandingSet,
+    PanelCornerClear, PanelCornerSet, PanelDiagnostic, PanelEdgeBandingClear, PanelEdgeBandingSet, PanelMaterialSet,
     PanelOutlineToContour, PanelRename, PanelResize, PanelRingBandingClear, PanelRingBandingSet, Session,
 };
 use furnicraft_model::{
-    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Id, MachiningId,
-    MaterialId, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
+    ContourSegmentId, CornerBanding, CornerFeature, CornerFeatureKind, EdgeBanding, EdgeId, Extent, Id, MachiningId,
+    MaterialId, Operation, Panel, PanelNominalSize, RectCorner, RectEdge, RingBanding, SegmentSource, VertexId,
 };
 use furnicraft_text::Message;
 use furnicraft_units::Length;
@@ -27,6 +27,7 @@ use crate::contour_edit::{ContourEntry, ContourTarget};
 use crate::machining::{MachiningAction, MachiningSection, diagnostic_machining};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// Persistent state of the panel card.
 #[derive(Debug, Default)]
@@ -229,6 +230,9 @@ impl PanelCard {
             ui.label(Message::SelectNodeInTree.text(lang));
             return PanelAction::None;
         };
+        // Every section reads the class through this one value, so the size fields, the shape, the
+        // banding and the machining menu cannot disagree about what the same row allows.
+        let rules = NodeRules::of(session.project(), panel_id);
 
         let mut actions = Vec::new();
         let mut machining_actions: Vec<MachiningAction> = Vec::new();
@@ -260,31 +264,47 @@ impl PanelCard {
                 if panel.is_contour() {
                     ui.label(Message::PanelContourSetsSize.text(lang));
                 } else {
+                    // The class says which sides of the size a person may change; a field the class
+                    // fixes stays visible as the current value and says why it cannot move.
+                    let editable = [rules.may_resize(Dimension::Length), rules.may_resize(Dimension::Width)];
                     let mut commit = None;
-                    for (label, value) in
+                    for (index, (label, value)) in
                         [(Message::Length.text(lang), &mut draft.length), (Message::Width.text(lang), &mut draft.width)]
+                            .into_iter()
+                            .enumerate()
                     {
+                        let allowed = editable.get(index).copied().unwrap_or(false);
                         ui.horizontal(|ui| {
                             ui.label(label);
-                            let outcome = Scrub::new(value)
-                                .speed(0.5)
-                                .range(1.0..=10_000.0)
-                                .decimals(3)
-                                .unit("mm")
-                                .parse(scrub::parse_millimetres)
-                                .policy(CommitPolicy::Live)
-                                .edit(fresh)
-                                .show(ui);
-                            if let Some(message) = outcome.error {
-                                errors.push(message.text(lang).to_owned());
-                            }
-                            if let Some(scope) = outcome.cancelled {
-                                actions.push(Action::CancelEdit(scope));
-                            }
-                            if outcome.commit {
-                                commit = outcome.scope;
-                            }
+                            ui.add_enabled_ui(allowed, |ui| {
+                                let outcome = Scrub::new(value)
+                                    .speed(0.5)
+                                    .range(1.0..=10_000.0)
+                                    .decimals(3)
+                                    .unit("mm")
+                                    .parse(scrub::parse_millimetres)
+                                    .policy(CommitPolicy::Live)
+                                    .edit(fresh)
+                                    .show(ui);
+                                if let Some(message) = outcome.error {
+                                    errors.push(message.text(lang).to_owned());
+                                }
+                                if let Some(scope) = outcome.cancelled {
+                                    actions.push(Action::CancelEdit(scope));
+                                }
+                                if outcome.commit {
+                                    commit = outcome.scope;
+                                }
+                            });
                         });
+                    }
+                    if editable.iter().any(|allowed| !allowed) {
+                        let message = if rules.extent() == Extent::None {
+                            Message::PanelClassSizeFixed
+                        } else {
+                            Message::PanelClassLengthOnly
+                        };
+                        ui.label(message.text(lang));
                     }
                     if let Some(scope) = commit {
                         match (scrub::millimetres(draft.length), scrub::millimetres(draft.width)) {
@@ -312,11 +332,11 @@ impl PanelCard {
         });
         ui.separator();
         section(ui, "panel.shape", Message::SectionShape.text(lang), true, |ui| {
-            contour_request = self.show_shape(ui, panel_id, panel, panel_entry, &mut actions);
+            contour_request = self.show_shape(ui, panel_id, panel, panel_entry, rules, &mut actions);
         });
         ui.separator();
         section(ui, "panel.banding", Message::SectionBanding.text(lang), true, |ui| {
-            self.show_bands(ui, session, panel_id, panel, &mut actions);
+            self.show_bands(ui, session, panel_id, panel, rules, &mut actions);
         });
         ui.separator();
         section(ui, "panel.machining", Message::SectionMachining.text(lang), true, |ui| {
@@ -328,6 +348,7 @@ impl PanelCard {
                 &diagnostics,
                 contour_target,
                 single_selection,
+                rules,
                 &mut machining_actions,
             ) {
                 contour_request = PanelAction::StartCutoutContour { panel: panel_id, machining };
@@ -340,7 +361,7 @@ impl PanelCard {
 
         if let Some(error) = &self.error {
             ui.separator();
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         if !errors.is_empty() {
             self.error = Some(errors.join("\n"));
@@ -389,7 +410,7 @@ impl PanelCard {
         if let Some(material) = current
             && session.catalog().panel_material(material).is_none()
         {
-            ui.colored_label(Color32::LIGHT_RED, Message::PanelMaterialMissingCatalogue.with(lang, [material]));
+            ui.colored_label(theme::danger(ui), Message::PanelMaterialMissingCatalogue.with(lang, [material]));
         }
         let selected_text = match current {
             Some(material) => session
@@ -418,9 +439,14 @@ impl PanelCard {
         panel_id: Id,
         panel: &Panel,
         entry: ContourEntry,
+        rules: NodeRules,
         actions: &mut Vec<Action>,
     ) -> PanelAction {
         let lang = crate::language(ui.ctx());
+        if !rules.admits(Operation::Contour) {
+            ui.label(Message::PanelClassNoContour.text(lang));
+            return PanelAction::None;
+        }
         let mut request = PanelAction::None;
         section(ui, "panel.shape.outline", Message::SectionOutline.text(lang), true, |ui| {
             if panel.is_contour() {
@@ -553,7 +579,15 @@ impl PanelCard {
         }
     }
 
-    fn show_bands(&self, ui: &mut Ui, session: &Session, panel_id: Id, panel: &Panel, actions: &mut Vec<Action>) {
+    fn show_bands(
+        &self,
+        ui: &mut Ui,
+        session: &Session,
+        panel_id: Id,
+        panel: &Panel,
+        rules: NodeRules,
+        actions: &mut Vec<Action>,
+    ) {
         let lang = crate::language(ui.ctx());
         let listed = listed_band_sources(panel);
         if listed.is_empty() {
@@ -577,6 +611,12 @@ impl PanelCard {
                     }
                 }
             }
+        }
+
+        if !rules.admits(Operation::EdgeBand) {
+            ui.add_space(4.0);
+            ui.label(Message::PanelClassNoBanding.text(lang));
+            return;
         }
 
         ui.add_space(4.0);
@@ -633,7 +673,7 @@ impl PanelCard {
             if diagnostic_machining(diagnostic).is_some() {
                 continue;
             }
-            ui.colored_label(Color32::LIGHT_RED, diagnostic_message(diagnostic, lang));
+            ui.colored_label(theme::danger(ui), diagnostic_message(diagnostic, lang));
             listed += 1;
         }
         let bound = diagnostics.len().saturating_sub(listed);
@@ -661,7 +701,7 @@ fn show_resolved(ui: &mut Ui, session: &Session, panel_id: Id) {
             ui.label(Message::OverallRow.with(lang, [geometry.overall_length(), geometry.overall_width()]));
         }
         Err(error) => {
-            ui.colored_label(Color32::LIGHT_RED, Message::GeometryError.with(lang, [error]));
+            ui.colored_label(theme::danger(ui), Message::GeometryError.with(lang, [error]));
         }
     }
 }
@@ -1373,7 +1413,8 @@ mod tests {
             |ui| {
                 let panel = session.project().panel(panel_id).expect("panel");
                 let card = PanelCard::default();
-                let _ = card.show_shape(ui, panel_id, panel, ContourEntry::Ready, &mut actions);
+                let rules = NodeRules::of(session.project(), panel_id);
+                let _ = card.show_shape(ui, panel_id, panel, ContourEntry::Ready, rules, &mut actions);
             },
         );
         output.textures_delta.clear();
@@ -1649,5 +1690,89 @@ mod tests {
             vec![key_event(egui::Key::Enter)],
         );
         assert_corner_feature(&actions, CornerFeatureKind::Chamfer { incoming: mm(10), outgoing: mm(14) });
+    }
+
+    /// Every text the frame drew, in draw order.
+    fn drawn_texts(context: &egui::Context, session: &mut Session, panel: Id) -> Vec<String> {
+        let mut texts = Vec::new();
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 1200.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let mut card = PanelCard::default();
+                let _ = card.show(ui, session, Some(panel), None, true);
+            },
+        );
+        output.textures_delta.clear();
+        use egui::epaint::Shape;
+        fn walk(shape: &Shape, texts: &mut Vec<String>) {
+            match shape {
+                Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+                Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, texts);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+
+    /// The sample shelf classed as `code`, with a session the card can draw.
+    fn classed_panel_session(code: Option<&str>) -> (Session, Id) {
+        use furnicraft_engine::{NodePropertySet, node_cmds::NODE_PROPERTY_SET_ID};
+        use furnicraft_model::{PropertyValue, SYSTEM_CLASS};
+
+        let mut session =
+            Session::with_catalog(furnicraft_testkit::sample_project(), furnicraft_testkit::sample_catalog());
+        let panel = Id::new(2).expect("panel id");
+        if let Some(code) = code {
+            let params = crate::command::json(&NodePropertySet {
+                node: panel,
+                key: SYSTEM_CLASS.to_owned(),
+                value: PropertyValue::class(code.parse().expect("a class code")),
+            })
+            .expect("class parameters");
+            session.dispatch(NODE_PROPERTY_SET_ID, &params).expect("assign the class");
+        }
+        (session, panel)
+    }
+
+    #[test]
+    fn the_size_fields_follow_the_class_and_say_why_one_is_fixed() {
+        let context = egui::Context::default();
+        crate::theme::install(&context);
+        crate::set_language(&context, crate::Lang::En);
+
+        let (mut session, panel) = classed_panel_session(None);
+        let free = drawn_texts(&context, &mut session, panel);
+        assert!(!free.iter().any(|text| text.contains("fixes the width")), "a free class says nothing: {free:?}");
+        assert!(!free.iter().any(|text| text.contains("fixes the size")), "a free class says nothing: {free:?}");
+        assert!(
+            !free.iter().any(|text| text.contains("does not allow edge banding")),
+            "an unclassified panel still offers banding: {free:?}"
+        );
+
+        let (mut session, panel) = classed_panel_session(Some("70.01"));
+        let worktop = drawn_texts(&context, &mut session, panel);
+        assert!(
+            worktop.iter().any(|text| text.contains("resizes by length only")),
+            "a worktop's fixed width is named: {worktop:?}"
+        );
+        assert!(worktop.iter().any(|text| text == "Length") && worktop.iter().any(|text| text == "Width"));
+        assert!(
+            worktop.iter().any(|text| text.contains("does not allow edge banding")),
+            "a worktop is linear stock and not banded: {worktop:?}"
+        );
+
+        let (mut session, panel) = classed_panel_session(Some("50.02.01"));
+        let hinge = drawn_texts(&context, &mut session, panel);
+        assert!(hinge.iter().any(|text| text.contains("fixes the size")), "a hinge's fixed size is named: {hinge:?}");
     }
 }

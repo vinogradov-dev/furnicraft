@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=A task=U79 state=idle base=04e6a7d updated=2026-11-12
+STATE: milestone=M7 phase=T task=V2 state=idle base=0efd3b4 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-U79 is next: cargo xtask skills keeps the project skills honest, so every path, command and sibling
-a skill names exists and its frontmatter is what the loader needs.
+V2 turns the cube into a cuboid: three sizes, a drawn base and a pulled height, edited by corner,
+face and card (ADR 0101).
 
 ## Index
 

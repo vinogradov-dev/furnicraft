@@ -1306,6 +1306,7 @@ dependencies = [
  "furnicraft-ui",
  "furnicraft-units",
  "log",
+ "pollster",
  "serde_json",
 ]
 
@@ -1370,6 +1371,7 @@ name = "furnicraft-model"
 version = "0.1.0"
 dependencies = [
  "furnicraft-geom",
+ "furnicraft-text",
  "furnicraft-units",
  "serde",
  "serde_json",
@@ -1408,7 +1410,9 @@ dependencies = [
  "furnicraft-geom",
  "furnicraft-model",
  "furnicraft-scene",
+ "furnicraft-testkit",
  "naga",
+ "pollster",
  "thiserror 2.0.21",
  "wgpu",
 ]
@@ -1430,6 +1434,7 @@ version = "0.1.0"
 dependencies = [
  "furnicraft-model",
  "furnicraft-units",
+ "png 0.18.1",
 ]
 
 [[package]]
@@ -5003,8 +5008,10 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "serde_json",
  "state-contract",
+ "syn 2.0.119",
 ]
 
 [[package]]

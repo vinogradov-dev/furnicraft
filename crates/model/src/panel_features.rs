@@ -264,8 +264,7 @@ mod tests {
                 "nominal_size": {"length": 700000, "width": 500000},
                 "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
                 "last_known_thickness": 18000,
-                "corner_features": corner_features,
-                "edge_bows": edge_bows,
+                "outline": {"kind": "rect", "corner_features": corner_features, "edge_bows": edge_bows},
             })
         };
 

@@ -23,7 +23,7 @@
 use furnicraft_geom::{DMat4, DVec3, MeshData};
 
 use crate::camera::Camera;
-use crate::{Drawable, Polyline};
+use crate::{Drawable, Polyline, ProductEnvelope};
 
 /// Pick radius around an unlit line chain, in viewport points.
 ///
@@ -83,6 +83,63 @@ impl Ray {
         parameter.is_finite().then_some(parameter)
     }
 }
+
+/// Distance along `ray` to the face where it enters a product envelope, if it crosses the box.
+///
+/// The envelope is three sides in the product's own frame, so the ray is moved into that frame and
+/// tested against the axis-aligned box `[0..size]`; a rigid transform keeps the direction a unit
+/// vector. A malformed size or a transform that cannot be inverted is no hit, never a panic. The
+/// distance is the entry point clamped to zero, so a ray that starts inside the box reports its
+/// origin instead of a negative value.
+pub(crate) fn ray_hit_product_envelope(ray: Ray, envelope: &ProductEnvelope) -> Option<f64> {
+    let size = envelope.size;
+    if !size.is_finite() || size.min_element() <= 0.0 || !envelope.world_transform.is_finite() {
+        return None;
+    }
+    let inverse = envelope.world_transform.try_inverse()?;
+    if !inverse.is_finite() {
+        return None;
+    }
+    let origin = inverse.transform_point3(ray.origin);
+    let direction = inverse.transform_vector3(ray.direction);
+    if !origin.is_finite() || !direction.is_finite() {
+        return None;
+    }
+    ray_slab(origin, direction, size)
+}
+
+/// The near distance where a local-space ray crosses the box `[0..size]`.
+///
+/// A direction parallel to an axis neither enters nor leaves through it, so the origin must already
+/// lie inside that slab; every other axis narrows the interval. The far plane behind the origin, or
+/// an empty interval, is no hit.
+fn ray_slab(origin: DVec3, direction: DVec3, size: DVec3) -> Option<f64> {
+    // The inverse of a rotation puts a point that lies on a face a few floating-point steps
+    // outside it; a micrometre of slack keeps an exact boundary inside the box.
+    const SLACK_MM: f64 = 1.0e-6;
+    let mut near = f64::NEG_INFINITY;
+    let mut far = f64::INFINITY;
+    for (origin, direction, maximum) in
+        [(origin.x, direction.x, size.x), (origin.y, direction.y, size.y), (origin.z, direction.z, size.z)]
+    {
+        if direction.abs() < 1.0e-12 {
+            if origin < -SLACK_MM || origin > maximum + SLACK_MM {
+                return None;
+            }
+            continue;
+        }
+        let first = -origin / direction;
+        let second = (maximum - origin) / direction;
+        let (entry, exit) = if first <= second { (first, second) } else { (second, first) };
+        near = near.max(entry);
+        far = far.min(exit);
+    }
+    if far < near || far < 0.0 {
+        return None;
+    }
+    Some(near.max(0.0))
+}
+
 /// Distance along `ray` to the nearest triangle of `drawable`, if it crosses one.
 ///
 /// A malformed vertex, index or transform is skipped rather than ending the cast.

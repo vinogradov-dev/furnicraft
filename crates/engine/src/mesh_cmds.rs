@@ -12,6 +12,7 @@ use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::class_rules::{Dimension, NodeRules};
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 use furnicraft_text::Message;
@@ -56,6 +57,7 @@ fn mesh_vertices_move_enabled(session: &Session, params: &Value) -> bool {
     };
     !params.moves.is_empty()
         && session.project().object(params.object).is_some_and(|object| object.geometry().as_mesh().is_some())
+        && class_allows_vertex_moves(session.project(), &params).is_ok()
 }
 
 fn mesh_vertices_move_run(
@@ -71,8 +73,41 @@ fn mesh_vertices_move_run(
         });
     }
     let moves: Vec<(u32, [Length; 3])> = params.moves.iter().map(|entry| (entry.vertex, entry.position)).collect();
+    class_allows_vertex_moves(project, &params)?;
     project.move_mesh_vertices(params.object, &moves)?;
     Ok(CommandOutcome::changed())
+}
+
+/// The class gate of a vertex edit: a fixed dimension may not move, and a length-only class may
+/// not move the width or the thickness.
+///
+/// A mesh object is resized by moving its vertices, so it reads the same `extent` a panel does. A
+/// move that leaves a dimension where it was is not an edit on that axis and is not refused.
+fn class_allows_vertex_moves(project: &Project, params: &MeshVerticesMove) -> Result<(), CommandError> {
+    let Some(object) = project.object(params.object) else {
+        return Ok(());
+    };
+    let Some(mesh) = object.geometry().as_mesh() else {
+        return Ok(());
+    };
+    let rules = NodeRules::of(project, params.object);
+    for entry in &params.moves {
+        let Some(current) = usize::try_from(entry.vertex).ok().and_then(|index| mesh.positions().get(index)) else {
+            continue;
+        };
+        for (axis, dimension) in Dimension::ALL.into_iter().enumerate() {
+            let Some(before) = current.get(axis) else {
+                continue;
+            };
+            let Some(after) = entry.position.get(axis) else {
+                continue;
+            };
+            if after != before {
+                rules.allow_resize(dimension).map_err(|refusal| CommandError::class(MESH_VERTICES_MOVE_ID, refusal))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, CommandError> {
@@ -218,5 +253,37 @@ mod tests {
         let undone = session.project().revision();
         session.dispatch(MESH_VERTICES_MOVE_ID, &params).expect("second move");
         assert!(session.project().revision() > undone);
+    }
+    #[test]
+    fn a_length_only_class_refuses_a_vertex_move_across_the_width() {
+        use furnicraft_model::{ClassCode, PropertyValue, SYSTEM_CLASS};
+
+        let (mut session, object) = cube_session();
+        let class: ClassCode = "70.01".parse().expect("the worktop code");
+        let assignment = serde_json::json!({
+            "node": object,
+            "key": SYSTEM_CLASS,
+            "value": PropertyValue::class(class),
+        });
+        session.dispatch("node.property.set", &assignment).expect("class the cube");
+
+        let start = position(&session, object, 0);
+        let along_length = [Length::from_micrometres(start[0].micrometres() + 10_000), start[1], start[2]];
+        let along_width = [start[0], Length::from_micrometres(start[1].micrometres() + 10_000), start[2]];
+
+        let allowed = session
+            .dispatch(MESH_VERTICES_MOVE_ID, &move_params(object, &[(0, along_length)]))
+            .expect("a worktop changes its length");
+        assert_eq!(allowed.created_id(), None);
+        let revision = session.project().revision();
+
+        let refused = session
+            .dispatch(MESH_VERTICES_MOVE_ID, &move_params(object, &[(0, along_width)]))
+            .expect_err("a worktop keeps its width");
+        assert!(matches!(
+            refused,
+            CommandError::ClassRefused { command: MESH_VERTICES_MOVE_ID, refusal: crate::ClassRefusal::Dimension(_) }
+        ));
+        assert_eq!(session.project().revision(), revision, "the refused move changes nothing");
     }
 }

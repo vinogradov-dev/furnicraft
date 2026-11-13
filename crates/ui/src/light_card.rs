@@ -18,6 +18,7 @@ use furnicraft_text::{Lang, Message};
 use crate::command::{dispatch, json};
 use crate::scrub::{CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// Default point-light power in watts when a sun is switched to a point light.
 const DEFAULT_POINT_POWER: f32 = 1000.0;
@@ -147,7 +148,7 @@ impl LightCard {
         // Take a snapshot so the document borrow ends before a command runs.
         let fields = draft.clone();
         if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
 
         if let Some(name) = rename {

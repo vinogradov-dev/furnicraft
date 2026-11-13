@@ -1,14 +1,16 @@
 //! Command metadata, the static registry and dispatch errors.
 
-use furnicraft_model::{Catalog, Id, MachiningId, MaterialId, Project, ProjectError};
+use furnicraft_model::{Catalog, Id, Level, MachiningId, MaterialId, Project, ProjectError};
 use furnicraft_text::Message;
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::class_rules::{self, ClassRefusal, CreationRefusal};
 use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
 use crate::panel_cmds;
+use crate::product_cmds;
 use crate::scene_cmds;
 use crate::session::Session;
 
@@ -46,6 +48,30 @@ impl CommandOutcome {
     }
 }
 
+/// What a creating command adds, and where its parameters say it lands.
+///
+/// The level is the class trait the guard reads: a furniture part or fitting is born only inside
+/// the one open product, while a free scene object is not gated (ADR 0098). A command that creates
+/// nothing declares no [`Creation`], and a parameter set that does not name a parent is left to the
+/// command's own parser so a malformed request still reports its parameters.
+#[derive(Clone, Copy, Debug)]
+pub struct Creation {
+    level: Level,
+    parent_of: fn(&Value) -> Option<Id>,
+}
+
+impl Creation {
+    /// Declares the level of the created node and the parameter that names its parent.
+    pub const fn new(level: Level, parent_of: fn(&Value) -> Option<Id>) -> Self {
+        Self { level, parent_of }
+    }
+
+    /// The class level of the node the command creates.
+    pub const fn level(self) -> Level {
+        self.level
+    }
+}
+
 /// Metadata and implementation of one document command.
 ///
 /// The id is lowercase `<area>.<verb>` and stable forever. The label is a [`Message`], so the
@@ -56,6 +82,7 @@ pub struct CommandSpec {
     label: Message,
     enabled_fn: fn(&Session, &Value) -> bool,
     run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
+    creation: Option<Creation>,
 }
 
 impl CommandSpec {
@@ -66,7 +93,13 @@ impl CommandSpec {
         enabled_fn: fn(&Session, &Value) -> bool,
         run_fn: fn(&mut Project, &Catalog, &Value) -> Result<CommandOutcome, CommandError>,
     ) -> Self {
-        Self { id, label, enabled_fn, run_fn }
+        Self { id, label, enabled_fn, run_fn, creation: None }
+    }
+
+    /// Declares what the command creates, so the session can apply ADR 0098's guard.
+    pub const fn creating(mut self, creation: Creation) -> Self {
+        self.creation = Some(creation);
+        self
     }
 
     /// The stable command id.
@@ -86,6 +119,26 @@ impl CommandSpec {
         (self.enabled_fn)(session, params)
     }
 
+    /// Why the command may not create its node in this session, or `Ok` when it creates nothing
+    /// gated (ADR 0098).
+    ///
+    /// The session asks this after a command has run on a copy and before that copy replaces the
+    /// document, so a refusal writes nothing and leaves the history untouched. The command's own
+    /// `enabled` check asks [`crate::allow_creation`] directly, so the button, the palette and a
+    /// future assistant agree about the refusal.
+    pub(crate) fn creation_refusal(self, session: &Session, params: &Value) -> Result<(), CreationRefusal> {
+        let Some(creation) = self.creation else {
+            return Ok(());
+        };
+        if !class_rules::is_furniture(creation.level()) {
+            return Ok(());
+        }
+        let Some(parent) = (creation.parent_of)(params) else {
+            return Ok(());
+        };
+        class_rules::allow_creation(session.project(), parent, session.active_product())
+    }
+
     pub(crate) fn run(
         self,
         project: &mut Project,
@@ -103,6 +156,8 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::OUTLINE_SET,
     panel_cmds::OUTLINE_CONTOUR,
     node_cmds::ASSEMBLY_CREATE,
+    product_cmds::PRODUCT_CREATE,
+    product_cmds::PRODUCT_ENVELOPE_SET,
     panel_cmds::RENAME,
     node_cmds::NODE_RENAME,
     panel_cmds::RESIZE,
@@ -193,6 +248,22 @@ pub enum CommandError {
     /// The document rejected the change.
     #[error(transparent)]
     Model(#[from] ProjectError),
+    /// The node's class forbids what the command would do.
+    #[error("`{command}` is not allowed for this object: {refusal}")]
+    ClassRefused {
+        /// The stable command id.
+        command: &'static str,
+        /// What the class forbids.
+        refusal: ClassRefusal,
+    },
+    /// A furniture part may not be created outside the open product.
+    #[error("`{command}` cannot create furniture here: {refusal}")]
+    CreationRefused {
+        /// The stable command id.
+        command: &'static str,
+        /// What the session or the target parent refuses.
+        refusal: CreationRefusal,
+    },
     /// Deriving geometry for the command failed.
     #[error("cannot evaluate `{command}`: {message}")]
     Evaluation {
@@ -213,6 +284,18 @@ pub enum CommandError {
     /// There is no undone command to reapply.
     #[error("nothing to redo")]
     NothingToRedo,
+}
+
+impl CommandError {
+    /// A class gate's refusal, tagged with the command that asked it.
+    pub(crate) fn class(command: &'static str, refusal: ClassRefusal) -> Self {
+        Self::ClassRefused { command, refusal }
+    }
+
+    /// The creation guard's refusal, tagged with the command that asked it (ADR 0098).
+    pub(crate) fn creation(command: &'static str, refusal: CreationRefusal) -> Self {
+        Self::CreationRefused { command, refusal }
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +364,12 @@ mod tests {
         let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
         assert_eq!(assembly_create.id(), "assembly.create");
         assert_eq!(assembly_create.label().text(Lang::En), "Create assembly");
+        let product_create = registry.get("product.create").expect("product.create is registered");
+        assert_eq!(product_create.id(), "product.create");
+        assert_eq!(product_create.label().text(Lang::En), "Create product frame");
+        let envelope_set = registry.get("product.envelope.set").expect("product.envelope.set is registered");
+        assert_eq!(envelope_set.id(), "product.envelope.set");
+        assert_eq!(envelope_set.label().text(Lang::En), "Set product frame size");
         let node_rename = registry.get("node.rename").expect("node.rename is registered");
         assert_eq!(node_rename.id(), "node.rename");
         assert_eq!(node_rename.label().text(Lang::En), "Rename");
@@ -345,7 +434,7 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label().text(Lang::En), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 52);
+        assert_eq!(registry.specs().len(), 54);
     }
 
     #[test]

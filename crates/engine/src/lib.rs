@@ -14,6 +14,7 @@
     clippy::unreachable
 )]
 
+mod class_rules;
 mod commands;
 mod diagnostics;
 pub mod mesh_cmds;
@@ -21,11 +22,15 @@ pub mod node_cmds;
 pub mod object_cmds;
 pub mod panel_cmds;
 mod preview;
+pub mod product_cmds;
 mod resolve;
 pub mod scene_cmds;
 mod session;
 
-pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec};
+pub use class_rules::{
+    ClassRefusal, CreationRefusal, Dimension, NodeRules, allow_creation, is_furniture, operation_of,
+};
+pub use commands::{CommandError, CommandOutcome, CommandRegistry, CommandSpec, Creation};
 pub use diagnostics::{PanelDiagnostic, diagnose_panel};
 pub use mesh_cmds::{MESH_VERTICES_MOVE_ID, MESH_VERTICES_MOVE_LABEL, MeshVertexMove, MeshVerticesMove};
 pub use node_cmds::{
@@ -44,5 +49,6 @@ pub use panel_cmds::{
     PanelResize, PanelRingBandingClear, PanelRingBandingSet,
 };
 pub use preview::Preview;
+pub use product_cmds::{ProductCreate, ProductEnvelopeSet};
 pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
 pub use session::{EditScope, Session};

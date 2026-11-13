@@ -20,7 +20,7 @@
 
 use core::ops::RangeInclusive;
 
-use egui::{Color32, RichText, TextEdit, Ui};
+use egui::{RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::NODE_RENAME_ID;
 use furnicraft_engine::object_cmds::{
     OBJECT_COLLAPSE_ID, OBJECT_CONTOUR_REPLACE_ID, OBJECT_PATH_REPLACE_ID, OBJECT_PRIMITIVE_REPLACE_ID,
@@ -40,6 +40,7 @@ use crate::command::{dispatch, json};
 use crate::mesh_edit::{MeshEdit, MeshElement};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
+use crate::theme;
 
 /// What the object card asks the editor to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -548,7 +549,7 @@ impl ObjectCard {
 
         if let Some(error) = &self.error {
             ui.separator();
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
         }
         action
     }
@@ -902,7 +903,7 @@ impl ObjectCard {
                 return;
             }
             if self.confirm_collapse {
-                ui.colored_label(Color32::from_rgb(230, 180, 80), Message::CollapseWarning.text(lang));
+                ui.colored_label(theme::warn(ui), Message::CollapseWarning.text(lang));
                 ui.horizontal(|ui| {
                     if ui.button(Message::CollapseToMesh.text(lang)).clicked() {
                         collapse = true;

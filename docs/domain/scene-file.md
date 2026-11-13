@@ -95,7 +95,7 @@ A scene file is UTF-8 JSON with the extension `.fcs`:
 1. Read the bytes and parse the envelope.
 2. Reject a missing or different `format`, and a `format_version` newer than this build, with a
    readable error.
-3. Migrate the document from its `schema` to the current one (section 7).
+3. Refuse a document `schema` that is not the current one (section 7).
 4. Validate the document: ids, placements, `pivot_local` offsets, finite values, mesh and feature limits.
 5. Resolve materials and banding against the catalogue; a missing material is a diagnostic, never a
    load failure ([document.md](document.md) §4–5).
@@ -130,17 +130,22 @@ Rules:
 
 ## 7. Versioning and migrations
 
+**Before `1.0` the document has no past**
+([0096](../decisions/0096-before-the-first-release-the-format-has-no-past.md)). A schema bump changes
+the layout and deletes the old loader in the same change: there is no migration pass, no alias for a
+field an earlier layout used and no golden file for an older schema. The tree carries none of them —
+one loader, one golden, one error.
+
 - Bump `document.schema` when the document layout changes; bump `format_version` only when the
   framing changes.
-- Every schema bump adds a migration from the previous version and a checked-in golden file that
-  must keep loading. A bump that only adds a node kind or a payload variant still ships a golden
-  file for the new version; the older goldens stay in the suite.
-- A migration never guesses. A value that cannot be derived gets its documented default and a
-  diagnostic; it is never inferred from geometry, a name or a catalogue entry.
-- A file whose `schema` is newer than this build supports is a readable error — "saved by a newer
-  version" — not a partial load.
+- A `schema` that is not the current one — older or newer — is one readable error that names both
+  numbers. It is never a partial load and never a second code path.
+- One golden file per current schema proves that the writer and the reader agree with each other. A
+  schema move regenerates it and deletes the previous one; older goldens are not kept.
 - Unknown top-level sections survive a load and save cycle, so a newer build's extra data is not
   destroyed by an older one.
+- The version-by-version history of pre-release schemas is not documented and not kept; `git log`
+  holds it.
 
 ## 8. The scene and an order
 
@@ -161,11 +166,12 @@ Rules:
 
 At minimum:
 
-- every checked-in golden file loads, migrates and re-saves to the same document;
+- the golden file for the current schema loads and re-saves to the same document;
 - a round trip of a scene with a container, a panel, a geometry object, a camera and a light;
 - an unknown top-level section survives a load and save cycle;
 - an unknown field inside `document` is a readable error;
-- a newer `format_version` and a newer `schema` are readable errors;
+- a `format_version` newer than this build and a `schema` other than the current one — older or
+  newer — are readable errors;
 - a saved file contains no catalogue, no derived mesh, no diagnostic and no undo history;
 - a failed write leaves the previous file intact;
 - a scene with no camera and no light loads and renders with the built-in defaults;

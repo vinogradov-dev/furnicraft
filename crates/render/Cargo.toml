@@ -20,3 +20,6 @@ wgpu = { workspace = true }
 naga = { version = "30", features = ["wgsl-in"] }
 # Tests build a polyline, which carries a document id; already in the tree through `scene`.
 furnicraft-model = { workspace = true }
+# The ignored pixel test renders the product envelope offscreen and writes it next to the UI shots.
+furnicraft-testkit = { workspace = true }
+pollster = { workspace = true }

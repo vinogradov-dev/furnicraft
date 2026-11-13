@@ -1,6 +1,6 @@
 //! FurniCraft workspace tasks.
 //!
-//! Usage: `cargo xtask <layers|plan|status|task|next|dashboard|ci>`
+//! Usage: `cargo xtask <layers|ui-rules|skills|plan|status|task|next|dashboard|ci>`
 //!
 //! The crate rules below are the source of truth for architectural layering.
 //! They mirror `PROJECT.md`; a new crate must be registered in both places in
@@ -21,6 +21,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use state_contract::{Command as PlanCommand, Config, Global};
+
+mod skills;
+mod ui_rules;
 
 /// Dependencies that the domain side of the workspace must never pull in.
 const UI_GPU_DEPS: &[&str] = &["egui", "eframe", "egui-wgpu", "wgpu", "winit"];
@@ -239,12 +242,29 @@ static HOST: &[PlanCommand] = &[
         run: |global, _, _| run_layers(global),
     },
     PlanCommand {
+        name: "ui-rules",
+        usage: "ui-rules",
+        summary: "check that the interface takes its colours from the theme and draws each overlay host in the module that owns it",
+        run: |global, _, _| run_ui_rules(global),
+    },
+    PlanCommand {
+        name: "skills",
+        usage: "skills",
+        summary: "check that the skills and prompts name existing paths and commands and carry loadable frontmatter",
+        run: |global, _, _| run_skills(global),
+    },
+    PlanCommand {
         name: "ci",
         usage: "ci",
-        summary: "run the whole gate: fmt, clippy, tests, layers, plan, docs",
+        summary: "run the whole gate: fmt, clippy, tests, layers, ui-rules, plan, docs, skills",
         run: |global, config, _| run_ci(global, config),
     },
 ];
+
+/// The names of the commands this binary adds to the plan tool, in help order.
+fn host_commands() -> Vec<&'static str> {
+    HOST.iter().map(|command| command.name).collect()
+}
 
 fn main() {
     let config = Config { runner: "cargo xtask".to_owned(), name: "xtask".to_owned(), ..Config::default() };
@@ -268,7 +288,41 @@ fn run_layers(_global: &Global) -> Result<(), String> {
     }
 }
 
-/// `ci`: the cargo steps, then the two checks that are not cargo commands.
+/// `ui-rules`: the colour and host ownership rules, read from the interface's own sources.
+fn run_ui_rules(global: &Global) -> Result<(), String> {
+    match ui_rules::check(&global.root) {
+        Ok(count) => {
+            println!("ui-rules: {count} files checked");
+            println!("ui-rules: ok");
+            Ok(())
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            Err(format!("ui-rules: FAILED ({} violation(s))", violations.len()))
+        }
+    }
+}
+
+/// `skills`: the skills, their references and the prompts, against the tree they describe.
+fn run_skills(global: &Global) -> Result<(), String> {
+    match skills::check(&global.root, &host_commands()) {
+        Ok(count) => {
+            println!("skills: {count} files checked");
+            println!("skills: ok");
+            Ok(())
+        }
+        Err(violations) => {
+            for violation in &violations {
+                eprintln!("error: {violation}");
+            }
+            Err(format!("skills: FAILED ({} violation(s))", violations.len()))
+        }
+    }
+}
+
+/// `ci`: the cargo steps, then the checks that are not cargo commands.
 fn run_ci(global: &Global, config: &Config) -> Result<(), String> {
     for (name, args) in CI_STEPS {
         println!("ci: {name}");
@@ -285,6 +339,7 @@ fn run_ci(global: &Global, config: &Config) -> Result<(), String> {
         }
     }
     run_layers(global)?;
+    run_ui_rules(global)?;
     match state_contract::check(&global.root) {
         Ok(summary) => {
             println!("plan: {} tasks, state {}", summary.tasks.len(), summary.state.status);
@@ -309,6 +364,7 @@ fn run_ci(global: &Global, config: &Config) -> Result<(), String> {
             return Err(format!("docs: FAILED ({} violation(s))", violations.len()));
         }
     }
+    run_skills(global)?;
     println!("ci: ok");
     Ok(())
 }
@@ -327,6 +383,13 @@ mod tests {
     fn collect(packages: &[serde_json::Value]) -> Vec<String> {
         let (_, violations) = collect_violations(CRATES, packages).expect("synthetic metadata is valid");
         violations
+    }
+
+    #[test]
+    fn the_skill_check_is_a_command_of_the_tool() {
+        assert!(host_commands().contains(&"skills"), "`cargo xtask skills` must be dispatchable on its own");
+        assert!(host_commands().contains(&"layers"));
+        assert!(host_commands().contains(&"ui-rules"), "`cargo xtask ui-rules` must run on its own");
     }
 
     #[test]

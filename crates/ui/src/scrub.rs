@@ -26,11 +26,13 @@ use core::time::Duration;
 use egui::emath::Numeric;
 use egui::text::CCursorRange;
 use egui::{
-    Align2, Color32, CursorIcon, FontId, Id, Key, Margin, Response, RichText, Sense, Stroke, StrokeKind, TextEdit,
-    TextStyle, Ui, Widget, pos2, vec2,
+    Align2, CursorIcon, FontId, Id, Key, Margin, Response, RichText, Sense, Stroke, StrokeKind, TextEdit, TextStyle,
+    Ui, Widget, pos2, vec2,
 };
 use furnicraft_engine::EditScope;
 use furnicraft_text::Message;
+
+use crate::theme;
 
 /// The width every inspector field draws at, so a column of numbers lines up.
 pub(crate) const FIELD_WIDTH: f32 = 76.0;
@@ -479,7 +481,7 @@ fn paint_fill(ui: &Ui, rect: egui::Rect, focused: bool) {
 /// Paints the box's outline, red while the typed text was refused.
 fn paint_border(ui: &Ui, rect: egui::Rect, focused: bool, invalid: bool) {
     let stroke = if invalid {
-        Stroke::new(1.0, Color32::LIGHT_RED)
+        Stroke::new(1.0, theme::danger(ui))
     } else if focused {
         ui.visuals().selection.stroke
     } else {

@@ -24,6 +24,7 @@ mod document;
 mod draw_gizmo;
 mod extrude_gizmo;
 mod file_menu;
+mod fill_gizmo;
 /// The shell's frame, asserted without a window (U78).
 #[cfg(test)]
 mod frame_tests;
@@ -43,6 +44,9 @@ mod tabs;
 #[cfg(test)]
 mod test_support;
 mod translate_gizmo;
+/// The interface rendered offscreen, one PNG per cell of the look matrix (U81).
+#[cfg(test)]
+mod ui_shots;
 mod vertex_gizmo;
 mod view_cluster;
 mod view_layout;
@@ -52,6 +56,7 @@ use std::path::Path;
 use eframe::egui;
 use eframe::egui_wgpu;
 use furnicraft_scene::SceneColors;
+use furnicraft_ui::product_card::ProductCard;
 use furnicraft_ui::settings::{Settings, SettingsSection};
 use furnicraft_ui::ui_scale;
 use furnicraft_ui::{Palette, icons, theme};
@@ -185,6 +190,8 @@ struct FurniCraftApp {
     home_open: bool,
     /// The command palette and its last-used order; session state, never document data.
     palette: Palette,
+    /// The product-frame card: window chrome, like the File dialogs, so it outlives a tab switch.
+    product_card: ProductCard,
     /// Why the defaults were used instead of the saved workspace, shown in the status bar.
     settings_notice: Option<crate::settings_store::Notice>,
     /// The tab or the window whose unsaved changes are waiting for the close question.
@@ -218,11 +225,27 @@ impl FurniCraftApp {
         settings: Settings,
         session: furnicraft_engine::Session,
     ) -> Result<Self, String> {
+        Self::test_app(ctx, None, settings_path, settings, session)
+    }
+
+    /// Builds the application for a test: no window, and a GPU only when one was handed over.
+    ///
+    /// A headless frame test passes `None` and draws no scene image; a shot passes a device and
+    /// queue with no surface, so the real viewport renders into its target and egui paints the same
+    /// interface a window would show, offscreen (U77, U81).
+    #[cfg(test)]
+    fn test_app(
+        ctx: &egui::Context,
+        render_state: Option<egui_wgpu::RenderState>,
+        settings_path: std::path::PathBuf,
+        settings: Settings,
+        session: furnicraft_engine::Session,
+    ) -> Result<Self, String> {
         let (preference, preset, accent) = settings.install_args();
         theme::install_with(ctx, preference, preset, accent);
         ctx.set_zoom_factor(ui_scale::factor(settings.appearance.ui_scale));
         let loaded = crate::settings_store::Loaded { settings, notice: None };
-        Self::build(ctx, None, SettingsStore::at(settings_path), loaded, session)
+        Self::build(ctx, render_state, SettingsStore::at(settings_path), loaded, session)
     }
 
     /// Composes the shell around one document, one workspace and, when the window has one, its GPU.
@@ -253,6 +276,7 @@ impl FurniCraftApp {
             settings_open: false,
             home_open: false,
             palette: Palette::new(),
+            product_card: ProductCard::new(),
             settings_notice: loaded.notice,
             pending_close: None,
             quit_requested: false,
@@ -469,9 +493,26 @@ impl FurniCraftApp {
     /// image runs under it and a translucent ribbon blends with the furniture (U51, ADR 0080). The
     /// document draws it because the fold is the document's; the band it occupies is the window's.
     fn ribbon(&mut self, ui: &mut egui::Ui, design: egui::Rect) {
-        self.tabs.active_mut().show_ribbon(ui, design, &mut self.shell, &self.settings);
+        if self.tabs.active_mut().show_ribbon(ui, design, &mut self.shell, &self.settings) {
+            self.product_card.start();
+        }
         self.sync_ribbon_fold();
         self.sync_pinned_variants();
+    }
+
+    /// Draws the product-frame card and creates the frame it describes.
+    ///
+    /// The card is the numeric path to `product.create`: the editor dispatches the command and
+    /// opens the new frame as a session view operation, so the next part lands inside it (ADR 0100).
+    /// A refused command leaves the card closed and the sentence on the status bar.
+    fn product_frame_card(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.product_card.show(ctx) else {
+            return;
+        };
+        let lang = furnicraft_ui::language(ctx);
+        if let Err(error) = self.tabs.active_mut().create_product(draft, lang) {
+            self.failed(error);
+        }
     }
 
     /// Remembers the ribbon's fold as a workspace setting and hands it to every open scene.
@@ -703,7 +744,7 @@ impl FurniCraftApp {
         }
         // A modal — the Settings window, the Home surface, the palette — owns the keys for the frame
         // it is up, so typing a path or a name never saves, undoes, reframes or leaves a tool.
-        let modals = self.settings_open || self.home_open || self.palette.is_open();
+        let modals = self.settings_open || self.home_open || self.palette.is_open() || self.product_card.is_open();
         {
             let Self { tabs, shell, .. } = self;
             tabs.active_mut().handle_keys(ui, modals, shell);
@@ -820,6 +861,7 @@ impl FurniCraftApp {
             self.settings_notice = None;
         }
         self.settings_window(ui.ctx());
+        self.product_frame_card(ui.ctx());
         self.home_surface(ui.ctx());
         // The close command needs the context, which only the frame has: everything else a quit
         // touches — the questions, the settings write — has already happened by now.

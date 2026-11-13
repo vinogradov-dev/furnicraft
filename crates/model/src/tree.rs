@@ -6,7 +6,7 @@
 
 use furnicraft_geom::DVec3;
 
-use crate::{Container, Geometry, Id, Node, Panel, PivotLocal, Placement, Project, ProjectError};
+use crate::{Container, Geometry, Id, Node, Panel, Placement, Project, ProjectError};
 
 /// The node with `id` at or below `children`, with its depth.
 ///
@@ -174,19 +174,6 @@ pub(crate) fn panel_bounds(children: &[Node], parent: Placement, depth: u32) -> 
         }
     }
     bounds
-}
-
-/// The pivot offset a container saved before schema 6 was stored with: the centre of the local
-/// panel bounds, or the origin.
-///
-/// Only the schema-5 migration writes this value now; a container created today is born at zero
-/// and a group puts its content at zero through [`crate::rebase_origin_at`]. No later pass
-/// re-normalizes a stored pivot.
-pub(crate) fn default_container_pivot(children: &[Node]) -> PivotLocal {
-    let Some((min, max)) = panel_bounds(children, Placement::IDENTITY, 0) else {
-        return PivotLocal::ZERO;
-    };
-    PivotLocal::from_local((min + max) * 0.5).unwrap_or(PivotLocal::ZERO)
 }
 
 /// The local bounding box of an object's geometry, in millimetres.

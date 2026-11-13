@@ -14,7 +14,7 @@ use furnicraft_model::{Id, Project};
 use furnicraft_scene::{Camera, MAX_DISTANCE_MM};
 use furnicraft_units::Length;
 
-use crate::gizmo_math::{Axis, PreviewKey, hit_axis, paint_axis_handles, ray_to};
+use crate::gizmo_math::{Axis, PreviewKey, editable_axes, hit_axis, paint_axis_handles, ray_to};
 use crate::mesh_pick;
 
 /// One continuous vertex drag.
@@ -171,7 +171,8 @@ impl VertexGizmo {
         let Some(pointer) = response.hover_pos() else {
             return Ok(None);
         };
-        let Some(axis) = hit_axis(camera, viewport, origin_world, pointer) else {
+        let axes = editable_axes(project, object);
+        let Some(axis) = hit_axis(camera, viewport, origin_world, pointer, axes) else {
             return Ok(None);
         };
         self.hover = Some(axis);
@@ -215,7 +216,15 @@ impl VertexGizmo {
             };
             origin
         };
-        paint_axis_handles(ui, viewport, camera, origin_world, self.hover, self.drag.as_ref().map(|drag| drag.axis));
+        paint_axis_handles(
+            ui,
+            viewport,
+            camera,
+            origin_world,
+            self.hover,
+            self.drag.as_ref().map(|drag| drag.axis),
+            editable_axes(project, object),
+        );
     }
 }
 

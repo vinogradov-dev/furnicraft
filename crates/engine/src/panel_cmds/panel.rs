@@ -14,12 +14,16 @@
 //! It does not do: the edge and corner trims (`banding.rs`), the machining records
 //! (`machining.rs`), or any geometry derivation.
 
-use furnicraft_model::{Catalog, Contour, Id, MaterialId, PanelNominalSize, Placement, Project, ProjectError};
+use furnicraft_model::{
+    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, Panel, PanelNominalSize, Placement, Project,
+    ProjectError, PropertyValue, SYSTEM_CLASS,
+};
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::commands::{CommandError, CommandOutcome, CommandSpec};
+use crate::class_rules::{Dimension, NodeRules, allow_creation};
+use crate::commands::{CommandError, CommandOutcome, CommandSpec, Creation};
 use crate::session::Session;
 use furnicraft_text::Message;
 
@@ -43,6 +47,21 @@ pub struct PanelCreate {
     pub material: MaterialId,
     /// Placement relative to the parent container.
     pub placement: Placement,
+    /// The furniture class the new part plays, when the tool that created it has one.
+    ///
+    /// A fill tool knows the class whose `fill` trait chose the axis pair, so the post or shelf is
+    /// born classified instead of unclassified. A panel created by the plain panel tool carries
+    /// none, which is the long-standing default (ADR 0034).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<ClassCode>,
+    /// The outline the panel is born with, when the tool measured one.
+    ///
+    /// A ring makes the new panel a contour panel from its first revision (ADR 0042): the ring is
+    /// the panel's own outline anchored at its zero corner, and `nominal_size` must be the size of
+    /// its bounds. A plain panel carries no ring and keeps the nominal rectangle. The empty-space
+    /// tool creates a shelf in a splayed niche this way, in the same one command and one undo entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Contour>,
 }
 
 impl PanelCreate {
@@ -89,7 +108,16 @@ fn invalid_default(message: &str) -> CommandError {
 }
 
 /// The `panel.create` command.
-pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL, create_enabled, create_run);
+pub(crate) const CREATE: CommandSpec = CommandSpec::new(CREATE_ID, CREATE_LABEL, create_enabled, create_run)
+    .creating(Creation::new(Level::Part, created_parent));
+
+/// The parent a creating command's parameters name, or `None` when the parameters do not parse.
+///
+/// A malformed request is left to the command's own parser, which reports it as invalid parameters;
+/// the guard only speaks about a request that already names a container (ADR 0098).
+fn created_parent(params: &Value) -> Option<Id> {
+    PanelCreate::parse(params).ok().map(|params| params.parent)
+}
 
 /// Stable id of the contour-panel creation command.
 pub const CONTOUR_CREATE_ID: &str = "panel.contour.create";
@@ -138,13 +166,21 @@ impl PanelContourCreate {
 
 /// The `panel.contour.create` command.
 pub(crate) const CONTOUR_CREATE: CommandSpec =
-    CommandSpec::new(CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, contour_create_enabled, contour_create_run);
+    CommandSpec::new(CONTOUR_CREATE_ID, CONTOUR_CREATE_LABEL, contour_create_enabled, contour_create_run)
+        .creating(Creation::new(Level::Part, contour_created_parent));
+
+/// The parent a contour-panel request names, or `None` when the parameters do not parse.
+fn contour_created_parent(params: &Value) -> Option<Id> {
+    PanelContourCreate::parse(params).ok().map(|params| params.parent)
+}
 
 fn contour_create_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelContourCreate::parse(params) else {
         return false;
     };
     params.validate_name().is_ok()
+        && session.project().is_container(params.parent)
+        && allow_creation(session.project(), params.parent, session.active_product()).is_ok()
         && session.catalog().panel_material(params.material).is_some()
         && session.project().validate_panel_contour(params.parent, params.source).is_ok()
 }
@@ -224,11 +260,13 @@ fn outline_set_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelOutlineSet::parse(params) else {
         return false;
     };
-    session.project().validate_panel_outline(params.panel, &params.contour).is_ok()
+    class_allows_contour(session.project(), params.panel, OUTLINE_SET_ID).is_ok()
+        && session.project().validate_panel_outline(params.panel, &params.contour).is_ok()
 }
 
 fn outline_set_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelOutlineSet::parse(params)?;
+    class_allows_contour(project, params.panel, OUTLINE_SET_ID)?;
     project.set_panel_outline(params.panel, params.contour)?;
     Ok(CommandOutcome::changed())
 }
@@ -266,7 +304,8 @@ fn outline_contour_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelOutlineToContour::parse(params) else {
         return false;
     };
-    session.project().validate_panel_contour_conversion(params.panel).is_ok()
+    class_allows_contour(session.project(), params.panel, OUTLINE_CONTOUR_ID).is_ok()
+        && session.project().validate_panel_contour_conversion(params.panel).is_ok()
 }
 
 fn outline_contour_run(
@@ -275,6 +314,7 @@ fn outline_contour_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelOutlineToContour::parse(params)?;
+    class_allows_contour(project, params.panel, OUTLINE_CONTOUR_ID)?;
     project.convert_panel_to_contour(params.panel)?;
     Ok(CommandOutcome::changed())
 }
@@ -285,6 +325,7 @@ fn create_enabled(session: &Session, params: &Value) -> bool {
     };
     params.validate_name().is_ok()
         && session.project().is_container(params.parent)
+        && allow_creation(session.project(), params.parent, session.active_product()).is_ok()
         && session.catalog().panel_material(params.material).is_some()
 }
 
@@ -293,14 +334,38 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
     params.validate_name()?;
     let material =
         catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
-    let id = project.add_panel(
-        params.parent,
-        params.name,
-        params.nominal_size,
-        Some(params.material),
-        material.nominal_thickness(),
-        params.placement,
-    )?;
+    let thickness = material.nominal_thickness();
+    let id = match params.outline.as_ref() {
+        Some(outline) => {
+            let anchored = Panel::anchored_contour(outline).map_err(ProjectError::from)?;
+            let measured = Panel::contour_size(&anchored).map_err(ProjectError::from)?;
+            if measured != params.nominal_size {
+                return Err(CommandError::InvalidParams {
+                    command: CREATE_ID,
+                    message: "the outline and the nominal size do not describe the same panel".to_owned(),
+                });
+            }
+            project.add_panel_contour(
+                params.parent,
+                params.name,
+                &anchored,
+                Some(params.material),
+                thickness,
+                params.placement,
+            )?
+        }
+        None => project.add_panel(
+            params.parent,
+            params.name,
+            params.nominal_size,
+            Some(params.material),
+            thickness,
+            params.placement,
+        )?,
+    };
+    if let Some(class) = params.class {
+        project.set_property(id, SYSTEM_CLASS, PropertyValue::class(class))?;
+    }
     Ok(CommandOutcome::created(id))
 }
 
@@ -384,13 +449,43 @@ fn resize_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelResize::parse(params) else {
         return false;
     };
-    session.project().validate_panel_resize(params.panel, params.nominal_size).is_ok()
+    class_allows_resize(session.project(), params.panel, params.nominal_size).is_ok()
+        && session.project().validate_panel_resize(params.panel, params.nominal_size).is_ok()
 }
 
 fn resize_run(project: &mut Project, _catalog: &Catalog, params: &Value) -> Result<CommandOutcome, CommandError> {
     let params = PanelResize::parse(params)?;
+    class_allows_resize(project, params.panel, params.nominal_size)?;
     project.set_panel_nominal_size(params.panel, params.nominal_size)?;
     Ok(CommandOutcome::changed())
+}
+
+/// The class gate of a nominal-size change: only the dimensions the class leaves free may move.
+///
+/// A no-op resize is always allowed, so a field that reports the current size does not fail. An
+/// unclassified panel is free, and the model still checks the geometry and the machining.
+fn class_allows_resize(project: &Project, panel: Id, nominal_size: PanelNominalSize) -> Result<(), CommandError> {
+    let Some(current) = project.panel(panel) else {
+        return Ok(());
+    };
+    let rules = NodeRules::of(project, panel);
+    let changes = [
+        (Dimension::Length, nominal_size.length() != current.nominal_size().length()),
+        (Dimension::Width, nominal_size.width() != current.nominal_size().width()),
+    ];
+    for (dimension, changed) in changes {
+        if changed {
+            rules.allow_resize(dimension).map_err(|refusal| CommandError::class(RESIZE_ID, refusal))?;
+        }
+    }
+    Ok(())
+}
+
+/// The class gate of a panel outline edit: a class that admits no contour admits no reshaping.
+fn class_allows_contour(project: &Project, panel: Id, command: &'static str) -> Result<(), CommandError> {
+    NodeRules::of(project, panel)
+        .allow_operation(Operation::Contour)
+        .map_err(|refusal| CommandError::class(command, refusal))
 }
 
 /// Stable id of the panel material command.

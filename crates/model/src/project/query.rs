@@ -3,7 +3,7 @@
 //! A query never mutates the document and never allocates more than the answer needs. The same
 //! lookups feed the UI, reports and commands, so every caller agrees on what a node is.
 
-use furnicraft_geom::DVec3;
+use furnicraft_geom::{DQuat, DVec3};
 
 use crate::project::Project;
 use crate::tree::{find_container, find_node, find_panel_with_depth, find_parent, object_bounds_mm, panel_bounds};
@@ -271,13 +271,107 @@ impl Project {
         }
     }
 
-    /// The furniture type stored on a node; unclassified when the node has no type.
-    pub fn furntype(&self, id: Id) -> Option<FurnType> {
-        match self.properties(id)?.get(SYSTEM_FURNTYPE) {
-            Some(PropertyValue::FurnType { value }) => Some(*value),
+    /// The class stored on a node; unclassified when the node has no class.
+    pub fn class(&self, id: Id) -> Option<ClassCode> {
+        match self.properties(id)?.get(SYSTEM_CLASS) {
+            Some(PropertyValue::Class { value }) => Some(*value),
             Some(_) => None,
-            None => Some(FurnType::UNCLASSIFIED),
+            None => Some(ClassCode::UNCLASSIFIED),
         }
+    }
+
+    /// The nearest product at or above `id`, or `None` when the node is outside every product.
+    ///
+    /// The answer is computed by a walk and never stored, so no reference can go stale (ADR 0097).
+    /// A part two levels down answers with the product that owns it, and a product answers with
+    /// itself; physical containment is not kinship, so a piece standing in another's niche is not
+    /// part of it.
+    pub fn product_of(&self, id: Id) -> Option<Id> {
+        let mut current = Some(id);
+        while let Some(id) = current {
+            if self.container(id).is_some_and(Container::is_product) {
+                return Some(id);
+            }
+            current = self.parent_of(id);
+        }
+        None
+    }
+
+    /// Every product in the tree, in tree order.
+    pub fn products(&self) -> Vec<Id> {
+        fn walk(children: &[Node], found: &mut Vec<Id>, depth: u32) {
+            if depth > Project::MAX_ASSEMBLY_DEPTH {
+                return;
+            }
+            for child in children {
+                if let Node::Container(container) = child {
+                    if container.is_product() {
+                        found.push(container.id());
+                    }
+                    walk(container.children(), found, depth.saturating_add(1));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(self.root.children(), &mut found, 1);
+        found
+    }
+
+    /// The placement a newly created product takes in the root's frame.
+    ///
+    /// An empty scene puts it at the origin, on the floor. Otherwise it stands beside the nearest
+    /// product, on the floor, clear of every product's envelope: a reserved space that overlapped
+    /// another would make the two pieces ambiguous from the first frame. Beyond the nearest piece
+    /// the candidate slides along +X until no envelope overlaps it, so the answer depends only on
+    /// the document and never on the order the products were authored in.
+    ///
+    /// The envelope stands on its base-min corner, so the reserved box is `[0..W] x [0..D] x
+    /// [0..H]` in its own frame (ADR 0097, ADR 0101). Every distance is measured in world
+    /// millimetres, because a product may be turned or hang off the floor, and the result is
+    /// converted back into the root's frame at the end.
+    pub fn product_placement(&self, envelope: Envelope) -> Placement {
+        let products = self.product_boxes();
+        let root_inverse = self.root.placement().inverse().unwrap_or(Placement::IDENTITY);
+        let Some(nearest) = nearest_box(&products, self.root.placement().translation()) else {
+            return Placement::IDENTITY;
+        };
+        let size =
+            DVec3::new(envelope.x().millimetres_f64(), envelope.y().millimetres_f64(), envelope.z().millimetres_f64());
+        // The newcomer stands beside the nearest piece, on the floor, its base-min corner on that
+        // piece's near-left corner line.
+        let mut min = DVec3::new(nearest.max.x, nearest.min.y, 0.0);
+        let mut max = min + size;
+        // Each pass pushes the candidate past every envelope it still overlaps; x only grows, so a
+        // finite number of products settles in at most that many passes.
+        for _ in 0..=products.len() {
+            let mut moved = false;
+            for box_ in &products {
+                if !overlaps(min, max, box_) {
+                    continue;
+                }
+                min.x = box_.max.x;
+                max.x = min.x + size.x;
+                moved = true;
+            }
+            if !moved {
+                break;
+            }
+        }
+        // A finite translation built from finite document data cannot fail; the fallback keeps a
+        // corrupt coordinate from becoming a panic.
+        Placement::new(root_inverse.transform_point(min), DQuat::IDENTITY).unwrap_or(Placement::IDENTITY)
+    }
+
+    /// The world-space box of every product envelope, in tree order.
+    fn product_boxes(&self) -> Vec<ProductBox> {
+        self.products()
+            .into_iter()
+            .filter_map(|id| {
+                let envelope = self.container(id)?.envelope()?;
+                let world = self.world_placement(id)?;
+                ProductBox::of(envelope, world)
+            })
+            .collect()
     }
 
     /// Selects the nodes that match a query, in tree order.
@@ -288,10 +382,10 @@ impl Project {
             {
                 return false;
             }
-            if let Some(wanted) = query.furntype() {
-                let found = match properties.get(SYSTEM_FURNTYPE) {
-                    Some(PropertyValue::FurnType { value }) => *value,
-                    _ => FurnType::UNCLASSIFIED,
+            if let Some(wanted) = query.class() {
+                let found = match properties.get(SYSTEM_CLASS) {
+                    Some(PropertyValue::Class { value }) => *value,
+                    _ => ClassCode::UNCLASSIFIED,
                 };
                 if !found.is_ancestor_or_self(wanted) {
                     return false;
@@ -345,9 +439,70 @@ impl Project {
     }
 }
 
+/// One product's authored box in world millimetres, as an axis-aligned box.
+#[derive(Clone, Copy, Debug)]
+struct ProductBox {
+    min: DVec3,
+    max: DVec3,
+}
+
+impl ProductBox {
+    /// The world box of an envelope through its world placement.
+    ///
+    /// A turned piece no longer has axis-aligned sides, so its eight corners are collected and the
+    /// tightest box around them is used: placement is used for containment, never for a decision a
+    /// maker reads off an axis.
+    fn of(envelope: Envelope, world: Placement) -> Option<Self> {
+        let size =
+            DVec3::new(envelope.x().millimetres_f64(), envelope.y().millimetres_f64(), envelope.z().millimetres_f64());
+        let mut min = DVec3::splat(f64::INFINITY);
+        let mut max = DVec3::splat(f64::NEG_INFINITY);
+        for x in [0.0, size.x] {
+            for y in [0.0, size.y] {
+                for z in [0.0, size.z] {
+                    let corner = world.transform_point(DVec3::new(x, y, z));
+                    if !corner.is_finite() {
+                        return None;
+                    }
+                    min = min.min(corner);
+                    max = max.max(corner);
+                }
+            }
+        }
+        Some(Self { min, max })
+    }
+
+    /// The squared distance from `point` to the box, zero inside it.
+    fn distance_squared(self, point: DVec3) -> f64 {
+        (point.clamp(self.min, self.max) - point).length_squared()
+    }
+}
+
+/// The product whose box is nearest to `origin`; the first one in tree order wins a tie.
+fn nearest_box(products: &[ProductBox], origin: DVec3) -> Option<ProductBox> {
+    let mut nearest: Option<(f64, ProductBox)> = None;
+    for box_ in products {
+        let distance = box_.distance_squared(origin);
+        if nearest.is_none_or(|(best, _)| distance < best) {
+            nearest = Some((distance, *box_));
+        }
+    }
+    nearest.map(|(_, box_)| box_)
+}
+
+/// Whether two boxes share a volume; touching faces are clear, not an overlap.
+fn overlaps(min: DVec3, max: DVec3, other: &ProductBox) -> bool {
+    min.x < other.max.x
+        && other.min.x < max.x
+        && min.y < other.max.y
+        && other.min.y < max.y
+        && min.z < other.max.z
+        && other.min.z < max.z
+}
+
 #[cfg(test)]
 mod tests {
-    use furnicraft_geom::DVec3;
+    use furnicraft_geom::{DQuat, DVec3};
     use furnicraft_units::{Degrees, Length};
 
     use crate::fixtures::*;
@@ -401,12 +556,12 @@ mod tests {
         let group = project.group_nodes(&[Id::new(2).expect("id"), Id::new(3).expect("id")], "G").expect("group");
         assert!(!project.is_component(group));
 
-        project.set_property(group, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(group, SYSTEM_CLASS, PropertyValue::class(class("30.11"))).expect("class");
         assert!(project.is_component(group));
         project.set_property(group, SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("false marker");
         assert!(project.is_component(group), "an explicit false does not erase the furniture type");
-        assert_eq!(project.furntype(group), Some(furntype("12.03.02")));
-        assert_eq!(project.furntype(root), Some(FurnType::UNCLASSIFIED));
+        assert_eq!(project.class(group), Some(class("30.11")));
+        assert_eq!(project.class(root), Some(ClassCode::UNCLASSIFIED));
 
         assert_eq!(project.ungroup_group(group), Err(ProjectError::NotAComponent { id: group }));
 
@@ -421,21 +576,21 @@ mod tests {
         let panel = Id::new(2).expect("panel");
         let front = Id::new(4).expect("front");
         let drawer = Id::new(3).expect("drawer");
-        project.set_property(drawer, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(drawer, SYSTEM_CLASS, PropertyValue::class(class("30.11"))).expect("class");
         project.set_property(panel, "role", PropertyValue::text("shelf")).expect("role");
 
         assert_eq!(project.query(&NodeQuery::any()), vec![panel, drawer, front]);
         assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Container)), vec![drawer]);
         assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Panel)), vec![panel, front]);
         assert_eq!(
-            project.query(&NodeQuery::any().with_furntype_under(furntype("12"))),
+            project.query(&NodeQuery::any().with_class_under(class("30"))),
             vec![drawer],
             "a query on a group matches every type below it"
         );
-        assert_eq!(project.query(&NodeQuery::any().with_furntype_under(furntype("12.03.02"))), vec![drawer]);
-        assert!(project.query(&NodeQuery::any().with_furntype_under(furntype("13"))).is_empty());
+        assert_eq!(project.query(&NodeQuery::any().with_class_under(class("30.11"))), vec![drawer]);
+        assert!(project.query(&NodeQuery::any().with_class_under(class("40"))).is_empty());
         assert_eq!(
-            project.query(&NodeQuery::any().with_furntype_under(FurnType::UNCLASSIFIED)),
+            project.query(&NodeQuery::any().with_class_under(ClassCode::UNCLASSIFIED)),
             vec![panel, front],
             "unclassified is a sentinel, not the root of the type tree"
         );
@@ -450,5 +605,78 @@ mod tests {
                 .len()
                 == 1
         );
+    }
+
+    /// A product of `w x d x h` millimetres, placed on the floor at `x`.
+    fn product(project: &mut Project, name: &str, w: i64, d: i64, h: i64, x: i64) -> Id {
+        let root = project.root().id();
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(x), Length::ZERO, Length::ZERO)
+            .expect("a floor placement");
+        project
+            .add_product(
+                root,
+                name,
+                ClassCode::GENERAL_PRODUCT,
+                Envelope::new(millimetres(w), millimetres(d), millimetres(h)).expect("a valid box"),
+                placement,
+            )
+            .expect("add product")
+    }
+
+    fn box_(w: i64, d: i64, h: i64) -> Envelope {
+        Envelope::new(millimetres(w), millimetres(d), millimetres(h)).expect("a valid box")
+    }
+
+    #[test]
+    fn an_empty_scene_puts_the_first_product_at_the_origin() {
+        let project = sample_project();
+        assert!(project.products().is_empty());
+        assert_eq!(project.product_placement(box_(600, 560, 720)), Placement::IDENTITY);
+    }
+
+    #[test]
+    fn a_new_product_stands_beside_the_nearest_one_and_clear_of_every_box() {
+        let mut project = sample_project();
+        // Two pieces on the same floor line: the newcomer starts to the right of the nearest one
+        // and is pushed again until the far piece no longer shares a volume with it.
+        product(&mut project, "Near", 600, 560, 720, 0);
+        product(&mut project, "Far", 400, 560, 720, 700);
+        let placement = project.product_placement(box_(600, 560, 720));
+        assert_eq!(placement.translation(), DVec3::new(1100.0, 0.0, 0.0), "clear of both boxes");
+        assert_eq!(placement.rotation(), DQuat::IDENTITY, "a frame is born square to the root");
+
+        // A piece standing elsewhere on the floor is further away, so the newcomer joins the one
+        // nearest the root instead of lining up behind the furthest.
+        product(&mut project, "Far away", 600, 560, 720, 5000);
+        let placement = project.product_placement(box_(600, 560, 720));
+        assert_eq!(placement.translation(), DVec3::new(1100.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_new_product_slides_past_a_second_box_that_stands_in_the_way() {
+        let mut project = sample_project();
+        product(&mut project, "Near", 600, 560, 720, 0);
+        // This piece starts where the newcomer would land beside the nearest one, so the sideways
+        // push has to run once more before the box is clear.
+        product(&mut project, "Next", 600, 560, 720, 600);
+        let placement = project.product_placement(box_(600, 560, 720));
+        assert_eq!(placement.translation(), DVec3::new(1200.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_turned_product_is_cleared_by_its_world_box() {
+        let mut project = sample_project();
+        let near = product(&mut project, "Near", 600, 560, 720, 0);
+        let turned = Placement::IDENTITY
+            .with_rotation_euler(EulerAngles { z: Degrees::from_millidegrees(45_000), ..EulerAngles::default() })
+            .expect("a turned placement");
+        project.set_node_placement(near, turned).expect("turn the product");
+        let placement = project.product_placement(box_(100, 100, 720));
+        // The turned box reaches 0.707 · 600 along world X, so the newcomer starts there.
+        let expected = 0.5_f64.sqrt() * 600.0;
+        assert!((placement.translation().x - expected).abs() < 1e-9, "was {placement:?}");
+        assert!(placement.translation().z.abs() < 1e-9, "the newcomer stands on the floor: {placement:?}");
+        assert_eq!(placement.rotation(), DQuat::IDENTITY, "the frame itself is never turned by its neighbour");
     }
 }

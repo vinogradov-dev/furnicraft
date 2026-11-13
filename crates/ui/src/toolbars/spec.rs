@@ -17,6 +17,7 @@
 //! Every row is a constant, so the ribbon allocates nothing to read the map.
 
 use furnicraft_engine::PrimitiveKind;
+use furnicraft_model::ClassCode;
 use furnicraft_text::Message;
 
 use crate::draw::DrawTool;
@@ -42,8 +43,12 @@ pub enum ToolKind {
     Primitive(PrimitiveKind),
     /// Extrudes the selected closed path into a body.
     Extrude,
+    /// Opens the card that creates a product frame.
+    Product,
     /// Creates a panel at the scene root.
     Panel,
+    /// Arms the empty-space tool with `class`; its `fill` trait picks the size pair.
+    Fill(ClassCode),
     /// Creates an assembly at the scene root.
     Assembly,
     /// Creates a camera at the scene root.
@@ -650,7 +655,20 @@ const MODEL: [GroupSpec; 5] = [
     },
 ];
 
-const FURNITURE: [GroupSpec; 5] = [
+const FURNITURE: [GroupSpec; 6] = [
+    GroupSpec {
+        id: "furniture.product",
+        label: Message::GroupProduct,
+        tools: &[ToolSpec {
+            id: "furniture.product.frame",
+            label: Message::ToolProductFrame,
+            icon: Some(icons::scene::PRODUCT),
+            shortcut: None,
+            run: Some(ToolKind::Product),
+            method: None,
+            variants: &[],
+        }],
+    },
     GroupSpec {
         id: "furniture.panels",
         label: Message::GroupPanels,
@@ -661,6 +679,24 @@ const FURNITURE: [GroupSpec; 5] = [
                 icon: Some(icons::scene::PANEL),
                 shortcut: None,
                 run: Some(ToolKind::Panel),
+                method: None,
+                variants: &[],
+            },
+            ToolSpec {
+                id: "furniture.panels.post",
+                label: Message::ToolPost,
+                icon: Some(icons::scene::POST),
+                shortcut: None,
+                run: Some(ToolKind::Fill(ClassCode::VERTICAL_PANEL)),
+                method: None,
+                variants: &[],
+            },
+            ToolSpec {
+                id: "furniture.panels.shelf",
+                label: Message::ToolShelf,
+                icon: Some(icons::scene::SHELF),
+                shortcut: None,
+                run: Some(ToolKind::Fill(ClassCode::HORIZONTAL_PANEL)),
                 method: None,
                 variants: &[],
             },
@@ -952,7 +988,10 @@ mod tests {
             live("model"),
             ["model.create.extrude", "model.primitives.cube", "model.primitives.cylinder", "model.primitives.sphere",]
         );
-        assert_eq!(live("furniture"), ["furniture.panels.panel"]);
+        assert_eq!(
+            live("furniture"),
+            ["furniture.panels.panel", "furniture.panels.post", "furniture.panels.shelf", "furniture.product.frame"]
+        );
         assert_eq!(live("scene"), ["scene.objects.assembly", "scene.objects.camera", "scene.objects.light"]);
         assert_eq!(live("view"), ["view.display.grid", "view.projection.frame-all", "view.projection.toggle"]);
     }
@@ -963,7 +1002,10 @@ mod tests {
             ToolKind::CloseDraft,
             ToolKind::CancelDraft,
             ToolKind::Extrude,
+            ToolKind::Product,
             ToolKind::Panel,
+            ToolKind::Fill(ClassCode::VERTICAL_PANEL),
+            ToolKind::Fill(ClassCode::HORIZONTAL_PANEL),
             ToolKind::Assembly,
             ToolKind::Camera,
             ToolKind::Light,
@@ -1009,7 +1051,7 @@ mod tests {
         assert_eq!(sketch.columns(), 8);
         // The planned groups draw nothing, so the Model tab is the three primitives and the extrusion.
         assert_eq!(tab("model").expect("model").columns(), 4);
-        assert_eq!(tab("furniture").expect("furniture").columns(), 1);
+        assert_eq!(tab("furniture").expect("furniture").columns(), 4);
         assert_eq!(tab("scene").expect("scene").columns(), 3);
         assert_eq!(tab("view").expect("view").columns(), 3);
         let widest = tabs().iter().map(TabSpec::columns).max().unwrap_or(0);

@@ -7,15 +7,15 @@
 use furnicraft_units::Length;
 
 use crate::{
-    Contour, ContourSegmentId, FurnType, Geometry, Id, MaterialId, Mesh, Object, Panel, PanelNominalSize, PanelRect,
+    ClassCode, Contour, ContourSegmentId, Geometry, Id, MaterialId, Mesh, Object, Panel, PanelNominalSize, PanelRect,
     Placement,
 };
 
 pub(crate) use crate::testing::{millimetres, sample_project};
 
-/// Parses the dotted text form of a furniture type.
-pub(crate) fn furntype(text: &str) -> FurnType {
-    text.parse().expect("valid furniture type")
+/// Parses the dotted text form of a class code.
+pub(crate) fn class(text: &str) -> ClassCode {
+    text.parse().expect("valid class code")
 }
 
 pub(crate) fn sample_nominal() -> PanelNominalSize {

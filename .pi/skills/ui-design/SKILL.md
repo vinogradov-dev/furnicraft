@@ -56,15 +56,16 @@ fix the document in the same change (AGENTS §1, "if the hint is wrong, fix the 
 - `ui` does not see `wgpu`; the shell wires the renderer. State that is not document data — camera,
   selection, hover, armed tool, open containers, layout — lives in the session or the shell (§4.10).
 - Colours, radii, heights and gaps come from `theme.rs`; a literal colour in a feature module is a
-  defect (ADR 0063, 0089). Hover, press, disabled and hairline states are mixed from the palette,
-  never hand-picked.
+  defect (ADR 0063, 0089), and `cargo xtask ui-rules` fails it. Hover, press, disabled and hairline
+  states are mixed from the palette, never hand-picked.
 - Numbers are typed through the one scrubbing field (`crates/ui/src/scrub.rs`, ADR 0092), with the
   unit outside the box; a bespoke drag arithmetic is a second field, and we have one.
 - Every user-facing string is a message with a stable id (`crates/text`), not a literal: a missing
   translation must be a compile error, not an English word in a Russian screen.
-- A floating surface is an `egui::Area` on `Order::Middle` over the scene and is declared to
+- A floating surface is an `egui::Area` on `Order::Middle` over the scene, is declared to
   `Chrome::covers`, so a click on it is chrome and never a pick, a border drag or a camera gesture
-  (ADR 0080). The scene rectangle does not shrink when a panel folds.
+  (ADR 0080), and its module is one row of `HOST_OWNERS` in `xtask/src/ui_rules.rs`. The scene
+  rectangle does not shrink when a panel folds.
 - Long work previews; it does not block. A changeable value fills `Session::preview` and one
   confirmed action commits it (ADR 0093).
 - Nothing is available only by hovering, and nothing destructive is confirmed by a dialog when undo

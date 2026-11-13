@@ -10,7 +10,7 @@
 //!
 //! Changes when: a card joins the inspector or a tree action changes.
 
-use egui::{Color32, Ui};
+use egui::Ui;
 
 use furnicraft_engine::node_cmds::{
     NODE_COMPONENT_CONVERT_TO_GROUP_ID, NODE_DELETE_ID, NODE_DUPLICATE_ID, NODE_GROUP_ID, NODE_UNGROUP_ID,
@@ -26,6 +26,7 @@ use crate::contour_edit::{ContourEdit, ContourTarget};
 use crate::object_card::ObjectAction;
 use crate::panel_card::PanelAction;
 use crate::scene_tree::{self, TreeAction};
+use crate::theme;
 
 impl Editor {
     /// Draws the scene tree and dispatches the tree actions.
@@ -39,7 +40,7 @@ impl Editor {
             self.initialized = true;
         }
         if let Some(error) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(theme::danger(ui), error);
             ui.separator();
         }
         let actions = scene_tree::show(ui, session, &mut self.selection, &mut self.flags);
@@ -144,6 +145,10 @@ impl Editor {
             TreeAction::AddChild { parent } => {
                 self.arm_creation(session.project(), parent);
             }
+            TreeAction::OpenProduct { node } => {
+                self.open_product(session, node);
+            }
+            TreeAction::CloseProduct => self.close_product(session),
             TreeAction::Duplicate { node } => {
                 let params = json(&NodeDuplicate { node })?;
                 let outcome = dispatch(session, NODE_DUPLICATE_ID, &params)?;

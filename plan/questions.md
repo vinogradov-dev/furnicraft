@@ -37,3 +37,14 @@ this file only when a task touches the question.
   (F4 in the S7 audit). One `Project::apply(Change)` value per area would collapse the engine side to
   one module and the UI to one card, at the cost of rewriting every command or keeping the stable ids
   as thin wrappers over the change values. Decide before M8 puts hardware commands on the same pattern.
+- How a workshop-made part is decomposed for production. `30.15` tamburat and `30.16` bent panels
+  (ADR 0104) are classes because the shop assembles them, and `supply = shop` keeps them counted once
+  and out of the cutting list. Whether their components travel as a recipe on the object — the two
+  8 mm skins and the rails, expanded by the exporter — or as ordinary sheet parts in the tree is not
+  decided. The class rows do not change either way; the production mechanism does. The owner left it
+  to practice after the first real tamburat order.
+- The host rule of ADR 0094 and the approved table disagree: the record says a variant's `host`
+  must contain its type's, while `50.03.03` undermount runner narrows `50.03` to `30.3` and drops
+  `30.10`, which is what an under-drawer runner physically does. T2 follows the table and the model
+  test now rejects a variant that *widens* its host instead. Confirm the reading, or restore the
+  record's wording and give `50.03.03` the type's hosts back.

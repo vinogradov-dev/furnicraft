@@ -14,7 +14,7 @@
 #![allow(clippy::expect_used)]
 
 use eframe::egui;
-use furnicraft_model::Id;
+use furnicraft_model::{ClassCode, Envelope, Id};
 use furnicraft_scene::Camera;
 use furnicraft_text::{Lang, Message};
 
@@ -417,4 +417,186 @@ fn no_chrome_gesture_writes_a_revision() {
     assert_eq!(harness.revision(), revision, "no chrome gesture writes the document");
     assert!(!harness.app.tabs.active().is_dirty(), "and none of them marks the scene unsaved");
     assert!(!harness.app.tabs.active().can_undo(), "and none of them adds an undo entry");
+}
+
+#[test]
+fn each_tab_keeps_its_own_open_product() {
+    // Openness is session view state (ADR 0098), and a tab owns its session: a new tab starts with
+    // every product closed, and the first tab still works in the frame it opened.
+    let mut harness = Harness::new("frame-product-tabs");
+    harness.settle();
+    let first_tab = harness.app.tabs.active_id();
+    let draft = furnicraft_ui::product_card::ProductDraft {
+        envelope: Envelope::new(
+            furnicraft_testkit::millimetres(600),
+            furnicraft_testkit::millimetres(560),
+            furnicraft_testkit::millimetres(720),
+        )
+        .expect("a valid box"),
+        class: ClassCode::GENERAL_PRODUCT,
+    };
+    harness.app.tabs.active_mut().create_product(draft, Lang::En).expect("create the frame");
+    let first = harness.app.tabs.active().session.active_product().expect("the first tab works in it");
+
+    harness.app.new_tab().expect("a new tab");
+    let second_tab = harness.app.tabs.active_id();
+    assert_ne!(first_tab, second_tab);
+    assert_eq!(harness.app.tabs.active().session.active_product(), None, "a new tab opens no product");
+
+    assert!(harness.app.tabs.activate(first_tab));
+    assert_eq!(harness.app.tabs.active().session.active_product(), Some(first), "the first tab kept it");
+    assert!(harness.app.tabs.activate(second_tab));
+    assert_eq!(harness.app.tabs.active().session.active_product(), None);
+}
+
+#[test]
+fn the_product_card_creates_a_frame_that_is_open_and_receives_the_next_part() {
+    let mut harness = Harness::new("frame-product-card");
+    harness.settle();
+    let before = harness.revision();
+    harness.app.product_card.start();
+    harness.settle();
+    assert!(harness.app.product_card.is_open(), "the card is up");
+
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    let document = harness.app.tabs.active();
+    let product = document.session.active_product().expect("the card created a frame and opened it");
+    assert!(document.session.project().container(product).is_some_and(|product| product.is_product()));
+    assert_eq!(harness.revision().get(), before.get() + 1, "a frame is one command");
+    assert!(!harness.app.product_card.is_open(), "the confirmed card closed");
+    assert_eq!(
+        document.editor.creation_target(document.session.project()),
+        product,
+        "the next part lands inside the new frame"
+    );
+}
+
+#[test]
+fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step() {
+    let mut harness = Harness::new("frame-fill");
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    let (product, before, pointer) = {
+        let document = harness.app.tabs.active_mut();
+        let product = document.session.active_product().expect("the card opens the frame");
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let placement = project.world_placement(product).expect("a frame");
+        let centre = placement.transform_point(size * 0.5);
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let camera = document.camera();
+        let pointer = gizmo_math::screen_point(camera, rect, centre).expect("the frame is on screen");
+        assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+        document
+            .editor
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .expect("the shelf fill arms inside the open frame");
+        (product, harness.revision(), pointer)
+    };
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let created = {
+        let document = harness.app.tabs.active();
+        // The ghost the click used is still on screen: it moved with the pointer, so the part that
+        // was created is exactly what the maker was looking at, not a second measurement.
+        let ghost = document.fill_gizmo.ghost().cloned().expect("the ghost that the click created");
+        let created = document.editor.selected_node().expect("the new part is selected");
+        let panel = document.session.project().panel(created).expect("the click created a panel");
+        assert_eq!(panel.nominal_size(), ghost.nominal_size, "the part is exactly the ghost's size");
+        assert_eq!(panel.placement(), ghost.placement, "and exactly the ghost's placement");
+        assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+        assert_eq!(
+            document.session.project().class(created),
+            Some(ClassCode::HORIZONTAL_PANEL),
+            "the tool's class travels with the same command"
+        );
+        created
+    };
+    assert!(harness.revision() > before, "the click writes the document once");
+
+    // One undo takes the whole fill back, class and all: the click was one entry, not two.
+    let document = harness.app.tabs.active_mut();
+    assert!(document.session.can_undo());
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the part");
+}
+
+#[test]
+fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
+    // Two posts stand at an angle, so the free section is a trapezoid: the ghost draws the polygon
+    // and the click stores exactly that ring, not the rectangle around it (ADR 0099).
+    let mut harness = Harness::new("frame-fill-shaped");
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    let (product, pointer) = {
+        let document = harness.app.tabs.active_mut();
+        let product = document.session.active_product().expect("the card opens the frame");
+        // The posts' inner faces run from (100, 0) to (200, 560) and from (500, 0) to (400, 560).
+        let slant = 100.0 / 560.0_f64.hypot(100.0);
+        let drop = 560.0 / 560.0_f64.hypot(100.0);
+        for (through, normal) in [((100.0, 0.0), (drop, -slant)), ((500.0, 0.0), (-drop, -slant))] {
+            let direction = (-normal.1, normal.0);
+            let start_y = 280.0 - 600.0 * direction.1;
+            let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
+            let rotation = furnicraft_geom::DQuat::from_rotation_z(normal.1.atan2(normal.0))
+                * furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+            let translation = furnicraft_geom::DVec3::new(start_x, start_y, 720.0)
+                - furnicraft_geom::DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+            let placement = furnicraft_model::Placement::new(translation, rotation).expect("a placement");
+            let nominal = furnicraft_model::PanelNominalSize::new(
+                furnicraft_testkit::millimetres(720),
+                furnicraft_testkit::millimetres(1200),
+            )
+            .expect("a post size");
+            document
+                .editor
+                .create_panel_sized(&mut document.session, product, "Post".to_owned(), nominal, None, placement, None)
+                .expect("add a post");
+        }
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let centre = project.world_placement(product).expect("a frame").transform_point(size * 0.5);
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let pointer = gizmo_math::screen_point(document.camera(), rect, centre).expect("the frame is on screen");
+        assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+        document
+            .editor
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .expect("the shelf fill arms inside the open frame");
+        (product, pointer)
+    };
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let document = harness.app.tabs.active();
+    let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
+    let outline = ghost.outline.clone().expect("the ghost carries the measured polygon");
+    let created = document.editor.selected_node().expect("the new part is selected");
+    let panel = document.session.project().panel(created).expect("the click created a panel");
+    assert!(panel.is_contour(), "the shelf takes the polygon, not the rectangle around it");
+    assert_eq!(Some(outline), panel.outline_contour().cloned(), "the stored ring is the ghost's ring");
+    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
+    assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+
+    let document = harness.app.tabs.active_mut();
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the shaped part");
 }

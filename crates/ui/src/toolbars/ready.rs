@@ -33,7 +33,9 @@ pub(super) struct Ready {
 /// *where* a tool sits is data, and everything about *whether* it can run is here, next to the words
 /// that say why not.
 pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: RibbonContext, lang: Lang) -> Ready {
-    let RibbonContext { has_panel_material, selected, selected_path, active, owns_view, grid, draft, .. } = context;
+    let RibbonContext {
+        has_panel_material, product_open, selected, selected_path, active, owns_view, grid, draft, ..
+    } = context;
     match kind {
         ToolKind::Draw(draw) => Ready {
             enabled: true,
@@ -83,12 +85,40 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
                 action,
             }
         }
+        ToolKind::Product => Ready {
+            enabled: true,
+            armed: false,
+            hint: tool_hint(tool.label.text(lang), tool.shortcut),
+            action: Some(ToolAction::CreateProductCard),
+        },
         ToolKind::Panel => Ready {
             enabled: has_panel_material,
             armed: false,
             hint: tool_hint(tool.label.text(lang), tool.shortcut),
             action: Some(ToolAction::CreatePanel),
         },
+        ToolKind::Fill(class) => {
+            // A niche belongs to the open product (ADR 0098) and a part needs a material to take its
+            // thickness from; the class must actually carry the `fill` trait, so a table row that
+            // lost it disables the cell instead of arming a tool with no axis pair.
+            let fills = class.traits().and_then(|traits| traits.fill()).is_some();
+            let hint = if !product_open {
+                Message::FillNeedsProduct.text(lang)
+            } else if !has_panel_material {
+                Message::FillNeedsMaterial.text(lang)
+            } else if !fills {
+                Message::FillNeedsFillTrait.text(lang)
+            } else {
+                tool.label.text(lang)
+            };
+            let enabled = product_open && has_panel_material && fills;
+            Ready {
+                enabled,
+                armed: is_armed(active, kind),
+                hint: tool_hint(hint, tool.shortcut),
+                action: enabled.then_some(ToolAction::Fill { class }),
+            }
+        }
         ToolKind::Assembly => Ready {
             enabled: true,
             armed: false,

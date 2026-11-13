@@ -25,56 +25,67 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
-  Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
-   to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
-   skill load reliably. The move to `.pi/skills` also showed that pi parses frontmatter as
-   strict YAML: an unquoted colon in a description silently loaded no skill at all, and nothing
-   in the gate noticed.
-  Shape: A new `xtask/src/skills.rs` in the shape of the other checks. It reads `AGENTS.md`,
-   `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a sentence when: a path named in
-   backticks or as a markdown link does not exist; a `cargo xtask <name>` is not a command of
-   the tool; a `references/*.md` a skill names is missing; the frontmatter `name` is not the
-   folder name; `description` is missing, empty or unquoted; a `SKILL.md` is over 200 lines or
-   a reference over 150; `AGENTS.md` §1.3 does not name the design skill. Tests use fixture
-   trees, one per refusal, and the real tree must pass. Join `cargo xtask ci` after `docs`.
-  Done: Each refusal has a test that names the offending file; the real tree passes; cargo
-   xtask ci runs the new step and fails when a path in a skill is renamed away.
-  `files: xtask/src/main.rs, AGENTS.md, .pi/skills/ui-design/SKILL.md, .pi/prompts/ui-review.md`
-- `[ ]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
-  Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
-   it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
-   and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
-   click that should have been a pick. Review catches this sometimes; a parse catches it every
-   time.
-  Shape: A new xtask/src/ui_rules.rs that parses the source with syn rather than grepping text,
-   so an alias cannot slip past. Refused outside crates/ui/src/theme.rs: Color32::from_rgb,
-   from_rgba*, from_gray, the named constants and a raw struct literal. Refused outside a table
-   of owners (the shell's side_panels, status_bar, view_cluster, strip and ui's palette,
-   settings, home): egui::Area, Window, Panel, SidePanel, TopBottomPanel, CentralPanel, Popup.
-   The table is a const in the check, so adding a surface is one row and no allowance comment.
-   Join cargo xtask ci after layers.
-  Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
-   a host in a card fails; theme.rs and every owner in the table pass; an alias (use
-   egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
-  `files: xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs`
-- `[ ]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
-  Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
-   55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
-   only way to answer it is to start the app while the owner is working. An offscreen render
-   into target/ui-shots answers it silently and leaves a picture the session can read.
-  Shape: After U77's seam: a wgpu instance and adapter with no surface, a device and queue,
-   egui_wgpu::Renderer on the app's own frame, a texture with RENDER_ATTACHMENT and COPY_SRC,
-   copy_texture_to_buffer and a PNG writer under target/ui-shots. One ignored test renders the
-   matrix: three presets, dark and light, panel opacity 55, 92 and 100, panels expanded and
-   folded, 100 and 200 % scale, on the same fixture scene. No adapter prints one sentence and
-   skips, so the check is safe on a machine without a GPU; the PNGs are looked at, never
-   compared pixel by pixel in CI.
-  Done: A run writes one PNG per cell of the matrix into target/ui-shots with a name that says
-   the cell; a machine without an adapter skips with a readable sentence; the image at 55 %
-   shows the model through the panel and the light image is not washed out; cargo test
-   --workspace and cargo xtask ci stay green without a GPU.
-  `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs`
+- `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
+  Why: The only solid primitive is a cube with one size for three edges, which nothing in
+   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
+   height, created the way the extrusion tool already works: draw the base, then pull the
+   height. ADR 0101 makes it the shared box the product frame will use too.
+  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
+   height, each validated by the existing primitive bounds, and the mesh builder derives the
+   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
+   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
+   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
+   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
+   drag on a max face changes one size while a min face changes it and compensates the
+   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
+   golden file in the same change; the schema is bumped with no migration (0096).
+  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
+   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
+   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
+   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
+   messages no longer mention a cube; cargo xtask ci is green.
+  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs`
+- `[ ]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
+  Why: The owner wants the frame created and edited exactly like the box, not with a separate
+   toolkit: the reserved space and the solid are the same three lengths. Without this the frame
+   is card-only while the box has grips, and the two owners of a box disagree.
+  Shape: The frame plugs into the box editor of V2 as its second owner: eight corner grips and
+   six face grips edit the envelope through product.envelope.set, a corner changing two sizes
+   and a face one, the card keeping the three numbers and the type. Dragging a min face
+   translates the placement so the opposite face stays put in the world (0082, 0088). The drawn
+   gesture — base rectangle, then height — dispatches product.create, so the card and the draw
+   reach the same command. The grips show whenever the frame is selected, including the
+   closed-with-parts state where its dashed lines are hidden (0100). Distances typed in the
+   fields during the gesture land with N8.
+  Done: Tests: a corner grip changes two envelope sizes as one undo entry; a face grip changes
+   one; a min-face drag keeps the opposite face still; the drawn gesture creates a frame of
+   exactly the ghost size with the placeholder class; the card and the gesture produce the same
+   document; the grips are checked offscreen and the drag feel by a live run; cargo xtask ci is
+   green.
+  `files: apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs, crates/engine/src/node_cmds.rs`
+- `[ ]` **N8** the exact-distance fields: type a distance, lock it, centre it, with the keyboard
+  Why: A maker cannot place a post to the millimetre with a mouse, and the same need appears in
+   three gestures: filling a niche, drawing a box or a frame, and moving a piece. The probe
+   exists (N6, ADR 0103); without the fields it is a measurement nobody can state exactly.
+   Studied as behaviour in an established editor, the mechanism is a live distance field per
+   direction with one active field — not a dialog.
+  Shape: A session overlay draws one shared number field per direction of the work plane from
+   the new face to the first surface the probe found, with the unit outside (ADR 0092); exactly
+   one field is active and shows the focus ring from the theme. Typing takes the mouse out of
+   the gesture for that direction, Enter commits, Escape returns the mouse, Tab moves to the
+   opposite direction. A field offers the semantic value «По центру» / Centred in its menu,
+   which places the part in the middle of the void and yields a computed coordinate. A
+   committed distance shows a lock and the next is measured from the locked face. A direction
+   with no neighbour disables the field with a sentence; an impossible value is refused with a
+   message and writes nothing; the whole gesture is one undo entry. The overlay is shared by
+   the niche fill, the box gesture and the move tool, and the numbers come from the model
+   probe, never from a second computation.
+  Done: Tests over the pure parts: the active field, Tab, Enter and Escape move focus and
+   commit or abandon without a write; a lock makes the second distance relative to the locked
+   face; the centred value produces the midpoint coordinate; a missing neighbour disables the
+   field; an impossible value is refused. The overlay is checked offscreen for the focus ring
+   and the lock glyph, and a live run for the typing feel; cargo xtask rules and ci are green.
+  `files: crates/ui/src/scrub.rs, apps/furnicraft/src/main.rs, crates/ui/src/theme.rs`
 
 ## Bugs
 
@@ -99,8 +110,348 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   no behaviour change. Test: one asserting that the window title, `app_id`, settings directory and
   open-dialog filter all read the constants, so a second rename cannot miss a copy.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
+  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
+   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
+   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
+   the writer.
+  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
+   units; the exporter adds the additive columns and declares kerf and trim in the manifest
+   rules block. The package major version does not move.
+  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
+   columns are additive; the golden file records them; cargo xtask ci is green.
+  `files: crates/model/src/catalog.rs`
+- `[ ]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
+  Why: Filed from the class/export planning session: `task add --phase K` created the first
+   task of a new phase, but the paragraph that declares what each phase letter means
+   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
+   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
+   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
+  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
+   <text>` verb appends or updates the legend line in one gated write, so a session can declare
+   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
+   covers adding a phase that the legend does not mention and updating one that it does.
+  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
+   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
+  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
+- `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
+  Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
+   process, possibly in Python, and neither the document JSON nor the internal database is a
+   contract they can rely on (ADR 0095). The package is that contract, and the class traits,
+   the product envelope and the exact contours only pay off when they travel with it. It
+   follows the product entity (N1) because its products table is the envelope plus product_id,
+   and the classes snapshot carries mount and fill.
+  Shape: A new crate crates/export at layer 3, registered in the layer map and PROJECT.md, with
+   one column table as the only source for the manifest, the JSONL writer and the CSV copies.
+   Tables: products, nodes, parts, banding, contours, facades, fittings, machining, materials,
+   classes, properties; integer micrometres, millidegrees, square millimetres and
+   scaled-integer rotation, no floats. Products carry the authored envelope plus the derived
+   content bounds; parts carry product_id, measured sizes, area, banding totals; contours hand
+   over the stored segments and arcs without recomputation; the manifest carries the optional
+   order number and version. The package embeds the catalogue rows the order uses and the class
+   rows it references, so it is self-contained. Ordering by key and no timestamp in the tables
+   make one revision produce byte-identical output.
+  Done: A golden package from the fixture scene; two exports of one revision are identical; the
+   manifest column list equals the writer table and each CSV copy carries exactly those
+   columns; an order with two cabinets groups correctly by product_id; cargo xtask layers and
+   cargo xtask ci are green.
+  `files: Cargo.toml, xtask/src/main.rs, crates/model/src/lib.rs, docs/domain/order-export.md`
+- `[ ]` **K3** the order package is written from a command line, without opening a window
+  Why: A package is useless if producing it needs a window and a person. The report pipeline
+   runs over saved files, and the assistant milestone already needs a headless job over a
+   project, so the exporter has to be reachable from a command line in the same binary.
+  Shape: furnicraft export <scene.fcs> --out <dir> [--format bundle|single] [--no-timestamp]:
+   the subcommand is handled before the window starts, prints one line per written table, and
+   exits non-zero with a readable message on a bad path, an unreadable scene or an unknown
+   format. No second binary, no new dependency.
+  Done: A CLI test writes a package from a fixture and checks its manifest and one table; no
+   window opens; the help text names the flags; cargo xtask ci is green.
+  `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
+  Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
+   two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
+   instead of a box that does not fit. The six probes already report faces, so the outline is a
+   consequence of the query, not a new concept (ADR 0099).
+  Shape: The niche query returns the probed faces as well as the distances, builds the
+   cross-section of the free space in the vertical plane facing the viewer and extrudes it
+   along the depth into a geom::Region, so a slanted boundary becomes a polygon and not a
+   bounding box. The shelf fill takes that region as the panel outline through the existing
+   contour conversion (ADR 0042), and the ghost shows the polygon before the click. A piece
+   whose free section cannot be described by one extruded polygon is refused with a sentence
+   rather than approximated.
+  Done: Tests: two angled posts give a trapezoid region with the expected vertices; a shelf
+   created in it has the contour outline, not a rectangle; a rectangular case still produces
+   the rectangle through the same path; an unrepresentable section is a readable refusal; the
+   preview and the created panel agree; cargo xtask ci is green.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, apps/furnicraft/src/fill_gizmo.rs, crates/engine/src/panel_cmds/panel.rs, crates/ui/src/editor/creation.rs` — `0efd3b4`
+
+- `[x]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
+  Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
+   feature the program is built around: the niche is the space the frame reserves, a post is
+   cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
+   drawing and a later report must agree on what the void is, and because a shelf crossing the
+   piece must split one niche into two without anything being stored.
+  Shape: The model answers the measurement (ADR 0103): probe(point, direction) reports the
+   distance to the first furniture surface and what it hit — a panel face, a hardware body,
+   another product shell or the envelope virtual face — and niche(point) aggregates the axes
+   into a size, a world position and a shape (a box today). Both are pure document queries,
+   derived and never stored, tested without a UI. The tool is bound to a class whose fill trait
+   says which axis pair it takes — HeightAndDepth for a post, WidthAndDepth for a shelf — and
+   draws the ghost through the session preview overlay (ADR 0093); it moves in 1 mm steps and a
+   click dispatches one panel.create with exactly the ghost size and placement, so history
+   holds one entry. Only the open product offers niches. The exact-distance fields and the
+   centred value land in N8.
+  Done: Headless tests: a probe stops at the envelope face, at a panel and at another product
+   shell, and reports which; a niche shrinks around an existing part on the right axis; a shelf
+   at full width splits the piece into two niches and the query above and below returns the two
+   boxes; a niche reports a world position and a shape, not only three lengths; the ghost size
+   equals the created panel size; a click is one undo entry; the tool refuses when no product
+   is open; only classes with a fill can be chosen; the ghost is checked offscreen and the 1 mm
+   feel by a live run.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/fill_gizmo.rs, apps/furnicraft/src/document.rs` — `13a42ad`
+
+- `[x]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
+  Why: The current translate tool moves anything anywhere, which is right for geometry and
+   wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
+   other. The mount trait exists for exactly this and today has no consumer.
+  Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
+   the floor plane (the vertical is fixed at zero), Wall stays free. Collision follows ADR
+   0102: a body stops at contact with another body and a shell stops at contact with another
+   shell, so no product is half inside another envelope while containment stays legal. Snapping
+   to the floor, to the frame virtual faces of the product and its neighbours, to a
+   neighbouring part face and to the 1 mm grid, with the constraint applied to the preview and
+   one node.placement.set on release, so a drag is one undo entry. The drag reads the probe
+   (ADR 0103) for contact and snap targets; typed distances during the drag arrive with N8.
+  Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
+   product can; a drag that would intersect another product stops at contact; snapping lands on
+   the grid and on a face; one undo restores the whole drag. The frame and the class attributes
+   drive the behaviour without a code literal check.
+  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/project/move_query.rs` — `1c82740`
+
+- `[x]` **N4** the creation guard: a furniture part is created only inside the open product
+  Why: The rule "no furniture part outside an open product" is worth nothing if a palette
+   entry, a shortcut or a future assistant can bypass the button that enforces it. ADR 0098
+   therefore puts the guard in the command enabled check, where every dispatch path meets it.
+  Shape: panel.create, facade and fitting creation read session.active_product and the class
+   level: a class of level Part or Fitting is refused when no product is open or when the
+   target parent is not inside it, with one of two messages and no write. Primitives, drawn
+   figures, mesh objects and hardware models stay free. Every fixture and test that created a
+   panel under the root gains a product and an opened session, or asserts the refusal; the
+   testkit fixture grows a product so the mechanical change stays in one place.
+  Done: Tests: refuse with no product open and with a closed product; refuse when the parent is
+   outside the open product; allow when it is inside, including a nested group; a primitive
+   still creates without a product; nothing is written on a refusal and the history is
+   untouched; cargo xtask ci is green.
+  `files: crates/engine/src/class_rules.rs, crates/engine/src/commands.rs, crates/engine/src/session.rs, crates/engine/src/panel_cmds/panel.rs, crates/engine/src/object_cmds.rs, crates/text/src/messages.rs, crates/model/src/testing.rs, crates/testkit/src/lib.rs, crates/ui/src/editor/tests.rs` — `187d42e`
+
+- `[x]` **N3** one product is open at a time, opened by a double click and never written to the file
+  Why: The owner ruled that one product is open at a time and that a furniture piece is created
+   through a card and is open the moment it exists: press add frame, enter the dimensions, and
+   the next part goes inside it without another gesture. Without this the creation guard has
+   nothing to point at and a new project has no first step.
+  Shape: Session carries active_product: Option<Id>, opened and closed by view operations,
+   cleared per tab and never serialised; opening another replaces the previous one, and
+   product.create (N1) opens the new frame in the same user action — a command followed by a
+   session operation, never an open flag in the file. The ribbon gains one cell, add frame,
+   which opens a card: width, depth and height in 1 mm steps and a searchable list of product
+   classes defaulting to the placeholder. Placement is deterministic: the origin in an empty
+   scene, otherwise beside the nearest product on the floor, clear of every envelope, and
+   selected. The double click in the viewport and the click on the tree both open; nothing here
+   dispatches a document command. The card is the numeric path; the drawn gesture (rect then
+   height) reaches the same command and arrives with the box tool (V3), so this task does not
+   wait for it.
+  Done: Tests: adding a frame opens it and the next panel lands inside; in an empty scene the
+   frame is at the origin, otherwise beside the nearest product and clear of every envelope;
+   opening A then B leaves B open; closing leaves none; the state is not in the saved file; a
+   double click on a part does not open a product that does not contain it; each tab keeps its
+   own open product; the card is driven through an egui context; cargo xtask ci is green.
+  `files: crates/engine/src/session.rs, crates/ui/src/scene_tree.rs, apps/furnicraft/src/main.rs` — `5f5a232`
+
+- `[x]` **N2** the product frame is drawn as a dashed wireframe that never picks
+  Why: The envelope is useless if nobody can see it and nobody can click it: the owner
+   described the frame as a dashed wireframe that is picked to select, open and move the piece,
+   and the picture has to say whether the piece is open, closed and empty, or closed with
+   parts. It also has to be visibly not a body, or it will be grabbed by mistake.
+  Shape: The scene description gains one frame item per product — the envelope in world space,
+   lines only; the renderer draws it dashed with no fill after the solid pass, with no depth
+   write. Three states per ADR 0100: open and active in the active line colour, closed and
+   empty in the inactive line colour, closed with parts not drawn at all. Picking uses the
+   envelope, not only the lines: a single click on a line or on empty space inside the piece
+   selects the frame, a click that hits a solid picks the solid, and when several products
+   contain the point the innermost wins. The shell rebuilds the item with the rest of the scene
+   and keeps it out of the solid pipelines.
+  Done: An open product draws active dashed lines, a closed empty one inactive dashed lines, a
+   closed one with parts draws none; a click inside empty space selects the frame, a click on a
+   panel selects the panel, a click on a nested product selects the inner one; a click through
+   the frame behind it still reaches what is behind; the colours come from the theme and are
+   checked offscreen; cargo xtask ci is green.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/scene_build.rs` — `36d4dde`
+
+- `[x]` **N1** the product entity: a container with a class and an authored envelope, created by a command
+  Why: Reports, the export and the creation guard all need the same answer — which piece is
+   this part in and how big is that piece — and today nothing in the document carries it. ADR
+   0097 settled the shape: a product is an ordinary container with a class of level Product and
+   an authored envelope, not a new node kind.
+  Shape: Container gains an optional Envelope (three micrometre lengths) with validation, and
+   the model refuses the two mismatches: an envelope on a container whose class is not level
+   Product, and a product class without one. node.duplicate copies it,
+   node.component.convert_to_group clears it with the class, and a product is never a
+   descendant of a product. product.create takes parent, name, class, envelope and placement,
+   and assigns the registry placeholder «изделие общего назначения» when no class is given, so
+   a product always has one. product.envelope.set edits the box and never a child size.
+   Accessors product_of(id) and products() walk the tree once; parent_id and product_id stay
+   uncomputed in the document. The schema is bumped; ADR 0096 means no migration, only a
+   regenerated golden file.
+  Done: Tests: create a product with an envelope, and one with the placeholder class; refuse an
+   envelope without a product class and a product class without an envelope; refuse a product
+   under a product; duplicate copies the envelope; convert_to_group drops both; a bad envelope
+   is a typed error; product_of returns the nearest product for a shelf two levels down; cargo
+   xtask ci is green.
+  `files: crates/model/src/container.rs, crates/model/src/class.rs, crates/model/src/project/product_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/property_cmds.rs, crates/model/src/project/mod.rs, crates/engine/src/product_cmds.rs, crates/engine/src/commands.rs` — `a049094`
+
+- `[x]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
+  Why: Traits only matter if the program refuses what the class forbids. Without this the class
+   table is documentation: a worktop still stretches across its width, a hinge still offers
+   resize, and the cutting list still has no flag to read.
+  Shape: The enabled check reads extent, operations and host: panel.resize and the mesh
+   commands refuse a LengthOnly or None class on the forbidden axis, edge banding refuses a
+   class without EdgeBand, cutouts refuse a class without Cutout, and mounting checks host. The
+   gizmo offers free, length-only or no handles from the same accessor. One accessor exposes
+   nesting and measure for the cutting list and the export that follow.
+  Done: Tests: a worktop resizes by length only, a hinge offers no resize and no banding, a
+   fitting never enters nesting, and changing a class row flips the behaviour without touching
+   the command; no code path compares a class literal outside a test.
+  `files: crates/engine/src/class_rules.rs, crates/engine/src/commands.rs, crates/engine/src/node_cmds.rs, apps/furnicraft/src/gizmo_math.rs` — `173acb4`
+
+- `[x]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
+  Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
+   today it edits a raw GG.TT.VV text field, so a saved project can hold a code the registry
+   never heard of, and nothing shows a user what the digits mean.
+  Shape: A picker per the ui-design skill: one search field over label, slug and alias, the
+   tree group to type to variant, retired rows hidden, an explicit unclassified row, and the
+   current class marked. The scene-tree badge shows the label with the code in the tooltip; the
+   property card shows a class row instead of a text edit. No new command: assignment stays
+   node.property.set with the reserved key.
+  Done: A click assigns a class and one undo entry restores the previous one; searching полка,
+   shelf and the alias finds the same row; a retired class cannot be assigned but still
+   renders; the picker state is tested through an egui context and the result is checked
+   offscreen.
+  `files: crates/ui/src/properties_card.rs, crates/ui/src/scene_tree.rs` — `fcc5041`
+
+- `[x]` **T2** the class registry is data in the model, and the program can see what it is looking at
+  Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)
+   but not its meaning: 20.01.09 is accepted although no such type exists, and no algorithm can
+   ask what an object is. The class registry turns the code into something the program can see
+   with, and ADR 0094 is the accepted design.
+  Shape: furntype.rs becomes the class module: ClassCode (six digits, three levels, 000000
+   unclassified), TraitSet as a bit mask, and a const registry table whose inheritance is
+   resolved at compile time so a lookup never walks parents. PropertyValue::FurnType becomes
+   PropertyValue::Class under the reserved key class, query.rs renames with_furntype_under to
+   with_class_under, assignment rejects a code the registry does not know while loading keeps
+   an unknown number. A test compares the registry with the table in docs/domain/classes.md.
+   The schema is bumped because the stored serde tag changes, and ADR 0096 means no migration.
+  Done: Tests: lookup and inheritance per level; a contradictory override is rejected; an
+   unknown code is refused on set and kept on load; the document table equals the registry row
+   for row; no code literal is compared outside a test; cargo xtask ci is green.
+  `files: crates/model/src/class.rs, crates/model/src/properties.rs, crates/model/src/query.rs` — `de739a0`
+
+- `[x]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
+  Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
+   serde aliases for renamed fields, a separate error path for a newer schema, and a
+   version-by-version history in two domain documents — all of it protecting files no user has
+   ever saved. ADR 0096 makes the rule explicit and this is the commit that spends it.
+  Shape: Delete the migration functions and their tests, the older golden files, and every
+   serde alias that exists only for a previous field name. Keep one schema_version, one golden
+   file for the current schema, and one readable error for any other number (older or newer).
+   The envelope keeps format_version as it is. docs/domain/scene-file.md §7 and
+   docs/domain/document.md §8 already state the rule; this task makes the code match them. A
+   default stays only where the field is optional in the current layout.
+  Done: cargo test -p furnicraft-model -p furnicraft-project is green with one golden file; a
+   file with any other schema number is rejected by the same sentence; rg finds no migration
+   pass and no alias for an older name; the two domain documents no longer describe a
+   migration; cargo xtask ci is green.
+  `files: crates/model/src/project/wire.rs, crates/project/tests/scene_file.rs, crates/project/src/lib.rs, docs/domain/scene-file.md` — `10b1079`
+
+- `[x]` **T1** the class table is written down and approved, so the registry has content before it has code
+  Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with
+   nothing to say, and every later task reads the table (the model, the picker, the trait
+   gates, the export). Until the rows are written and approved, none of them can start without
+   inventing classes in code.
+  Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
+   40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
+   reserved, plus the editor placeholder row «изделие общего назначения» / general product
+   (level = Product, never offered for a part) that product.create assigns when the card names
+   no type. Every type and variant carries its traits (supply, measure, nesting, extent,
+   operations, host, level, opening, mount, fill) and its slug; TT 90..99 stays reserved for
+   local codes. Product rows get level = Product and a mount, part rows get a fill, and a
+   product class is named by its function (a wall cabinet is 30.01.02), never by a product code
+   range: 0094 removed that axis. Each row must earn its code by a rule difference or a
+   separate report line, and the hinge example (card versus spring, then
+   overlay/inset/half-overlay) is the worked case. furntypes.md and PROJECT.md point at the new
+   table; the old registry stays only as history.
+  Done: The table covers every family the milestone needs; every row names all ten traits it
+   applies to; the product rows carry level = Product and mount, the part rows carry fill; the
+   placeholder product row exists and is never offered for a part; a fixture set (cabinet,
+   shelf, side, back, door, spring hinge, runner, worktop, plinth) resolves against it and
+   shows the intended report and editor behaviour; the owner has approved the rows entry by
+   entry.
+  `files: docs/domain/classes.md, docs/domain/furntypes.md, PROJECT.md` — `92276c7`
+
+- `[x]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
+  Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
+   55 % panel over the model, 200 % scale — cannot be answered from rectangles, and today the
+   only way to answer it is to start the app while the owner is working. An offscreen render
+   into target/ui-shots answers it silently and leaves a picture the session can read.
+  Shape: After U77's seam: a wgpu instance and adapter with no surface, a device and queue,
+   egui_wgpu::Renderer on the app's own frame, a texture with RENDER_ATTACHMENT and COPY_SRC,
+   copy_texture_to_buffer and a PNG writer under target/ui-shots. One ignored test renders the
+   matrix: three presets, dark and light, panel opacity 55, 92 and 100, panels expanded and
+   folded, 100 and 200 % scale, on the same fixture scene. No adapter prints one sentence and
+   skips, so the check is safe on a machine without a GPU; the PNGs are looked at, never
+   compared pixel by pixel in CI.
+  Done: A run writes one PNG per cell of the matrix into target/ui-shots with a name that says
+   the cell; a machine without an adapter skips with a readable sentence; the image at 55 %
+   shows the model through the panel and the light image is not washed out; cargo test
+   --workspace and cargo xtask ci stay green without a GPU.
+  `files: apps/furnicraft/src/main.rs, crates/render/src/lib.rs, crates/ui/src/theme.rs, crates/testkit/src/lib.rs` — `b370740`
+
+- `[x]` **U80** cargo xtask ui-rules fails a literal colour and a raw egui host outside the module that owns it
+  Why: theme.rs owns the colours and three modules own the overlay hosts, but nothing checks
+   it: a literal Color32 in a card looks right in the dark palette and breaks the light one,
+   and a private egui::Window escapes Chrome::covers and the one overlay order, then swallows a
+   click that should have been a pick. Review catches this sometimes; a parse catches it every
+   time.
+  Shape: A new xtask/src/ui_rules.rs that parses the source with syn rather than grepping text,
+   so an alias cannot slip past. Refused outside crates/ui/src/theme.rs: Color32::from_rgb,
+   from_rgba*, from_gray, the named constants and a raw struct literal. Refused outside a table
+   of owners (the shell's side_panels, status_bar, view_cluster, strip and ui's palette,
+   settings, home): egui::Area, Window, Panel, SidePanel, TopBottomPanel, CentralPanel, Popup.
+   The table is a const in the check, so adding a surface is one row and no allowance comment.
+   Join cargo xtask ci after layers.
+  Done: Tests: a literal colour in ui/panel_card.rs fails and the message names file and line;
+   a host in a card fails; theme.rs and every owner in the table pass; an alias (use
+   egui::Color32 as C) is still caught; the real tree passes; cargo xtask ci runs the step.
+  `files: xtask/src/ui_rules.rs, xtask/src/main.rs, crates/ui/src/theme.rs, crates/ui/src/icons.rs, crates/ui/src/panel_card.rs, apps/furnicraft/src/side_panels.rs` — `7d78778`
+
+- `[x]` **U79** cargo xtask skills keeps the project skills honest: every path, command and sibling they name exists, and the frontmatter is what the loader needs
+  Why: A skill that names a file or a `cargo xtask` command that is gone sends the next session
+   to nothing, and the router line in `AGENTS.md` §1.3 is the only thing that makes the design
+   skill load reliably. The move to `.pi/skills` also showed that pi parses frontmatter as
+   strict YAML: an unquoted colon in a description silently loaded no skill at all, and nothing
+   in the gate noticed.
+  Shape: A new `xtask/src/skills.rs` in the shape of the other checks. It reads `AGENTS.md`,
+   `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a sentence when: a path named in
+   backticks or as a markdown link does not exist; a `cargo xtask <name>` is not a command of
+   the tool; a `references/*.md` a skill names is missing; the frontmatter `name` is not the
+   folder name; `description` is missing, empty or unquoted; a `SKILL.md` is over 200 lines or
+   a reference over 150; `AGENTS.md` §1.3 does not name the design skill. Tests use fixture
+   trees, one per refusal, and the real tree must pass. Join `cargo xtask ci` after `docs`.
+  Done: Each refusal has a test that names the offending file; the real tree passes; cargo
+   xtask ci runs the new step and fails when a path in a skill is renamed away.
+  `files: xtask/src/main.rs, AGENTS.md, .pi/skills/ui-design/SKILL.md, .pi/prompts/ui-review.md` — `5ff6bb7`
 
 - `[x]` **U78** the shell's frame is checked without a window: the scene rectangle, the layer order, Chrome::covers and the keys are asserted on the real app
   Why: U66 and U72 are accepted with sentences like "the panels narrow no view", "a click on a
@@ -509,7 +860,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    preserves world vertices and pivot_world, set_pivot/center_pivot change only pivot_local,
    placement.world_zero changes only translation, a panel's pivot is read-only zero, old
    goldens load unchanged through the alias, ADR 0088 exists, cargo xtask ci is green.
-  `files: crates/model/src/frame.rs, crates/model/src/placement.rs, crates/model/src/contour.rs, crates/model/src/project/object_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/wire.rs, crates/model/src/project/frame_contract.rs, crates/engine/src/node_cmds.rs, crates/engine/src/session.rs, crates/ui/src/pivot_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/coords.rs, crates/text/src/messages.rs, docs/decisions/0088-origin-and-pivot-are-different-points.md, docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md, docs/decisions/0082-the-local-zero-is-the-creation-anchor.md, docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md, docs/domain/document.md, docs/domain/geometry.md, docs/domain/panels.md, docs/domain/scene-file.md, crates/project/tests/golden/scene-v20.fcs, PROJECT.md, AGENTS.md, plan/map.md` — `c250d09`
+  `files: crates/model/src/frame.rs, crates/model/src/placement.rs, crates/model/src/contour.rs, crates/model/src/project/object_cmds.rs, crates/model/src/project/node_cmds.rs, crates/model/src/project/panel_cmds.rs, crates/model/src/project/query.rs, crates/model/src/project/wire.rs, crates/model/src/project/frame_contract.rs, crates/engine/src/node_cmds.rs, crates/engine/src/session.rs, crates/ui/src/pivot_card.rs, crates/ui/src/placement_card.rs, crates/ui/src/coords.rs, crates/text/src/messages.rs, docs/decisions/0088-origin-and-pivot-are-different-points.md, docs/decisions/0026-the-manipulation-pivot-is-stored-node-data.md, docs/decisions/0082-the-local-zero-is-the-creation-anchor.md, docs/decisions/0083-a-panel-is-anchored-at-its-base-corner.md, docs/domain/document.md, docs/domain/geometry.md, docs/domain/panels.md, docs/domain/scene-file.md, crates/project/tests/golden/scene.fcs, PROJECT.md, AGENTS.md, plan/map.md` — `c250d09`
 
 - `[x]` **X8** the scene stays dark in the light theme: with the workspace on *Light*, the viewport
   still clears to the dark chrome, the floor grid keeps its light-on-dark lines, and the rendered

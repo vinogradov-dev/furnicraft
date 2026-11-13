@@ -35,7 +35,7 @@ pub struct LightNode {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,
@@ -186,7 +186,7 @@ struct LightNodeWire {
     id: Id,
     name: String,
     placement: Placement,
-    #[serde(default, alias = "pivot")]
+    #[serde(default)]
     pivot_local: PivotLocal,
     #[serde(default)]
     properties: Properties,

@@ -159,7 +159,8 @@ A furniture project is the user's work; a crash must never be the answer to bad 
 
 ### 4.5 No format assumptions
 
-- Documents are versioned serde data. Keep older files loading: new fields get `#[serde(default)]`; unknown fields are preserved or explicitly rejected, never silently dropped.
+- **Before the first release the file format has no past** (ADR 0096). A schema bump changes the layout and deletes the old loader in the same change: no migration pass, no `serde` alias for an older field name, no golden file for an older schema. One golden file per current schema; a `schema_version` other than the current one is a readable error. The day `1.0` ships this clause flips — older files keep loading, a bump ships a migration, and a new ADR records the flip. Compatibility promises follow released users, not version numbers, so earmarked freedom must not be spent silently.
+- `#[serde(default)]` marks a field that is optional in the *current* layout. A default that exists only so a previous layout can load leaves the tree with the migration — before `1.0`, it leaves now.
 - Never assume a material, thickness, unit or hardware type exists: all of these are data with defaults chosen by the document, not constants in code.
 - Unknown enum variants from a newer file are an error the user can read, never a panic or a silent reinterpretation.
 
@@ -252,9 +253,24 @@ cargo xtask ci
 ```
 
 `cargo xtask ci` runs `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace`, `cargo xtask layers`, `cargo xtask plan` and `cargo xtask docs`, in that
-order, stopping at the first failure. Run the steps individually while iterating (see below); run `cargo fmt --all` to fix
-formatting, the gate only checks it.
+`cargo test --workspace`, `cargo xtask layers`, `cargo xtask ui-rules`, `cargo xtask plan`,
+`cargo xtask docs` and `cargo xtask skills`, in that order, stopping at the first failure. Run the steps individually while
+iterating (see below); run `cargo fmt --all` to fix formatting, the gate only checks it.
+
+`cargo xtask skills` reads `AGENTS.md`, `.pi/skills/**/*.md` and `.pi/prompts/*.md` and fails with a
+sentence naming the file when a backticked path or a markdown link does not exist, when a
+`cargo xtask <name>` is not a command of the tool, when a `SKILL.md` frontmatter `name` is not its
+folder or its `description` is missing, empty or unquoted, when a skill is over 200 lines or a
+reference over 150, and when `AGENTS.md` §1.3 stops naming the design skill. A bare file name, a
+command id and a `<placeholder>` are prose, not a claim, and are not checked.
+
+`cargo xtask ui-rules` reads every shipped file under `crates/ui/src` and `apps/furnicraft/src`
+with `syn`, not as text, and fails with the file and the line when a feature module builds a colour
+literal — `Color32::from_rgb(…)` with literal channels, a named ink, a raw struct literal — outside
+`crates/ui/src/theme.rs` (the icon role inks are the second owner, ADR 0090), or creates an `egui`
+host (`Area`, `Window`, `Modal`, a panel, `Popup`) outside the module whose row in `HOST_OWNERS`
+owns that surface. Test code is not read: a test may drive whatever host it needs. A new surface is
+one row in that table, and it names the surface, so the table is the inventory rather than a waiver.
 
 `cargo xtask plan` fails when the plan files, the notes, the reference files or the `base`
 contradict each other, and it names the mismatch in a sentence you can act on: a missing or
@@ -376,6 +392,7 @@ New tasks are developed on the `dev` branch; `main` holds only verified, merge-r
 - `assets/icons/STYLE_GUIDE.md` — icon visual language; read only when drawing or editing an icon
   (`assets/README.md` holds the file format, `assets/icons/AUDIT.md` the measured state of the set).
 - `docs/decisions/` — architecture decision records: one short file per decision, with the reason and the consequences.
+- `docs/domain/classes.md` — the semantic class registry: encoding, traits and lifecycle; `docs/domain/products.md` — the product, its authored envelope and the workspace rules; `docs/domain/order-export.md` — the published order-package contract other programs read.
 - `plan/STATUS.md` — the `STATE` line, where the project stands and what comes next; rewritten at the end of every task, never appended to.
 - `plan/BACKLOG.md` — one entry per task with a stable id, its order, its labelled fields and a `files:` hint; the single list of what is done, in progress and next.
 - `plan/notes/<ID>.md` — the research note of one task: what a session measured, decided and ruled out. Printed by `cargo xtask task <ID>`, read by nothing else, and kept after the task lands.

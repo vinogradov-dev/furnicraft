@@ -13,10 +13,11 @@
 //! It does not do: compute the machining effects or the outline they cut — `furnicraft-param`
 //! owns that.
 
-use furnicraft_model::{Catalog, Id, MachiningAnchor, MachiningId, MachiningParams, Project};
+use furnicraft_model::{Catalog, Id, MachiningAnchor, MachiningId, MachiningKind, MachiningParams, Project};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::class_rules::{NodeRules, operation_of};
 use crate::commands::{CommandError, CommandOutcome, CommandSpec};
 use crate::session::Session;
 use furnicraft_text::Message;
@@ -54,7 +55,8 @@ fn machining_add_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelMachiningAdd::parse(params) else {
         return false;
     };
-    session.project().validate_machining(params.panel, params.anchor, &params.params).is_ok()
+    class_allows_machining(session.project(), params.panel, params.params.kind(), MACHINING_ADD_ID).is_ok()
+        && session.project().validate_machining(params.panel, params.anchor, &params.params).is_ok()
 }
 
 fn machining_add_run(
@@ -63,6 +65,7 @@ fn machining_add_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelMachiningAdd::parse(params)?;
+    class_allows_machining(project, params.panel, params.params.kind(), MACHINING_ADD_ID)?;
     let id = project.add_machining(params.panel, params.anchor, params.params)?;
     Ok(CommandOutcome::created_machining(id))
 }
@@ -105,7 +108,11 @@ fn machining_update_enabled(session: &Session, params: &Value) -> bool {
     let Ok(params) = PanelMachiningUpdate::parse(params) else {
         return false;
     };
-    session.project().validate_machining_update(params.panel, params.machining, params.anchor, &params.params).is_ok()
+    class_allows_machining(session.project(), params.panel, params.params.kind(), MACHINING_UPDATE_ID).is_ok()
+        && session
+            .project()
+            .validate_machining_update(params.panel, params.machining, params.anchor, &params.params)
+            .is_ok()
 }
 
 fn machining_update_run(
@@ -114,6 +121,7 @@ fn machining_update_run(
     params: &Value,
 ) -> Result<CommandOutcome, CommandError> {
     let params = PanelMachiningUpdate::parse(params)?;
+    class_allows_machining(project, params.panel, params.params.kind(), MACHINING_UPDATE_ID)?;
     project.update_machining(params.panel, params.machining, params.anchor, params.params)?;
     Ok(CommandOutcome::changed())
 }
@@ -210,4 +218,16 @@ fn machining_move_run(
     let params = PanelMachiningMove::parse(params)?;
     project.move_machining(params.panel, params.machining, params.index)?;
     Ok(CommandOutcome::changed())
+}
+
+/// The class gate of one machining change: the class states which operations it admits.
+fn class_allows_machining(
+    project: &Project,
+    panel: Id,
+    kind: MachiningKind,
+    command: &'static str,
+) -> Result<(), CommandError> {
+    NodeRules::of(project, panel)
+        .allow_operation(operation_of(kind))
+        .map_err(|refusal| CommandError::class(command, refusal))
 }

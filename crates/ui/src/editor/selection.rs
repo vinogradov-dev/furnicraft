@@ -9,7 +9,8 @@
 //!
 //! Changes when: a gesture selects, adds to the selection, or opens and closes a container.
 
-use furnicraft_model::{Id, Project};
+use furnicraft_engine::Session;
+use furnicraft_model::{Container, Id, Project};
 
 use super::Editor;
 use crate::target::{child_containing, resolve_viewport_pick};
@@ -53,26 +54,37 @@ impl Editor {
         }
     }
 
-    /// Enters one level below the picked node: opens it and selects the child that owns `hit`.
+    /// Acts on a double click in the viewport: opens a product, or enters one level below a group.
     ///
-    /// A double-click on a closed container reveals its contents; double-clicking a panel has no
-    /// effect because a panel has no children.
-    pub fn enter_viewport_level(&mut self, project: &Project, hit: Option<Id>) {
+    /// A double click on a product opens it as the session's working product (ADR 0098, ADR 0100)
+    /// and arms it for creation; a double click on a group reveals its contents and selects the
+    /// child under the pointer. A double click on a panel, a loose object or the root does nothing
+    /// beyond the selection the first click already made — in particular it never opens a product
+    /// that does not own the hit.
+    ///
+    /// Returns whether the open product changed, so the shell can rebuild the envelope inks in the
+    /// frame the click lands in.
+    pub fn enter_viewport_level(&mut self, session: &mut Session, hit: Option<Id>) -> bool {
         let Some(hit) = hit else {
-            return;
+            return false;
         };
         self.initialized = true;
+        let project = session.project();
         let Some(selected) = resolve_viewport_pick(project, &self.open, hit) else {
-            return;
+            return false;
         };
         self.selection.replace(selected);
         if !project.is_container(selected) {
-            return;
+            return false;
+        }
+        if project.container(selected).is_some_and(Container::is_product) {
+            return self.open_product(session, selected);
         }
         self.open.insert(selected);
         if let Some(child) = child_containing(project, selected, hit) {
             self.selection.replace(child);
         }
+        false
     }
 
     /// Closes one level and returns the selection to the container that owns it.
