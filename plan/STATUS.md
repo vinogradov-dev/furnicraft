@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=T1 state=doing base=db72cdd updated=2026-11-13
+STATE: milestone=M7 phase=T task=K1 state=idle base=92276c7 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-T1 writes the class table down: the registry's groups, types, variants and their eight traits in
-`docs/domain/classes.md`, approved row by row, so the registry has content before it has code.
+K1 takes the format's past away: the two migration passes, the serde aliases for older field names
+and the nine older golden files go, leaving one schema version, one golden file and one readable
+error for any other number (ADR 0096).
 
 ## Index
 

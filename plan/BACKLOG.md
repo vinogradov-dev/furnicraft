@@ -25,30 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **T1** the class table is written down and approved, so the registry has content before it has code
-  Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with
-   nothing to say, and every later task reads the table (the model, the picker, the trait
-   gates, the export). Until the rows are written and approved, none of them can start without
-   inventing classes in code.
-  Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
-   40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
-   reserved, plus the editor placeholder row «изделие общего назначения» / general product
-   (level = Product, never offered for a part) that product.create assigns when the card names
-   no type. Every type and variant carries its traits (supply, measure, nesting, extent,
-   operations, host, level, opening, mount, fill) and its slug; TT 90..99 stays reserved for
-   local codes. Product rows get level = Product and a mount, part rows get a fill, and a
-   product class is named by its function (a wall cabinet is 30.01.02), never by a product code
-   range: 0094 removed that axis. Each row must earn its code by a rule difference or a
-   separate report line, and the hinge example (card versus spring, then
-   overlay/inset/half-overlay) is the worked case. furntypes.md and PROJECT.md point at the new
-   table; the old registry stays only as history.
-  Done: The table covers every family the milestone needs; every row names all ten traits it
-   applies to; the product rows carry level = Product and mount, the part rows carry fill; the
-   placeholder product row exists and is never offered for a part; a fixture set (cabinet,
-   shelf, side, back, door, spring hinge, runner, worktop, plinth) resolves against it and
-   shows the intended report and editor behaviour; the owner has approved the rows entry by
-   entry.
-  `files: docs/domain/classes.md, docs/domain/furntypes.md, PROJECT.md`
 - `[ ]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
   Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
    serde aliases for renamed fields, a separate error path for a newer schema, and a
@@ -387,6 +363,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **T1** the class table is written down and approved, so the registry has content before it has code
+  Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with
+   nothing to say, and every later task reads the table (the model, the picker, the trait
+   gates, the export). Until the rows are written and approved, none of them can start without
+   inventing classes in code.
+  Shape: docs/domain/classes.md grows the full tree: groups 10 seating, 20 lying, 30 storage,
+   40 work and dining surfaces, 50 fittings, 60 appliances, 70 boards and trim, with 80 and 90
+   reserved, plus the editor placeholder row «изделие общего назначения» / general product
+   (level = Product, never offered for a part) that product.create assigns when the card names
+   no type. Every type and variant carries its traits (supply, measure, nesting, extent,
+   operations, host, level, opening, mount, fill) and its slug; TT 90..99 stays reserved for
+   local codes. Product rows get level = Product and a mount, part rows get a fill, and a
+   product class is named by its function (a wall cabinet is 30.01.02), never by a product code
+   range: 0094 removed that axis. Each row must earn its code by a rule difference or a
+   separate report line, and the hinge example (card versus spring, then
+   overlay/inset/half-overlay) is the worked case. furntypes.md and PROJECT.md point at the new
+   table; the old registry stays only as history.
+  Done: The table covers every family the milestone needs; every row names all ten traits it
+   applies to; the product rows carry level = Product and mount, the part rows carry fill; the
+   placeholder product row exists and is never offered for a part; a fixture set (cabinet,
+   shelf, side, back, door, spring hinge, runner, worktop, plinth) resolves against it and
+   shows the intended report and editor behaviour; the owner has approved the rows entry by
+   entry.
+  `files: docs/domain/classes.md, docs/domain/furntypes.md, PROJECT.md` — `92276c7`
 
 - `[x]` **U81** the interface renders offscreen to a PNG, so colour, contrast and translucency are checked without a window on the owner's screen
   Why: The eyes-only list in .pi/skills/ui-design/references/checklist.md — the light theme, a
