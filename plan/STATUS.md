@@ -55,7 +55,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-Nothing is scheduled: 8 open tasks wait in `## Next`, the niche work N9–N12 last.
+Nothing is scheduled: 8 open tasks wait in `## Next` — K2, K3, R1, K4, then N9–N12.
 
 ## Index
 
