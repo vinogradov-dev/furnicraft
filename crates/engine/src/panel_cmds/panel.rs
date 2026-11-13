@@ -15,8 +15,8 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{
-    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
-    PropertyValue, SYSTEM_CLASS,
+    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, Panel, PanelNominalSize, Placement, Project,
+    ProjectError, PropertyValue, SYSTEM_CLASS,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -54,6 +54,14 @@ pub struct PanelCreate {
     /// none, which is the long-standing default (ADR 0034).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<ClassCode>,
+    /// The outline the panel is born with, when the tool measured one.
+    ///
+    /// A ring makes the new panel a contour panel from its first revision (ADR 0042): the ring is
+    /// the panel's own outline anchored at its zero corner, and `nominal_size` must be the size of
+    /// its bounds. A plain panel carries no ring and keeps the nominal rectangle. The empty-space
+    /// tool creates a shelf in a splayed niche this way, in the same one command and one undo entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Contour>,
 }
 
 impl PanelCreate {
@@ -326,14 +334,35 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
     params.validate_name()?;
     let material =
         catalog.panel_material(params.material).ok_or(CommandError::UnknownMaterial { material: params.material })?;
-    let id = project.add_panel(
-        params.parent,
-        params.name,
-        params.nominal_size,
-        Some(params.material),
-        material.nominal_thickness(),
-        params.placement,
-    )?;
+    let thickness = material.nominal_thickness();
+    let id = match params.outline.as_ref() {
+        Some(outline) => {
+            let anchored = Panel::anchored_contour(outline).map_err(ProjectError::from)?;
+            let measured = Panel::contour_size(&anchored).map_err(ProjectError::from)?;
+            if measured != params.nominal_size {
+                return Err(CommandError::InvalidParams {
+                    command: CREATE_ID,
+                    message: "the outline and the nominal size do not describe the same panel".to_owned(),
+                });
+            }
+            project.add_panel_contour(
+                params.parent,
+                params.name,
+                &anchored,
+                Some(params.material),
+                thickness,
+                params.placement,
+            )?
+        }
+        None => project.add_panel(
+            params.parent,
+            params.name,
+            params.nominal_size,
+            Some(params.material),
+            thickness,
+            params.placement,
+        )?,
+    };
     if let Some(class) = params.class {
         project.set_property(id, SYSTEM_CLASS, PropertyValue::class(class))?;
     }

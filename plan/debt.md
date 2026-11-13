@@ -223,3 +223,11 @@ module size, layer arrows and duplicated knowledge, `[plan]` the plan tool and i
   choose a class whose host the assignment then refuses and reads the engine's English sentence in
   the status bar. The picker should filter its rows by `host`, the way it already filters a query
   (T3, T4).
+- `[gizmo]` The empty-space tool refuses a post in a splayed niche, although a post spans the depth as a
+  rectangle: the free x-range it may stand in is the intersection of the section's width over the whole
+  depth, which the trapezoid's two wall lines answer exactly, and the model could hand that range to
+  the post. Until then a maker fills a splayed niche with shelves only (N7).
+- `[gizmo]` A shaped niche's walls are checked for height at the void's floor and ceiling, not along
+  the whole span: two boards that meet in the middle with the envelope behind them would pass as one
+  wall. The union of the coplanar faces' extents would close it; the samples are one micrometre apart
+  and no furniture case this tree builds has such a gap (N7).

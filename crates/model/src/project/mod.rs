@@ -26,7 +26,7 @@ mod wire;
 
 pub use error::ProjectError;
 pub use move_query::{MoveAxis, MoveLimit, MoveRule};
-pub use niche::{Niche, NicheShape, Probe, ProbeHit};
+pub use niche::{Niche, NicheRefusal, NicheShape, Probe, ProbeFace, ProbeHit};
 pub use surface::SurfaceKind;
 pub(crate) use wire::ProjectWire;
 

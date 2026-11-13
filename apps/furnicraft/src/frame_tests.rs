@@ -529,3 +529,74 @@ fn the_empty_space_tool_creates_the_ghost_as_one_classed_part_in_one_undo_step()
     document.session.undo().expect("one undo step");
     assert!(document.session.project().panel(created).is_none(), "one undo removes the part");
 }
+
+#[test]
+fn a_shelf_in_a_splayed_niche_is_created_with_the_ghost_outline() {
+    // Two posts stand at an angle, so the free section is a trapezoid: the ghost draws the polygon
+    // and the click stores exactly that ring, not the rectangle around it (ADR 0099).
+    let mut harness = Harness::new("frame-fill-shaped");
+    harness.settle();
+    harness.app.product_card.start();
+    harness.settle();
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+
+    let (product, pointer) = {
+        let document = harness.app.tabs.active_mut();
+        let product = document.session.active_product().expect("the card opens the frame");
+        // The posts' inner faces run from (100, 0) to (200, 560) and from (500, 0) to (400, 560).
+        let slant = 100.0 / 560.0_f64.hypot(100.0);
+        let drop = 560.0 / 560.0_f64.hypot(100.0);
+        for (through, normal) in [((100.0, 0.0), (drop, -slant)), ((500.0, 0.0), (-drop, -slant))] {
+            let direction = (-normal.1, normal.0);
+            let start_y = 280.0 - 600.0 * direction.1;
+            let start_x = through.0 + (start_y - through.1) * (direction.0 / direction.1);
+            let rotation = furnicraft_geom::DQuat::from_rotation_z(normal.1.atan2(normal.0))
+                * furnicraft_geom::DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+            let translation = furnicraft_geom::DVec3::new(start_x, start_y, 720.0)
+                - furnicraft_geom::DVec3::new(normal.0, normal.1, 0.0) * 18.0;
+            let placement = furnicraft_model::Placement::new(translation, rotation).expect("a placement");
+            let nominal = furnicraft_model::PanelNominalSize::new(
+                furnicraft_testkit::millimetres(720),
+                furnicraft_testkit::millimetres(1200),
+            )
+            .expect("a post size");
+            document
+                .editor
+                .create_panel_sized(&mut document.session, product, "Post".to_owned(), nominal, None, placement, None)
+                .expect("add a post");
+        }
+        let project = document.session.project();
+        let envelope = project.container(product).and_then(|product| product.envelope()).expect("an envelope");
+        let size = furnicraft_geom::DVec3::new(
+            envelope.x().millimetres_f64(),
+            envelope.y().millimetres_f64(),
+            envelope.z().millimetres_f64(),
+        );
+        let centre = project.world_placement(product).expect("a frame").transform_point(size * 0.5);
+        let rect = document.scene_rect().expect("a drawn frame gives the scene a rectangle");
+        let pointer = gizmo_math::screen_point(document.camera(), rect, centre).expect("the frame is on screen");
+        assert!(rect.contains(pointer), "the press lands on the scene: {pointer:?} in {rect:?}");
+        document
+            .editor
+            .arm_fill(&document.session, ClassCode::HORIZONTAL_PANEL, Lang::En)
+            .expect("the shelf fill arms inside the open frame");
+        (product, pointer)
+    };
+
+    harness.click(pointer, egui::PointerButton::Primary);
+
+    let document = harness.app.tabs.active();
+    let ghost = document.fill_gizmo.ghost().cloned().expect("the splayed void took a ghost");
+    let outline = ghost.outline.clone().expect("the ghost carries the measured polygon");
+    let created = document.editor.selected_node().expect("the new part is selected");
+    let panel = document.session.project().panel(created).expect("the click created a panel");
+    assert!(panel.is_contour(), "the shelf takes the polygon, not the rectangle around it");
+    assert_eq!(Some(outline), panel.outline_contour().cloned(), "the stored ring is the ghost's ring");
+    assert_eq!(panel.placement(), ghost.placement, "and the ghost's placement");
+    assert_eq!(panel.nominal_size(), ghost.nominal_size, "and the ghost's size");
+    assert_eq!(document.session.project().parent_of(created), Some(product), "it lands in the open frame");
+
+    let document = harness.app.tabs.active_mut();
+    document.session.undo().expect("one undo step");
+    assert!(document.session.project().panel(created).is_none(), "one undo removes the shaped part");
+}

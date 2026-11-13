@@ -1819,6 +1819,7 @@ fn a_fill_creates_a_classed_panel_of_exactly_the_ghost_size() {
             product,
             "Shelf".to_owned(),
             size,
+            None,
             placement,
             Some(ClassCode::HORIZONTAL_PANEL),
         )

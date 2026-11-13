@@ -346,8 +346,8 @@ mod tests {
     use furnicraft_model::{
         Catalog, ClassCode, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth,
         CutoutShape, EdgeBandingMaterial, EdgeId, Envelope, FaceSide, FrameAnchor, Geometry, Id, MachiningAnchor,
-        MachiningParams, PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue,
-        RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
+        MachiningParams, PanelContourError, PanelMaterial, PanelNominalSize, PivotLocal, Placement, ProjectError,
+        PropertyValue, RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -391,6 +391,7 @@ mod tests {
             material: sample_material_id(),
             placement: Placement::IDENTITY,
             class: None,
+            outline: None,
         }
     }
 
@@ -559,6 +560,61 @@ mod tests {
 
         session.undo().expect("one undo step");
         assert_eq!(session.project().panel(id), None, "one undo takes the whole creation back");
+    }
+
+    #[test]
+    fn a_shaped_panel_is_born_from_its_ring_in_one_undo_step() {
+        // A shelf in a splayed niche arrives as a ring: the command creates a contour panel anchored
+        // at its own zero corner, with the tool's class, and one undo takes the whole part back.
+        let mut session = product_session();
+        let product = session.active_product().expect("a product is open");
+        let ring = Contour::from_polygon(vec![
+            [Length::ZERO, Length::ZERO],
+            [Length::from_millimetres(400).expect("a length"), Length::ZERO],
+            [Length::from_millimetres(300).expect("a length"), Length::from_millimetres(560).expect("a width")],
+            [Length::from_millimetres(100).expect("a length"), Length::from_millimetres(560).expect("a width")],
+        ])
+        .expect("a trapezoid");
+        let size = PanelNominalSize::new(
+            Length::from_millimetres(400).expect("a length"),
+            Length::from_millimetres(560).expect("a width"),
+        )
+        .expect("a size");
+        let fill = "30.11".parse::<ClassCode>().expect("a shelf class");
+        let request = PanelCreate {
+            parent: product,
+            name: "Shelf".to_owned(),
+            nominal_size: size,
+            material: sample_material_id(),
+            placement: Placement::IDENTITY
+                .with_translation(millimetres_length(100), Length::ZERO, millimetres_length(350))
+                .expect("a placement"),
+            class: Some(fill),
+            outline: Some(ring.clone()),
+        };
+        let params = json_params(&request);
+        let before = session.project().revision();
+
+        let id = session.dispatch("panel.create", &params).expect("create the shelf").created_id().expect("an id");
+        let panel = session.project().panel(id).expect("a panel");
+        assert!(panel.is_contour(), "the shaped shelf stores its ring, not a rectangle");
+        assert_eq!(panel.nominal_size(), size, "the ring's bounds are the panel's size");
+        assert_eq!(
+            panel.placement().translation_lengths(),
+            Some([millimetres_length(100), Length::ZERO, millimetres_length(350)]),
+            "anchored at its zero corner"
+        );
+        assert_eq!(panel.outline_contour().map(|stored| stored.bounds_micrometres()), Some(ring.bounds_micrometres()));
+        assert_eq!(session.project().class(id), Some(fill), "the tool's class travels with the same command");
+        assert!(session.project().revision() > before);
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole part back");
+    }
+
+    /// A whole millimetre as the document's length.
+    fn millimetres_length(value: i64) -> Length {
+        Length::from_millimetres(value).expect("whole millimetres fit")
     }
 
     #[test]

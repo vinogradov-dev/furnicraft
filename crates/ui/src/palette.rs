@@ -471,6 +471,7 @@ fn params_for(id: &str, session: &Session, context: &PaletteContext, lang: Lang)
                 material,
                 placement: Placement::IDENTITY,
                 class: None,
+                outline: None,
             })
         }
         furnicraft_engine::node_cmds::ASSEMBLY_CREATE_ID => json(&AssemblyCreate {

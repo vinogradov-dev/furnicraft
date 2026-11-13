@@ -78,14 +78,19 @@ id, no node, no command, no field; like content bounds, it is computed when aske
 stale.
 
 **It is measured by probes.** From the point, six rays are cast — right, left, up, down, forward,
-back — and each stops at the first furniture object or at the envelope. Version 1 uses the six
-distances as an axis-aligned box; the post tool and the shelf tool consume that box.
+back — and each stops at the first furniture object or at the envelope. The four side rays bound the
+**section**, the polygon of free space in the product's own horizontal plane; the two vertical rays
+give the void's floor and ceiling. A rectangular case answers that section as a box; a shelf takes the
+polygon as its outline. The post tool takes the box, whose height and depth sides it spans.
 
-**The shape is a staged promise.** The probes report *faces*, not only lengths, so the same query can
-return a cross-section. The first non-rectangular case is a piece whose posts stand at an angle: the
-free section is a trapezoid, extruded along the depth, and a shelf there must take the trapezoid.
-Version 2 builds the outline from the probed faces; version 3 would be arbitrary regions and is not
-planned. Nothing in the document changes between the stages.
+**The shape is a staged promise.** The probes report *faces*, not only lengths, so the section is built
+from the wall planes and not from the distances: the first non-rectangular case is a piece whose posts
+stand at an angle, where the plan section is a trapezoid. A shelf's outline lies in the product's own
+horizontal plane, so that plane is the one the section is measured in. The section is accepted only
+when it is one straight extruded shape: a wall that stops halfway, or a free space with a notch, gives
+no usable outline and the tool refuses it with a sentence rather than approximating it. A post spans
+the depth as a flat board, so a splayed section offers no post and the tool refuses that too.
+Arbitrary regions are not planned. Nothing in the document changes: the niche stays derived.
 
 **A probe stops at the first surface of a furniture entity and never passes through it** (0102): a
 panel face, a hardware body or another product's shell. A piece standing inside another's reserved
@@ -94,8 +99,8 @@ niche "bounded by the envelope and by panels and other furniture products" true 
 only in the sentence.
 
 **A niche answers with three things:** its **size** (width, height, depth), its **world position** —
-the corner the box is anchored at — and its **shape** (a box today, an extruded cross-section once the
-trapezoid lands). A tool never re-derives a position from a cursor point and a size; that is where
+the corner the box is anchored at — and its **shape** (a box, or the section polygon extruded along
+the height). A tool never re-derives a position from a cursor point and a size; that is where
 rounding drift appears. The answer is a model query (0103), so the fill tool, the distance indicator
 and the move tool all consume the same one.
 
@@ -149,13 +154,15 @@ The maker's flow: open a product, choose “add a post” or “add a shelf”, 
 
 - The cursor ray meets the envelope's interior; the point defines the niche (§4).
 - A **post** takes the niche's height and depth; a **shelf** takes its width and depth. Which axis pair
-  a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`, `None`).
+  a class fills is the class trait `fill` (`HeightAndDepth`, `WidthAndDepth`, `None`). A shelf in a
+  splayed case takes the section polygon as a contour-panel outline; a post needs a rectangular
+  section, because it is a flat board across the depth.
 - A **ghost** of the part follows the cursor through the session preview overlay (ADR 0093); nothing
   is written until the click.
 - The offset step is **1 mm**; there are no fractional sizes.
 - A click creates the part with exactly the ghost's size, through one command and one undo entry.
-- Version 1 handles axis-aligned niches and the two fills. A drawer, a back panel and a facade need
-  their own fill rules; the trapezoid needs the shaped niche of §4.
+- The two fills handle axis-aligned products; a shelf also takes the shaped section of §4. A drawer, a
+  back panel and a facade need their own fill rules.
 
 **Exact distances.** While a fill, a box creation or a move runs, the viewport shows one distance field
 per direction of the work plane — from the new face to the first surface — and exactly one of them is

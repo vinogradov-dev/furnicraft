@@ -997,6 +997,7 @@ impl Document {
             ghost.parent,
             name,
             ghost.nominal_size,
+            ghost.outline.clone(),
             ghost.placement,
             Some(arm.class),
         )

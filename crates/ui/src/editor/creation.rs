@@ -20,7 +20,9 @@ use furnicraft_engine::scene_cmds::{CAMERA_CREATE_ID, LIGHT_CREATE_ID};
 use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
-use furnicraft_model::{CameraProjection, ClassCode, Id, LightKind, PanelNominalSize, Placement, Project};
+use furnicraft_model::{
+    CameraProjection, ClassCode, Contour, Id, LightKind, MaterialId, PanelNominalSize, Placement, Project,
+};
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
@@ -110,7 +112,7 @@ impl Editor {
     /// Dispatches `panel.create` with the catalogue's first material and the default size.
     pub(super) fn create_panel(&mut self, session: &mut Session, parent: Id) -> Result<(), String> {
         let nominal_size = PanelCreate::default_nominal_size().map_err(|error| error.to_string())?;
-        self.create_panel_sized(session, parent, "Panel".to_owned(), nominal_size, Placement::IDENTITY, None)
+        self.create_panel_sized(session, parent, "Panel".to_owned(), nominal_size, None, Placement::IDENTITY, None)
     }
 
     /// Dispatches `panel.create` for a part of exactly this size, placement and class.
@@ -119,25 +121,35 @@ impl Editor {
     /// created is exactly the ghost the maker saw; the class travels with the same command, so the
     /// click is one undo entry rather than a create followed by an assignment. The material stays
     /// the catalogue's first, as it is for every created panel.
+    ///
+    /// A ring makes the part a contour panel whose outline is that ring, which is how a shelf takes
+    /// the trapezoid a splayed niche reserves (ADR 0042, ADR 0099); a rectangle panel carries none.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_panel_sized(
         &mut self,
         session: &mut Session,
         parent: Id,
         name: String,
         nominal_size: PanelNominalSize,
+        outline: Option<Contour>,
         placement: Placement,
         class: Option<ClassCode>,
     ) -> Result<(), String> {
-        let material = session
-            .catalog()
-            .panel_materials()
-            .first()
-            .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())?
-            .id();
-        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class })?;
+        let material = Self::panel_material(session)?;
+        let params = json(&PanelCreate { parent, name, nominal_size, material, placement, class, outline })?;
         let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());
         Ok(())
+    }
+
+    /// The material every created panel takes: the catalogue's first panel material.
+    fn panel_material(session: &Session) -> Result<MaterialId, String> {
+        session
+            .catalog()
+            .panel_materials()
+            .first()
+            .map(|material| material.id())
+            .ok_or_else(|| "Add a panel material to the catalogue first.".to_owned())
     }
 
     /// Creates the product frame the card describes and opens it, in one user action.

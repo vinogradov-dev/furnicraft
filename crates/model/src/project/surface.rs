@@ -1,11 +1,15 @@
-//! A furniture surface as an axis-aligned world box, in millimetres.
+//! A furniture surface as a box, in millimetres.
 //!
 //! Two pure queries measure the document against the same surfaces: the furniture move rule stops a
 //! drag at one (`move_query`), and the niche probe reports the first one along a ray (`niche`). They
 //! share this value so they cannot disagree about where a surface is (ADR 0102, ADR 0103).
 //!
-//! A turned body has no axis-aligned sides any more, so its eight corners are transformed and the
-//! tightest box around them is used. The box is a measurement device, never stored in the document.
+//! A surface carries two readings of the same box. The move rule needs the axis-aligned world bounds
+//! of a turned body, so its eight corners are transformed and the tightest world box around them is
+//! kept. The probe needs the true face, so the box keeps its own frame as well and the ray is taken
+//! into it before the slab test: a shelf in a splayed case is measured against the slanted board and
+//! not against the box around it (ADR 0099). Both readings are measurement devices, never stored in
+//! the document.
 
 use furnicraft_geom::DVec3;
 
@@ -28,13 +32,34 @@ pub enum SurfaceKind {
     Shell,
 }
 
-/// One furniture surface as an axis-aligned world box, in millimetres.
+/// One furniture surface as a box, in millimetres.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SurfaceBox {
     pub(crate) id: Id,
+    /// The axis-aligned bounds of the surface in the world, millimetres.
     pub(crate) min: DVec3,
     pub(crate) max: DVec3,
+    /// The surface's own box, before its placement: the true faces a probe meets.
+    pub(crate) local_min: DVec3,
+    pub(crate) local_max: DVec3,
+    /// The node's world placement.
+    pub(crate) world: Placement,
     pub(crate) kind: SurfaceKind,
+}
+
+/// One face of a surface a probe meets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FaceHit {
+    /// The distance along the probed unit direction, in millimetres.
+    pub(crate) distance: f64,
+    /// The world point where the ray meets the face, in millimetres.
+    pub(crate) point: DVec3,
+    /// The face's unit normal in the world, pointing back along the ray.
+    ///
+    /// The free space therefore lies in the half-space `normal · (point - hit) >= 0`.
+    pub(crate) normal: DVec3,
+    /// The surface's own axis the face lies on: 0, 1 or 2.
+    pub(crate) axis: usize,
 }
 
 /// One axis of a [`SurfaceBox`].
@@ -68,13 +93,48 @@ impl SurfaceBox {
             && point.z >= self.min.z
             && point.z <= self.max.z
     }
+
+    /// The first face of this box a ray meets, in world millimetres.
+    ///
+    /// The ray is taken into the surface's own frame, so a turned panel is measured by its true face
+    /// and not by the world box around it. A rotation keeps lengths, so the distance is the same in
+    /// both frames. The returned normal always faces back along the ray, which puts the free space on
+    /// the normal's side.
+    pub(crate) fn face_hit(self, point: DVec3, direction: DVec3) -> Option<FaceHit> {
+        let inverse = self.world.inverse().ok()?;
+        let local_point = inverse.transform_point(point);
+        let local_direction = inverse.transform_vector(direction);
+        if !local_point.is_finite() || !local_direction.is_finite() {
+            return None;
+        }
+        let (distance, axis, positive) = face_ahead(local_point, local_direction, self.local_min, self.local_max)?;
+        let mut normal_local = DVec3::ZERO;
+        normal_local[axis] = if positive { 1.0 } else { -1.0 };
+        let mut normal = self.world.transform_vector(normal_local);
+        if normal.dot(direction) > 0.0 {
+            normal = -normal;
+        }
+        let hit = point + direction * distance;
+        if !hit.is_finite() || !normal.is_finite() {
+            return None;
+        }
+        Some(FaceHit { distance, point: hit, normal, axis })
+    }
 }
 
 /// A local box through a node's world placement, as the world box around its eight corners.
 ///
 /// A corner that is not finite is no box.
 pub(crate) fn surface_box(id: Id, min: DVec3, max: DVec3, world: Placement, kind: SurfaceKind) -> Option<SurfaceBox> {
-    let mut box_ = SurfaceBox { id, min: DVec3::splat(f64::INFINITY), max: DVec3::splat(f64::NEG_INFINITY), kind };
+    let mut box_ = SurfaceBox {
+        id,
+        min: DVec3::splat(f64::INFINITY),
+        max: DVec3::splat(f64::NEG_INFINITY),
+        local_min: min,
+        local_max: max,
+        world,
+        kind,
+    };
     for x in [min.x, max.x] {
         for y in [min.y, max.y] {
             for z in [min.z, max.z] {
@@ -90,16 +150,18 @@ pub(crate) fn surface_box(id: Id, min: DVec3, max: DVec3, world: Placement, kind
     Some(box_)
 }
 
-/// The visible faces of a surface a probe can meet along a unit direction, or `None`.
+/// The visible face a ray meets along a unit direction: distance, own axis and side, or `None`.
 ///
 /// The slab test returns the near face for a point outside the box and the far face for a point
 /// inside it; a ray that starts on a face and points inward meets the opposite face, while one that
 /// starts on a face and points outward meets it at zero. That is what makes a point on the envelope
-/// answer with a zero extent on the axis it leaves.
-pub(crate) fn face_ahead(point: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<f64> {
+/// answer with a zero extent on the axis it leaves. The side is `true` for the box's positive face.
+pub(crate) fn face_ahead(point: DVec3, direction: DVec3, min: DVec3, max: DVec3) -> Option<(f64, usize, bool)> {
     const EPSILON: f64 = 1.0e-9;
     let mut enter = f64::NEG_INFINITY;
     let mut exit = f64::INFINITY;
+    let mut enter_face = (0usize, true);
+    let mut exit_face = (0usize, true);
     for axis in 0..3 {
         let origin = point[axis];
         let step = direction[axis];
@@ -113,13 +175,22 @@ pub(crate) fn face_ahead(point: DVec3, direction: DVec3, min: DVec3, max: DVec3)
         }
         let first = (low - origin) / step;
         let second = (high - origin) / step;
-        enter = enter.max(first.min(second));
-        exit = exit.min(first.max(second));
+        let near = first.min(second);
+        let far = first.max(second);
+        if near > enter {
+            enter = near;
+            enter_face = (axis, step < 0.0);
+        }
+        if far < exit {
+            exit = far;
+            exit_face = (axis, step > 0.0);
+        }
     }
     if exit < enter || exit < 0.0 {
         return None;
     }
-    if enter > EPSILON { Some(enter) } else { Some(exit) }
+    let (axis, positive) = if enter > EPSILON { enter_face } else { exit_face };
+    Some((if enter > EPSILON { enter } else { exit }, axis, positive))
 }
 
 #[cfg(test)]
@@ -136,19 +207,23 @@ mod tests {
     fn a_face_ahead_enters_from_outside_and_leaves_from_inside() {
         let (min, max) = unit_box();
         let outside = DVec3::new(-5.0, 5.0, 5.0);
-        assert_eq!(face_ahead(outside, DVec3::X, min, max), Some(5.0), "the near face");
+        assert_eq!(face_ahead(outside, DVec3::X, min, max), Some((5.0, 0, false)), "the near face");
         let inside = DVec3::new(5.0, 5.0, 5.0);
-        assert_eq!(face_ahead(inside, DVec3::X, min, max), Some(5.0), "the far face");
+        assert_eq!(face_ahead(inside, DVec3::X, min, max), Some((5.0, 0, true)), "the far face");
         let leaving = DVec3::new(0.0, 5.0, 5.0);
-        assert_eq!(face_ahead(leaving, -DVec3::X, min, max), Some(0.0), "a face the ray already sits on");
-        assert_eq!(face_ahead(leaving, DVec3::X, min, max), Some(10.0), "and the opposite one inward");
+        assert_eq!(face_ahead(leaving, -DVec3::X, min, max), Some((0.0, 0, false)), "a face the ray already sits on");
+        assert_eq!(face_ahead(leaving, DVec3::X, min, max), Some((10.0, 0, true)), "and the opposite one inward");
     }
 
     #[test]
     fn a_ray_that_misses_the_box_meets_no_face() {
         let (min, max) = unit_box();
         assert_eq!(face_ahead(DVec3::new(-5.0, 50.0, 5.0), DVec3::X, min, max), None);
-        assert_eq!(face_ahead(DVec3::new(5.0, 5.0, 5.0), -DVec3::X, min, max), Some(5.0), "the far face backwards");
+        assert_eq!(
+            face_ahead(DVec3::new(5.0, 5.0, 5.0), -DVec3::X, min, max),
+            Some((5.0, 0, false)),
+            "the far face backwards"
+        );
         assert_eq!(face_ahead(DVec3::new(50.0, 5.0, 5.0), DVec3::X, min, max), None, "a box behind the ray");
     }
 
@@ -167,5 +242,29 @@ mod tests {
         assert!((box_.max.x - 5.0 * std::f64::consts::SQRT_2).abs() < 1e-9, "was {box_:?}");
         assert!((box_.max.y - 6.0 * std::f64::consts::SQRT_2).abs() < 1e-9, "was {box_:?}");
         assert!(!box_.is_shell());
+    }
+
+    #[test]
+    fn a_probe_meets_the_true_face_of_a_turned_body() {
+        // A 10 x 2 board turned 45 degrees: its world box is wider than the board, so a ray along X
+        // that meets its world box would report a wall the board does not have.
+        let turn = Placement::IDENTITY.with_rotation_euler(crate::EulerAngles {
+            z: furnicraft_units::Degrees::from_millidegrees(45_000),
+            ..crate::EulerAngles::default()
+        });
+        let turn = turn.expect("a turn");
+        let board =
+            surface_box(Id::new(1).expect("id"), DVec3::ZERO, DVec3::new(10.0, 2.0, 1.0), turn, SurfaceKind::Panel)
+                .expect("a box");
+        // The board's world box is wider than the board: a point can lie inside the box and still be
+        // in the free space beside the board, so a ray from it must not meet a face there.
+        let beside = DVec3::new(2.0, 8.4, 0.5);
+        assert!(board.contains(beside), "the point is inside the world box");
+        assert_eq!(board.face_hit(beside, -DVec3::X), None, "but the true board is not in its way");
+        let inside = DVec3::new(0.0, 0.0, -5.0);
+        let hit = board.face_hit(inside, DVec3::new(0.0, 0.0, 1.0)).expect("the board's own top face is met");
+        assert!((hit.distance - 5.0).abs() < 1e-9, "was {hit:?}");
+        assert!((hit.normal.dot(DVec3::Z) + 1.0).abs() < 1e-9, "the face looks back down the ray: {hit:?}");
+        assert_eq!(hit.axis, 2);
     }
 }

@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
+- `[~]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
   Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
    two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
    instead of a box that does not fit. The six probes already report faces, so the outline is a
@@ -41,7 +41,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    created in it has the contour outline, not a rectangle; a rectangular case still produces
    the rectangle through the same path; an unrepresentable section is a readable refusal; the
    preview and the created panel agree; cargo xtask ci is green.
-  `files: crates/model/src/project/query.rs, crates/geom/src/lib.rs, apps/furnicraft/src/gizmo.rs`
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, apps/furnicraft/src/fill_gizmo.rs, crates/engine/src/panel_cmds/panel.rs, crates/ui/src/editor/creation.rs`
 - `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
   Why: The only solid primitive is a cube with one size for three edges, which nothing in
    cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
