@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N6 state=idle base=1c82740 updated=2026-11-13
+STATE: milestone=M7 phase=T task=N7 state=idle base=13a42ad updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N6 is the empty-space tool: a post or a shelf follows the cursor and is created to fit the void. The
-model answers probe and niche as pure queries (ADR 0103), and only the open product offers a niche.
+N7 shapes the niche: the six probes report faces, so an angled pair of posts gives a trapezoid
+extruded along the depth and the shelf takes that outline through the contour path (ADR 0099). N6
+answers the box and the fill; N7 widens the answer to a region.
 
 ## Index
 

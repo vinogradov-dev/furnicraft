@@ -25,30 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
-  Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
-   feature the program is built around: the niche is the space the frame reserves, a post is
-   cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
-   drawing and a later report must agree on what the void is, and because a shelf crossing the
-   piece must split one niche into two without anything being stored.
-  Shape: The model answers the measurement (ADR 0103): probe(point, direction) reports the
-   distance to the first furniture surface and what it hit — a panel face, a hardware body,
-   another product shell or the envelope virtual face — and niche(point) aggregates the axes
-   into a size, a world position and a shape (a box today). Both are pure document queries,
-   derived and never stored, tested without a UI. The tool is bound to a class whose fill trait
-   says which axis pair it takes — HeightAndDepth for a post, WidthAndDepth for a shelf — and
-   draws the ghost through the session preview overlay (ADR 0093); it moves in 1 mm steps and a
-   click dispatches one panel.create with exactly the ghost size and placement, so history
-   holds one entry. Only the open product offers niches. The exact-distance fields and the
-   centred value land in N8.
-  Done: Headless tests: a probe stops at the envelope face, at a panel and at another product
-   shell, and reports which; a niche shrinks around an existing part on the right axis; a shelf
-   at full width splits the piece into two niches and the query above and below returns the two
-   boxes; a niche reports a world position and a shape, not only three lengths; the ghost size
-   equals the created panel size; a click is one undo entry; the tool refuses when no product
-   is open; only classes with a fill can be chosen; the ghost is checked offscreen and the 1 mm
-   feel by a live run.
-  `files: crates/model/src/project/query.rs, apps/furnicraft/src/gizmo.rs, apps/furnicraft/src/main.rs`
 - `[ ]` **N7** a shaped niche: an angled pair of posts gives a trapezoid, and the shelf takes its outline
   Why: The owner named the trapezoid case as part of the feature, not as a later refinement:
    two posts standing at an angle reserve a trapezoid, and a shelf in it must take that shape
@@ -210,6 +186,31 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
+  Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
+   feature the program is built around: the niche is the space the frame reserves, a post is
+   cut to it and a shelf spans it. The query has to exist in the model, because the tool, a
+   drawing and a later report must agree on what the void is, and because a shelf crossing the
+   piece must split one niche into two without anything being stored.
+  Shape: The model answers the measurement (ADR 0103): probe(point, direction) reports the
+   distance to the first furniture surface and what it hit — a panel face, a hardware body,
+   another product shell or the envelope virtual face — and niche(point) aggregates the axes
+   into a size, a world position and a shape (a box today). Both are pure document queries,
+   derived and never stored, tested without a UI. The tool is bound to a class whose fill trait
+   says which axis pair it takes — HeightAndDepth for a post, WidthAndDepth for a shelf — and
+   draws the ghost through the session preview overlay (ADR 0093); it moves in 1 mm steps and a
+   click dispatches one panel.create with exactly the ghost size and placement, so history
+   holds one entry. Only the open product offers niches. The exact-distance fields and the
+   centred value land in N8.
+  Done: Headless tests: a probe stops at the envelope face, at a panel and at another product
+   shell, and reports which; a niche shrinks around an existing part on the right axis; a shelf
+   at full width splits the piece into two niches and the query above and below returns the two
+   boxes; a niche reports a world position and a shape, not only three lengths; the ghost size
+   equals the created panel size; a click is one undo entry; the tool refuses when no product
+   is open; only classes with a fill can be chosen; the ghost is checked offscreen and the 1 mm
+   feel by a live run.
+  `files: crates/model/src/project/niche.rs, crates/model/src/project/surface.rs, crates/ui/src/editor/fill.rs, apps/furnicraft/src/fill_gizmo.rs, apps/furnicraft/src/document.rs` — `13a42ad`
 
 - `[x]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
   Why: The current translate tool moves anything anywhere, which is right for geometry and
