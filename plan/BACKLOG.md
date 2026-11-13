@@ -41,24 +41,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **P13** the work order may be empty, and the plan says so instead of inventing a task
-  Why: The order cannot be emptied: closing or deferring the last task in `## Now` is refused,
-   because `STATE: task=` is required and must name the first unfinished task there. A
-   milestone that parks its work in `## Next` — which is exactly where R1, K2, K3 and K4 sit
-   now — leaves the plan unable to say so, so a session either invents a task or leaves a
-   finished one in progress.
-  Shape: The empty order becomes a legal plan state: `STATE: task=-` says no task is scheduled,
-   and the gate accepts that value only while `## Now` holds no unfinished task and nothing is
-   `[~`. `close` and `defer` that empty the order write that value and a `## Next` paragraph
-   that starts with `Nothing is scheduled`; `take` from `## Next` claims the head again and
-   moves `task=` back to an id. `status`, `next` and the dashboard read the empty state instead
-   of failing on a task id of `-`.
-  Done: Tests: closing the last task leaves the order empty and the plan valid; deferring the
-   last one does the same; `task=-` with an open task in `## Now`, or with a `[~` task, is a
-   violation; taking a task from `## Next` restores `task=` and the plan passes; `cargo xtask
-   next` and `status` describe the parked work without a panic; cargo xtask ci is green.
-  `files: state-contract/src/validate.rs, state-contract/src/cli/write.rs`
-
 ## Bugs
 
 ## Next
@@ -131,6 +113,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/catalog.rs`
 
 ## Done
+
+- `[x]` **P13** the work order may be empty, and the plan says so instead of inventing a task
+  Why: The order cannot be emptied: closing or deferring the last task in `## Now` is refused,
+   because `STATE: task=` is required and must name the first unfinished task there. A
+   milestone that parks its work in `## Next` — which is exactly where R1, K2, K3 and K4 sit
+   now — leaves the plan unable to say so, so a session either invents a task or leaves a
+   finished one in progress.
+  Shape: The empty order becomes a legal plan state: `STATE: task=-` says no task is scheduled,
+   and the gate accepts that value only while `## Now` holds no unfinished task and nothing is
+   `[~`. `close` and `defer` that empty the order write that value and a `## Next` paragraph
+   that starts with `Nothing is scheduled`; `take` from `## Next` claims the head again and
+   moves `task=` back to an id. `status`, `next` and the dashboard read the empty state instead
+   of failing on a task id of `-`.
+  Done: Tests: closing the last task leaves the order empty and the plan valid; deferring the
+   last one does the same; `task=-` with an open task in `## Now`, or with a `[~` task, is a
+   violation; taking a task from `## Next` restores `task=` and the plan passes; `cargo xtask
+   next` and `status` describe the parked work without a panic; cargo xtask ci is green.
+  `files: state-contract/src/validate.rs, state-contract/src/cli/write.rs` — `67fd5b9`
 
 - `[x]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
   Why: Filed from the class/export planning session: `task add --phase K` created the first

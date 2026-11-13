@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=P13 state=doing base=62b849a updated=2026-11-13
+STATE: milestone=M7 phase=T task=- state=idle base=e02e945 updated=2026-11-14
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,7 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-P13: the work order may be empty — `STATE: task=-`, a `Nothing is scheduled` paragraph, and
-close/defer/take that keep the plan valid. The phase legend and the K park are done; the export work
-waits in `## Next`.
+Nothing is scheduled: 4 open tasks wait in `## Next`.
 
 ## Index
 
