@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=R1 state=idle base=6f8b62c updated=2026-11-13
+STATE: milestone=M7 phase=T task=K4 state=idle base=6f8b62c updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-R1: the pre-release rename — one home for the product identity, the 13 bare crate names, the four
-registers that must agree and the envelope format string. `plan/rename.md` holds the measured
-procedure.
+K4: the package learns sheets and money once the catalogue carries stock sizes and prices. R1 is
+parked in `## Next` until the product name is chosen, so the rename waits for a decision.
 
 ## Index
 
