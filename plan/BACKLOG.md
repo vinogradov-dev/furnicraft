@@ -126,6 +126,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 ## Done
 
+- `[x]` **U82** the editor opens empty: a new scene carries no demonstration panels, edges or groups
+  Why: The startup document is the maker's work surface. Three sample panels, two cutouts,
+   three edges, a group and a drawer teach nothing after the first run and stand in front of
+   the first real piece; a maker who wants a piece now draws one with the frame and box tools.
+  Shape: The shell builds the empty session at launch instead of the demonstration one: a root
+   container named «Scene» and the default catalogue, which is not scene data and stays. The
+   demonstration document survives only where a test needs something to draw, so it becomes a
+   test fixture with a doc comment that says so, and the imports and doc lines that exist only
+   for it go with it.
+  Done: Tests: launching the editor yields a document with no children and a frame that draws
+   nothing, asserted through the function the launcher calls; the fixture still evaluates in
+   the tests that use it; cargo xtask ci is green.
+  `files: apps/furnicraft/src/scene_build.rs, apps/furnicraft/src/main.rs` — `03a076b`
+
 - `[x]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
   Why: The only solid primitive is a cube with one size for three edges, which nothing in
    cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
