@@ -25,25 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **N2** the product frame is drawn as a dashed wireframe that never picks
-  Why: The envelope is useless if nobody can see it and nobody can click it: the owner
-   described the frame as a dashed wireframe that is picked to select, open and move the piece,
-   and the picture has to say whether the piece is open, closed and empty, or closed with
-   parts. It also has to be visibly not a body, or it will be grabbed by mistake.
-  Shape: The scene description gains one frame item per product — the envelope in world space,
-   lines only; the renderer draws it dashed with no fill after the solid pass, with no depth
-   write. Three states per ADR 0100: open and active in the active line colour, closed and
-   empty in the inactive line colour, closed with parts not drawn at all. Picking uses the
-   envelope, not only the lines: a single click on a line or on empty space inside the piece
-   selects the frame, a click that hits a solid picks the solid, and when several products
-   contain the point the innermost wins. The shell rebuilds the item with the rest of the scene
-   and keeps it out of the solid pipelines.
-  Done: An open product draws active dashed lines, a closed empty one inactive dashed lines, a
-   closed one with parts draws none; a click inside empty space selects the frame, a click on a
-   panel selects the panel, a click on a nested product selects the inner one; a click through
-   the frame behind it still reaches what is behind; the colours come from the theme and are
-   checked offscreen; cargo xtask ci is green.
-  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/scene_build.rs`
 - `[ ]` **N3** one product is open at a time, opened by a double click and never written to the file
   Why: The owner ruled that one product is open at a time and that a furniture piece is created
    through a card and is open the moment it exists: press add frame, enter the dimensions, and
@@ -283,6 +264,26 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N2** the product frame is drawn as a dashed wireframe that never picks
+  Why: The envelope is useless if nobody can see it and nobody can click it: the owner
+   described the frame as a dashed wireframe that is picked to select, open and move the piece,
+   and the picture has to say whether the piece is open, closed and empty, or closed with
+   parts. It also has to be visibly not a body, or it will be grabbed by mistake.
+  Shape: The scene description gains one frame item per product — the envelope in world space,
+   lines only; the renderer draws it dashed with no fill after the solid pass, with no depth
+   write. Three states per ADR 0100: open and active in the active line colour, closed and
+   empty in the inactive line colour, closed with parts not drawn at all. Picking uses the
+   envelope, not only the lines: a single click on a line or on empty space inside the piece
+   selects the frame, a click that hits a solid picks the solid, and when several products
+   contain the point the innermost wins. The shell rebuilds the item with the rest of the scene
+   and keeps it out of the solid pipelines.
+  Done: An open product draws active dashed lines, a closed empty one inactive dashed lines, a
+   closed one with parts draws none; a click inside empty space selects the frame, a click on a
+   panel selects the panel, a click on a nested product selects the inner one; a click through
+   the frame behind it still reaches what is behind; the colours come from the theme and are
+   checked offscreen; cargo xtask ci is green.
+  `files: crates/scene/src/lib.rs, crates/render/src/lib.rs, apps/furnicraft/src/scene_build.rs` — `36d4dde`
 
 - `[x]` **N1** the product entity: a container with a class and an authored envelope, created by a command
   Why: Reports, the export and the creation guard all need the same answer — which piece is

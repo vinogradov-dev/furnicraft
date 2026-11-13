@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N2 state=doing base=a049094 updated=2026-11-13
+STATE: milestone=M7 phase=T task=N3 state=idle base=36d4dde updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N2 draws the product frame: the envelope of a product becomes a dashed wireframe that never picks,
-so a maker sees the space a piece reserves before any part exists.
+N3 opens one product at a time: the session carries `active_product`, a double click opens a piece,
+and the *add frame* card creates one through `product.create`, already open, beside the nearest
+product.
 
 ## Index
 
