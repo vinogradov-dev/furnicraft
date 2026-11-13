@@ -81,8 +81,9 @@ node; a type or a variant is.
 
 Inheritance is the authoring rule and the test behind it, not a run-time walk: every row in §7 states
 its complete trait set, so a lookup is a bit test. A variant must agree with its type on the *stock*
-traits — `supply`, `measure`, `nesting` — and on `level` and `opening`, and its `operations` and
-`host` must contain the type's. `mount`, `extent` and `fill` describe the *form* rather than the
+traits — `supply`, `measure`, `nesting` — and on `level` and `opening`; its `operations` must contain
+the type's, and its `host` may narrow the type's but never widen it (an undermount runner mounts
+under the drawer and not on a side panel). `mount`, `extent` and `fill` describe the *form* rather than the
 stock, so a variant may state its own: a wall cabinet is the same cabinet as a base one and differs
 in `mount`, which is exactly why 0097 made mounting a trait. The test still rejects the contradiction
 that matters — `nesting = Member` under a type that is `Never` — because a form never changes what a
@@ -298,8 +299,10 @@ a workshop's local codes.
 
 A section is a **family**: its heading carries the code, the slug and the two labels, and every table
 row under it is an assignable class. The headings are listed here once so the tree is complete:
-`10` `seating` · `20` `lying` · `30` `storage` · `40` `surfaces` · `50` `fittings` · `60` `appliances`
-· `70` `boards-trim` · `80` `general`.
+`10` `seating` — Seating / «Места для сидения» · `20` `lying` — Lying / «Места для лежания» ·
+`30` `storage` — Storage / «Хранение» · `40` `surfaces` — Surfaces / «Поверхности» ·
+`50` `fittings` — Fittings / «Фурнитура» · `60` `appliances` — Appliances / «Бытовая техника» ·
+`70` `boards-trim` — Boards and trim / «Плиты и погонаж» · `80` `general` — General / «Общее».
 
 ### 7.1 Seating — `10`
 

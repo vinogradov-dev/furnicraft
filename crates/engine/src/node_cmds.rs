@@ -3,7 +3,7 @@
 //!
 //! A panel is an atomic leaf: it owns its geometry and machining and is never split into child
 //! nodes. A container is either an ordinary group or a furniture component; a component is marked
-//! by a non-zero `furntype`, a `prototype.id` or `component = true`. These commands wrap siblings
+//! by a non-zero `class`, a `prototype.id` or `component = true`. These commands wrap siblings
 //! into a new group and flatten an ordinary container back into its parent without moving any leaf
 //! in world space. `node.ungroup` refuses a component; `node.component.convert_to_group` clears the
 //! marker first.

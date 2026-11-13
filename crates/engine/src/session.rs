@@ -290,10 +290,10 @@ mod tests {
     use super::*;
 
     use furnicraft_model::{
-        Catalog, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth, CutoutShape,
-        EdgeBandingMaterial, EdgeId, FaceSide, FrameAnchor, FurnType, Geometry, Id, MachiningAnchor, MachiningParams,
-        PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue, RectCorner, RectEdge,
-        Revision, SYSTEM_FURNTYPE, SegmentSource, VertexId,
+        Catalog, ClassCode, Constructive, Contour, ContourSegmentId, CornerFeatureKind, Cutout, CutoutDepth,
+        CutoutShape, EdgeBandingMaterial, EdgeId, FaceSide, FrameAnchor, Geometry, Id, MachiningAnchor,
+        MachiningParams, PanelContourError, PanelMaterial, PivotLocal, Placement, ProjectError, PropertyValue,
+        RectCorner, RectEdge, Revision, SYSTEM_CLASS, SegmentSource, VertexId,
     };
     use furnicraft_testkit::{
         sample_band_thickness, sample_band_width, sample_blind_depth, sample_catalog, sample_cutout_rect,
@@ -1989,17 +1989,17 @@ mod tests {
         assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!convert.enabled(&session, &json_params(&NodeComponentConvertToGroup { node: group_id })));
 
-        let furntype: FurnType = "12.03.02".parse().expect("furntype");
+        let class: ClassCode = "30.01.02".parse().expect("class");
         session
             .dispatch(
                 "node.property.set",
                 &json_params(&NodePropertySet {
                     node: group_id,
-                    key: SYSTEM_FURNTYPE.to_owned(),
-                    value: PropertyValue::furn_type(furntype),
+                    key: SYSTEM_CLASS.to_owned(),
+                    value: PropertyValue::class(class),
                 }),
             )
-            .expect("type the container");
+            .expect("class the container");
         assert!(session.project().is_component(group_id));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!ungroup.enabled(&session, &json_params(&NodeUngroup { node: drawer })));

@@ -1,20 +1,20 @@
 //! A node that holds children: an ordinary group or a furniture component.
 //!
-//! There is one container kind. A container is a component when a furniture type, a prototype
-//! reference or an explicit marker says so; an unmarked container is a group and can be flattened.
+//! There is one container kind. A container is a component when a class, a prototype reference or
+//! an explicit marker says so; an unmarked container is a group and can be flattened.
 //! The project root is a container too, with an immutable id and a zero pivot.
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Id, Node, PivotLocal, Placement, Properties, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE,
+    Id, Node, PivotLocal, Placement, Properties, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT,
     SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
 };
 
 /// A node that can hold children: an ordinary group or a furniture component.
 ///
 /// There is one container kind. "Assembly" is a word for a container marked as a component — a
-/// cabinet, a drawer box, a facade or a hinge — by a non-zero `furntype`, a `prototype.id` or an
+/// cabinet, a drawer box, a facade or a hinge — by a non-zero `class`, a `prototype.id` or an
 /// explicit `component = true`. An unmarked container is an ordinary group and can be flattened by
 /// `node.ungroup`. The project root is a container.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,13 +110,13 @@ impl Container {
 
     /// Whether the container is marked as a furniture component.
     ///
-    /// A non-zero furniture type, a prototype reference or an explicit `component = true` all mark
+    /// A non-zero class, a prototype reference or an explicit `component = true` all mark
     /// a component; an explicit `component = false` does not erase the other two markers.
     pub fn is_component(&self) -> bool {
         if let Some(PropertyValue::Bool { value: true }) = self.properties.get(SYSTEM_COMPONENT) {
             return true;
         }
-        if let Some(PropertyValue::FurnType { value }) = self.properties.get(SYSTEM_FURNTYPE)
+        if let Some(PropertyValue::Class { value }) = self.properties.get(SYSTEM_CLASS)
             && !value.is_unclassified()
         {
             return true;
@@ -129,10 +129,10 @@ impl Container {
         self.properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(component)).map(|_| ())
     }
 
-    /// Clears the component marker, the prototype keys and the furniture type.
+    /// Clears the component marker, the prototype keys and the class.
     pub fn clear_component_marker(&mut self) {
         self.properties.remove(SYSTEM_COMPONENT);
-        self.properties.remove(SYSTEM_FURNTYPE);
+        self.properties.remove(SYSTEM_CLASS);
         self.properties.remove(SYSTEM_PROTOTYPE_ID);
         self.properties.remove(SYSTEM_PROTOTYPE_VERSION);
         self.properties.remove(SYSTEM_PROTOTYPE_PARAMETERS);

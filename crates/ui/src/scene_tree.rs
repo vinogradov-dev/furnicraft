@@ -144,8 +144,8 @@ fn container_label(ui: &Ui, project: &Project, container: &Container) -> RichTex
     if !container.is_component() {
         return RichText::new(name);
     }
-    let badge = match project.furntype(container.id()) {
-        Some(furntype) if !furntype.is_unclassified() => furntype.to_string(),
+    let badge = match project.class(container.id()) {
+        Some(class) if !class.is_unclassified() => class.to_string(),
         _ => Message::TreeBadgeComponent.text(crate::language(ui.ctx())).to_owned(),
     };
     RichText::new(format!("{name}  [{badge}]"))

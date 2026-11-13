@@ -2,7 +2,7 @@
   "format": "furnicraft.scene",
   "format_version": 1,
   "document": {
-    "schema_version": 20,
+    "schema_version": 21,
     "revision": 3,
     "next_id": 11,
     "root": {

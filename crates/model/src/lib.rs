@@ -20,6 +20,7 @@ use furnicraft_units::Length;
 
 mod camera;
 mod catalog;
+mod class;
 mod container;
 mod contour;
 mod contour_edit;
@@ -27,7 +28,6 @@ mod contour_frames;
 #[cfg(test)]
 mod fixtures;
 mod frame;
-mod furntype;
 mod ids;
 mod light;
 mod mesh;
@@ -46,6 +46,10 @@ mod tree;
 
 pub use camera::{CameraError, CameraNode, CameraProjection};
 pub use catalog::{Catalog, CatalogError, EdgeBandingMaterial, MaterialId, PanelMaterial};
+pub use class::{
+    CLASS_MAX_CODE, ClassCode, ClassCodeError, ClassPrefix, ClassRow, Extent, Fill, Level, Measure, Mount, Nesting,
+    Opening, Operation, OperationSet, Supply, TraitSet, registry,
+};
 pub use container::Container;
 pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
@@ -54,7 +58,6 @@ pub use contour::{
 pub use contour_edit::{ContourEditError, CornerMove, PathCorner};
 pub use contour_frames::{ArcFrame, CircleFrame, PolygonFrame, RectangleFrame};
 pub use frame::{Anchored, FrameAnchor, FrameError, Rebased, rebase_origin_at};
-pub use furntype::{FURNTYPE_MAX_CODE, FurnType, FurnTypeError};
 pub use ids::{ContourSegmentId, EdgeId, Id, MachiningId, Revision, VertexId};
 pub use light::{LightError, LightKind, LightNode};
 pub use mesh::{MAX_FACE_VERTICES, MAX_MESH_FACES, MAX_MESH_VERTICES, Mesh, MeshError};
@@ -75,7 +78,7 @@ pub use primitive::{
 };
 pub use project::{Project, ProjectError};
 pub use properties::{
-    Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_COMPONENT, SYSTEM_FURNTYPE, SYSTEM_PROTOTYPE_ID,
+    Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT, SYSTEM_PROTOTYPE_ID,
     SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
 };
 pub use query::{NodeQuery, PropertyPredicate, StructuralKind};

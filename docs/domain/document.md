@@ -64,17 +64,17 @@ named, placed node with children and typed properties: a cabinet, a hinge of thr
 holding a panel and its hardware, or an ordinary temporary group. The project root is a container.
 A node id is unique across both kinds and is never reused after a delete or an undo.
 
-A container is a **component** when it carries a non-zero `furntype`, a `prototype.id` or an explicit
+A container is a **component** when it carries a non-zero `class`, a `prototype.id` or an explicit
 `component = true`; otherwise it is an ordinary group. `node.ungroup` flattens an ordinary container
 into its parent and refuses a component. `node.component.convert_to_group` clears the component
-marker and the prototype keys and then flattens the container into its parent. A **furniture type** is a
-six-digit `GG.TT.VV` code stored in `furntype`; `000000` means unclassified. The registry and query
-rules live in [Furniture types](furntypes.md).
+marker and the prototype keys and then flattens the container into its parent. A **class** is a
+six-digit `GG.TT.VV` code stored in `class`; `000000` means unclassified and is the default. The
+registry, the traits and the query rules live in [Semantic classes](classes.md).
 
 Every node carries a property bag: an ordered map from a dotted key to a typed value (`Bool`,
-`Integer`, `Length`, `Angle`, `Text`, `Choice`, `Reference`, `FurnType` or `Structured` JSON). Name,
+`Integer`, `Length`, `Angle`, `Text`, `Choice`, `Reference`, `Class` or `Structured` JSON). Name,
 placement, pivot_local, panel size and material stay typed fields and are not duplicated in the bag.
-`component`, `furntype`, `prototype.id`, `prototype.version` and `prototype.parameters` are reserved
+`component`, `class`, `prototype.id`, `prototype.version` and `prototype.parameters` are reserved
 system keys; user properties live in their own namespaces. An unknown user property survives a load
 unchanged. Arrays and nested attributes that belong to a prototype are stored as one `Structured`
 JSON property and rendered in the UI as fields driven by the prototype schema.

@@ -1,7 +1,7 @@
 //! The selected-container card.
 //!
 //! A container is either an ordinary group or a furniture component. The difference is data, not a
-//! separate node kind: a component carries a non-zero `furntype`, a `prototype.id` or
+//! separate node kind: a component carries a non-zero `class`, a `prototype.id` or
 //! `component = true`. Both own children and are renamed through `node.rename`. Grouping and
 //! ungrouping live in the scene tree so the same action covers several selected nodes.
 

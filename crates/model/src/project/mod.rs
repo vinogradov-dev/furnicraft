@@ -48,7 +48,7 @@ impl Project {
     /// A file with any other number is refused with one readable sentence, older and newer alike:
     /// before the first release the format has no past, so there is no migration and no alias for a
     /// field an earlier layout used (ADR 0096). Bumping this number is the whole procedure.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 20;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 21;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;

@@ -3,6 +3,10 @@
 //! Physical values use the domain units; a bare number is never a property value. A node's
 //! properties are an ordered map, and the reserved system keys are validated on every write and on
 //! every load, so a component marker or a prototype record cannot be coerced into the wrong kind.
+//!
+//! The semantic `class` key is stricter on assignment than on load: a code the registry does not
+//! know is refused when it is written and kept when it arrives from a file, so a project opened
+//! after a registry change still loads (ADR 0094).
 
 use std::collections::BTreeMap;
 
@@ -12,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{FurnType, Id};
+use crate::{ClassCode, Id};
 
 /// The reserved system property keys of a node (ADR 0034).
 pub const SYSTEM_COMPONENT: &str = "component";
-/// The furniture type of a node; a non-zero value marks a container as a component (ADR 0035).
-pub const SYSTEM_FURNTYPE: &str = "furntype";
+/// The semantic class of a node; a non-zero value marks a container as a component (ADR 0035,
+/// renamed by 0094).
+pub const SYSTEM_CLASS: &str = "class";
 /// The prototype a component was created from, when a user script exists.
 pub const SYSTEM_PROTOTYPE_ID: &str = "prototype.id";
 /// The version of the prototype parameters.
@@ -69,11 +74,10 @@ pub enum PropertyValue {
         /// The referenced id.
         id: Id,
     },
-    /// A furniture type code.
-    #[serde(rename = "furntype")]
-    FurnType {
-        /// The furniture type.
-        value: FurnType,
+    /// A semantic class code.
+    Class {
+        /// The class.
+        value: ClassCode,
     },
     /// A nested, free-form structured record, usually prototype parameters.
     Structured {
@@ -118,9 +122,9 @@ impl PropertyValue {
         Self::Reference { id }
     }
 
-    /// Builds a furniture type property value.
-    pub const fn furn_type(value: FurnType) -> Self {
-        Self::FurnType { value }
+    /// Builds a class property value.
+    pub const fn class(value: ClassCode) -> Self {
+        Self::Class { value }
     }
 
     /// Builds a structured property value.
@@ -138,7 +142,7 @@ impl PropertyValue {
             Self::Text { .. } => "text",
             Self::Choice { .. } => "choice",
             Self::Reference { .. } => "reference",
-            Self::FurnType { .. } => "furntype",
+            Self::Class { .. } => "class",
             Self::Structured { .. } => "structured",
         }
     }
@@ -191,9 +195,10 @@ impl Properties {
     /// Stores or replaces the value under `key`, returning the previous value.
     ///
     /// Reserved system keys are validated here: a reserved key with the wrong value type is
-    /// rejected instead of coerced.
+    /// rejected instead of coerced, and a class code the registry does not assign is refused.
     pub fn insert(&mut self, key: &str, value: PropertyValue) -> Result<Option<PropertyValue>, PropertyError> {
         validate_property_value(key, &value)?;
+        validate_class_assignment(key, &value)?;
         Ok(self.0.insert(key.to_owned(), value))
     }
 
@@ -238,9 +243,9 @@ pub(crate) fn validate_property_value(key: &str, value: &PropertyValue) -> Resul
             PropertyValue::Bool { .. } => Ok(()),
             _ => Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a boolean".to_owned() }),
         },
-        SYSTEM_FURNTYPE => match value {
-            PropertyValue::FurnType { .. } => Ok(()),
-            _ => Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a furniture type".to_owned() }),
+        SYSTEM_CLASS => match value {
+            PropertyValue::Class { .. } => Ok(()),
+            _ => Err(PropertyError::Invalid { key: key.to_owned(), message: "must be a class code".to_owned() }),
         },
         SYSTEM_PROTOTYPE_ID => match value {
             PropertyValue::Reference { .. } => Ok(()),
@@ -266,6 +271,25 @@ pub(crate) fn validate_property_value(key: &str, value: &PropertyValue) -> Resul
     }
 }
 
+/// Refuses an assignment of a class code the registry does not assign.
+///
+/// Loading goes through [`validate_property_value`] alone, so an unknown number from a file is kept
+/// and the node reads as *not in the registry*; writing the key goes through this check, so the
+/// registry stays the only assigner (ADR 0094). A family heading is not assignable and unclassified
+/// is, because it is the default of every node.
+fn validate_class_assignment(key: &str, value: &PropertyValue) -> Result<(), PropertyError> {
+    if key != SYSTEM_CLASS {
+        return Ok(());
+    }
+    match value {
+        PropertyValue::Class { value } if !value.is_assignable() => Err(PropertyError::Invalid {
+            key: key.to_owned(),
+            message: format!("class {value} is not an assignable registry class"),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// One property change applied to one node.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropertyChange {
@@ -281,7 +305,7 @@ pub struct PropertyChange {
 mod tests {
     use super::*;
 
-    use crate::fixtures::{furntype, millimetres};
+    use crate::fixtures::{class, millimetres};
 
     #[test]
     fn property_values_round_trip_by_kind() {
@@ -293,7 +317,7 @@ mod tests {
             PropertyValue::text("oak"),
             PropertyValue::choice("left", "Left"),
             PropertyValue::reference(Id::new(9).expect("id")),
-            PropertyValue::furn_type(furntype("12.03")),
+            PropertyValue::class(class("30.11")),
             PropertyValue::structured(serde_json::json!({"width": 600})),
         ];
         for value in values {
@@ -307,18 +331,14 @@ mod tests {
     #[test]
     fn reserved_property_keys_reject_the_wrong_value_kind() {
         assert!(SYSTEM_COMPONENT.starts_with("component"));
-        for key in [
-            SYSTEM_COMPONENT,
-            SYSTEM_FURNTYPE,
-            SYSTEM_PROTOTYPE_ID,
-            SYSTEM_PROTOTYPE_VERSION,
-            SYSTEM_PROTOTYPE_PARAMETERS,
-        ] {
+        for key in
+            [SYSTEM_COMPONENT, SYSTEM_CLASS, SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_VERSION, SYSTEM_PROTOTYPE_PARAMETERS]
+        {
             assert!(Properties::new().insert(key, PropertyValue::text("wrong")).is_err(), "{key} accepted text");
         }
         let mut properties = Properties::new();
         properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("component flag");
-        properties.insert(SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12"))).expect("furntype");
+        properties.insert(SYSTEM_CLASS, PropertyValue::class(class("30.11"))).expect("class");
         properties
             .insert(SYSTEM_PROTOTYPE_ID, PropertyValue::reference(Id::new(5).expect("id")))
             .expect("prototype id");
@@ -327,5 +347,20 @@ mod tests {
             .insert(SYSTEM_PROTOTYPE_PARAMETERS, PropertyValue::structured(serde_json::json!({})))
             .expect("prototype parameters");
         assert_eq!(properties.keys().count(), 5);
+    }
+
+    #[test]
+    fn an_unknown_class_is_refused_on_assignment_and_kept_on_load() {
+        let unknown = class("20.01.09");
+        assert!(!unknown.is_registered());
+        assert!(Properties::new().insert(SYSTEM_CLASS, PropertyValue::class(unknown)).is_err());
+        assert!(Properties::new().insert(SYSTEM_CLASS, PropertyValue::class(class("30"))).is_err(), "a family");
+
+        let stored = serde_json::json!({ SYSTEM_CLASS: PropertyValue::class(unknown) });
+        let loaded = Properties::deserialize(stored).expect("an unknown class still loads");
+        assert_eq!(loaded.get(SYSTEM_CLASS), Some(&PropertyValue::class(unknown)));
+
+        let family = serde_json::json!({ SYSTEM_CLASS: PropertyValue::class(class("30")) });
+        Properties::deserialize(family).expect("a family code loads and reads as not assignable");
     }
 }

@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use egui::{RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_SET_ID};
 use furnicraft_engine::{EditScope, NodePropertyClear, NodePropertySet, Session};
-use furnicraft_model::{FurnType, Id, PropertyValue};
+use furnicraft_model::{ClassCode, Id, PropertyValue};
 use furnicraft_text::Message;
 use furnicraft_units::{Degrees, Length};
 
@@ -34,7 +34,7 @@ const NEW_KIND_NAMES: [Message; 6] = [
     Message::PropertyKindBool,
     Message::PropertyKindLength,
     Message::PropertyKindAngle,
-    Message::PropertyKindFurnitureType,
+    Message::PropertyKindClass,
 ];
 
 fn new_value(kind: usize) -> PropertyValue {
@@ -43,7 +43,7 @@ fn new_value(kind: usize) -> PropertyValue {
         2 => PropertyValue::bool(false),
         3 => PropertyValue::length(Length::ZERO),
         4 => PropertyValue::angle(Degrees::ZERO),
-        5 => PropertyValue::furn_type(FurnType::UNCLASSIFIED),
+        5 => PropertyValue::class(ClassCode::UNCLASSIFIED),
         _ => PropertyValue::text(""),
     }
 }
@@ -148,11 +148,11 @@ impl PropertiesCard {
             ui.horizontal(|ui| {
                 let status = if is_component { Message::ContainerRoleComponent } else { Message::ContainerRoleGroup };
                 ui.label(RichText::new(status.text(lang)).strong());
-                if let Some(furntype) = session.project().furntype(node) {
-                    let text = if furntype.is_unclassified() {
+                if let Some(class) = session.project().class(node) {
+                    let text = if class.is_unclassified() {
                         Message::Unclassified.text(lang).to_owned()
                     } else {
-                        Message::TypeWith.with(lang, [furntype])
+                        Message::ClassWith.with(lang, [class])
                     };
                     ui.label(text);
                 }
@@ -333,16 +333,16 @@ fn edit_row(
                     });
                 }
             }
-            PropertyValue::FurnType { value } => {
+            PropertyValue::Class { value } => {
                 let draft = drafts.text.entry(key.to_owned()).or_insert_with(|| value.to_string());
                 let response = ui.add(TextEdit::singleline(draft).hint_text("GG.TT.VV").desired_width(100.0));
                 if committed(&response) {
-                    match draft.parse::<FurnType>() {
-                        Ok(furntype) => {
+                    match draft.parse::<ClassCode>() {
+                        Ok(class) => {
                             drafts.text.remove(key);
                             changes.edits.push(Edit::Set {
                                 key: key.to_owned(),
-                                value: PropertyValue::furn_type(furntype),
+                                value: PropertyValue::class(class),
                                 scope: None,
                             });
                         }

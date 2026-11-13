@@ -271,12 +271,12 @@ impl Project {
         }
     }
 
-    /// The furniture type stored on a node; unclassified when the node has no type.
-    pub fn furntype(&self, id: Id) -> Option<FurnType> {
-        match self.properties(id)?.get(SYSTEM_FURNTYPE) {
-            Some(PropertyValue::FurnType { value }) => Some(*value),
+    /// The class stored on a node; unclassified when the node has no class.
+    pub fn class(&self, id: Id) -> Option<ClassCode> {
+        match self.properties(id)?.get(SYSTEM_CLASS) {
+            Some(PropertyValue::Class { value }) => Some(*value),
             Some(_) => None,
-            None => Some(FurnType::UNCLASSIFIED),
+            None => Some(ClassCode::UNCLASSIFIED),
         }
     }
 
@@ -288,10 +288,10 @@ impl Project {
             {
                 return false;
             }
-            if let Some(wanted) = query.furntype() {
-                let found = match properties.get(SYSTEM_FURNTYPE) {
-                    Some(PropertyValue::FurnType { value }) => *value,
-                    _ => FurnType::UNCLASSIFIED,
+            if let Some(wanted) = query.class() {
+                let found = match properties.get(SYSTEM_CLASS) {
+                    Some(PropertyValue::Class { value }) => *value,
+                    _ => ClassCode::UNCLASSIFIED,
                 };
                 if !found.is_ancestor_or_self(wanted) {
                     return false;
@@ -401,12 +401,12 @@ mod tests {
         let group = project.group_nodes(&[Id::new(2).expect("id"), Id::new(3).expect("id")], "G").expect("group");
         assert!(!project.is_component(group));
 
-        project.set_property(group, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(group, SYSTEM_CLASS, PropertyValue::class(class("30.01.02"))).expect("class");
         assert!(project.is_component(group));
         project.set_property(group, SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("false marker");
         assert!(project.is_component(group), "an explicit false does not erase the furniture type");
-        assert_eq!(project.furntype(group), Some(furntype("12.03.02")));
-        assert_eq!(project.furntype(root), Some(FurnType::UNCLASSIFIED));
+        assert_eq!(project.class(group), Some(class("30.01.02")));
+        assert_eq!(project.class(root), Some(ClassCode::UNCLASSIFIED));
 
         assert_eq!(project.ungroup_group(group), Err(ProjectError::NotAComponent { id: group }));
 
@@ -421,21 +421,21 @@ mod tests {
         let panel = Id::new(2).expect("panel");
         let front = Id::new(4).expect("front");
         let drawer = Id::new(3).expect("drawer");
-        project.set_property(drawer, SYSTEM_FURNTYPE, PropertyValue::furn_type(furntype("12.03.02"))).expect("type");
+        project.set_property(drawer, SYSTEM_CLASS, PropertyValue::class(class("30.01.02"))).expect("class");
         project.set_property(panel, "role", PropertyValue::text("shelf")).expect("role");
 
         assert_eq!(project.query(&NodeQuery::any()), vec![panel, drawer, front]);
         assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Container)), vec![drawer]);
         assert_eq!(project.query(&NodeQuery::any().with_kind(StructuralKind::Panel)), vec![panel, front]);
         assert_eq!(
-            project.query(&NodeQuery::any().with_furntype_under(furntype("12"))),
+            project.query(&NodeQuery::any().with_class_under(class("30"))),
             vec![drawer],
             "a query on a group matches every type below it"
         );
-        assert_eq!(project.query(&NodeQuery::any().with_furntype_under(furntype("12.03.02"))), vec![drawer]);
-        assert!(project.query(&NodeQuery::any().with_furntype_under(furntype("13"))).is_empty());
+        assert_eq!(project.query(&NodeQuery::any().with_class_under(class("30.01.02"))), vec![drawer]);
+        assert!(project.query(&NodeQuery::any().with_class_under(class("40"))).is_empty());
         assert_eq!(
-            project.query(&NodeQuery::any().with_furntype_under(FurnType::UNCLASSIFIED)),
+            project.query(&NodeQuery::any().with_class_under(ClassCode::UNCLASSIFIED)),
             vec![panel, front],
             "unclassified is a sentinel, not the root of the type tree"
         );

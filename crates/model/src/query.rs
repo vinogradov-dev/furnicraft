@@ -1,11 +1,11 @@
-//! Queries over the node tree: structural kind, furniture type subtree and property equality.
+//! Queries over the node tree: structural kind, class subtree and property equality.
 //!
 //! The same query feeds selection, reports and, later, CNC rules, so a report and a machining
 //! program cannot disagree about which nodes match.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{FurnType, PropertyValue};
+use crate::{ClassCode, PropertyValue};
 
 /// The structural kind a [`NodeQuery`] filters on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ impl PropertyPredicate {
     }
 }
 
-/// A query over the document tree: structural kind, furniture type subtree and property equality.
+/// A query over the document tree: structural kind, class subtree and property equality.
 ///
 /// The same query feeds selection, reports and, later, CNC rules, so a report and a machining
 /// program cannot disagree about which nodes match. An empty query matches every node below the
@@ -59,7 +59,7 @@ pub struct NodeQuery {
     #[serde(default)]
     kind: Option<StructuralKind>,
     #[serde(default)]
-    furntype: Option<FurnType>,
+    class: Option<ClassCode>,
     #[serde(default)]
     property: Option<PropertyPredicate>,
 }
@@ -67,7 +67,7 @@ pub struct NodeQuery {
 impl NodeQuery {
     /// A query that matches every node below the root.
     pub const fn any() -> Self {
-        Self { kind: None, furntype: None, property: None }
+        Self { kind: None, class: None, property: None }
     }
 
     /// Restricts the query to one structural kind.
@@ -76,9 +76,9 @@ impl NodeQuery {
         self
     }
 
-    /// Restricts the query to a furniture type and its descendants.
-    pub const fn with_furntype_under(mut self, furntype: FurnType) -> Self {
-        self.furntype = Some(furntype);
+    /// Restricts the query to a class and its descendants.
+    pub const fn with_class_under(mut self, class: ClassCode) -> Self {
+        self.class = Some(class);
         self
     }
 
@@ -90,7 +90,7 @@ impl NodeQuery {
 
     /// Whether the query has no filters and matches every node.
     pub const fn is_empty(&self) -> bool {
-        self.kind.is_none() && self.furntype.is_none() && self.property.is_none()
+        self.kind.is_none() && self.class.is_none() && self.property.is_none()
     }
 
     /// The structural kind filter, if any.
@@ -98,9 +98,9 @@ impl NodeQuery {
         self.kind
     }
 
-    /// The furniture type filter, if any.
-    pub const fn furntype(&self) -> Option<FurnType> {
-        self.furntype
+    /// The class filter, if any.
+    pub const fn class(&self) -> Option<ClassCode> {
+        self.class
     }
 
     /// The property predicate, if any.
@@ -118,7 +118,7 @@ mod tests {
         let query = NodeQuery::any();
         assert!(query.is_empty());
         assert_eq!(query.kind(), None);
-        assert_eq!(query.furntype(), None);
+        assert_eq!(query.class(), None);
         assert!(query.property().is_none());
     }
 
@@ -126,11 +126,11 @@ mod tests {
     fn a_query_keeps_the_filters_it_was_given_and_round_trips() {
         let query = NodeQuery::any()
             .with_kind(StructuralKind::Panel)
-            .with_furntype_under("12.03".parse().expect("furniture type"))
+            .with_class_under("30.01".parse().expect("class"))
             .with_property("width", PropertyValue::integer(600));
         assert!(!query.is_empty());
         assert_eq!(query.kind(), Some(StructuralKind::Panel));
-        assert_eq!(query.furntype().map(|value| value.value()), Some(120_300));
+        assert_eq!(query.class().map(|value| value.value()), Some(300_100));
         assert_eq!(query.property().map(|predicate| predicate.key()), Some("width"));
 
         let text = serde_json::to_string(&query).expect("serialize query");
