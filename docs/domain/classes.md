@@ -270,8 +270,9 @@ The table in this section is the registry's content for version 1. It becomes a 
 from what the program knows. A change here is a registry change and carries a changelog entry; once
 shipped, a code is immortal (§8).
 
-Status of the rows: written, awaiting the owner's approval entry by entry. A row that the owner
-rejects changes here before it reaches the code, and a rejected trait leaves the vocabulary.
+Status of the rows: **approved by the owner on 2026-11-13**, entry by entry, with one question left
+open — how a workshop-made part such as a tamburat panel is decomposed for production (§12). Practice
+with real orders revisits the rows; a change here is a registry change and needs the owner again.
 
 Read a row as a sentence: *this code names this thing; it is at this level; it comes from this
 supply; it is measured and nested this way; it may be resized this way; it admits these operations;
@@ -343,7 +344,8 @@ a shoe cabinet are these classes with the maker's own name on the node (6.2).
 Parts. The rule that separates a vertical panel from a horizontal one is `fill`: the void tool offers
 `30.10` for a post-like fill and `30.11` for a shelf-like one. The rule that separates the back is
 `ops`: it is the one sheet part that takes no banding. Tamburat and bent parts are made here from a
-recipe, so they are counted once and their components are what is nested.
+recipe, so they are counted once and their components are what is nested — how that recipe is
+written down is still open (§12).
 
 | Code | English / Russian | slug | level | supply | measure | nesting | extent | ops | host | opening | mount | fill |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -548,9 +550,15 @@ table, not from our digits.
   decided. The reserved range exists so the answer can be yes later without touching official codes.
 - Whether an object may carry more than one class (hardware that is also a fitting family) is still
   open; a second class would need a rule for which one an algorithm reads.
-- `host` is written as a code that matches its subtree, so `30.01` means every cabinet form. Whether a
-  rule needs an exact class rather than a subtree — a runner on a drawer box and not on a shelf, for
-  example — is decided when the mounting check is written (T4).
+- `host` is written as a code prefix, so `30.2` means every facade and `30.01` every cabinet form.
+  Whether a rule needs an exact class rather than a prefix — a runner on a drawer box and not on a
+  shelf, for example — is decided when the mounting check is written (T4).
 - A product kind beyond the ones listed (a sideboard, a shoe cabinet, a corner cabinet) takes its row
   when its rules or its report line differ from an existing row; a corner cabinet is a ruled
   difference of the envelope, not a class difference, so it may never need one.
+- **The recipe of a workshop-made part is open.** `30.15` tamburat and `30.16` bent are classes
+  because the shop assembles them, and `supply = shop` keeps them counted once and out of the cutting
+  list. Whether their components travel as a recipe on the object (two 8 mm skins and the rails,
+  expanded by the exporter) or as ordinary sheet parts in the tree is not decided; the class rows do
+  not change either way, the production mechanism does. The owner left it to practice after the first
+  real tamburat order.
