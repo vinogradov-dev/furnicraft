@@ -25,6 +25,7 @@ pub fn analyze(status: &str, backlog: &str, session: Option<&str>) -> Result<Sum
     let mut violations = parse_violations(status, backlog, &tasks);
     violations.extend(budget_violations(status, session));
     violations.extend(unparsed_task_lines(backlog));
+    violations.extend(legend_violations(backlog, &tasks));
 
     if let Some(violation) = updated_format_violation(&state.updated) {
         violations.push(violation);
@@ -332,6 +333,39 @@ fn unparsed_task_lines(backlog: &str) -> Vec<String> {
         .collect()
 }
 
+/// The phase legend: every id prefix must be a letter the legend explains.
+///
+/// A plan without a legend is not a violation — a project may not name its phases — but once the
+/// paragraph exists it is the vocabulary: a task whose id starts with a letter it does not declare,
+/// a clause the writer would not produce, or a letter declared twice means the paragraph and the ids
+/// have drifted apart, and the sentence names the verb that fixes it.
+fn legend_violations(backlog: &str, tasks: &[Task]) -> Vec<String> {
+    let Some(legend) = crate::edit::legend(backlog) else {
+        return Vec::new();
+    };
+    if let Some(problem) = legend.problems.first() {
+        // One sentence, not one per line: the paragraph is rewritten whole by the verb that owns it.
+        return vec![format!("`plan/BACKLOG.md` {problem}; `cargo xtask task phase` rewrites it")];
+    }
+    let mut violations = Vec::new();
+    let mut reported: Vec<char> = Vec::new();
+    for task in tasks {
+        let Some(letter) = task.id.chars().next().filter(|letter| letter.is_ascii_uppercase()) else {
+            continue;
+        };
+        if legend.name(letter).is_some() || reported.contains(&letter) {
+            continue;
+        }
+        reported.push(letter);
+        violations.push(format!(
+            "backlog id {} starts with phase {letter}, which the legend in `plan/BACKLOG.md` does not declare; \
+             `cargo xtask task phase {letter} --name \"…\"`",
+            task.id
+        ));
+    }
+    violations
+}
+
 /// The `base=` violation for the facts gathered from git.
 ///
 /// `HEAD` is a legal `base`: the plan edit is committed on top of it while it is still uncommitted.
@@ -508,6 +542,59 @@ mod tests {
         assert_eq!(summary.tasks[0].section, "Now");
         assert_eq!(summary.tasks[0].files.as_deref(), Some("crates/ui/src/object_card.rs"));
         assert_eq!(summary.tasks[2].status, TaskStatus::Done);
+    }
+
+    /// A backlog whose intro declares its phases, one clause per letter, and holds one task of each.
+    fn legend_backlog(clauses: &str, tasks: &str) -> String {
+        format!(
+            "# Backlog\n\nIntro.\n\n\
+             Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\
+             {clauses}\n\n\
+             ## Now\n\n{tasks}\n\
+             ## Done\n\n- `[x]` **A2** ring of segments — `0833b4c`\n"
+        )
+    }
+
+    #[test]
+    fn a_legend_that_declares_every_used_letter_is_consistent() {
+        let backlog =
+            legend_backlog("`A` — contour\n`K` — the order package", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let summary = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect("the plan is consistent");
+        assert_eq!(summary.tasks[0].id, "K4");
+    }
+
+    #[test]
+    fn an_id_in_a_phase_the_legend_does_not_declare_is_reported() {
+        let backlog = legend_backlog("`A` — contour", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let error = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect_err("K is undeclared");
+        assert!(
+            error
+                .iter()
+                .any(|violation| violation.contains("phase K") && violation.contains("`cargo xtask task phase K")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_prose_legend_is_reported_with_the_verb_that_rewrites_it() {
+        let backlog =
+            legend_backlog("Phases: A contour, K the order package", "- `[ ]` **K4** the package `files: src/a.rs`");
+        let error = analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None)
+            .expect_err("a prose clause line is not the canonical form");
+        assert!(
+            error.iter().any(|violation| violation.contains("is not a `L` — text clause")
+                && violation.contains("cargo xtask task phase")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_plan_without_a_legend_names_no_phases_and_is_not_a_violation() {
+        // A project that does not declare phases keeps working: only an existing legend is the vocabulary.
+        let backlog = legend_backlog("", "- `[ ]` **K4** the package `files: src/a.rs`")
+            .replace("Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\n", "");
+        assert!(!backlog.contains("Phases come from"), "{backlog}");
+        analyze(&HEADER.replace("task=A3", "task=K4"), &backlog, None).expect("no legend, no phase rule");
     }
 
     #[test]

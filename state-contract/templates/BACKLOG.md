@@ -16,6 +16,10 @@ Order is the order of work. Renumbering is not allowed; a new task takes the nex
 phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and
 `## Next` are not part of that order.
 
+A project that names its phases declares them in a legend paragraph here, one clause per id prefix —
+`` `A` — contour `` — written by `cargo xtask task phase A --name contour`, never by hand. Once the
+legend exists the gate refuses an id whose letter it does not declare.
+
 ## Now
 
 - `[ ]` **{{TASK_ID}}** what the user gets, in one line — rules: B1.

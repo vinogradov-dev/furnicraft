@@ -40,7 +40,8 @@ table, so one help lists everything.
 | `task [<id>]` | one task in full: fields, files with line counts and last commits, map rows, notes, `RELATED`, debt, questions, ADRs, the closing commit |
 | `task list` | one line per task, filtered by `--section`, `--status`, `--phase` and `--grep` |
 | `task --md` / `--paths` | the same task for an agent, or one path per line for a shell loop |
-| `task add\|start\|set\|step\|note\|close\|reopen\|take\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run`; `--repair` lets a write through that removes a violation and adds none |
+| `task add\|start\|set\|step\|note\|close\|reopen\|take\|defer\|drop` | write the plan, each verb validated before it lands and printable with `--dry-run`; `--repair` lets a write through that removes a violation and adds none |
+| `task phase <L> --name <text>` / `task phase --declare L=text …` | the phase legend: one clause per id prefix, declared or updated in the same gated write; several letters travel in one call because a plan whose ids name an undeclared phase is refused |
 | `state set k=v` / `state next` / `state where` | one field of the `STATE:` line, the `## Next` paragraph, or the `## Where we are` prose; `state next --task <id>` moves the paragraph and the current task in one write |
 | `file <plan/map.md\|…>` | one reference file (`map`, `debt`, `questions`, `refactor`, `rename`, the template) through the same gate and diff |
 | `dashboard [--task <id>]` | the framed overview, optionally with one task expanded |
@@ -104,7 +105,13 @@ The prose under `## Next` is the one part of `plan/STATUS.md` a command has to o
 requires it to name the current task: `edit::set_section` replaces a whole section body, and a close
 that changes the current task takes the new paragraph with it.
 
-`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|take|defer|drop` and `cargo xtask state
+The phase legend is the intro paragraph of `plan/BACKLOG.md` that says what each id prefix means. A
+project may leave it out; once it is there the gate holds the file to it — every clause in the form
+the writer produces, and every letter an id starts with declared, or a sentence naming
+`cargo xtask task phase`. `edit::set_phases` rewrites the paragraph whole, so the ids and the
+vocabulary that explains them cannot drift.
+
+`FurniCraft`'s `cargo xtask task add|start|set|step|note|close|reopen|take|defer|drop|phase` and `cargo xtask state
 set` are the reference host: they take `--dry-run`, print the diff, hold `plan/.lock` while they
 write and land each file through a temp file and a rename.
 

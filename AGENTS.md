@@ -35,7 +35,7 @@ Answering the next step has its own procedure (§1.1); it never re-derives the s
 
 **Writing the plan is a command too.** The agent changes `plan/BACKLOG.md`, `plan/STATUS.md`,
 `plan/SESSION.md` and `plan/notes/<ID>.md` with `cargo xtask task add|start|set|step|note|close|
-reopen|take|defer|drop` and `cargo xtask state set`, never with a text edit. The commands splice only the lines
+reopen|take|defer|drop|phase` and `cargo xtask state set`, never with a text edit. The commands splice only the lines
 they own, validate the result with the gate *before* writing, take `--dry-run`, and refuse instead
 of leaving a broken plan (ADR 0085). The owner may still edit a file by hand; the format is the
 same.
@@ -273,8 +273,9 @@ owns that surface. Test code is not read: a test may drive whatever host it need
 one row in that table, and it names the surface, so the table is the inventory rather than a waiver.
 
 `cargo xtask plan` fails when the plan files, the notes, the reference files or the `base`
-contradict each other, and it names the mismatch in a sentence you can act on: a missing or
-duplicated `STATE:` line, a key nobody reads, a `state=` other than `idle` or `doing`, an `updated=`
+contradict each other, and it names the mismatch in a sentence you can act on: a phase legend line
+the writer would not produce or an id whose prefix letter the legend does not declare (declared with
+`cargo xtask task phase`, never by hand), a missing or duplicated `STATE:` line, a key nobody reads, a `state=` other than `idle` or `doing`, an `updated=`
 that is not a `YYYY-MM-DD` calendar date or is earlier than the `base` commit's date, a `base` that
 is not an ancestor of `HEAD`, and an `idle` plan whose `base` lags commits that touched anything but
 `plan/` (`HEAD` is a legal `base` while the plan edit itself is still uncommitted); `state=doing`

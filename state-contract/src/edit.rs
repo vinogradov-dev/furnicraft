@@ -369,6 +369,168 @@ pub fn set_section(text: &str, heading: &str, body: &str) -> Result<String, Stri
     Ok(layout.render())
 }
 
+/// The line that opens the phase legend, so the reader and the parser find the same paragraph.
+pub const LEGEND_LEAD: &str = "Phases come from the shape-base plan; `cargo xtask task phase` owns this list:";
+
+/// The words that mark the legend paragraph, whatever its lead line says.
+const LEGEND_MARK: &str = "Phases come from the shape-base plan";
+
+/// The phase legend: one clause per phase letter, and whatever the parser could not read.
+///
+/// The legend is the intro paragraph that says what each id prefix means. Its canonical form is the
+/// lead line followed by one clause per letter — `` `A` — contour `` — wrapped at [`PROSE_WIDTH`]
+/// with two-space continuations, sorted by letter. The writer produces that form and the gate reads
+/// it; an older hand-written prose legend parses as a problem, so a drift is reported instead of
+/// silently keeping a second vocabulary.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Legend {
+    /// `(letter, text)` in file order.
+    pub clauses: Vec<(char, String)>,
+    /// One sentence per line the canonical form does not allow.
+    pub problems: Vec<String>,
+}
+
+impl Legend {
+    /// The clause of one letter, when the legend declares it.
+    pub fn name(&self, letter: char) -> Option<&str> {
+        self.clauses.iter().find(|(declared, _)| *declared == letter).map(|(_, name)| name.as_str())
+    }
+}
+
+/// The legend paragraph of `plan/BACKLOG.md`, or `None` when the file declares no phases.
+pub fn legend(text: &str) -> Option<Legend> {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| line.trim_start().starts_with(LEGEND_MARK))?;
+    let mut legend = Legend::default();
+    if lines.get(start).map(|line| line.trim_end()) != Some(LEGEND_LEAD) {
+        legend.problems.push(format!("phase legend must open with `{LEGEND_LEAD}`"));
+    }
+    let mut open: Option<char> = None;
+    for line in lines.iter().skip(start.saturating_add(1)) {
+        // A blank line or a heading ends the paragraph, even when a hand edit dropped the blank.
+        if line.trim().is_empty() || line.starts_with("## ") {
+            break;
+        }
+        if let Some((letter, body)) = parse_clause(line) {
+            if legend.name(letter).is_some() {
+                legend.problems.push(format!("phase legend declares `{letter}` twice"));
+            } else {
+                legend.clauses.push((letter, body));
+            }
+            open = Some(letter);
+            continue;
+        }
+        let Some(letter) = open else {
+            legend.problems.push(format!("phase legend line `{}` is not a `L` — text clause", line.trim()));
+            continue;
+        };
+        match legend.clauses.iter_mut().find(|(declared, _)| *declared == letter) {
+            Some((_, body)) if line.starts_with([' ', '\t']) => {
+                body.push(' ');
+                body.push_str(line.trim());
+            }
+            _ => legend.problems.push(format!("phase legend line `{}` is not a `L` — text clause", line.trim())),
+        }
+    }
+    Some(legend)
+}
+
+/// One canonical clause line: a backticked capital letter, an em dash and its text.
+fn parse_clause(line: &str) -> Option<(char, String)> {
+    let rest = line.strip_prefix('`')?;
+    let letter = rest.chars().next()?;
+    if !letter.is_ascii_uppercase() {
+        return None;
+    }
+    let rest = rest.get(letter.len_utf8()..)?.strip_prefix('`')?;
+    let body = rest.strip_prefix(" — ")?.trim();
+    (!body.is_empty()).then(|| (letter, body.to_owned()))
+}
+
+/// The lines of one clause: the letter, then the text wrapped under it.
+fn clause_lines(letter: char, text: &str) -> Vec<String> {
+    let prefix = format!("`{letter}` — ");
+    let mut lines = Vec::new();
+    let mut current = prefix.clone();
+    for word in text.split_whitespace() {
+        let at_start = current == prefix || current == INDENT;
+        if !at_start && current.chars().count().saturating_add(1).saturating_add(word.chars().count()) > PROSE_WIDTH {
+            lines.push(current);
+            current = INDENT.to_owned();
+        }
+        if !current.ends_with(' ') {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if current != prefix {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Declares or updates phase letters in the legend, in one splice.
+///
+/// One call may carry several letters, because a file whose legend is still prose has to gain every
+/// letter it uses at once: the gate refuses a plan whose ids name a phase the legend does not. A
+/// letter that is already there keeps its position in the sort order and takes the new text; a new
+/// letter is added. The paragraph is rewritten in the canonical form, so the writer and the reader
+/// never have to agree on two grammars.
+pub fn set_phases(text: &str, declares: &[(char, String)]) -> Result<String, String> {
+    if declares.is_empty() {
+        return Err("`task phase` needs a letter: `task phase K --name \"the order package\"`".to_owned());
+    }
+    let mut checked: Vec<(char, String)> = Vec::new();
+    for (letter, name) in declares {
+        let name = name.trim();
+        if !letter.is_ascii_uppercase() {
+            return Err(format!("`{letter}` is not a phase: a phase is one capital letter, like `K`"));
+        }
+        if name.is_empty() {
+            return Err(format!("phase {letter} needs a name: `task phase {letter} --name \"…\"`"));
+        }
+        if name.contains('\n') {
+            return Err(format!("phase {letter}'s name must be one line"));
+        }
+        checked.push((*letter, name.to_owned()));
+    }
+    let mut layout = Layout::parse(text);
+    let mut clauses = legend(text).map(|legend| legend.clauses).unwrap_or_default();
+    for (letter, name) in checked {
+        match clauses.iter_mut().find(|(seen, _)| *seen == letter) {
+            Some(entry) => entry.1 = name,
+            None => clauses.push((letter, name)),
+        }
+    }
+    clauses.sort_by_key(|(letter, _)| *letter);
+    let mut block = vec![LEGEND_LEAD.to_owned()];
+    for (letter, name) in &clauses {
+        block.extend(clause_lines(*letter, name));
+    }
+    match layout.lines.iter().position(|line| line.trim_start().starts_with(LEGEND_MARK)) {
+        Some(start) => {
+            let mut end = start;
+            while end < layout.lines.len() && !layout.lines[end].trim().is_empty() {
+                end = end.saturating_add(1);
+            }
+            layout.lines.splice(start..end, block);
+        }
+        None => {
+            // A file with no legend gains one above its first section, where the intro prose ends.
+            let at = layout.sections.iter().map(|(_, at)| *at).min().unwrap_or(layout.lines.len());
+            let mut inserted = Vec::new();
+            // One blank line on each side: the intro already ends its paragraph with one.
+            if at > 0 && !layout.lines.get(at.saturating_sub(1)).is_some_and(|line| line.trim().is_empty()) {
+                inserted.push(String::new());
+            }
+            inserted.append(&mut block);
+            inserted.push(String::new());
+            layout.lines.splice(at..at, inserted);
+        }
+    }
+    Ok(layout.render())
+}
+
 /// Whether `text` has a `## <heading>` section, so a verb knows whether it has to own it.
 pub fn has_section(text: &str, heading: &str) -> bool {
     Layout::parse(text).sections.iter().any(|(name, _)| name.eq_ignore_ascii_case(heading))
@@ -726,6 +888,76 @@ mod tests {
         assert!(text.contains("## Next\n\nA4 is next: the card.\n\nThen A5.\n\n## Index"), "{text}");
         assert!(text.contains("## Where we are\n\nProse.\n"), "the section above stays: {text}");
         assert!(set_section(status, "Gone", "x").is_err());
+    }
+
+    /// The intro of a plan that declares two phases the canonical way.
+    fn legend_backlog() -> String {
+        format!(
+            "# Backlog\n\nIntro prose.\n\n{LEGEND_LEAD}\n`A` — contour\n`K` — the order package, its writer and the \
+             money it carries\n\n## Now\n\n- `[ ]` **A3** arcs `files: src/a.rs`\n\n## Done\n"
+        )
+    }
+
+    #[test]
+    fn the_legend_parses_its_clauses_and_their_continuations() {
+        let parsed = legend(&legend_backlog()).expect("the file declares phases");
+        assert!(parsed.problems.is_empty(), "{parsed:?}");
+        assert_eq!(parsed.clauses.len(), 2);
+        assert_eq!(parsed.name('A'), Some("contour"));
+        assert_eq!(parsed.name('K'), Some("the order package, its writer and the money it carries"));
+        assert!(legend("# Backlog\n\nNo phases here.\n").is_none(), "no legend is not an error");
+    }
+
+    #[test]
+    fn a_prose_legend_is_reported_rather_than_guessed() {
+        let prose = format!(
+            "# Backlog\n\n{LEGEND_LEAD}\nPhases: A contour, B contour operations.\n\n## Now\n\n- `[ ]` **A3** arcs \
+             `files: src/a.rs`\n\n## Done\n"
+        );
+        let parsed = legend(&prose).expect("the paragraph is there");
+        assert_eq!(parsed.clauses.len(), 0);
+        assert!(!parsed.problems.is_empty(), "a prose clause line names what it wants");
+    }
+
+    #[test]
+    fn a_declaration_updates_one_clause_and_adds_another() {
+        let text =
+            set_phases(&legend_backlog(), &[('A', "the contour, drawn".to_owned()), ('M', "milestone".to_owned())])
+                .expect("the legend is written");
+        let parsed = legend(&text).expect("the legend is still there");
+        assert_eq!(parsed.name('A'), Some("the contour, drawn"));
+        assert_eq!(parsed.name('M'), Some("milestone"));
+        assert_eq!(parsed.clauses.iter().map(|(letter, _)| *letter).collect::<Vec<_>>(), vec!['A', 'K', 'M']);
+        assert!(text.contains("`A` — the contour, drawn\n"), "the clause is one line: {text}");
+        assert!(text.contains("## Now\n\n- `[ ]` **A3**"), "the rest of the file is untouched: {text}");
+    }
+
+    #[test]
+    fn a_file_without_a_legend_gains_one_above_its_first_section() {
+        let plain = "# Backlog\n\nIntro.\n\n## Now\n\n- `[ ]` **A3** arcs `files: src/a.rs`\n\n## Done\n";
+        let text = set_phases(plain, &[('A', "contour".to_owned())]).expect("the legend is added");
+        assert!(text.contains(&format!("Intro.\n\n{LEGEND_LEAD}\n`A` — contour\n\n## Now")), "{text}");
+        assert_eq!(legend(&text).and_then(|legend| legend.name('A').map(str::to_owned)), Some("contour".to_owned()));
+    }
+
+    #[test]
+    fn a_long_clause_wraps_under_its_letter_and_reads_back_whole() {
+        let long = "the order package: one manifest and ten flat tables other programs read, with a price per line "
+            .to_owned()
+            + "and a cutting plan per sheet, so a workshop can price the piece";
+        let text = set_phases(&legend_backlog(), &[('K', long.to_owned())]).expect("the legend is written");
+        let parsed = legend(&text).expect("the legend reads back");
+        assert_eq!(parsed.name('K'), Some(long.as_str()));
+        assert!(text.lines().all(|line| line.chars().count() <= PROSE_WIDTH), "every line fits: {text}");
+    }
+
+    #[test]
+    fn a_phase_needs_one_letter_and_a_name() {
+        let backlog = legend_backlog();
+        assert!(set_phases(&backlog, &[]).is_err());
+        assert!(set_phases(&backlog, &[('k', "lowercase".to_owned())]).is_err());
+        assert!(set_phases(&backlog, &[('K', "  ".to_owned())]).is_err());
+        assert!(set_phases(&backlog, &[('K', "two\nlines".to_owned())]).is_err());
     }
 
     #[test]

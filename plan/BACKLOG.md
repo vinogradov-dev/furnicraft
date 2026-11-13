@@ -12,11 +12,27 @@ those files and their callers, not the workspace.
 Order is the order of work. Renumbering is not allowed; a new task takes the next free id in its
 phase. The first unfinished task in `## Now` is the one `STATE: task=` must name; `## Bugs` and
 `## Next` are not part of that order.
-Phases come from the shape-base plan: A contour, B contour operations, C sketch, D panel
-variants, E 2D primitives, F revolution and sweep, G 2D booleans, H hardware and accessories; P is
-the plan and `xtask` itself, L is scene lighting, S is a structural refactor that changes module
-boundaries only, V is primitive parameters, X is a defect in behaviour that already shipped, and U
-is the UI: toolbars, drawing tools, view controls and icon resources.
+Phases come from the shape-base plan; `cargo xtask task phase` owns this list:
+`A` — contour
+`B` — contour operations
+`C` — sketch
+`D` — panel variants
+`E` — 2D primitives
+`F` — revolution and sweep
+`G` — 2D booleans
+`H` — hardware and accessories
+`K` — the contract other programs read: the scene file's compatibility and the order package
+`L` — scene lighting
+`M` — a milestone's own work, numbered by the milestone it was filed against
+`N` — the furniture product: its entity, the frame it reserves, the parts inside it and how they are
+  placed
+`P` — the plan and `xtask` itself
+`R` — the pre-release rename
+`S` — a structural refactor that changes module boundaries only
+`T` — the semantic classes: the registry table, its traits and the editors it gates
+`U` — the UI: toolbars, drawing tools, view controls and icon resources
+`V` — primitive parameters
+`X` — a defect in behaviour that already shipped
 
 A defect is filed under `## Bugs` with an `X` id next to the feature that owns it. Its entry states
 the observation, the expectation and the suspected cause, and never a guess at a fix that has not
@@ -25,22 +41,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
-  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
-   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
-   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
-   the writer.
-  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
-   units; the exporter adds the additive columns and declares kerf and trim in the manifest
-   rules block. The package major version does not move.
-  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
-   columns are additive; the golden file records them; cargo xtask ci is green.
-  `files: crates/model/src/catalog.rs`
-
-## Bugs
-
-## Next
-- `[ ]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
+- `[~]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
   Why: Filed from the class/export planning session: `task add --phase K` created the first
    task of a new phase, but the paragraph that declares what each phase letter means
    (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
@@ -53,6 +54,10 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
    every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
   `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
+
+## Bugs
+
+## Next
 - `[ ]` **K2** the order package writer: one manifest and ten flat tables other programs read
   Why: The reason for the whole discussion: reports, drawings and CNC are written outside our
    process, possibly in Python, and neither the document JSON nor the internal database is a
@@ -109,6 +114,17 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    longer exists: `plan/rename.md` has been updated and the inventory starts at `main.rs`,
    `file_menu.rs` and `settings_store.rs`. R1 waits here until the owner chooses a name.
   `files: plan/rename.md, crates/ui/src/theme.rs, crates/project/src/lib.rs`
+- `[ ]` **K4** the package learns sheets and money once the catalogue carries stock sizes and prices
+  Why: Version 1 of the package carries areas and stock groups but no per-sheet plan and no
+   money, because the catalogue stores only nominal thickness and colour: sheet dimensions and
+   prices do not exist yet. A cutting list per sheet and a purchase price cannot be invented in
+   the writer.
+  Shape: The catalogue grows sheet sizes, a stock group and an optional price in integer minor
+   units; the exporter adds the additive columns and declares kerf and trim in the manifest
+   rules block. The package major version does not move.
+  Done: A package carries a per-sheet cutting plan for one material and a price per line; the
+   columns are additive; the golden file records them; cargo xtask ci is green.
+  `files: crates/model/src/catalog.rs`
 
 ## Done
 

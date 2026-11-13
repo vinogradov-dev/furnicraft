@@ -96,8 +96,8 @@ fn read_stdin() -> Result<String, String> {
     Ok(text)
 }
 
-/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `take`, `defer` and `drop`, plus
-/// `state set`.
+/// `task add`, `start`, `set`, `step`, `note`, `close`, `reopen`, `take`, `defer`, `drop` and `phase`,
+/// plus `state set`.
 pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
     run_with(root, args, &ProcessGit::new(root))
 }
@@ -105,7 +105,7 @@ pub fn run(root: &Path, args: &[String]) -> Result<(), String> {
 /// [`run`] with the git facts supplied by `git`, so a test needs no repository.
 pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let Some(verb) = args.first().map(String::as_str) else {
-        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|defer|drop> …".to_owned());
+        return Err("usage: cargo xtask task <add|start|set|step|note|close|reopen|take|defer|drop|phase> …".to_owned());
     };
     let rest = &args[1..];
     match verb {
@@ -119,18 +119,27 @@ pub fn run_with(root: &Path, args: &[String], git: &dyn Git) -> Result<(), Strin
         "drop" => drop(root, rest, git),
         "take" => take(root, rest, git),
         "defer" => defer(root, rest, git),
+        "phase" => phase(root, rest, git),
         other => Err(format!("unknown verb `{other}`")),
     }
 }
 
-/// `task add --phase <P> --files <paths> [--section Now] [--at top|end] [--why/--shape/--done <text>] <lead>`
+/// `task add --phase <L> [--phase-name <text>] --files <paths> [--section Now] [--at top|end]
+/// [--why/--shape/--done <text>] <lead>`
 ///
 /// `--at top` puts the task at the head of the work order and points `STATE: task=` at it, because
 /// the tool cannot leave a plan in which the current task is not the first open one: an owner-directed
 /// interjection joins the order in one validated write instead of two that are each refused.
+///
+/// `--phase` is one capital letter, and `--phase-name` declares it in the legend in the same write,
+/// so the first task of a new phase does not need a second command. Without a name the phase must
+/// already be declared: a file whose ids use a letter its legend does not explain is the drift this
+/// gate reports.
 fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
-    let options = Options::parse(args, &["phase", "section", "files", "why", "shape", "done", "at", "next"])?;
-    let phase = options.required("phase")?;
+    let options =
+        Options::parse(args, &["phase", "phase-name", "section", "files", "why", "shape", "done", "at", "next"])?;
+    let phase = options.required("phase")?.to_uppercase();
+    let letter = one_letter(&phase)?;
     let files = options.required("files")?;
     let lead = options.words.join(" ");
     if lead.trim().is_empty() {
@@ -148,7 +157,21 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         ));
     }
     let backlog = read(root, "plan/BACKLOG.md")?;
-    let id = edit::next_id(&backlog, phase);
+    let backlog = match options.value("phase-name") {
+        Some(name) => edit::set_phases(&backlog, &[(letter, name.to_owned())])?,
+        None => {
+            if let Some(legend) = edit::legend(&backlog)
+                && legend.problems.is_empty()
+                && legend.name(letter).is_none()
+            {
+                return Err(format!(
+                    "phase {letter} is not declared in the legend; `cargo xtask task phase {letter} --name \"…\"` or `--phase-name`"
+                ));
+            }
+            backlog
+        }
+    };
+    let id = edit::next_id(&backlog, &phase);
     let mut fields: Vec<(String, String)> = Vec::new();
     for (label, key) in [("Why", "why"), ("Shape", "shape"), ("Done", "done")] {
         if let Some(body) = options.value(key) {
@@ -175,6 +198,51 @@ fn add(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
         println!("task {id} added to `## {section}`");
     }
     Ok(())
+}
+
+/// `task phase <L> --name <text>`, or `task phase --declare "L=text" [--declare "M=text" …]`
+///
+/// The legend of `plan/BACKLOG.md` — what each id prefix means — is written here and nowhere else,
+/// so a session can declare a phase when it opens one and the paragraph cannot drift from the ids
+/// the file uses. Several letters may travel in one call because a file whose legend is still prose
+/// has to gain every letter its ids use at once: the gate refuses a plan whose ids name a phase the
+/// legend does not declare, so a one-letter-at-a-time migration could not land.
+fn phase(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
+    let options = Options::parse(args, &["name", "declare"])?;
+    let mut declares: Vec<(char, String)> = Vec::new();
+    for (key, value) in &options.values {
+        if key != "declare" {
+            continue;
+        }
+        let Some((letter, name)) = value.split_once('=') else {
+            return Err(format!("`--declare` takes `L=text`, not `{value}`"));
+        };
+        declares.push((one_letter(&letter.trim().to_uppercase())?, name.trim().to_owned()));
+    }
+    if let Some(word) = options.words.first() {
+        let letter = one_letter(&word.to_uppercase())?;
+        declares.push((letter, options.required("name")?.to_owned()));
+    }
+    let backlog = read(root, "plan/BACKLOG.md")?;
+    let backlog = edit::set_phases(&backlog, &declares)?;
+    let changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
+    apply(root, changes, &options, git)?;
+    if !options.dry_run {
+        println!("the phase legend changed");
+    }
+    Ok(())
+}
+
+/// The one capital letter a phase is, or the sentence that says what a phase is.
+fn one_letter(text: &str) -> Result<char, String> {
+    let mut chars = text.chars();
+    let Some(letter) = chars.next() else {
+        return Err("a phase is one capital letter, like `K`".to_owned());
+    };
+    if chars.next().is_some() || !letter.is_ascii_uppercase() {
+        return Err(format!("`{text}` is not a phase: a phase is one capital letter, like `K`"));
+    }
+    Ok(letter)
 }
 
 /// `task start <ID> [--goal <text>] [--now <text>] [--run <cmd>]`
@@ -880,6 +948,99 @@ mod tests {
 ## Done\n";
     const NOTE: &str = "task: P6\ngoal: the writer\n\nsteps:\n  [x] the layout\n  [ ] the writer\n\n\
 now: the writer\nblocked: nothing\nrun: cargo test\nresume: the writer\n";
+
+    /// A backlog that declares its phases the canonical way and holds one task of each.
+    const LEGEND: &str = "# Backlog\n\nIntro prose.\n\n\
+Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n\
+`P` — the plan and `xtask` itself\n\
+`S` — a structural refactor that changes module boundaries only\n\n\
+## Now\n\n\
+- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n\
+- `[ ]` **S14** the banding\n  `files: src/b.rs`\n\n\
+## Bugs\n\n\
+## Next\n\n\
+## Done\n";
+
+    #[test]
+    fn a_phase_is_declared_and_then_updated_by_one_verb() {
+        let root = project("phase", STATUS, LEGEND, None);
+        run(&root, &["phase", "K", "--name", "the order package"]).expect("K is declared");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "the clause added: {backlog}");
+        assert!(backlog.contains("`P` — the plan and `xtask` itself\n"), "the others stayed: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+
+        run(&root, &["phase", "K", "--name", "the order package and its money"]).expect("K is updated");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package and its money\n"), "{backlog}");
+        assert!(!backlog.contains("`K` — the order package\n"), "the old clause is gone: {backlog}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn several_phases_travel_in_one_write() {
+        let root = project("phase-many", STATUS, LEGEND, None);
+        run(&root, &["phase", "--declare", "K=the order package", "--declare", "R=the pre-release rename"])
+            .expect("both letters are declared");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "{backlog}");
+        assert!(backlog.contains("`R` — the pre-release rename\n"), "{backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_partial_legend_that_drops_a_used_phase_is_refused() {
+        // The prose legend declares P and K; rewriting it with P alone would leave task K4 unexplained.
+        let prose = LEGEND
+            .replace(
+                "`P` — the plan and `xtask` itself\n`S` — a structural refactor that changes module boundaries only",
+                "P is the plan, K is the order package",
+            )
+            .replace("**S14** the banding", "**K4** the package");
+        let root = project("phase-drop", STATUS, &prose, None);
+        let before = std::fs::read_to_string(root.join("plan/BACKLOG.md")).expect("the backlog is readable");
+        let error = run(&root, &["phase", "P", "--name", "the plan"]).expect_err("K would lose its clause");
+        assert!(error.contains("nothing was written"), "{error}");
+        // The sentence itself belongs to the gate, so it is asserted there: this verb only refuses.
+        assert!(
+            crate::check_with(&root, &FakeGit).is_err(),
+            "the fixture's prose legend is what the gate reports, and the rewrite would have left K undeclared"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("plan/BACKLOG.md")).expect("readable"),
+            before,
+            "a refusal writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_task_in_an_undeclared_phase_is_refused_unless_it_names_one() {
+        let root = project("phase-add", STATUS, LEGEND, None);
+        let error =
+            run(&root, &["add", "--phase", "K", "--files", "src/a.rs", "the package"]).expect_err("K is not declared");
+        assert!(error.contains("task phase K"), "the sentence names the verb: {error}");
+
+        run(&root, &["add", "--phase", "K", "--phase-name", "the order package", "--files", "src/a.rs", "the package"])
+            .expect("the declaration travels with the task");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        assert!(backlog.contains("`K` — the order package\n"), "{backlog}");
+        assert!(backlog.contains("**K1** the package"), "the task landed in its phase: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_phase_is_one_capital_letter() {
+        let root = project("phase-letter", STATUS, LEGEND, None);
+        let error = run(&root, &["phase", "KK", "--name", "two letters"]).expect_err("two letters is no phase");
+        assert!(error.contains("one capital letter"), "{error}");
+        // A lowercase letter is read as the capital it names, the same way `add --phase` reads one.
+        run(&root, &["phase", "k", "--name", "lowercase but read as K"]).expect("a lowercase letter names its phase");
+        assert!(text(&root, "plan/BACKLOG.md").contains("`K` — lowercase but read as K\n"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A scratch project: two plan files, two source files, a note only when the test needs one.
     fn project(name: &str, status: &str, backlog: &str, session: Option<&str>) -> PathBuf {
