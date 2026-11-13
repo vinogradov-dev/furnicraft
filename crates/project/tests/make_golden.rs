@@ -67,7 +67,8 @@ fn scene() -> SceneFile {
     let drawn = Path::polyline(vec![[Length::ZERO, Length::ZERO], [millimetres(120), millimetres(40)]], false)
         .expect("an open path");
 
-    let drawer = Container::new(id(8), "Drawer", Placement::IDENTITY, vec![front.into()]);
+    let mut drawer = Container::new(id(8), "Drawer", Placement::IDENTITY, vec![front.into()]);
+    drawer.set_component_marker(true).expect("the drawer is a component");
     let root = Container::new(
         id(1),
         "Root",

@@ -392,7 +392,12 @@
                 }
               }
             ],
-            "properties": {}
+            "properties": {
+              "component": {
+                "kind": "bool",
+                "value": true
+              }
+            }
           }
         }
       ],
