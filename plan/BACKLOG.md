@@ -25,22 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
-  Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
-   serde aliases for renamed fields, a separate error path for a newer schema, and a
-   version-by-version history in two domain documents — all of it protecting files no user has
-   ever saved. ADR 0096 makes the rule explicit and this is the commit that spends it.
-  Shape: Delete the migration functions and their tests, the older golden files, and every
-   serde alias that exists only for a previous field name. Keep one schema_version, one golden
-   file for the current schema, and one readable error for any other number (older or newer).
-   The envelope keeps format_version as it is. docs/domain/scene-file.md §7 and
-   docs/domain/document.md §8 already state the rule; this task makes the code match them. A
-   default stays only where the field is optional in the current layout.
-  Done: cargo test -p furnicraft-model -p furnicraft-project is green with one golden file; a
-   file with any other schema number is rejected by the same sentence; rg finds no migration
-   pass and no alias for an older name; the two domain documents no longer describe a
-   migration; cargo xtask ci is green.
-  `files: crates/model/src/project/wire.rs, crates/project/tests/scene_file.rs, crates/project/src/lib.rs, docs/domain/scene-file.md`
 - `[ ]` **T2** the class registry is data in the model, and the program can see what it is looking at
   Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)
    but not its meaning: 20.01.09 is accepted although no such type exists, and no algorithm can
@@ -363,6 +347,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **K1** the document format loses its past: migrations, aliases and older golden files are deleted
+  Why: Measured 2026-11-12: nine golden files scene-v7..v20, two tree-walking migration passes,
+   serde aliases for renamed fields, a separate error path for a newer schema, and a
+   version-by-version history in two domain documents — all of it protecting files no user has
+   ever saved. ADR 0096 makes the rule explicit and this is the commit that spends it.
+  Shape: Delete the migration functions and their tests, the older golden files, and every
+   serde alias that exists only for a previous field name. Keep one schema_version, one golden
+   file for the current schema, and one readable error for any other number (older or newer).
+   The envelope keeps format_version as it is. docs/domain/scene-file.md §7 and
+   docs/domain/document.md §8 already state the rule; this task makes the code match them. A
+   default stays only where the field is optional in the current layout.
+  Done: cargo test -p furnicraft-model -p furnicraft-project is green with one golden file; a
+   file with any other schema number is rejected by the same sentence; rg finds no migration
+   pass and no alias for an older name; the two domain documents no longer describe a
+   migration; cargo xtask ci is green.
+  `files: crates/model/src/project/wire.rs, crates/project/tests/scene_file.rs, crates/project/src/lib.rs, docs/domain/scene-file.md` — `10b1079`
 
 - `[x]` **T1** the class table is written down and approved, so the registry has content before it has code
   Why: ADR 0094 fixes the mechanism, not the content: a registry without rows is a shape with

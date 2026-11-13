@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=K1 state=doing base=92276c7 updated=2026-11-13
+STATE: milestone=M7 phase=T task=T2 state=idle base=48bbceb updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-K1 takes the format's past away: the two migration passes, the serde aliases for older field names
-and the nine older golden files go, leaving one schema version, one golden file and one readable
-error for any other number (ADR 0096).
+T2 turns `furntype.rs` into the class module: `ClassCode`, the `TraitSet` bit mask and the approved
+registry table of `docs/domain/classes.md` §7, resolved at compile time, with the property key
+renamed to `class` and the schema bumped.
 
 ## Index
 
