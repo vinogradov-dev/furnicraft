@@ -121,6 +121,7 @@ impl Editor {
             nominal_size,
             material,
             placement: Placement::IDENTITY,
+            class: None,
         })?;
         let outcome = dispatch(session, PANEL_CREATE_ID, &params)?;
         self.select_created(outcome.created_id());

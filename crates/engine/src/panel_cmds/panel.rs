@@ -15,7 +15,8 @@
 //! (`machining.rs`), or any geometry derivation.
 
 use furnicraft_model::{
-    Catalog, Contour, Id, Level, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
+    Catalog, ClassCode, Contour, Id, Level, MaterialId, Operation, PanelNominalSize, Placement, Project, ProjectError,
+    PropertyValue, SYSTEM_CLASS,
 };
 use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,13 @@ pub struct PanelCreate {
     pub material: MaterialId,
     /// Placement relative to the parent container.
     pub placement: Placement,
+    /// The furniture class the new part plays, when the tool that created it has one.
+    ///
+    /// A fill tool knows the class whose `fill` trait chose the axis pair, so the post or shelf is
+    /// born classified instead of unclassified. A panel created by the plain panel tool carries
+    /// none, which is the long-standing default (ADR 0034).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<ClassCode>,
 }
 
 impl PanelCreate {
@@ -326,6 +334,9 @@ fn create_run(project: &mut Project, catalog: &Catalog, params: &Value) -> Resul
         material.nominal_thickness(),
         params.placement,
     )?;
+    if let Some(class) = params.class {
+        project.set_property(id, SYSTEM_CLASS, PropertyValue::class(class))?;
+    }
     Ok(CommandOutcome::created(id))
 }
 

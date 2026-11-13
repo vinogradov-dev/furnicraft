@@ -19,6 +19,7 @@
 
 use furnicraft_geom::DVec3;
 
+use super::surface::{Span, SurfaceBox, SurfaceKind, surface_box};
 use crate::project::Project;
 use crate::tree::{object_bounds_mm, panel_bounds};
 use crate::*;
@@ -113,7 +114,7 @@ impl Project {
                 return self.envelope_box(id);
             }
             let (min, max) = panel_bounds(container.children(), Placement::IDENTITY, 0)?;
-            return surface_box(id, min, max, self.world_placement(id)?, false);
+            return surface_box(id, min, max, self.world_placement(id)?, SurfaceKind::Body);
         }
         if let Some(panel) = self.panel(id) {
             let size = panel.nominal_size();
@@ -122,11 +123,11 @@ impl Project {
                 size.width().millimetres_f64(),
                 panel.last_known_thickness().millimetres_f64(),
             );
-            return surface_box(id, DVec3::ZERO, max, self.world_placement(id)?, false);
+            return surface_box(id, DVec3::ZERO, max, self.world_placement(id)?, SurfaceKind::Panel);
         }
         let object = self.object(id)?;
         let (min, max) = object_bounds_mm(object.geometry())?;
-        surface_box(id, min, max, self.world_placement(id)?, false)
+        surface_box(id, min, max, self.world_placement(id)?, SurfaceKind::Body)
     }
 
     /// The world box of a product's authored envelope.
@@ -134,7 +135,7 @@ impl Project {
         let envelope = self.container(id)?.envelope()?;
         let size =
             DVec3::new(envelope.x().millimetres_f64(), envelope.y().millimetres_f64(), envelope.z().millimetres_f64());
-        surface_box(id, DVec3::ZERO, size, self.world_placement(id)?, true)
+        surface_box(id, DVec3::ZERO, size, self.world_placement(id)?, SurfaceKind::Shell)
     }
 
     /// The surfaces a furniture drag may meet: every other product's envelope, and every other
@@ -205,55 +206,6 @@ impl MoveRule {
         let limit = stop_at_contact(axis, snapped, &self.movers, &self.obstacles);
         MoveLimit { distance_mm: quantised(limit.distance_mm), contact: limit.contact }
     }
-}
-
-/// One furniture surface as an axis-aligned world box, in millimetres.
-#[derive(Clone, Copy, Debug)]
-struct SurfaceBox {
-    id: Id,
-    min: DVec3,
-    max: DVec3,
-    /// A product's envelope is a shell; a panel, an object or any other container is a body.
-    shell: bool,
-}
-
-/// One axis of a [`SurfaceBox`].
-#[derive(Clone, Copy, Debug)]
-struct Span {
-    min: f64,
-    max: f64,
-}
-
-impl SurfaceBox {
-    /// The box's extent on `axis`.
-    fn span(self, axis: MoveAxis) -> Span {
-        match axis {
-            MoveAxis::X => Span { min: self.min.x, max: self.max.x },
-            MoveAxis::Y => Span { min: self.min.y, max: self.max.y },
-            MoveAxis::Z => Span { min: self.min.z, max: self.max.z },
-        }
-    }
-}
-
-/// A local box through a node's world placement, as the world box around its eight corners.
-///
-/// A turned body has no axis-aligned sides any more, so the tightest box around the corners is
-/// used, exactly as the product placement query does. A corner that is not finite is no box.
-fn surface_box(id: Id, min: DVec3, max: DVec3, world: Placement, shell: bool) -> Option<SurfaceBox> {
-    let mut box_ = SurfaceBox { id, min: DVec3::splat(f64::INFINITY), max: DVec3::splat(f64::NEG_INFINITY), shell };
-    for x in [min.x, max.x] {
-        for y in [min.y, max.y] {
-            for z in [min.z, max.z] {
-                let corner = world.transform_point(DVec3::new(x, y, z));
-                if !corner.is_finite() {
-                    return None;
-                }
-                box_.min = box_.min.min(corner);
-                box_.max = box_.max.max(corner);
-            }
-        }
-    }
-    Some(box_)
 }
 
 /// Whether `node` is one of `targets` or sits below one of them.
@@ -343,7 +295,7 @@ fn stop_at_contact(axis: MoveAxis, distance: f64, movers: &[SurfaceBox], obstacl
     for mover in movers {
         for obstacle in obstacles {
             // A body stops at a body and a shell at a shell (ADR 0102).
-            if mover.shell != obstacle.shell {
+            if mover.is_shell() != obstacle.is_shell() {
                 continue;
             }
             let Some(limit) = blocking(axis, sign, mover, obstacle) else {
@@ -380,7 +332,7 @@ fn blocking(axis: MoveAxis, sign: f64, moving: &SurfaceBox, obstacle: &SurfaceBo
         return None;
     }
     let contains = |outer: Span, inner: Span| outer.min <= inner.min && inner.max <= outer.max;
-    let shells = moving.shell && obstacle.shell;
+    let shells = moving.is_shell() && obstacle.is_shell();
     let moving_span = moving.span(axis);
     let obstacle_span = obstacle.span(axis);
     let inside = obstacle_span.min <= moving_span.min && moving_span.max <= obstacle_span.max;

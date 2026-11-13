@@ -390,6 +390,7 @@ mod tests {
             nominal_size: sample_panel_nominal_size(),
             material: sample_material_id(),
             placement: Placement::IDENTITY,
+            class: None,
         }
     }
 
@@ -538,6 +539,26 @@ mod tests {
                 session.dispatch("panel.create", &params).expect("create the part").created_id().expect("a panel id");
             assert_eq!(session.project().parent_of(created), Some(parent));
         }
+    }
+
+    #[test]
+    fn a_classed_panel_lands_in_one_undo_step() {
+        // The fill tool names the class whose trait chose the axis pair, and the class is written by
+        // the same command: a click is one entry, not a create followed by an assignment.
+        let mut session = product_session();
+        let mut request = panel_create(&session, "Shelf");
+        request.class = Some("30.11".parse::<ClassCode>().expect("a shelf class"));
+        let params = json_params(&request);
+        let before = session.project().revision();
+
+        let outcome = session.dispatch("panel.create", &params).expect("create the shelf");
+        let id = outcome.created_id().expect("an id");
+        let shelf = "30.11".parse::<ClassCode>().expect("a shelf class");
+        assert_eq!(session.project().class(id), Some(shelf));
+        assert!(session.project().revision() > before, "the class is part of the same creation");
+
+        session.undo().expect("one undo step");
+        assert_eq!(session.project().panel(id), None, "one undo takes the whole creation back");
     }
 
     #[test]

@@ -14,16 +14,20 @@ mod error;
 #[cfg(test)]
 mod frame_contract;
 mod move_query;
+mod niche;
 mod node_cmds;
 mod object_cmds;
 mod panel_cmds;
 mod product_cmds;
 mod property_cmds;
 mod query;
+mod surface;
 mod wire;
 
 pub use error::ProjectError;
 pub use move_query::{MoveAxis, MoveLimit, MoveRule};
+pub use niche::{Niche, NicheShape, Probe, ProbeHit};
+pub use surface::SurfaceKind;
 pub(crate) use wire::ProjectWire;
 
 use crate::*;
