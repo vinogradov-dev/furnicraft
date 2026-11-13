@@ -8,9 +8,9 @@ FurniCraft is a native, free and open-source 3D editor for parametric cabinet fu
 
 **In scope, in order of arrival:**
 
-1. A document model for cabinet furniture: model space and placements, containers and components, panels, machined features, edge banding, materials, hardware, typed properties and furniture types.
+1. A document model for cabinet furniture: model space and placements, containers and components, panels, machined features, edge banding, materials, hardware, typed properties and the semantic class of every object.
 2. Geometry objects beside the furniture parts: a mesh edited directly, a parametric primitive edited by its parameters, or a solid grown from a flat contour through a saved feature history and collapsed to a mesh when the user is done with it.
-3. Classification and queries: every object carries a numeric furniture type and typed properties, so parts lists, reports and CNC rules are derived by query. Parametric construction arrives later as user scripts, not built-in product builders.
+3. Classification and queries: every object carries a semantic class and typed properties, so parts lists, reports and CNC rules are derived by query. Parametric construction arrives later as user scripts, not built-in product builders.
 4. 3D viewport: camera views, orbit/pan/zoom, shading, selection and picking, a floor grid, dimensions.
 5. Camera and light objects, and a versioned scene file that saves the whole scene. Orders and their versions stay with the order program, never in the file.
 6. Editing: create and edit panels, assemblies, materials and hardware through commands, with undo/redo.
@@ -32,7 +32,7 @@ The root of a saved scene: the node tree, material references and their fallback
 
 Stable identifiers (`Id`) let hardware, commands and the undo stack refer to a panel or a container without holding a pointer. A monotonically increasing `Revision` marks every document change; caches (meshes, picking structures, derived parts) are keyed by it. Both are technical plumbing, not user-visible entities. In v1 an `Id` is a non-zero `u64` serialized as a number, and a `Revision` is a `u64` starting at zero. Panel vertices and edges use stable ids of the same kind; their visible numbers are labels, not keys.
 
-### `Container`, `Properties` and `FurnType`
+### `Container`, `Properties` and the class
 
 The tree has one container kind beside the panel. A **container** is a named, placed node with
 children and typed properties: a cabinet, a hinge of three parts, a facade holding a panel and its
@@ -52,12 +52,17 @@ fields and are not duplicated there. System keys (`component`, `furntype`, `prot
 `prototype.version`, `prototype.parameters`) are written only through validated commands; user keys
 live in their own namespaces. Unknown user properties survive a load.
 
-A **furniture type** is a six-digit code `GG.TT.VV` stored in `furntype`, with `000000` meaning
-unclassified; `GG` is the group, `TT` the type and `VV` the variant of a strict tree. Codes are
-stable and opaque, labels are registry data, and a query matches a prefix: `30` is every facade,
-`20.01.01` is every shelf. Material, finish, dimensions and price are separate properties, never
-encoded in the code. The registry lives in [`docs/domain/furntypes.md`](docs/domain/furntypes.md);
-see [ADR 0035](docs/decisions/0035-furniture-types-form-a-numbered-tree.md).
+A **class** is the semantic identity of an object: a six-digit code `GG.TT.VV` stored in the reserved
+property key (still `furntype` in the code; 0094 renames it to `class`), with `000000` meaning
+unclassified. `GG` is the function family, `TT` the thing inside it and `VV` a variant, **only when
+a rule differs**. The code identifies and the **traits** decide: supply, measure, nesting, extent,
+operations, host, level, opening, mount and fill are what a command, a report and a CNC rule read,
+never a number. The registry's rows live in [`docs/domain/classes.md`](docs/domain/classes.md), with
+the trait semantics and the rules that keep the table alive; the previous registry in
+[`furntypes.md`](docs/domain/furntypes.md) is kept only as history. See
+[ADR 0094](docs/decisions/0094-a-class-registry-gives-the-machine-its-semantics.md) and
+[0104](docs/decisions/0104-supply-names-four-sources.md). Material, finish, dimensions and price are
+separate properties, never encoded in the code.
 
 ### `Geometry` object
 
@@ -105,7 +110,7 @@ A physical fitting: hinge, drawer runner, connector, shelf pin, handle, and so o
 
 ### Queries and reports
 
-Every object can be selected by structural kind, `FurnType` subtree and property predicates. The same query layer feeds the scene-tree filter, selection, reports and, later, CNC rules; a report is a saved query plus a column set and grouping, so a report and a machining program cannot disagree about which panels are shelves. Product dimensions (overall width, shelf pitch, door gap) are typed properties, not a separate dimension object: a prototype script reads them, and the panel sizes it derives stay materialized geometry in the document.
+Every object can be selected by structural kind, a class subtree and property predicates. The same query layer feeds the scene-tree filter, selection, reports and, later, CNC rules; a report is a saved query plus a column set and grouping, so a report and a machining program cannot disagree about which panels are shelves. Product dimensions (overall width, shelf pitch, door gap) are typed properties, not a separate dimension object: a prototype script reads them, and the panel sizes it derives stay materialized geometry in the document.
 
 ### `Material`
 
@@ -131,7 +136,7 @@ Detailed, normative descriptions live in `docs/domain/`:
 - [`geometry.md`](docs/domain/geometry.md) — objects with a baked mesh, parametric primitive or a feature history, evaluation and collapse.
 - [`scene-file.md`](docs/domain/scene-file.md) — the envelope, its versions, what it stores and how it is written.
 - [`furntypes.md`](docs/domain/furntypes.md) — the previous numeric furniture-type registry; superseded by `classes.md` (ADR 0094).
-- [`classes.md`](docs/domain/classes.md) — the semantic class registry: six-digit identity, the trait set that carries behaviour, and the rules that keep it alive.
+- [`classes.md`](docs/domain/classes.md) — the semantic class registry: six-digit identity, the trait set that carries behaviour, the approved rows of the registry and the rules that keep it alive.
 - [`order-export.md`](docs/domain/order-export.md) — the order package: the published, one-way snapshot other programs read for reports, drawings, cutting lists and CNC.
 - [`products.md`](docs/domain/products.md) — the product as the unit of work: the authored envelope, open and closed, the workspace rules and the match to a void.
 

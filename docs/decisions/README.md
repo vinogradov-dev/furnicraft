@@ -108,6 +108,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0101](0101-a-frame-and-a-box-are-one-tool.md) | A frame and a box are one tool: draw the base, pull the height | Accepted; retires the cube primitive |
 | [0102](0102-a-furniture-entity-is-a-surface.md) | A furniture entity is a surface; a frame is a shell | Accepted; amends the probe and collision clauses of 0099 and 0097 |
 | [0103](0103-one-probe-serves-the-niche-the-distances-and-the-move.md) | One probe serves the niche, the distances and the move | Accepted; refines 0099 and 0102 |
+| [0104](0104-supply-names-four-sources.md) | Supply names four sources, and a product is assembled | Accepted; amends the trait list of 0094 |
 
 ## Format
 
