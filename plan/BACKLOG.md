@@ -25,23 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
-  Why: The current translate tool moves anything anywhere, which is right for geometry and
-   wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
-   other. The mount trait exists for exactly this and today has no consumer.
-  Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
-   the floor plane (the vertical is fixed at zero), Wall stays free. Collision follows ADR
-   0102: a body stops at contact with another body and a shell stops at contact with another
-   shell, so no product is half inside another envelope while containment stays legal. Snapping
-   to the floor, to the frame virtual faces of the product and its neighbours, to a
-   neighbouring part face and to the 1 mm grid, with the constraint applied to the preview and
-   one node.placement.set on release, so a drag is one undo entry. The drag reads the probe
-   (ADR 0103) for contact and snap targets; typed distances during the drag arrive with N8.
-  Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
-   product can; a drag that would intersect another product stops at contact; snapping lands on
-   the grid and on a face; one undo restores the whole drag. The frame and the class attributes
-   drive the behaviour without a code literal check.
-  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/project/move_query.rs`
 - `[ ]` **N6** the empty-space tool: a post or a shelf follows the cursor and is created to fit the void
   Why: This is the owner entrance to the whole product idea and, after the wall cabinet, the
    feature the program is built around: the niche is the space the frame reserves, a post is
@@ -227,6 +210,24 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **N5** the furniture move tool: floor-bound or free by class, no interpenetration, with snapping
+  Why: The current translate tool moves anything anywhere, which is right for geometry and
+   wrong for furniture: a floor cabinet must not fly, and two pieces must not pass through each
+   other. The mount trait exists for exactly this and today has no consumer.
+  Shape: A furniture move tool reads mount from the product class: Floor constrains the drag to
+   the floor plane (the vertical is fixed at zero), Wall stays free. Collision follows ADR
+   0102: a body stops at contact with another body and a shell stops at contact with another
+   shell, so no product is half inside another envelope while containment stays legal. Snapping
+   to the floor, to the frame virtual faces of the product and its neighbours, to a
+   neighbouring part face and to the 1 mm grid, with the constraint applied to the preview and
+   one node.placement.set on release, so a drag is one undo entry. The drag reads the probe
+   (ADR 0103) for contact and snap targets; typed distances during the drag arrive with N8.
+  Done: Tests over the pure constraint math: a Floor product cannot change height; a Wall
+   product can; a drag that would intersect another product stops at contact; snapping lands on
+   the grid and on a face; one undo restores the whole drag. The frame and the class attributes
+   drive the behaviour without a code literal check.
+  `files: apps/furnicraft/src/translate_gizmo.rs, apps/furnicraft/src/gizmo_math.rs, crates/model/src/project/move_query.rs` — `1c82740`
 
 - `[x]` **N4** the creation guard: a furniture part is created only inside the open product
   Why: The rule "no furniture part outside an open product" is worth nothing if a palette

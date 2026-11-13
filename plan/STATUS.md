@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=N5 state=doing base=187d42e updated=2026-11-13
+STATE: milestone=M7 phase=T task=N6 state=idle base=1c82740 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-N5 gives furniture its own move tool: a floor-standing product slides on the floor, a wall-hung one
-moves freely, no product passes through another, and the drag snaps to the frame's virtual faces, a
-neighbour's face and the 1 mm grid.
+N6 is the empty-space tool: a post or a shelf follows the cursor and is created to fit the void. The
+model answers probe and niche as pure queries (ADR 0103), and only the open product offers a niche.
 
 ## Index
 
