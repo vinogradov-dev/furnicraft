@@ -37,6 +37,20 @@ pub enum BoxDraftError {
     NoBase,
 }
 
+/// What the three sides of a drawn box become.
+///
+/// One box editor, two owners (ADR 0101): a cuboid primitive stores its three sides as geometry
+/// parameters, and a product frame stores them as the envelope its class reserves (ADR 0097). The
+/// gesture, the grips and the card are one code path; only the command that receives the numbers and
+/// the document field that keeps them differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxOwner {
+    /// A solid box: `object.primitive.create` and `object.primitive.replace`.
+    Cuboid,
+    /// A product's reserved space: `product.create` and `product.envelope.set`.
+    Product,
+}
+
 /// The fixed base rectangle: its minimum corner and its two sides, in work-plane millimetres.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoxBase {

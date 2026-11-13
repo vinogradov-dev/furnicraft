@@ -955,7 +955,8 @@ impl Document {
         }
     }
 
-    /// The single box the grips act on: the selection, when it is exactly one box object.
+    /// The single box the grips act on: the selection, when it is exactly one box — a cuboid
+    /// primitive or a product frame, which own the same three lengths (ADR 0101).
     fn grip_target(&self) -> Option<Id> {
         let selected = self.editor.selected_nodes();
         let [only] = selected else {

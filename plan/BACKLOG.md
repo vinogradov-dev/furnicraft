@@ -25,7 +25,7 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
+- `[~]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
   Why: The owner wants the frame created and edited exactly like the box, not with a separate
    toolkit: the reserved space and the solid are the same three lengths. Without this the frame
    is card-only while the box has grips, and the two owners of a box disagree.
