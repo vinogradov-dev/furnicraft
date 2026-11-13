@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=V2 state=idle base=HEAD updated=2026-11-13
+STATE: milestone=M7 phase=T task=V3 state=idle base=ce8ce93 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,8 +54,9 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-V2 turns the cube into a cuboid: three sizes, a drawn base and a pulled height, edited by corner,
-face and card (ADR 0101).
+V3: the frame joins the box editor — corner and face grips on the envelope and the drawn creation
+gesture, both reaching `product.create`. V2 left the box tool, its ten grips and the draw gesture in
+place; `plan/notes/V2.md` records the decisions, the ten-grip rule and the offscreen shots.
 
 ## Index
 

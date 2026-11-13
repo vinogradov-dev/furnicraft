@@ -25,26 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
-  Why: The only solid primitive is a cube with one size for three edges, which nothing in
-   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
-   height, created the way the extrusion tool already works: draw the base, then pull the
-   height. ADR 0101 makes it the shared box the product frame will use too.
-  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
-   height, each validated by the existing primitive bounds, and the mesh builder derives the
-   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
-   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
-   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
-   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
-   drag on a max face changes one size while a min face changes it and compensates the
-   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
-   golden file in the same change; the schema is bumped with no migration (0096).
-  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
-   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
-   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
-   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
-   messages no longer mention a cube; cargo xtask ci is green.
-  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs`
 - `[ ]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
   Why: The owner wants the frame created and edited exactly like the box, not with a separate
    toolkit: the reserved space and the solid are the same three lengths. Without this the frame
@@ -145,6 +125,27 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
    window opens; the help text names the flags; cargo xtask ci is green.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 ## Done
+
+- `[x]` **V2** the cube becomes a cuboid: drawn base, pulled height, edited by corner, face and card
+  Why: The only solid primitive is a cube with one size for three edges, which nothing in
+   cabinet making uses. The owner asked for a parallelepiped with independent width, depth and
+   height, created the way the extrusion tool already works: draw the base, then pull the
+   height. ADR 0101 makes it the shared box the product frame will use too.
+  Shape: PrimitiveKind::Cube and its single size are deleted; Cuboid carries width, depth and
+   height, each validated by the existing primitive bounds, and the mesh builder derives the
+   six faces from them. The ribbon cube cell becomes the box tool: draw the base rectangle in
+   the active work plane in 1 mm steps, fix it, pull the height with the wireframe-prism
+   preview through the session overlay (ADR 0093), and commit one object.primitive.create. The
+   box anchors at its base min corner, so its local zero is the corner of the rectangle, and a
+   drag on a max face changes one size while a min face changes it and compensates the
+   placement. Cube leaves the message table, the icon set, the scene tree, the fixtures and the
+   golden file in the same change; the schema is bumped with no migration (0096).
+  Done: Tests: a cuboid with three different sizes builds the expected mesh and bounds; the
+   drawn base and pulled height produce exactly the ghost size; a corner grip changes two sizes
+   and a face grip one, each one undo entry; a min-face drag keeps the opposite face still in
+   the world; cylinder and sphere still load and build; the ribbon cell, the icon and the
+   messages no longer mention a cube; cargo xtask ci is green.
+  `files: crates/model/src/primitive.rs, crates/mesh/src/primitive.rs, crates/engine/src/object_cmds.rs, crates/ui/src/toolbars.rs` — `ce8ce93`
 
 - `[x]` **N8** the exact-distance fields: type a distance, lock it, centre it, with the keyboard
   Why: A maker cannot place a post to the millimetre with a mouse, and the same need appears in
