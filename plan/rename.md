@@ -22,9 +22,8 @@ expensive.
 2. **Data identity on disk.** `FORMAT = "furnicraft.scene"` inside every `.fcs`, and the settings
    directory (`~/.config/furnicraft`, `%APPDATA%\FurniCraft`,
    `~/Library/Application Support/FurniCraft`). This is the only part that is a real contract.
-3. **Words on the screen.** Window title, header mark, Home heading, the sample root node name
-   (`"FurniCraft sample"`). Cheap: `theme::PRODUCT_NAME` already exists, it is just not used
-   everywhere.
+3. **Words on the screen.** Window title, header mark, Home heading. Cheap: `theme::PRODUCT_NAME`
+   already exists, it is just not used everywhere.
 
 Everything else — 20 `wgpu` debug labels in `crates/render/src/lib.rs`, `egui::Id` keys in
 `crates/ui/src/icons.rs`, `//!` comments, prose in `docs/` — has no runtime meaning.
@@ -106,8 +105,6 @@ Then remove the hardcoded duplicates:
 - `main.rs`: `.with_title("FurniCraft")` and `"FurniCraft"` as the `run_native` app name → `PRODUCT_NAME`;
   the error string `"FurniCraft requires the wgpu renderer"` → `PRODUCT_NAME`;
   `struct FurniCraftApp` → `App`.
-- `app/src/scene_build.rs:102` — `"FurniCraft sample"` is a document node name the user sees in the
-  tree; take it from `PRODUCT_NAME` or make it a neutral `"Sample"`.
 - `app/src/file_menu.rs` — `"scene.fcs"`, `eq_ignore_ascii_case("fcs")` and the dialog listing take
   `project::EXTENSION`.
 - `app/src/settings_store.rs` — the three platform branches and `join("furnicraft")` go through `APP_ID`.
@@ -213,8 +210,8 @@ cargo xtask plan
 # or: cargo xtask ci
 ```
 
-Then check by hand: the window title, the header mark, the Home heading, the sample root name, the
-settings path, and that `cargo run -p <app>` still opens the editor.
+Then check by hand: the window title, the header mark, the Home heading, the settings path, and that
+`cargo run -p <app>` still opens the editor.
 
 Measured on the scratch copy: 1140 tests, 0 failures, `layers: ok`, clippy clean.
 
