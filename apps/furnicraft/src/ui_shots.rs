@@ -161,7 +161,7 @@ fn render_state() -> Result<egui_wgpu::RenderState, String> {
 fn capture(render_state: &egui_wgpu::RenderState, shot: &Shot, path: &Path) -> Result<Picture, String> {
     let ctx = egui::Context::default();
     let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("workspace.json");
-    let session = crate::scene_build::sample_session()?;
+    let session = crate::scene_build::demo_session()?;
     let settings = shot.settings();
     let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, settings, session)?;
     app.tabs.active_mut().zoom_active_view(1.0 / MODEL_ZOOM);

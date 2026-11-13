@@ -3021,7 +3021,7 @@ mod tests {
     fn the_display_switch_hides_the_corner_widget_without_touching_the_document() {
         // The widget is a view-state drawing, so its switch is one: a press on it draws nothing on
         // the next frame and cannot reach the document (U73).
-        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let session = crate::scene_build::demo_session().expect("the sample scene");
         let revision = session.project().revision();
         let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
         let chrome = Chrome {
@@ -3045,7 +3045,7 @@ mod tests {
 
     #[test]
     fn a_theme_switch_repaints_the_frame_without_touching_the_document() {
-        let session = crate::scene_build::sample_session().expect("the sample scene");
+        let session = crate::scene_build::demo_session().expect("the sample scene");
         let mut cache = EvaluationCache::new();
         let mut kernel = TruckKernel::new();
         let evaluated =

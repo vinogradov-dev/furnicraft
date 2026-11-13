@@ -65,7 +65,7 @@ use furnicraft_ui::{Palette, icons, theme};
 use crate::document::Document;
 use crate::file_menu::{CloseAnswer, ConfirmClose, FileAction, PreservedSections};
 use crate::header::{HeaderAction, HeaderState, TabView};
-use crate::scene_build::{empty_session, sample_session};
+use crate::scene_build::{empty_session, initial_session};
 use crate::settings_store::SettingsStore;
 use crate::shortcuts::take_shortcuts;
 use crate::side_panels::{
@@ -211,7 +211,7 @@ impl FurniCraftApp {
         let (preference, preset, accent) = loaded.settings.install_args();
         theme::install_with(&cc.egui_ctx, preference, preset, accent);
         cc.egui_ctx.set_zoom_factor(ui_scale::factor(loaded.settings.appearance.ui_scale));
-        Self::build(&cc.egui_ctx, Some(render_state), settings_store, loaded, sample_session()?)
+        Self::build(&cc.egui_ctx, Some(render_state), settings_store, loaded, initial_session()?)
     }
 
     /// Builds the application without a window and without a GPU.

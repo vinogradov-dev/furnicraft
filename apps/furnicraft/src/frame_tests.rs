@@ -52,7 +52,7 @@ impl Harness {
     fn new(name: &str) -> Self {
         let path = furnicraft_testkit::scratch_dir(name).join("settings.json");
         let ctx = egui::Context::default();
-        let session = crate::scene_build::sample_session().expect("the sample session builds");
+        let session = crate::scene_build::demo_session().expect("the sample session builds");
         let app = FurniCraftApp::headless(&ctx, path.clone(), Settings::default(), session)
             .expect("the application builds with no device, no adapter and no window");
         Self { ctx, app, path, drawn: Vec::new(), last_scene: None }
