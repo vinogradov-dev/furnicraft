@@ -62,7 +62,14 @@ left-far on its rear edge. `A` never means "up" or "front": it is the face the s
 **The stance is a placement, not document data.** A tool that stands a part composes the stance's
 rotation with the position it measured and passes one `panel.create`. Nothing records which stance the
 panel was born in, a later gizmo turn is free, and a left and a right side panel are one stance at two
-placements.
+placements — nothing is turned to make the second hand, and the first corner is the node's zero in
+both.
+
+**The finished face follows the hand, and the hand is derived.** A post's face `A` points towards
+`−X`, so the post on the maker's right — the smaller `x` in the product's own frame, because the front
+view's screen-right is world `−X` — shows `A` outward and its left-hand twin shows `B`. The ids mean
+the same edge on either hand; a statement about a finished face names the hand, and the hand is read
+from where the board stands in its product rather than stored.
 
 ## Consequences
 
@@ -74,6 +81,12 @@ placements.
   wall need no offset. A tool that stands a part therefore has to know the stance's extrusion
   direction instead of assuming its node is the low corner of the board — which is exactly the
   assumption that made the old post hang from the ceiling.
+- Both hands of a post are the same board, and one of them has its finished face on `A` and the other
+  on `B`: the right post (smaller `x`) is `A` outward, the left post is `B` outward. A parts list, a
+  drawing or a CAM program that says "finish `A`" must therefore name the hand, and can derive it
+  from the placement. No second stance, no mirror and no extra quarter-turn exists for the other
+  hand, so the two posts stay interchangeable in the document and are distinguished only by where
+  they stand.
 - A creation tool has one rule to satisfy instead of one decision to reinvent: a back panel, a facade
   or a drawer front that arrives later derives its placement from the same table.
 - Banding, corner treatments and machining written by id mean the same thing on a shelf, a post and a
