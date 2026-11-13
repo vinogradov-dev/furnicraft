@@ -2,14 +2,13 @@
 
 ```text
 task: P12
-goal: a phase is declared through the plan tool
+goal: a phase can be declared through the plan tool, not by hand-editing the legend
 
 steps:
-  [x] read the legend and the writer
-  [x] the canonical legend, the phase verb and the gate check land with tests
+  [ ] the work landed at 4bb43e5; the owner names the next task — K2, K3, K4 and R1 wait in `## Next`
 
-now: read the legend and the writer
+now: the work landed at 4bb43e5; the owner names the next task — K2, K3, K4 and R1 wait in `## Next`
 blocked: nothing
-run: cargo xtask task phase P12
-resume: read the first `files:` path and its callers
+run: cargo xtask task P12
+resume: read plan/notes/P12.md
 ```
