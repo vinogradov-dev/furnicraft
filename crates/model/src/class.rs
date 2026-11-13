@@ -129,12 +129,14 @@ impl ClassCode {
         self.row().is_some()
     }
 
-    /// Whether a node may carry the code: unclassified, or a registered class.
+    /// Whether a node may carry the code: unclassified, or a registered class that has not been
+    /// withdrawn.
     ///
-    /// A family heading is never assigned, and neither is a code the registry does not know
-    /// (ADR 0094). Assignment checks this; loading keeps an unknown number instead.
+    /// A family heading is never assigned, neither is a code the registry does not know, and a
+    /// retired row still renders but is no longer assignable (ADR 0094). Assignment checks this;
+    /// loading keeps the number instead, even when it is unknown or retired.
     pub fn is_assignable(self) -> bool {
-        self.is_unclassified() || self.row().is_some_and(|row| row.is_class())
+        self.is_unclassified() || self.row().is_some_and(|row| row.is_assignable())
     }
 
     /// The trait set of the class, or `None` for an unclassified code, an unknown code or a family.
@@ -736,12 +738,14 @@ pub struct ClassRow {
     label: Message,
     traits: Option<TraitSet>,
     hosts: &'static [ClassPrefix],
+    aliases: &'static [&'static str],
+    retired: bool,
 }
 
 impl ClassRow {
     /// A family heading: a code, a slug and a label, and no traits.
     pub const fn family(code: u32, slug: &'static str, label: Message) -> Self {
-        Self { code, slug, label, traits: None, hosts: &[] }
+        Self { code, slug, label, traits: None, hosts: &[], aliases: &[], retired: false }
     }
 
     /// One assignable class, with its complete trait set and the classes it may sit in.
@@ -752,7 +756,19 @@ impl ClassRow {
         traits: TraitSet,
         hosts: &'static [ClassPrefix],
     ) -> Self {
-        Self { code, slug, label, traits: Some(traits), hosts }
+        Self { code, slug, label, traits: Some(traits), hosts, aliases: &[], retired: false }
+    }
+
+    /// The same row with search synonyms, which the picker matches but a document never stores.
+    pub const fn with_aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
+    /// The same row withdrawn: it still resolves and renders, but it cannot be assigned again.
+    pub const fn retired(mut self) -> Self {
+        self.retired = true;
+        self
     }
 
     /// The six-digit code.
@@ -780,14 +796,32 @@ impl ClassRow {
         self.hosts
     }
 
+    /// Search synonyms a person may type instead of the label: `shelf` for a horizontal panel.
+    ///
+    /// They are searched, never displayed and never stored in a document: the slug is the stable
+    /// mnemonic, the alias is only a second word for the same class.
+    pub const fn aliases(self) -> &'static [&'static str] {
+        self.aliases
+    }
+
     /// Whether the row is a family heading rather than a class.
     pub const fn is_family(self) -> bool {
         self.traits.is_none()
     }
 
-    /// Whether the row is an assignable class.
+    /// Whether the row is a class rather than a family heading.
     pub const fn is_class(self) -> bool {
         self.traits.is_some()
+    }
+
+    /// Whether the row is withdrawn: still resolvable, no longer assignable.
+    pub const fn is_retired(self) -> bool {
+        self.retired
+    }
+
+    /// Whether a node may carry this row: a class that has not been withdrawn.
+    pub const fn is_assignable(self) -> bool {
+        self.is_class() && !self.retired
     }
 
     /// The parent code, one level up.
@@ -837,7 +871,8 @@ const REGISTRY: &[ClassRow] = &[
             None,
         ),
         &[],
-    ),
+    )
+    .with_aliases(&["dining chair", "office chair", "kitchen chair"]),
     ClassRow::class(
         100_200,
         "stool",
@@ -950,7 +985,8 @@ const REGISTRY: &[ClassRow] = &[
             None,
         ),
         &[],
-    ),
+    )
+    .with_aliases(&["nightstand", "chest", "тумба", "комод"]),
     ClassRow::class(
         300_102,
         "wall-cabinet",
@@ -984,7 +1020,8 @@ const REGISTRY: &[ClassRow] = &[
             None,
         ),
         &[],
-    ),
+    )
+    .with_aliases(&["wardrobe", "гардероб"]),
     ClassRow::class(
         301_000,
         "vertical-panel",
@@ -1001,7 +1038,8 @@ const REGISTRY: &[ClassRow] = &[
             Some(Fill::HeightAndDepth),
         ),
         &[ClassPrefix::of(3001, 4)],
-    ),
+    )
+    .with_aliases(&["side", "side panel", "боковина", "перегородка", "стойка"]),
     ClassRow::class(
         301_100,
         "horizontal-panel",
@@ -1018,7 +1056,8 @@ const REGISTRY: &[ClassRow] = &[
             Some(Fill::WidthAndDepth),
         ),
         &[ClassPrefix::of(3001, 4)],
-    ),
+    )
+    .with_aliases(&["shelf", "bottom", "top", "полка", "полочка", "днище", "крыша"]),
     ClassRow::class(
         301_200,
         "back-panel",
@@ -1052,7 +1091,15 @@ const REGISTRY: &[ClassRow] = &[
             None,
         ),
         &[ClassPrefix::of(3030, 4)],
-    ),
+    )
+    .with_aliases(&[
+        "drawer side",
+        "drawer bottom",
+        "drawer back",
+        "боковина ящика",
+        "дно ящика",
+        "задняя стенка ящика",
+    ]),
     ClassRow::class(
         301_400,
         "glass-shelf",
@@ -1409,7 +1456,8 @@ const REGISTRY: &[ClassRow] = &[
         Message::ClassHandle,
         traits(Level::Fitting, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[ClassPrefix::of(302, 3)],
-    ),
+    )
+    .with_aliases(&["bar", "knob", "profile handle"]),
     ClassRow::class(
         500_500,
         "cam-connector",
@@ -1477,14 +1525,16 @@ const REGISTRY: &[ClassRow] = &[
         Message::ClassSink,
         traits(Level::Component, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[ClassPrefix::of(7001, 4)],
-    ),
+    )
+    .with_aliases(&["inset sink", "under-mount sink", "врезная мойка"]),
     ClassRow::class(
         600_200,
         "hob",
         Message::ClassHob,
         traits(Level::Component, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[ClassPrefix::of(7001, 4)],
-    ),
+    )
+    .with_aliases(&["gas hob", "induction hob", "газовая панель", "индукционная панель"]),
     ClassRow::class(
         600_300,
         "oven",
@@ -1505,21 +1555,24 @@ const REGISTRY: &[ClassRow] = &[
         Message::ClassDishwasher,
         traits(Level::Component, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[ClassPrefix::of(300101, 6)],
-    ),
+    )
+    .with_aliases(&["integrated dishwasher", "free-standing dishwasher"]),
     ClassRow::class(
         600_600,
         "refrigerator",
         Message::ClassRefrigerator,
         traits(Level::Component, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[],
-    ),
+    )
+    .with_aliases(&["integrated refrigerator", "free-standing refrigerator"]),
     ClassRow::class(
         600_700,
         "washer",
         Message::ClassWasher,
         traits(Level::Component, Supply::BuyPiece, Measure::Count, Nesting::Never, Extent::None, &[], None, None, None),
         &[ClassPrefix::of(300101, 6)],
-    ),
+    )
+    .with_aliases(&["integrated washer", "free-standing washer"]),
     // 70 — boards-trim
     ClassRow::family(700_000, "boards-trim", Message::ClassFamilyBoardsTrim),
     ClassRow::class(
@@ -1538,7 +1591,8 @@ const REGISTRY: &[ClassRow] = &[
             None,
         ),
         &[ClassPrefix::of(300101, 6), ClassPrefix::of(300103, 6)],
-    ),
+    )
+    .with_aliases(&["countertop", "postformed worktop"]),
     ClassRow::class(
         700_200,
         "plinth",
@@ -1742,6 +1796,50 @@ mod tests {
         assert!(ClassCode::UNCLASSIFIED.is_assignable());
         assert!(class("30.01.02").is_assignable());
         assert!(!class("30").is_assignable(), "a family heading is never assigned");
+    }
+
+    #[test]
+    fn a_retired_row_still_renders_and_is_not_assignable() {
+        let retired = ClassRow::class(
+            200_100,
+            "bed",
+            Message::ClassBed,
+            traits(
+                Level::Product,
+                Supply::MadeInShop,
+                Measure::Count,
+                Nesting::Never,
+                Extent::Free,
+                &[],
+                None,
+                Some(Mount::Floor),
+                None,
+            ),
+            &[],
+        )
+        .retired();
+        assert!(retired.is_retired());
+        assert!(retired.is_class());
+        assert!(!retired.is_assignable(), "a withdrawn class is never offered again");
+        assert_eq!(retired.label(), Message::ClassBed, "it still renders under its own label");
+        assert!(retired.traits().is_some(), "it still answers its traits");
+        assert!(!ClassRow::family(200_000, "lying", Message::ClassFamilyLying).is_assignable());
+    }
+
+    #[test]
+    fn aliases_are_search_words_and_never_repeat() {
+        for row in registry() {
+            let mut seen = std::collections::HashSet::new();
+            for alias in row.aliases() {
+                assert!(!alias.trim().is_empty(), "{} has an empty alias", row.slug());
+                assert_eq!(alias.trim(), *alias, "{} has an alias with stray space", row.slug());
+                assert!(seen.insert(alias.to_lowercase()), "{} repeats the alias `{alias}`", row.slug());
+            }
+        }
+        let shelf = class("30.11").row().expect("the horizontal panel row");
+        assert!(shelf.aliases().contains(&"shelf"));
+        assert!(shelf.aliases().contains(&"полка"));
+        assert!(shelf.aliases().contains(&"полочка"));
     }
 
     #[test]

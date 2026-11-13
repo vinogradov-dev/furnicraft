@@ -335,7 +335,8 @@ says where the thing comes from.
 Products. The cabinet type is the parent of the three forms and the class for a cabinet whose form is
 not decided yet; the forms are variants because `mount` differs between a wall cabinet and a base one
 (0097 reads it in the move tool) and the report separates them. A wardrobe, a nightstand, a chest and
-a shoe cabinet are these classes with the maker's own name on the node (6.2).
+a shoe cabinet are these classes with the maker's own name on the node (6.2); `wardrobe`, `nightstand`
+and `chest` are search aliases of those rows, never separate classes.
 
 | Code | English / Russian | slug | level | supply | measure | nesting | extent | ops | host | opening | mount | fill |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -362,7 +363,9 @@ written down is still open (§12).
 
 The aliases carry the workshop's own words, which are not classes: `30.10` is «боковина»,
 «перегородка» and «стойка»; `30.11` is «полка», «днище» and «крыша»; `30.13` is a drawer side, bottom
-or back. The glass shelf is the table's one override: glass is bought by area from the glazier, so
+or back. The same rows answer to the English words a person may think in — `side`, `shelf`, `bottom`,
+`top`, `drawer side` — because the picker searches the label, the slug and the aliases in both
+languages. The glass shelf is the table's one override: glass is bought by area from the glazier, so
 `measure` stays area under a `piece` supply, and no sheet is nested.
 
 Components. A front closes an opening, so it carries the gaps and the facade report. A made front is
@@ -438,7 +441,8 @@ The hinge is the worked case. A card hinge and a cup hinge are two types: the fi
 and the second bores a 35 mm cup through a mounting pattern, and the shop buys them as separate
 lines. Overlay, inset and half-overlay are variants because the mounting rule differs; the same hinge
 with a damper is the same class, because a damper is an article property and not a rule. A bar, a
-knob and a profile handle are one class with aliases: no rule differs and the article names the shape.
+knob and a profile handle are one class with the aliases `bar`, `knob` and `profile handle`: no rule
+differs and the article names the shape.
 
 The light profile is the family's exception that proves the axes independent: `level = fitting` puts
 its line with the bought parts, `supply = linear` puts it in the linear cut list, because the shop
@@ -450,7 +454,8 @@ An appliance is bought whole, occupies space and never acquires parts, so it is 
 product: no envelope, no `mount`, and its size comes from the catalogue article. Inset and
 under-mount sinks, gas and induction hobs, integrated and free-standing machines are one class each
 with aliases; when the rule “an integrated appliance takes a facade” lands, that rule earns its
-variant.
+variant. The search reads those words in both languages, so `inset sink`, `under-mount sink`,
+`gas hob`, `induction hob` and the `integrated` / `free-standing` forms all find their own row.
 
 | Code | English / Russian | slug | level | supply | measure | nesting | extent | ops | host | opening | mount | fill |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

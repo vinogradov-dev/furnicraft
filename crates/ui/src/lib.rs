@@ -16,6 +16,7 @@
 )]
 
 mod camera_card;
+mod class_picker;
 mod command;
 pub mod command_bar;
 mod container_card;

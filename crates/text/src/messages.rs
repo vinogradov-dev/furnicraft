@@ -591,13 +591,16 @@ messages! {
     KeyHint = ["key", "ключ"],
     Add = ["Add", "Добавить"],
     Unclassified = ["unclassified", "без классификации"],
-    ClassWith = ["class {}", "класс {}"],
     PropertyKindText = ["Text", "Текст"],
     PropertyKindInteger = ["Integer", "Целое"],
     PropertyKindBool = ["Bool", "Логическое"],
     PropertyKindLength = ["Length", "Длина"],
     PropertyKindAngle = ["Angle", "Угол"],
     PropertyKindClass = ["Class", "Класс"],
+    ClassPickerSearch = ["Search by name, code or alias", "Поиск по названию, коду или синониму"],
+    ClassPickerNoMatch = ["No class matches.", "Нет подходящего класса."],
+    ClassPickerNotInRegistry = ["not in the registry", "нет в реестре"],
+    ClassPickerHint = ["Assign a class from the registry", "Назначить класс из реестра"],
 
     // ── Small shared strings ────────────────────────────────────────────────
     MeshVertexNoun = ["vertex", "вершина"],

@@ -42,6 +42,7 @@ const COLOUR_OWNERS: &[Owner] = &[
 /// Every entry is one floating surface or one band of the window skeleton. A new surface adds a row
 /// here with the surface it draws, so the table is the inventory the reviewer reads, not a waiver.
 const HOST_OWNERS: &[Owner] = &[
+    Owner { path: "crates/ui/src/class_picker.rs", owns: "the class picker popup" },
     Owner { path: "crates/ui/src/command_bar.rs", owns: "the command bar over the viewport" },
     Owner { path: "crates/ui/src/home.rs", owns: "the Home start view" },
     Owner { path: "crates/ui/src/palette.rs", owns: "the command palette" },

@@ -6,6 +6,11 @@
 //! change. Reserved system keys are validated by the model, and a rejected value is shown as an
 //! error instead of being coerced.
 //!
+//! The reserved `class` key is not a text field: the card draws one class row that opens the registry
+//! picker ([`crate::class_picker`]), so a saved project cannot hold a six-digit code the registry
+//! never heard of by accident, and the row says what the digits mean. Choosing a class is still one
+//! `node.property.set`, so one undo returns the previous class.
+//!
 //! A number is the shared field ([ADR 0092]): an integer, a length or an angle is the same 76 px box
 //! with its unit outside it, and one drag or one typing run is one undo entry through the session
 //! edit scope. A length or an angle keeps its number in a draft keyed by the property name, because
@@ -18,10 +23,11 @@ use std::collections::BTreeMap;
 use egui::{RichText, TextEdit, Ui};
 use furnicraft_engine::node_cmds::{NODE_PROPERTY_CLEAR_ID, NODE_PROPERTY_SET_ID};
 use furnicraft_engine::{EditScope, NodePropertyClear, NodePropertySet, Session};
-use furnicraft_model::{ClassCode, Id, PropertyValue};
-use furnicraft_text::Message;
+use furnicraft_model::{ClassCode, Id, PropertyValue, SYSTEM_CLASS, registry};
+use furnicraft_text::{Lang, Message};
 use furnicraft_units::{Degrees, Length};
 
+use crate::class_picker::ClassPicker;
 use crate::command::{dispatch, json};
 use crate::scrub::{self, CommitPolicy, Scrub};
 use crate::section::section;
@@ -53,6 +59,7 @@ fn new_value(kind: usize) -> PropertyValue {
 pub(crate) struct PropertiesCard {
     node: Option<Id>,
     drafts: Drafts,
+    class_picker: ClassPicker,
     new_key: String,
     new_kind: usize,
     error: Option<String>,
@@ -131,6 +138,7 @@ impl PropertiesCard {
         if self.node != Some(node) {
             self.node = Some(node);
             self.drafts = Drafts::default();
+            self.class_picker.close();
             self.new_key.clear();
             self.error = None;
         }
@@ -144,17 +152,36 @@ impl PropertiesCard {
 
         ui.separator();
         let lang = crate::language(ui.ctx());
-        section(ui, "properties", Message::PropertiesTitle.text(lang), true, |ui| {
+        let folded = section(ui, "properties", Message::PropertiesTitle.text(lang), true, |ui| {
             ui.horizontal(|ui| {
                 let status = if is_component { Message::ContainerRoleComponent } else { Message::ContainerRoleGroup };
                 ui.label(RichText::new(status.text(lang)).strong());
-                if let Some(class) = session.project().class(node) {
-                    let text = if class.is_unclassified() {
-                        Message::Unclassified.text(lang).to_owned()
-                    } else {
-                        Message::ClassWith.with(lang, [class])
-                    };
-                    ui.label(text);
+            });
+
+            let current = session.project().class(node).unwrap_or(ClassCode::UNCLASSIFIED);
+            let caption = class_caption(current, lang);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(Message::PropertyKindClass.text(lang)).strong());
+                let response = ui.add(
+                    egui::Button::new(RichText::new(caption.clone()))
+                        .truncate()
+                        .min_size(egui::vec2(ui.available_width(), 22.0)),
+                );
+                let hint = if current.is_unclassified() {
+                    Message::ClassPickerHint.text(lang).to_owned()
+                } else {
+                    caption.clone()
+                };
+                let response = response.on_hover_text(hint);
+                if response.clicked() {
+                    self.class_picker.start();
+                }
+                if let Some(chosen) = self.class_picker.show(ui, &response, current, registry()) {
+                    changes.edits.push(Edit::Set {
+                        key: SYSTEM_CLASS.to_owned(),
+                        value: PropertyValue::class(chosen),
+                        scope: None,
+                    });
                 }
             });
 
@@ -162,6 +189,9 @@ impl PropertiesCard {
                 ui.label(Message::NoProperties.text(lang));
             }
             for (key, value) in properties.iter() {
+                if key == SYSTEM_CLASS {
+                    continue;
+                }
                 edit_row(ui, key, value, &mut self.drafts, fresh, &mut changes);
             }
 
@@ -189,6 +219,9 @@ impl PropertiesCard {
                 }
             });
         });
+        if folded.is_none() {
+            self.class_picker.close();
+        }
 
         for scope in changes.cancelled {
             session.cancel_edit(scope);
@@ -213,6 +246,20 @@ impl PropertiesCard {
 fn valid_new_key(key: &str) -> bool {
     let key = key.trim();
     !key.is_empty() && !key.chars().any(char::is_whitespace)
+}
+
+/// What the class row shows: the label and the code, or the explicit unclassified word.
+///
+/// A code the registry does not know still renders as digits and says so, because a file may carry
+/// a number from a newer build; the registry is the assigner, not the loader (ADR 0094).
+fn class_caption(class: ClassCode, lang: Lang) -> String {
+    if class.is_unclassified() {
+        return Message::Unclassified.text(lang).to_owned();
+    }
+    match class.row() {
+        Some(row) => format!("{}   {class}", row.label().text(lang)),
+        None => format!("{class} — {}", Message::ClassPickerNotInRegistry.text(lang)),
+    }
 }
 
 fn apply(session: &mut Session, node: Id, edit: Edit) -> Result<(), String> {
@@ -476,6 +523,47 @@ mod tests {
             walk(&clipped.shape, &mut out);
         }
         out
+    }
+
+    #[test]
+    fn choosing_a_class_is_one_undoable_change() {
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let drawer = Id::new(3).expect("drawer id");
+        let mut card = PropertiesCard::default();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        crate::set_language(&ctx, Lang::En);
+        let screen = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        // The first frame selects the node, and a node change closes the picker.
+        let output = ctx.run_ui(screen(), |ui| card.show(ui, &mut session, drawer));
+        output.drop_without_applying_deltas();
+        card.class_picker.start();
+
+        let frames = [
+            Vec::new(),
+            vec![egui::Event::Text("shelf".to_owned())],
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ];
+        for events in frames {
+            let input = egui::RawInput { events, ..screen() };
+            let output = ctx.run_ui(input, |ui| card.show(ui, &mut session, drawer));
+            output.drop_without_applying_deltas();
+        }
+
+        let shelf: ClassCode = "30.11".parse().expect("the horizontal panel code");
+        assert_eq!(session.project().class(drawer), Some(shelf), "Enter takes the first match the search leaves");
+        session.undo().expect("one undo returns the previous class");
+        assert_eq!(session.project().class(drawer), Some(ClassCode::UNCLASSIFIED));
+        assert!(!session.can_undo(), "the assignment was exactly one undo entry");
     }
 
     #[test]

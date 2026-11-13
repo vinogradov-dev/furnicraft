@@ -136,19 +136,26 @@ pub(crate) fn show(
     actions
 }
 
-fn container_label(ui: &Ui, project: &Project, container: &Container) -> RichText {
+fn container_label(ui: &Ui, project: &Project, container: &Container) -> (RichText, Option<String>) {
     let name = container.name();
     if container.id() == project.root().id() {
-        return RichText::new(name).strong();
+        return (RichText::new(name).strong(), None);
     }
     if !container.is_component() {
-        return RichText::new(name);
+        return (RichText::new(name), None);
     }
-    let badge = match project.class(container.id()) {
-        Some(class) if !class.is_unclassified() => class.to_string(),
-        _ => Message::TreeBadgeComponent.text(crate::language(ui.ctx())).to_owned(),
+    let lang = crate::language(ui.ctx());
+    let (badge, tooltip) = match project.class(container.id()) {
+        Some(class) if !class.is_unclassified() => {
+            let code = class.to_string();
+            // The row says what the digits mean; the code stays one hover away, because the digits
+            // are what an export and a conversation with the shop use.
+            let label = class.label().map(|label| label.text(lang)).unwrap_or(&code);
+            (label.to_owned(), Some(code))
+        }
+        _ => (Message::TreeBadgeComponent.text(lang).to_owned(), None),
     };
-    RichText::new(format!("{name}  [{badge}]"))
+    (RichText::new(format!("{name}  [{badge}]")), tooltip)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -169,19 +176,23 @@ fn show_container(
     let state = CollapsingState::load_with_default_open(ui.ctx(), state_id, depth < 2);
     let label = container_label(ui, project, container);
     let (_toggle, header, _) =
-        state.show_header(ui, |ui| row(ui, id, label, selection.contains(id), flags, !is_root)).body(|ui| {
+        state.show_header(ui, |ui| row(ui, id, label.0, selection.contains(id), flags, !is_root)).body(|ui| {
             for child in container.children() {
                 show_node(ui, project, child, selection, flags, actions, group, depth.saturating_add(1));
             }
         });
-    if header.inner.clicked() {
+    let mut header = header.inner;
+    if let Some(tooltip) = label.1 {
+        header = header.on_hover_text(tooltip);
+    }
+    if header.clicked() {
         select(ui, selection, id);
     }
     // The row drew its own toggles a moment ago, so the menu captions read the flags as they are
     // now instead of a copy taken before the row.
     let hidden = flags.is_hidden(id);
     let locked = flags.is_locked(id);
-    header.inner.context_menu(|ui| {
+    header.context_menu(|ui| {
         container_menu(ui, id, is_root, is_component, hidden, locked, group, actions);
     });
 }
@@ -653,6 +664,32 @@ mod tests {
         let (locked, locked_images) = draw(&session, &mut flags);
         assert!(!locked.iter().any(|text| text == "Unlock"), "the padlock is a glyph, not a caption: {locked:?}");
         assert_eq!(locked_images, 1, "a locked row keeps its padlock");
+    }
+
+    #[test]
+    fn a_component_badge_shows_the_class_label_instead_of_its_digits() {
+        use furnicraft_engine::NodePropertySet;
+        use furnicraft_engine::node_cmds::NODE_PROPERTY_SET_ID;
+        use furnicraft_model::{PropertyValue, SYSTEM_CLASS};
+
+        let mut session = Session::with_catalog(sample_project(), sample_catalog());
+        let drawer = Id::new(3).expect("drawer id");
+        let (before, _) = draw(&session, &mut ViewFlags::default());
+        assert!(before.iter().any(|text| text == "Drawer  [component]"), "a bare component says so: {before:?}");
+
+        let params = crate::command::json(&NodePropertySet {
+            node: drawer,
+            key: SYSTEM_CLASS.to_owned(),
+            value: PropertyValue::class("30.01.01".parse().expect("base cabinet")),
+        })
+        .expect("class parameters");
+        session.dispatch(NODE_PROPERTY_SET_ID, &params).expect("assign the class");
+
+        let (after, _) = draw(&session, &mut ViewFlags::default());
+        assert!(
+            after.iter().any(|text| text == "Drawer  [Base cabinet]"),
+            "the badge names the class and keeps the code for the tooltip: {after:?}"
+        );
     }
 
     #[test]
