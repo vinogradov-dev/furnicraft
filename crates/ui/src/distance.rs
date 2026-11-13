@@ -129,6 +129,14 @@ impl Distances {
         if !(low.is_finite() && high.is_finite()) || high <= low {
             return;
         }
+        // A pin belongs to the void it was typed in: a face outside the new walls would draw a
+        // distance that cannot be taken, so it is dropped instead of kept.
+        let outside = |face: f64| wall_low.is_some_and(|wall| face < wall) || wall_high.is_some_and(|wall| face > wall);
+        if self.pins.iter().flatten().any(|face| outside(*face)) {
+            self.pins = [None; 2];
+            self.locks = [false; 2];
+            self.active = None;
+        }
         self.wall_low = wall_low;
         self.wall_high = wall_high;
         // A pinned face is where the typed number put it, and the opposite face follows the
@@ -263,10 +271,6 @@ impl Distances {
         }
         if !value.is_finite() || value < 0.0 {
             return Err(DistanceRefusal::OutOfVoid);
-        }
-        if self.locked(side) {
-            // The face the number would move is fixed by the maker's own Enter.
-            return Err(DistanceRefusal::WouldResize);
         }
         if self.locks[side.opposite().index()] {
             // The field is a span from the locked face: taking it would change the extent.
@@ -548,6 +552,11 @@ impl DistanceFields {
             self.suspended = false;
         }
         if escape && state.is_active() {
+            // The field keeps egui's focus on Escape; surrender it here so the key reaches the
+            // tool on the next press instead of being swallowed by a field with no owner.
+            if let Some(id) = self.focused_id.take() {
+                ui.ctx().memory_mut(|memory| memory.surrender_focus(id));
+            }
             state.cancel();
             self.focus = None;
             self.error = None;
@@ -662,6 +671,27 @@ mod tests {
         );
         assert_eq!(state.low(), 100.0);
         assert_eq!(state.high(), 118.0);
+    }
+
+    #[test]
+    fn a_locked_distance_can_be_stated_again() {
+        let mut state = distances();
+        state.lock(Side::Low).expect("the face has a neighbour");
+        state.place(Side::Low, 200.0).expect("the locked face takes a new number");
+        assert_eq!(state.low(), 200.0);
+        assert_eq!(state.high(), 218.0, "the extent travels with the face");
+        assert!(state.locked(Side::Low), "the statement stays locked");
+        assert_eq!(state.pinned_low(), Some(200.0));
+    }
+
+    #[test]
+    fn a_pin_outside_a_new_void_is_dropped() {
+        let mut state = distances();
+        state.place(Side::Low, 550.0).expect("the part fits the first void");
+        state.sync(Some(600.0), Some(1200.0), 700.0, 718.0);
+        assert_eq!(state.pinned_low(), None, "the pinned face is outside the new walls");
+        assert_eq!(state.low(), 700.0);
+        assert_eq!(state.high(), 718.0);
     }
 
     #[test]
