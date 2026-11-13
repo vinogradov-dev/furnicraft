@@ -25,20 +25,6 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[ ]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
-  Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
-   today it edits a raw GG.TT.VV text field, so a saved project can hold a code the registry
-   never heard of, and nothing shows a user what the digits mean.
-  Shape: A picker per the ui-design skill: one search field over label, slug and alias, the
-   tree group to type to variant, retired rows hidden, an explicit unclassified row, and the
-   current class marked. The scene-tree badge shows the label with the code in the tooltip; the
-   property card shows a class row instead of a text edit. No new command: assignment stays
-   node.property.set with the reserved key.
-  Done: A click assigns a class and one undo entry restores the previous one; searching полка,
-   shelf and the alias finds the same row; a retired class cannot be assigned but still
-   renders; the picker state is tested through an egui context and the result is checked
-   offscreen.
-  `files: crates/ui/src/properties_card.rs, crates/ui/src/scene_tree.rs`
 - `[ ]` **T4** class traits gate the editor: what the class forbids, the command and the gizmo refuse
   Why: Traits only matter if the program refuses what the class forbids. Without this the class
    table is documentation: a worktop still stretches across its width, a hinge still offers
@@ -331,6 +317,21 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: apps/furnicraft/src/main.rs, apps/furnicraft/Cargo.toml`
 
 ## Done
+
+- `[x]` **T3** the inspector assigns a class from the registry tree instead of typing six digits
+  Why: docs/domain/classes.md §6 says the inspector assigns a class from the registry tree;
+   today it edits a raw GG.TT.VV text field, so a saved project can hold a code the registry
+   never heard of, and nothing shows a user what the digits mean.
+  Shape: A picker per the ui-design skill: one search field over label, slug and alias, the
+   tree group to type to variant, retired rows hidden, an explicit unclassified row, and the
+   current class marked. The scene-tree badge shows the label with the code in the tooltip; the
+   property card shows a class row instead of a text edit. No new command: assignment stays
+   node.property.set with the reserved key.
+  Done: A click assigns a class and one undo entry restores the previous one; searching полка,
+   shelf and the alias finds the same row; a retired class cannot be assigned but still
+   renders; the picker state is tested through an egui context and the result is checked
+   offscreen.
+  `files: crates/ui/src/properties_card.rs, crates/ui/src/scene_tree.rs` — `fcc5041`
 
 - `[x]` **T2** the class registry is data in the model, and the program can see what it is looking at
   Why: Today the model validates the shape of a code (group non-zero, a variant needs a type)

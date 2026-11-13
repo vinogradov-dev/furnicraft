@@ -1,6 +1,6 @@
 # Status
 
-STATE: milestone=M7 phase=T task=T3 state=idle base=de739a0 updated=2026-11-13
+STATE: milestone=M7 phase=T task=T4 state=idle base=fcc5041 updated=2026-11-13
 
 Read this file first; the two commands print the state and one task, `AGENTS.md` §1.1 orders a broken plan.
 
@@ -54,9 +54,8 @@ Read this file first; the two commands print the state and one task, `AGENTS.md`
 
 ## Next
 
-T3 draws the class picker: a search over the registry's labels, slugs and aliases, the tree from
-family to type to variant with an unclassified row, and the class label on the scene-tree badge.
-Assignment stays one `node.property.set`.
+T4 gates the editor on the class traits: a worktop resizes by its length only, a hinge offers no
+resize or banding, a fitting never nests, and mounting checks the host.
 
 ## Index
 
