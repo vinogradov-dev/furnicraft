@@ -334,7 +334,7 @@ icons!(Contour, "contour", Draw, contour {
 });
 
 icons!(Primitives, "primitives", Model, primitives {
-    CUBE => "cube",
+    CUBOID => "cuboid",
     CYLINDER => "cylinder",
     SPHERE => "sphere",
     CONE => "cone",

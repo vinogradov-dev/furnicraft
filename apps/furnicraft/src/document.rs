@@ -37,11 +37,12 @@ use furnicraft_scene::{
 use furnicraft_text::Lang;
 use furnicraft_ui::settings::{Settings, ViewportSettings};
 use furnicraft_ui::{
-    CommandBar, CommandBarAction, ContourGrip, DistanceFields, DistanceOutcome, Distances, DrawDraft, Editor,
+    BoxDraft, CommandBar, CommandBarAction, ContourGrip, DistanceFields, DistanceOutcome, Distances, DrawDraft, Editor,
     FieldPlacement, GripValue, MeshElement, Message, PaletteContext, Side, ViewFlags, command_bar,
 };
 use furnicraft_units::Length;
 
+use crate::box_gizmo::{self, BoxEvent, BoxGrips, GripUpdate};
 use crate::contour_gizmo;
 use crate::contour_gizmo::ContourGizmo;
 use crate::draw_gizmo::{DrawAction, DrawGizmo, DrawModifiers};
@@ -295,6 +296,8 @@ pub(crate) struct Document {
     pub(crate) extrude_gizmo: ExtrudeGizmo,
     /// The empty-space tool's ghost; armed by the ribbon, it follows the pointer and creates a part.
     pub(crate) fill_gizmo: FillGizmo,
+    /// The grips of the selected box: four base corners and six faces, one drag each.
+    pub(crate) box_grips: BoxGrips,
     /// The exact-distance fields of the running fill gesture: their pins, locks and keyboard.
     pub(crate) distance_fields: DistanceFields,
     /// The measurement the fields draw, rebuilt from the ghost every frame (ADR 0103).
@@ -380,6 +383,7 @@ impl Document {
             draw_gizmo: DrawGizmo::new(),
             extrude_gizmo: ExtrudeGizmo::default(),
             fill_gizmo: FillGizmo::default(),
+            box_grips: BoxGrips::default(),
             distance_fields: DistanceFields::default(),
             distances: None,
             distance_rects: Vec::new(),
@@ -512,6 +516,12 @@ impl Document {
     /// Draws the inspector's body.
     pub(crate) fn show_card(&mut self, ui: &mut egui::Ui) {
         self.editor.show_card(ui, &mut self.session);
+    }
+
+    /// Whether the command bar drew last frame, for the shot that looks at it.
+    #[cfg(test)]
+    pub(crate) fn command_bar_is_up(&self) -> bool {
+        self.command_bar_rect.is_some()
     }
 
     /// Takes back one command and reports a refusal in the status bar.
@@ -945,6 +955,112 @@ impl Document {
         }
     }
 
+    /// The single box the grips act on: the selection, when it is exactly one box object.
+    fn grip_target(&self) -> Option<Id> {
+        let selected = self.editor.selected_nodes();
+        let [only] = selected else {
+            return None;
+        };
+        crate::box_gizmo::is_box(self.session.project(), *only).then_some(*only)
+    }
+
+    /// Reads one frame of the box gesture: the live base, the pulled height, and the click that
+    /// anchors it, fixes it or accepts it.
+    ///
+    /// A click that fixes the base starts the pull; every frame of the pull reads the pointer along
+    /// the plane's normal, so the height is a number of millimetres rather than a screen distance.
+    /// The last click, or the command bar's ✓, is the one command the gesture writes (ADR 0101).
+    fn update_box(&mut self, ui: &mut egui::Ui, response: &egui::Response, rect: egui::Rect) {
+        let plane = WorkPlane::from_camera(self.scene.camera);
+        let Some(draft) = self.editor.box_draft().copied() else {
+            return;
+        };
+        let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos());
+        if draft.is_pulling() {
+            if let (Some(pointer), Some(base)) = (pointer, draft.base())
+                && let Some(height) = box_gizmo::pulled_height(self.scene.camera, rect, plane, base.corner, pointer)
+                && let Err(error) = self.editor.pull_box_height(height)
+            {
+                self.last_error = Some(error.to_string());
+            }
+        } else if let Some(pointer) = pointer
+            && let Some(corner) = box_gizmo::plane_point(self.scene.camera, rect, plane, pointer)
+        {
+            self.editor.set_box_corner(corner);
+        }
+        match box_gizmo::update_box(ui, response, rect, self.scene.camera, plane, &draft) {
+            Some(BoxEvent::Click(corner)) => {
+                if let Err(error) = self.editor.click_box(corner) {
+                    self.last_error = Some(error.to_string());
+                }
+            }
+            Some(BoxEvent::Commit) => {
+                if let Err(error) = self.finish_box() {
+                    self.last_error = Some(error);
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Reads one frame of the box grips and writes the sides they reach.
+    ///
+    /// One press mints the edit scope and every move writes through it, so a whole drag is one undo
+    /// entry; the release ends the gesture and writes nothing more (ADR 0092).
+    fn update_box_grips(&mut self, ui: &mut egui::Ui, response: &egui::Response, rect: egui::Rect) {
+        let Some(object) = self.grip_target() else {
+            return;
+        };
+        let update = self.box_grips.update(
+            ui,
+            rect,
+            self.scene.camera,
+            self.session.project(),
+            Some(object),
+            response.hover_pos(),
+        );
+        match update {
+            GripUpdate::Press(grip) => {
+                let scope = self.session.edit_scope();
+                self.box_grips.begin(object, grip, scope);
+            }
+            GripUpdate::Edit(edit) => {
+                let Some(scope) = self.box_grips.scope() else {
+                    return;
+                };
+                match box_gizmo::apply_grip_edit(&mut self.session, edit, scope) {
+                    Ok(()) => {
+                        if let Err(error) = self.refresh() {
+                            self.last_error = Some(error);
+                        }
+                    }
+                    Err(error) => self.last_error = Some(error),
+                }
+            }
+            GripUpdate::Idle => {}
+        }
+    }
+
+    /// Commits the box the pull shows; idempotent, because the committed gesture leaves no draft.
+    pub(crate) fn finish_box(&mut self) -> Result<(), String> {
+        let plane = WorkPlane::from_camera(self.scene.camera);
+        box_gizmo::commit_box(&mut self.session, &mut self.editor, plane)?;
+        self.refresh()
+    }
+
+    /// Drops the box gesture and, with it, a grip drag; the document keeps what its last command
+    /// wrote unless the drag had not ended, in which case its edit is rolled back.
+    pub(crate) fn cancel_box(&mut self) {
+        if let Some(scope) = self.box_grips.scope()
+            && self.session.cancel_edit(scope)
+            && let Err(error) = self.refresh()
+        {
+            self.last_error = Some(error);
+        }
+        self.box_grips.end();
+        self.editor.cancel_box();
+    }
+
     /// Measures the void under the pointer and keeps the ghost the next click would create.
     ///
     /// The model answers the measurement; the shell only maps the pointer to the face of the open
@@ -1204,6 +1320,10 @@ impl Document {
     /// field's range or cannot be parsed is refused by the field itself, so the preview keeps the
     /// last height the document could hold.
     fn show_command_bar(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, opacity: u32) {
+        if self.editor.box_draft().is_some_and(BoxDraft::is_pulling) {
+            self.show_box_bar(ui, viewport, opacity);
+            return;
+        }
         let Some(object) = self.extrude_gizmo.object() else {
             self.command_bar_rect = None;
             return;
@@ -1247,6 +1367,49 @@ impl Document {
                 }
             }
             Some(CommandBarAction::Cancel) => self.cancel_extrude(),
+            None => {}
+        }
+    }
+
+    /// Draws the box height's command bar: its field pulls the ghost, ✓ commits the one command.
+    ///
+    /// The bar is the typed twin of the pointer pull (ADR 0101): a maker who knows the height types
+    /// it, and the ghost the field drives is the box the ✓ creates.
+    fn show_box_bar(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, opacity: u32) {
+        let Some(height) = self.editor.box_draft().map(BoxDraft::height).filter(|height| height.is_positive()) else {
+            self.command_bar_rect = None;
+            return;
+        };
+        let mut millimetres = height.millimetres_f64();
+        let maximum = box_gizmo::MAX_SIDE_MM as f64;
+        let outcome = command_bar::show(
+            ui,
+            viewport,
+            CommandBar {
+                label: Message::BoxHeight,
+                value: &mut millimetres,
+                unit: "mm",
+                range: box_gizmo::MIN_SIDE_MM as f64..=maximum,
+                decimals: 3,
+                focus: false,
+            },
+            opacity,
+        );
+        self.command_bar_rect = Some(outcome.rect);
+        let whole = millimetres.round();
+        if let Some(next) = Length::from_millimetres(whole as i64)
+            && next != height
+            && let Err(error) = self.editor.pull_box_height(next)
+        {
+            self.last_error = Some(error.to_string());
+        }
+        match outcome.action {
+            Some(CommandBarAction::Apply) => {
+                if let Err(error) = self.finish_box() {
+                    self.last_error = Some(error);
+                }
+            }
+            Some(CommandBarAction::Cancel) => self.cancel_box(),
             None => {}
         }
     }
@@ -1441,6 +1604,7 @@ impl Document {
         // the user drags it over a panel, so releasing there still commits the move.
         let capturing = self.translate_gizmo.is_dragging()
             || self.rotate_gizmo.is_dragging()
+            || self.box_grips.is_dragging()
             || self.vertex_gizmo.is_dragging()
             || self.contour_gizmo.is_dragging()
             || self.extrude_gizmo.is_dragging()
@@ -1451,8 +1615,11 @@ impl Document {
         // A drawing tool owns it too: the left button places points, not selections. A click on the
         // chrome is never a point, so the tool waits for a click on the scene.
         let drawing = interactive && !pointer_on_chrome && self.editor.drawing().is_some();
-        // An armed primitive owns the next click: it places a cube, it does not select.
+        // An armed primitive owns the next click: it places a cylinder or a sphere, it does not
+        // select. The box tool owns a whole gesture instead: two clicks for the base, one for the
+        // height (ADR 0101).
         let placing = interactive && !pointer_on_chrome && self.editor.pending_primitive().is_some();
+        let boxing = interactive && !pointer_on_chrome && self.editor.box_draft().is_some();
         // The pull arrow is the live gesture after an extrusion. A contour edit, a draft, a
         // placement or a sub-object mode takes the pointer from it, so the arrow never competes
         // with a grip, a point or a cube for the same click.
@@ -1460,6 +1627,7 @@ impl Document {
             && (contour_editing
                 || drawing
                 || placing
+                || boxing
                 || self.editor.mesh_edit().is_some()
                 || self.editor.fill_arm().is_some())
         {
@@ -1477,7 +1645,8 @@ impl Document {
         // An armed navigation gesture owns a primary-button drag, but not the other tools: while a
         // contour edit, a draft or a sub-object mode is live, that mode keeps the pointer.
         let navigation = shell.cluster.navigation;
-        let navigating = navigation.is_some() && !contour_editing && !drawing && !placing && !pulling && !filling;
+        let navigating =
+            navigation.is_some() && !contour_editing && !drawing && !placing && !boxing && !pulling && !filling;
         let mesh_object = if !interactive || contour_editing || drawing || placing || pulling || filling {
             None
         } else {
@@ -1623,6 +1792,26 @@ impl Document {
             }
         }
 
+        if boxing {
+            self.update_box(ui, &response, rect);
+        }
+
+        // A grip drag resizes a selected box in place: a press mints the edit scope that makes the
+        // whole drag one undo entry, and every move writes the sides the pointer reaches (ADR 0092).
+        let gripping = interactive
+            && !contour_editing
+            && !drawing
+            && !placing
+            && !boxing
+            && !pulling
+            && !filling
+            && self.grip_target().is_some();
+        if gripping {
+            self.update_box_grips(ui, &response, rect);
+        } else if !self.box_grips.is_dragging() {
+            self.box_grips = BoxGrips::default();
+        }
+
         if filling {
             self.update_fill(ui, &response, rect, fill_arm, opacity);
             if response.clicked_by(egui::PointerButton::Primary)
@@ -1657,8 +1846,10 @@ impl Document {
             || contour_editing
             || drawing
             || placing
+            || boxing
             || pulling
             || filling
+            || self.box_grips.is_dragging()
             || navigating
             || mesh_object.is_some()
             || locked_selection.is_some()
@@ -1702,16 +1893,17 @@ impl Document {
         } else {
             self.translate_gizmo.is_dragging() || self.rotate_gizmo.is_dragging()
         };
-        let consumed_click = if contour_editing || drawing || placing || pulling || filling {
-            true
-        } else if mesh_object.is_some() {
-            self.vertex_gizmo.consumed_click()
-        } else {
-            match shell.mode {
-                TransformMode::Move => self.translate_gizmo.consumed_click(),
-                TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
-            }
-        };
+        let consumed_click =
+            if contour_editing || drawing || placing || boxing || pulling || filling || self.box_grips.is_dragging() {
+                true
+            } else if mesh_object.is_some() {
+                self.vertex_gizmo.consumed_click()
+            } else {
+                match shell.mode {
+                    TransformMode::Move => self.translate_gizmo.consumed_click(),
+                    TransformMode::Rotate => self.rotate_gizmo.consumed_click(),
+                }
+            };
 
         // Looking through an authored camera pins the view: navigation would move a camera the
         // document owns, and a command is the only way to edit document data. The gesture acts on
@@ -1793,8 +1985,8 @@ impl Document {
             ui.ctx().set_cursor_icon(self.draw_gizmo.cursor());
         } else if pulling {
             ui.ctx().set_cursor_icon(self.extrude_gizmo.cursor());
-        } else if placing || filling {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+        } else if placing || boxing || filling {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         } else if navigating {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         } else if dragging || response.dragged() {
@@ -1818,6 +2010,7 @@ impl Document {
         if !contour_editing
             && !drawing
             && !placing
+            && !boxing
             && !pulling
             && clicked
             && !pointer_over_gizmo
@@ -1997,6 +2190,9 @@ impl Document {
             }
         } else if let Some(draft) = self.editor.drawing() {
             self.draw_gizmo.paint(ui, rect, self.scene.camera, draft);
+        } else if let Some(draft) = self.editor.box_draft().copied() {
+            let plane = WorkPlane::from_camera(self.scene.camera);
+            box_gizmo::paint_box(ui, rect, self.scene.camera, plane, response.hover_pos(), &draft);
         } else if let Some(object) = mesh_object {
             let target = vertex_gizmo::MeshTarget {
                 camera: self.scene.camera,
@@ -2014,6 +2210,9 @@ impl Document {
             // axis under the pointer would compete with the camera drag, and a locked node draws no
             // handles because the drag it would start is refused.
         } else {
+            // A box shows its grips instead of nothing: the faces and the base corners are the
+            // three-side editor, and the placement handles still act beside them.
+            self.box_grips.paint(ui, rect, self.scene.camera, self.session.project(), self.grip_target());
             match shell.mode {
                 TransformMode::Move => self.translate_gizmo.paint(ui, rect, paint_target),
                 TransformMode::Rotate => self.rotate_gizmo.paint(ui, rect, paint_target),
@@ -2046,7 +2245,12 @@ impl Document {
         // The cluster floats over the drawn viewport, so it is the last thing painted inside it. A
         // command bar takes the bottom-centre slot while a previewing operation runs, so the
         // cluster moves up by the bar's height and the two never overlap.
-        let bar_offset = if self.extrude_gizmo.is_active() { command_bar::BAR_HEIGHT + 6.0 } else { 0.0 };
+        let bar_offset = if self.extrude_gizmo.is_active() || self.editor.box_draft().is_some_and(BoxDraft::is_pulling)
+        {
+            command_bar::BAR_HEIGHT + 6.0
+        } else {
+            0.0
+        };
         let view = ClusterView {
             owns_view: viewport_owns_view(self.session.project()),
             projection: self.scene.camera.projection(),
@@ -2359,6 +2563,18 @@ impl Document {
         } else if self.editor.pending_primitive().is_some() {
             if escape && !ui.ctx().text_edit_focused() {
                 self.editor.cancel_primitive();
+            }
+        } else if self.editor.box_draft().is_some() || self.box_grips.is_dragging() {
+            // Escape drops the base, the pull or the grip drag; the grip's edit scope is rolled
+            // back, so a cancelled resize leaves no trace at all.
+            if escape {
+                self.cancel_box();
+            } else if enter
+                && !ui.ctx().text_edit_focused()
+                && self.editor.box_draft().is_some_and(BoxDraft::is_pulling)
+                && let Err(error) = self.finish_box()
+            {
+                self.last_error = Some(error);
             }
         } else if self.extrude_gizmo.is_active() {
             // Escape drops the pull and its preview whatever has the focus: the field's text is part

@@ -383,6 +383,184 @@ fn the_interface_renders_offscreen_to_one_png_per_cell() {
     );
 }
 
+/// Draws the box tool's base rectangle and pulled height into one picture.
+///
+/// The gesture is driven through the real shell with pointer events, so the shot proves the whole
+/// path — the plane mapping, the wireframe prism, the live size and the grips — not only the shape
+/// the editor holds. Escape drops the draft afterwards: the shot writes no scene.
+#[test]
+#[ignore = "needs a GPU adapter; writes target/ui-shots/box-tool.png"]
+fn the_box_tool_gesture_is_painted_offscreen() {
+    let render_state = match render_state() {
+        Ok(render_state) => render_state,
+        Err(reason) => {
+            println!("{reason}");
+            return;
+        }
+    };
+    let ctx = egui::Context::default();
+    let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("box-workspace.json");
+    let session = furnicraft_engine::Session::with_catalog(
+        furnicraft_testkit::sample_project(),
+        furnicraft_testkit::sample_catalog(),
+    );
+    let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
+        .expect("the application builds");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
+    let _ = settle(&mut app, &ctx, &render_state, screen);
+
+    // Two points on the work plane, and the height the pointer pulls above the base.
+    let corners = {
+        let document = app.tabs.active_mut();
+        document.editor.arm_box();
+        let rect = document.scene_rect().expect("the settled frame gives the scene a rectangle");
+        let camera = document.camera();
+        let project = document.session.project();
+        let _ = project;
+        let corner = |x: f64, y: f64, z: f64| {
+            crate::gizmo_math::screen_point(camera, rect, furnicraft_geom::DVec3::new(x, y, z))
+                .expect("the work plane is on screen")
+        };
+        // The pull follows the normal through the base corner, which is where a maker drags it.
+        let anchor = corner(-300.0, -200.0, 0.0);
+        let pull = egui::Pos2::new(anchor.x, anchor.y - 140.0);
+        (anchor, corner(300.0, 200.0, 0.0), pull)
+    };
+    let click = |pointer: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos: pointer,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frames = vec![
+        vec![egui::Event::PointerMoved(corners.0), click(corners.0, true), click(corners.0, false)],
+        vec![egui::Event::PointerMoved(corners.1)],
+        vec![click(corners.1, true), click(corners.1, false)],
+        vec![egui::Event::PointerMoved(corners.2)],
+        // One more frame at the same pointer: the bar's area lays itself out on the frame it
+        // appears, so the picture is taken once it has.
+        vec![egui::Event::PointerMoved(corners.2)],
+    ];
+    let mut jobs = Vec::new();
+    for events in frames {
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+            app.frame(ui);
+        });
+        let mut delta = std::mem::take(&mut output.textures_delta);
+        {
+            let mut renderer = render_state.renderer.write();
+            for (id, images) in &delta.set {
+                for image in images {
+                    renderer.update_texture(&render_state.device, &render_state.queue, *id, image);
+                }
+            }
+            for id in &delta.free {
+                renderer.free_texture(id);
+            }
+        }
+        delta.clear();
+        jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+    {
+        let document = app.tabs.active_mut();
+        let draft = document.editor.box_draft().copied().expect("the gesture is pulling its height");
+        assert!(draft.is_pulling() && draft.height().is_positive(), "the height follows the pointer");
+        assert!(document.command_bar_is_up(), "the height pull draws its command bar: {draft:?}");
+    }
+    let pixels_per_point = ctx.pixels_per_point();
+    let size =
+        [(WINDOW.x * pixels_per_point).round().max(1.0) as u32, (WINDOW.y * pixels_per_point).round().max(1.0) as u32];
+    let rgba = paint(&render_state, &jobs, size, pixels_per_point).expect("the frame paints");
+    let directory = furnicraft_testkit::ui_shots_dir().expect("the shots directory is created");
+    let path = directory.join("box-tool.png");
+    furnicraft_testkit::write_png(&path, size[0], size[1], &rgba).expect("the picture is written");
+    app.tabs.active_mut().release_target();
+    let picture = Picture { width: size[0], height: size[1], rgba };
+    assert!(!picture.is_flat(), "{} draws less than one colour", path.display());
+    println!("the box tool is in {}", path.display());
+}
+
+/// Draws a selected box with its ten grips into one picture.
+///
+/// The grips are the three-side editor (ADR 0101): four base corners move two sides and six face
+/// centres one, so the shot proves their placement, size and tone against the shaded box.
+#[test]
+#[ignore = "needs a GPU adapter; writes target/ui-shots/box-grips.png"]
+fn the_box_grips_are_painted_offscreen() {
+    let render_state = match render_state() {
+        Ok(render_state) => render_state,
+        Err(reason) => {
+            println!("{reason}");
+            return;
+        }
+    };
+    let ctx = egui::Context::default();
+    let workspace = furnicraft_testkit::scratch_dir("ui-shots").join("box-grips-workspace.json");
+    let session = furnicraft_engine::Session::with_catalog(
+        furnicraft_testkit::sample_project(),
+        furnicraft_testkit::sample_catalog(),
+    );
+    let mut app = FurniCraftApp::test_app(&ctx, Some(render_state.clone()), workspace, Settings::default(), session)
+        .expect("the application builds");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, WINDOW);
+    let _ = settle(&mut app, &ctx, &render_state, screen);
+    {
+        let document = app.tabs.active_mut();
+        let root = document.session.project().root().id();
+        let params = serde_json::to_value(furnicraft_engine::ObjectPrimitiveCreate {
+            parent: root,
+            name: "Box".to_owned(),
+            primitive: furnicraft_model::Primitive::cuboid(
+                furnicraft_testkit::millimetres(600),
+                furnicraft_testkit::millimetres(400),
+                furnicraft_testkit::millimetres(720),
+            )
+            .expect("a box"),
+            placement: furnicraft_model::Placement::IDENTITY,
+        })
+        .expect("params");
+        let box_id = document
+            .session
+            .dispatch(furnicraft_engine::object_cmds::OBJECT_PRIMITIVE_CREATE_ID, &params)
+            .expect("the box is created")
+            .created_id()
+            .expect("an id");
+        document.editor.select_node(Some(box_id));
+        document.upload_scene().expect("the frame follows the new node");
+    }
+    let mut jobs = Vec::new();
+    for _ in 0..SETTLE_FRAMES {
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            app.frame(ui);
+        });
+        let mut delta = std::mem::take(&mut output.textures_delta);
+        {
+            let mut renderer = render_state.renderer.write();
+            for (id, images) in &delta.set {
+                for image in images {
+                    renderer.update_texture(&render_state.device, &render_state.queue, *id, image);
+                }
+            }
+            for id in &delta.free {
+                renderer.free_texture(id);
+            }
+        }
+        delta.clear();
+        jobs = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+    let pixels_per_point = ctx.pixels_per_point();
+    let size =
+        [(WINDOW.x * pixels_per_point).round().max(1.0) as u32, (WINDOW.y * pixels_per_point).round().max(1.0) as u32];
+    let rgba = paint(&render_state, &jobs, size, pixels_per_point).expect("the frame paints");
+    let directory = furnicraft_testkit::ui_shots_dir().expect("the shots directory is created");
+    let path = directory.join("box-grips.png");
+    furnicraft_testkit::write_png(&path, size[0], size[1], &rgba).expect("the picture is written");
+    app.tabs.active_mut().release_target();
+    let picture = Picture { width: size[0], height: size[1], rgba };
+    assert!(!picture.is_flat(), "{} draws less than one colour", path.display());
+    println!("the box grips are in {}", path.display());
+}
+
 /// Draws the empty-space tool's ghost into one picture, so its accent and callouts can be looked at.
 ///
 /// The matrix above varies the window's look; this shot varies the tool. It arms the shelf fill

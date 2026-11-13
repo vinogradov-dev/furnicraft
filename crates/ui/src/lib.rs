@@ -15,6 +15,7 @@
     clippy::unreachable
 )]
 
+mod box_tool;
 mod camera_card;
 mod class_picker;
 mod command;
@@ -49,6 +50,7 @@ pub mod toolbars;
 pub mod ui_scale;
 mod view_flags;
 
+pub use box_tool::{BoxBase, BoxDraft, BoxDraftError, MIN_BOX_HEIGHT_MM};
 pub use command_bar::{CommandBar, CommandBarAction};
 pub use contour_edit::{ContourDraft, ContourEdit, ContourTarget};
 pub use contour_grips::{ContourGrip, GripNumber, GripValue};

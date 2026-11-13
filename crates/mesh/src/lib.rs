@@ -803,7 +803,7 @@ mod tests {
 
     #[test]
     fn object_mesh_triangulates_a_cube_into_twelve_flat_triangles() {
-        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let cube = furnicraft_testkit::cube_mesh(millimetres(100));
         let mesh = object_mesh(&cube).expect("render mesh");
         assert_eq!(mesh.triangle_count(), 12);
         assert_eq!(mesh.vertex_count(), 36, "flat shading duplicates vertices per face");
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn a_cube_edge_list_is_the_twelve_box_edges_without_diagonals() {
-        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let cube = furnicraft_testkit::cube_mesh(millimetres(100));
         let mesh = object_mesh(&cube).expect("render mesh");
         assert_eq!(mesh_edges(&mesh).len() / 2, 12, "a cube shows its twelve box edges");
         assert_eq!(mesh_all_edges(&mesh).len() / 2, 18, "the diagnostic list adds six face diagonals");
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn an_object_is_reused_until_its_payload_changes() {
-        let cube = furnicraft_model::Mesh::cube(millimetres(100)).expect("cube");
+        let cube = furnicraft_testkit::cube_mesh(millimetres(100));
         let object = Object::new(
             Id::new(3).expect("id"),
             "Cube",
@@ -1183,7 +1183,7 @@ mod tests {
         cache.finish();
         assert!(Arc::ptr_eq(first.body().expect("body"), second.body().expect("body")));
 
-        let scaled = furnicraft_model::Mesh::cube(millimetres(200)).expect("cube");
+        let scaled = furnicraft_testkit::cube_mesh(millimetres(200));
         let changed = Object::new(object.id(), "Cube", Placement::IDENTITY, furnicraft_model::Geometry::Mesh(scaled));
         cache.start();
         let third = cache.object(Revision::ZERO.checked_next().expect("revision"), &changed).expect("cube mesh");

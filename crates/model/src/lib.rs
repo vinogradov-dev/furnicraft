@@ -73,7 +73,7 @@ pub use panel::{
 pub use panel_features::{CornerFeature, CornerFeatureKind, EdgeBow};
 pub use placement::{EulerAngles, PivotLocal, Placement, PlacementError};
 pub use primitive::{
-    Cube, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
+    Cuboid, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
     MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
 };
 pub use project::{

@@ -6,7 +6,7 @@
 //! explains itself. It also holds the one rule the button and the draft agree on: when a running
 //! chain can be closed.
 
-use furnicraft_model::Id;
+use furnicraft_model::{Id, PrimitiveKind};
 use furnicraft_text::{Lang, Message};
 
 use super::spec::{ToolKind, ToolSpec};
@@ -66,7 +66,14 @@ pub(super) fn ready(kind: ToolKind, tool: &ToolSpec, state: &Toolbars, context: 
         }
         ToolKind::Primitive(primitive) => {
             let armed = is_armed(active, ToolKind::Primitive(primitive));
-            let hint = Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)]);
+            // A box is drawn: its base is a rectangle on the plane and its height a pull, so the
+            // hint names the first step rather than a click that would place it (ADR 0101).
+            let hint = match primitive {
+                PrimitiveKind::Cuboid => Message::PrimitiveDrawBase.with(lang, [tool.label.text(lang)]),
+                PrimitiveKind::Cylinder | PrimitiveKind::Sphere => {
+                    Message::PrimitiveClickPlane.with(lang, [tool.label.text(lang)])
+                }
+            };
             let action = ToolAction::CreatePrimitive { kind: primitive, size: state.primitive_size() };
             Ready { enabled: true, armed, hint, action: Some(action) }
         }

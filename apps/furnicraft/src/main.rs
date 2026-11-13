@@ -19,6 +19,7 @@
     clippy::unreachable
 )]
 
+mod box_gizmo;
 mod contour_gizmo;
 mod document;
 mod draw_gizmo;

@@ -14,17 +14,17 @@ use furnicraft_engine::{PanelCreate, PrimitiveKind, Session};
 use furnicraft_model::Contour;
 use furnicraft_model::{
     ClassCode, Container, Cutout, CutoutDepth, CutoutShape, DEFAULT_BANDS, DEFAULT_SEGMENTS, Envelope, EulerAngles,
-    FaceSide, Geometry, MachiningAnchor, MachiningParams, Mesh, Panel, PivotLocal, Placement,
+    FaceSide, Geometry, MachiningAnchor, MachiningParams, Panel, PivotLocal, Placement,
 };
 use furnicraft_model::{Path, PathCorner, Project};
-use furnicraft_testkit::{millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
+use furnicraft_testkit::{cube_mesh, millimetres, open_path, sample_catalog, sample_panel_thickness, sample_project};
 use furnicraft_units::Degrees;
 use furnicraft_units::Length;
 
 fn cube_project() -> (Project, Id) {
     let mut project = sample_project();
     let root = project.root().id();
-    let mesh = Mesh::cube(Length::from_millimetres(100).expect("length")).expect("cube");
+    let mesh = cube_mesh(Length::from_millimetres(100).expect("length"));
     let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("add object");
     (project, id)
 }
@@ -300,8 +300,9 @@ fn another_tool_replaces_the_running_draft_and_writes_nothing() {
     editor.drawing_point([Length::from_millimetres(600).expect("x"), Length::ZERO]).expect("end");
     assert_eq!(editor.drawing().map(DrawDraft::len), Some(1));
     editor
-        .arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size"))
-        .expect("arm a cube, which a drawing tool must drop");
+        .arm_primitive(PrimitiveKind::Cuboid, Length::from_millimetres(100).expect("size"))
+        .expect("arm the box tool, which a drawing tool must drop");
+    assert!(editor.box_tool().is_some(), "the box tool owns the next clicks");
 
     editor.start_drawing(DrawTool::Rectangle);
     let draft = editor.drawing().expect("the rectangle tool is live");
@@ -309,6 +310,7 @@ fn another_tool_replaces_the_running_draft_and_writes_nothing() {
     assert!(draft.points().is_empty(), "the new tool starts with an empty draft");
     assert!(draft.segments().is_empty(), "the old chain is gone");
     assert!(editor.pending_primitive().is_none(), "a drawing tool drops an armed primitive");
+    assert!(editor.box_tool().is_none(), "a drawing tool drops the box base too");
     assert_eq!(session.project().revision(), revision, "the switch writes nothing");
     assert!(!session.can_undo(), "no half figure entered the undo history");
 }
@@ -612,8 +614,10 @@ fn free_creation_tools_land_at_the_root_beside_a_selected_nested_assembly() {
     assert_eq!(session.project().parent_of(created_assembly), Some(root), "an assembly lands at the root");
 
     editor.select_node(Some(inner));
-    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm the cube");
-    let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cube");
+    editor
+        .arm_primitive(PrimitiveKind::Cylinder, Length::from_millimetres(100).expect("size"))
+        .expect("arm a cylinder");
+    let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cylinder");
     assert_eq!(session.project().parent_of(created_primitive), Some(root), "a primitive lands at the root");
 
     editor.select_node(Some(inner));
@@ -679,8 +683,10 @@ fn an_armed_container_receives_a_path_a_panel_and_a_primitive() {
     );
     assert_eq!(editor.creation_target(session.project()), assembly, "a refused arm changes nothing");
 
-    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm the cube");
-    let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cube");
+    editor
+        .arm_primitive(PrimitiveKind::Cylinder, Length::from_millimetres(100).expect("size"))
+        .expect("arm a cylinder");
+    let created_primitive = editor.place_primitive(&mut session, Placement::IDENTITY).expect("place the cylinder");
     assert_eq!(session.project().parent_of(created_primitive), Some(assembly), "the primitive lands in the arm");
 }
 
@@ -765,13 +771,13 @@ fn an_open_polyline_commits_as_drawn() {
 }
 
 #[test]
-fn arming_a_cube_waits_for_a_click_and_places_it_there() {
+fn arming_a_cylinder_waits_for_a_click_and_places_it_there() {
     let (project, panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
     let size = Length::from_millimetres(300).expect("size");
-    editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm the cube");
-    assert_eq!(editor.pending_primitive(), Some((PrimitiveKind::Cube, size)));
+    editor.arm_primitive(PrimitiveKind::Cylinder, size).expect("arm the cylinder");
+    assert_eq!(editor.pending_primitive(), Some((PrimitiveKind::Cylinder, size)));
     assert!(editor.drawing().is_none(), "an armed primitive leaves a drawing");
 
     let placement = Placement::IDENTITY
@@ -781,8 +787,8 @@ fn arming_a_cube_waits_for_a_click_and_places_it_there() {
             Length::ZERO,
         )
         .expect("placement");
-    let id = editor.place_primitive(&mut session, placement).expect("place the cube");
-    assert!(editor.pending_primitive().is_none(), "one click places one cube");
+    let id = editor.place_primitive(&mut session, placement).expect("place the cylinder");
+    assert!(editor.pending_primitive().is_none(), "one click places one primitive");
     assert_eq!(editor.selected_node(), Some(id));
     let object = session.project().object(id).expect("object");
     assert_eq!(object.placement(), placement);
@@ -813,12 +819,12 @@ fn a_clicked_primitive_lands_on_the_pointer_at_the_root_and_in_a_turned_containe
     for armed in [None, Some(parent)] {
         let mut editor = Editor::new();
         if let Some(container) = armed {
-            assert!(editor.arm_creation(session.project(), container), "the cube lands in the container");
+            assert!(editor.arm_creation(session.project(), container), "the primitive lands in the container");
         }
-        editor.arm_primitive(PrimitiveKind::Cube, mm(300)).expect("arm the cube");
+        editor.arm_primitive(PrimitiveKind::Cylinder, mm(300)).expect("arm the cylinder");
 
         let before = session.project().revision();
-        let cube = editor.place_primitive(&mut session, click).expect("place the cube");
+        let cube = editor.place_primitive(&mut session, click).expect("place the cylinder");
         let what = if armed.is_some() { "in the container" } else { "at the root" };
         assert_eq!(
             session.project().revision(),
@@ -847,14 +853,14 @@ fn a_clicked_primitive_lands_on_the_pointer_at_the_root_and_in_a_turned_containe
             assert!(!object.placement().same_transform(click), "the container stores a relative placement");
         }
 
-        session.undo().expect("one undo removes the cube");
-        assert!(session.project().object(cube).is_none(), "{what}: the undo removed the cube");
+        session.undo().expect("one undo removes the primitive");
+        assert!(session.project().object(cube).is_none(), "{what}: the undo removed the primitive");
     }
     assert!(session.project().container(parent).is_some(), "the container is its own undo entry");
 }
 
 #[test]
-fn a_cube_edge_must_be_positive() {
+fn a_primitive_size_must_be_positive() {
     let mut editor = Editor::new();
     assert!(editor.arm_primitive(PrimitiveKind::Cylinder, Length::ZERO).is_err());
 }
@@ -862,7 +868,7 @@ fn a_cube_edge_must_be_positive() {
 #[test]
 fn every_primitive_kind_can_be_armed() {
     let size = Length::from_millimetres(120).expect("size");
-    for kind in [PrimitiveKind::Cube, PrimitiveKind::Cylinder, PrimitiveKind::Sphere] {
+    for kind in [PrimitiveKind::Cylinder, PrimitiveKind::Sphere] {
         let mut editor = Editor::new();
         editor.arm_primitive(kind, size).expect("arm");
         assert_eq!(editor.pending_primitive(), Some((kind, size)));
@@ -874,6 +880,12 @@ fn every_primitive_kind_can_be_armed() {
             "arming alone creates nothing"
         );
     }
+    // A box has three independent sides, so the tool starts its base rectangle instead of arming
+    // one extent it could not describe (ADR 0101).
+    let mut editor = Editor::new();
+    editor.arm_primitive(PrimitiveKind::Cuboid, size).expect("arm the box");
+    assert_eq!(editor.pending_primitive(), None, "a box waits for its base, not for a click");
+    assert_eq!(editor.box_tool(), Some(PrimitiveKind::Cuboid));
 }
 
 #[test]
@@ -1030,18 +1042,18 @@ fn the_ribbon_hands_a_new_polygon_the_default_side_count() {
 }
 
 #[test]
-fn the_toolbar_creates_the_cube_at_the_scene_root() {
+fn the_toolbar_creates_the_primitive_at_the_scene_root() {
     let (project, panel) = contour_panel_project();
     let mut session = Session::with_catalog(project, sample_catalog());
     let mut editor = Editor::new();
     let root = Id::new(1).expect("root");
     editor.select_node(Some(root));
-    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
-    editor.place_primitive(&mut session, Placement::IDENTITY).expect("cube");
-    let cube = editor.selected_node().expect("the new cube is selected");
-    assert!(session.project().object(cube).is_some());
+    editor.arm_primitive(PrimitiveKind::Cylinder, Length::from_millimetres(200).expect("size")).expect("arm");
+    editor.place_primitive(&mut session, Placement::IDENTITY).expect("cylinder");
+    let cylinder = editor.selected_node().expect("the new primitive is selected");
+    assert!(session.project().object(cylinder).is_some());
     assert!(session.project().panel(panel).is_some());
-    assert_eq!(session.project().parent_of(cube), Some(root));
+    assert_eq!(session.project().parent_of(cylinder), Some(root));
     assert!(editor.initialized, "the fresh selection survives the next frame");
 }
 
@@ -1393,23 +1405,79 @@ fn escape_closes_one_level_and_returns_to_the_parent_container() {
 }
 
 #[test]
-fn creating_a_cube_dispatches_the_primitive_command_and_selects_it() {
+fn creating_a_primitive_dispatches_the_primitive_command_and_selects_it() {
     let mut session = Session::with_catalog(sample_project(), sample_catalog());
     let mut editor = Editor::new();
 
-    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(200).expect("size")).expect("arm");
-    editor.place_primitive(&mut session, Placement::IDENTITY).expect("create cube");
+    editor.arm_primitive(PrimitiveKind::Cylinder, Length::from_millimetres(200).expect("size")).expect("arm");
+    editor.place_primitive(&mut session, Placement::IDENTITY).expect("create the cylinder");
 
     let id = editor.selected_node().expect("the new object is selected");
     let object = session.project().object(id).expect("object");
-    assert_eq!(object.name(), "Cube");
+    assert_eq!(object.name(), "Cylinder", "the new object is named after its shape");
     let primitive = object.geometry().as_primitive().expect("the parameters are stored");
-    assert_eq!(primitive.mesh_counts(), (8, 6), "a cube keeps six faces");
+    assert_eq!(primitive.mesh_counts(), (DEFAULT_SEGMENTS as usize * 2, DEFAULT_SEGMENTS as usize + 2));
     assert_eq!(session.project().revision().get(), 1, "one command is one revision");
 
     undo(&mut session, &mut editor);
     assert_eq!(editor.selected_node(), None, "undo drops the selection of a vanished object");
     assert!(session.project().object(id).is_none());
+}
+
+#[test]
+fn the_box_tool_draws_its_base_and_pulls_its_height() {
+    let (project, _panel) = contour_panel_project();
+    let mut session = Session::with_catalog(project, sample_catalog());
+    let root = session.project().root().id();
+    let mut editor = Editor::new();
+    let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+
+    editor.arm_primitive(PrimitiveKind::Cuboid, mm(200)).expect("arm the box tool");
+    assert_eq!(editor.box_tool(), Some(PrimitiveKind::Cuboid));
+    assert!(!editor.click_box([mm(600), mm(400)]).expect("the anchor"), "the first click only anchors");
+    editor.set_box_corner([mm(0), mm(0)]);
+    assert!(editor.click_box([mm(0), mm(0)]).expect("the base"), "the second click fixes the base");
+
+    let base = editor.box_draft().and_then(BoxDraft::base).expect("a base");
+    assert_eq!((base.width, base.depth), (mm(600), mm(400)), "the rectangle the maker drew");
+    editor.pull_box_height(mm(720)).expect("the pull");
+    assert_eq!(
+        editor.box_draft().and_then(BoxDraft::sizes),
+        Some([mm(600), mm(400), mm(720)]),
+        "the ghost is exactly the box the ✓ builds"
+    );
+
+    // The plane frame sits on the base rectangle's minimum corner, so the box's own zero is that
+    // corner and the height runs along the plane's normal.
+    let placement = Placement::IDENTITY.with_translation(mm(0), mm(0), mm(0)).expect("the base corner");
+    let id = editor.commit_box(&mut session, placement).expect("commit the box");
+    assert!(editor.box_tool().is_none(), "the gesture is over");
+    let object = session.project().object(id).expect("the new box");
+    assert_eq!(object.name(), "Box");
+    assert_eq!(object.placement(), placement, "the base corner is the node's origin");
+    assert_eq!(session.project().parent_of(id), Some(root));
+    let primitive = object.geometry().as_primitive().expect("the parameters are stored");
+    assert_eq!(primitive.bounds_micrometres(), ([0; 3], [600_000, 400_000, 720_000]));
+    assert_eq!(session.project().revision().get(), 1, "the whole gesture is one command");
+
+    undo(&mut session, &mut editor);
+    assert!(session.project().object(id).is_none(), "one undo removes the box");
+}
+
+#[test]
+fn a_box_draft_that_is_cancelled_writes_nothing() {
+    let (project, _panel) = contour_panel_project();
+    let session = Session::with_catalog(project, sample_catalog());
+    let mut editor = Editor::new();
+    let mm = |value: i64| Length::from_millimetres(value).expect("a whole millimetre");
+    editor.arm_primitive(PrimitiveKind::Cuboid, mm(200)).expect("arm the box tool");
+    editor.click_box([mm(0), mm(0)]).expect("anchor");
+    editor.click_box([mm(600), mm(400)]).expect("base");
+    editor.pull_box_height(mm(720)).expect("pull");
+    editor.cancel_box();
+    assert!(editor.box_tool().is_none());
+    assert_eq!(session.project().revision().get(), 0, "the draft never reached the document");
+    assert!(!session.can_undo());
 }
 
 #[test]
@@ -1438,7 +1506,7 @@ fn the_ribbon_marks_the_tool_that_owns_the_next_click() {
 
     editor.cancel_drawing();
     let size = Length::from_millimetres(crate::toolbars::DEFAULT_PRIMITIVE_SIZE_MM).expect("size");
-    editor.arm_primitive(PrimitiveKind::Cube, size).expect("arm");
+    editor.arm_primitive(PrimitiveKind::Cylinder, size).expect("arm");
     editor.set_ribbon_tab(spec::tab("model").expect("the map declares the model tab"));
     let primitive = ctx.run_ui(Default::default(), |ui| {
         editor.show_ribbon(ui, &mut session, view).expect("ribbon");
@@ -1786,10 +1854,11 @@ fn arming_the_empty_space_tool_leaves_the_other_pointer_modes() {
     editor.start_drawing(DrawTool::Line);
     editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post");
     assert!(editor.drawing().is_none(), "a fill replaces the running draft");
-    editor.arm_primitive(PrimitiveKind::Cube, Length::from_millimetres(100).expect("size")).expect("arm a cube");
+    editor.arm_primitive(PrimitiveKind::Cuboid, Length::from_millimetres(100).expect("size")).expect("arm the box");
     assert!(editor.fill_arm().is_none(), "a primitive replaces the fill");
+    assert!(editor.box_tool().is_some());
     editor.arm_fill(&session, ClassCode::VERTICAL_PANEL, crate::Lang::En).expect("arm the post again");
-    assert!(editor.pending_primitive().is_none(), "the fill replaces the primitive");
+    assert!(editor.box_tool().is_none(), "the fill replaces the box tool");
     editor.cancel_fill();
     assert!(editor.fill_arm().is_none());
 }

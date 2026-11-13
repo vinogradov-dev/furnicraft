@@ -50,6 +50,7 @@ impl Editor {
         self.contour_edit = None;
         self.drawing = None;
         self.pending_primitive = None;
+        self.box_draft = None;
         self.fill = Some(FillArm { class, fill });
         Ok(())
     }

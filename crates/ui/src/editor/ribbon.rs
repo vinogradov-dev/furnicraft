@@ -46,7 +46,7 @@ impl Editor {
         let selected_path = selected.and_then(|id| session.project().object_path(id).ok()).map(Path::is_closed);
         let active = toolbars::tool_activity(
             self.drawing.as_ref().map(|draft| draft.tool()),
-            self.pending_primitive.map(|pending| pending.kind),
+            self.pending_primitive.map(|pending| pending.kind).or_else(|| self.box_tool()),
             self.fill_arm().map(|arm| arm.class),
         );
         let draft = self.drawing.as_ref().map(|draft| (draft.tool(), draft.len(), draft.is_closed()));

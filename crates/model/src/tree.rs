@@ -305,7 +305,7 @@ mod tests {
                 drawer,
                 "Bracket",
                 Placement::IDENTITY,
-                Geometry::Mesh(Mesh::cube(Length::from_millimetres(20).expect("size")).expect("cube")),
+                Geometry::Mesh(crate::testing::cube_mesh(Length::from_millimetres(20).expect("size"))),
             )
             .expect("add a geometry object");
 

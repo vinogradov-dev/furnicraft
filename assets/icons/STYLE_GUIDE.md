@@ -384,7 +384,7 @@ around:
 - sphere: one circle plus its equator ellipse, never shading;
 - connection: a solid dot at the joint, never a second fastener.
 
-The same basis serves `cube`, `cylinder`, `panel`, `assembly` and `extrude`: the source profile is a
+The same basis serves `cuboid`, `cylinder`, `panel`, `assembly` and `extrude`: the source profile is a
 passive face (`0.12–0.18`) and the geometry the action creates takes the result tone (`0.45–0.60`)
 with the heavy outline. A plate stays a plate at every size.
 

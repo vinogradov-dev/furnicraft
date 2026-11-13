@@ -19,7 +19,7 @@ assets/icons/<theme>/<name>.svg
 | Theme | Icons | Shown by |
 |---|---|---|
 | `contour` | `line`, `polyline`, `arc`, `arc-centre`, `rectangle`, `rectangle-centre`, `rectangle-centre-directed`, `circle`, `circle-three-points`, `polygon`, `trim`, `extend`, `offset`, `fillet`, `chamfer`, `break`, `construction-horizontal`, `construction-vertical`, `construction-parallel`, `construction-angle`, `dimension-linear`, `dimension-angular`, `dimension-radius`, `boolean-union`, `boolean-subtract`, `boolean-intersect`, `close`, `cancel` | The ribbon *Sketch* tab |
-| `primitives` | `cube`, `cylinder`, `sphere`, `cone` | The ribbon *Model* tab |
+| `primitives` | `cuboid`, `cylinder`, `sphere`, `cone` | The ribbon *Model* tab |
 | `bodies` | `extrude`, `revolve`, `sweep` | The ribbon *Model* tab |
 | `scene` | `product`, `panel`, `post`, `shelf`, `assembly`, `camera`, `light` | The ribbon *Furniture* and *Scene* tabs |
 | `view` | `orthographic`, `perspective`, `frame-all`, `maximize`, `restore`, `home`, `grid-snap`, `orbit`, `pan`, `zoom`, `layout`, `shaded`, `shaded-edges`, `wireframe`, `xray`, `translucent`, `sliders`, `axon`, `front`, `left`, `top`, `right`, `bottom` | The ribbon *View* tab, the floating viewport cluster, the header |

@@ -305,7 +305,7 @@ messages! {
     SectionParameters = ["Parameters", "Параметры"],
     PrimitiveRefused = ["The primitive was refused: {}", "Примитив отклонён: {}"],
     FigureRefused = ["The figure was refused: {}", "Фигура отклонена: {}"],
-    FieldEdge = ["Edge", "Ребро"],
+    FieldDepth = ["Depth", "Глубина"],
     FieldBands = ["Bands", "Полосы"],
     SectionMeshEditing = ["Mesh editing", "Редактирование сетки"],
     CollapseBeforeEditing = [
@@ -638,7 +638,7 @@ messages! {
     TreeBadgeMesh = ["mesh", "сетка"],
     TreeBadgeContour = ["contour", "контур"],
     TreeBadgePath = ["path", "путь"],
-    TreeBadgeCube = ["cube", "куб"],
+    TreeBadgeBox = ["box", "блок"],
     TreeBadgeCylinder = ["cylinder", "цилиндр"],
     TreeBadgeSphere = ["sphere", "сфера"],
     TreeGroupSelection = ["Group selection", "Сгруппировать выделение"],
@@ -861,7 +861,7 @@ messages! {
     ToolRevolve = ["Revolve", "Вращение"],
     ToolLoft = ["Loft", "По сечениям"],
     ToolSweep = ["Sweep", "По траектории"],
-    ToolCube = ["Cube", "Куб"],
+    ToolBox = ["Box", "Блок"],
     ToolCylinder = ["Cylinder", "Цилиндр"],
     ToolSphere = ["Sphere", "Сфера"],
     ToolCone = ["Cone", "Конус"],
@@ -944,6 +944,8 @@ messages! {
     ExtrudePathOpen = ["The selected path is open; close it first", "Выбранный путь разомкнут; сначала замкните его"],
     ExtrudeNotPath = ["The selected object is not a path", "Выбранный объект не является путём"],
     PrimitiveClickPlane = ["{}: click the work plane", "{}: щёлкните по рабочей плоскости"],
+    PrimitiveDrawBase = ["{}: draw its base on the work plane", "{}: начертите основание на рабочей плоскости"],
+    BoxHeight = ["Box height", "Высота блока"],
 
     // ── Display names ───────────────────────────────────────────────────────
     Axonometric = ["Axonometric", "Аксонометрия"],

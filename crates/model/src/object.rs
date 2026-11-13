@@ -579,7 +579,7 @@ mod tests {
             Err(ProjectError::NotAMeshObject { id })
         );
 
-        let mesh = Mesh::cube(millimetres(10)).expect("mesh");
+        let mesh = crate::testing::cube_mesh(millimetres(10));
         let revision = project.collapse_object(id, mesh.clone()).expect("collapse");
         assert_eq!(revision.get(), 3);
         let object = project.object(id).expect("object");
@@ -627,7 +627,7 @@ mod tests {
             Err(ProjectError::NotAMeshObject { id })
         );
 
-        let mesh = Mesh::cube(millimetres(10)).expect("mesh");
+        let mesh = crate::testing::cube_mesh(millimetres(10));
         let revision = project.collapse_object(id, mesh.clone()).expect("collapse");
         assert_eq!(revision.get(), 3);
         let object = project.object(id).expect("object");

@@ -119,8 +119,8 @@ fn parse<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, CommandErr
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use furnicraft_model::{Geometry, Mesh, Placement};
-    use furnicraft_testkit::{millimetres, sample_catalog, sample_project};
+    use furnicraft_model::{Geometry, Placement};
+    use furnicraft_testkit::{cube_mesh, millimetres, sample_catalog, sample_project};
     use furnicraft_units::Length;
 
     use super::*;
@@ -129,7 +129,7 @@ mod tests {
     fn cube_session() -> (Session, Id) {
         let mut project = sample_project();
         let root = project.root().id();
-        let mesh = Mesh::cube(millimetres(100)).expect("cube");
+        let mesh = cube_mesh(millimetres(100));
         let id = project.add_object(root, "Cube", Placement::IDENTITY, Geometry::Mesh(mesh)).expect("object");
         (Session::with_catalog(project, sample_catalog()), id)
     }

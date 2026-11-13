@@ -1,11 +1,11 @@
 //! Builds the polygon mesh of a parametric primitive.
 //!
 //! The parameters are document data in integer micrometres; this module is the boundary where the
-//! ring trigonometry runs in floating point and the result is rounded back to lengths. A cube keeps
-//! six quads, a cylinder one quad per side plus two polygonal caps, and a sphere latitude bands
-//! joined by triangles at the poles.
+//! ring trigonometry runs in floating point and the result is rounded back to lengths. A box keeps
+//! six quads at its base corner, a cylinder one quad per side plus two polygonal caps, and a sphere
+//! latitude bands joined by triangles at the poles.
 
-use furnicraft_model::{Cylinder, Mesh, Primitive, Sphere};
+use furnicraft_model::{Cuboid, Cylinder, Mesh, Primitive, Sphere};
 use furnicraft_units::Length;
 
 use crate::MeshError;
@@ -32,10 +32,16 @@ fn index(value: usize) -> Result<u32, MeshError> {
 /// Builds the document mesh of one primitive.
 pub(crate) fn build_primitive_mesh(primitive: &Primitive) -> Result<Mesh, MeshError> {
     match primitive {
-        Primitive::Cube(cube) => Ok(Mesh::cube(cube.edge())?),
+        Primitive::Cuboid(cuboid) => cuboid_mesh(cuboid),
         Primitive::Cylinder(cylinder) => cylinder_mesh(cylinder),
         Primitive::Sphere(sphere) => sphere_mesh(sphere),
     }
+}
+
+/// A box between the local zero and its three sides: the base corner is the anchor.
+fn cuboid_mesh(cuboid: &Cuboid) -> Result<Mesh, MeshError> {
+    let [width, depth, height] = cuboid.sides();
+    Mesh::cuboid([Length::ZERO; 3], [width, depth, height]).map_err(|error| MeshError::Invalid(error.to_string()))
 }
 
 /// A capped tube: one quad per side and one polygon per cap.
@@ -192,11 +198,14 @@ mod tests {
     }
 
     #[test]
-    fn a_cube_is_the_document_cube() {
-        let primitive = Primitive::cube(millimetres(100)).expect("cube");
+    fn a_box_starts_at_its_base_corner_with_its_three_sides() {
+        let primitive = Primitive::cuboid(millimetres(600), millimetres(400), millimetres(720)).expect("box");
+        let mesh = build_primitive_mesh(&primitive).expect("mesh");
         assert_eq!(
-            build_primitive_mesh(&primitive).expect("mesh"),
-            Mesh::cube(millimetres(100)).expect("document cube")
+            mesh,
+            Mesh::cuboid([Length::ZERO; 3], [millimetres(600), millimetres(400), millimetres(720)])
+                .expect("the same box")
         );
+        assert_eq!(mesh.bounds_micrometres(), ([0; 3], [600_000, 400_000, 720_000]));
     }
 }

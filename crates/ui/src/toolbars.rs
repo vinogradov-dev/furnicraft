@@ -58,7 +58,8 @@ pub use self::state::Toolbars;
 
 use self::ready::{projection_icon, ready};
 
-/// Edge length of a new cube, in millimetres; also the size a new primitive starts at.
+/// Full extent of a new primitive, in millimetres; the size a cylinder or a sphere starts at and
+/// the equal-sided box a one-extent creation builds.
 pub const DEFAULT_PRIMITIVE_SIZE_MM: i64 = 200;
 
 /// Height of a new extrusion, in millimetres; also the height the next extrusion starts at.
@@ -830,7 +831,7 @@ mod tests {
             (
                 "model",
                 &[
-                    "Cube: click the work plane",
+                    "Box: draw its base on the work plane",
                     "Cylinder: click the work plane",
                     "Select a closed path first",
                     "Sphere: click the work plane",
@@ -1027,7 +1028,7 @@ mod tests {
         let cases = [
             (None, None, None, None),
             (Some(DrawTool::Line), None, None, Some(ToolActivity::Draw(DrawTool::Line))),
-            (None, Some(PrimitiveKind::Cube), None, Some(ToolActivity::Primitive(PrimitiveKind::Cube))),
+            (None, Some(PrimitiveKind::Cuboid), None, Some(ToolActivity::Primitive(PrimitiveKind::Cuboid))),
             (None, None, Some(post), Some(ToolActivity::Fill(post))),
             (Some(DrawTool::Arc), Some(PrimitiveKind::Sphere), None, Some(ToolActivity::Draw(DrawTool::Arc))),
         ];
@@ -1047,9 +1048,9 @@ mod tests {
             (Some(ToolActivity::Draw(DrawTool::Line)), ToolKind::Draw(DrawTool::Line), true),
             (Some(ToolActivity::Draw(DrawTool::Line)), ToolKind::Draw(DrawTool::Circle), false),
             (Some(ToolActivity::Draw(DrawTool::Line)), ToolKind::Panel, false),
-            (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), ToolKind::Primitive(PrimitiveKind::Cube), true),
-            (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), ToolKind::Primitive(PrimitiveKind::Sphere), false),
-            (Some(ToolActivity::Primitive(PrimitiveKind::Cube)), ToolKind::Light, false),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Primitive(PrimitiveKind::Cuboid), true),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Primitive(PrimitiveKind::Sphere), false),
+            (Some(ToolActivity::Primitive(PrimitiveKind::Cuboid)), ToolKind::Light, false),
         ];
         for (activity, kind, expected) in cases {
             assert_eq!(is_armed(activity, kind), expected, "activity={activity:?} kind={kind:?}");
@@ -1164,14 +1165,14 @@ mod tests {
 
     #[test]
     fn a_primitive_cell_runs_at_the_default_size() {
-        let cube = tool("model.primitives.cube");
+        let tool = tool("model.primitives.cuboid");
         let mut state = Toolbars::new();
         state.set_tab(tab("model"));
-        let (actions, _) = click_cell(&mut state, cube, main_point());
+        let (actions, _) = click_cell(&mut state, tool, main_point());
         assert_eq!(
             actions,
             vec![ToolAction::CreatePrimitive {
-                kind: PrimitiveKind::Cube,
+                kind: PrimitiveKind::Cuboid,
                 size: Length::from_millimetres(DEFAULT_PRIMITIVE_SIZE_MM).expect("the default size is a length"),
             }],
             "the cell hands the command the typed default"
@@ -1215,7 +1216,9 @@ mod tests {
         let mut state = Toolbars::new();
         state.set_tab(tab("model"));
         let (_, labels, actions) = draw(&mut state, full_context());
-        for label in ["Cube: click the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"] {
+        for label in
+            ["Box: draw its base on the work plane", "Cylinder: click the work plane", "Sphere: click the work plane"]
+        {
             assert!(labels.iter().any(|text| text.contains(label)), "{label} is missing: {labels:?}");
         }
         assert!(actions.is_empty(), "drawing alone runs no tool");

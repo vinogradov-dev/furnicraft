@@ -318,7 +318,7 @@ fn status_state_ui(ui: &mut egui::Ui, info: &StatusInfo) -> (Option<StatusAction
     // height field, the check and the cross, so the status bar names no second Apply (M71).
     if let Some((kind, size)) = info.primitive {
         let name = match kind {
-            furnicraft_engine::PrimitiveKind::Cube => Message::ToolCube,
+            furnicraft_engine::PrimitiveKind::Cuboid => Message::ToolBox,
             furnicraft_engine::PrimitiveKind::Cylinder => Message::ToolCylinder,
             furnicraft_engine::PrimitiveKind::Sphere => Message::ToolSphere,
         };

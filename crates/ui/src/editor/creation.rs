@@ -1,9 +1,11 @@
-//! Creation: the armed container, the armed primitive and the five `create` commands.
+//! Creation: the armed container, the armed primitive, the box tool and the five `create` commands.
 //!
 //! Every creation lands in the container armed here, or at the scene root when nothing is armed
-//! (ADR 0056). A primitive is armed rather than created, because its placement is the next
-//! work-plane click; the arm is resolved at the click, so clearing or moving it changes where the
-//! primitive lands. A create command's node becomes the selection.
+//! (ADR 0056). A cylinder or a sphere is armed rather than created, because its placement is the
+//! next work-plane click; the arm is resolved at the click, so clearing or moving it changes where
+//! the primitive lands. A box is drawn instead: the ribbon starts a draft whose base rectangle and
+//! pulled height become one `object.primitive.create` (ADR 0101). A create command's node becomes
+//! the selection.
 //!
 //! Refuses an arm for the root or for a node that cannot own children, a primitive size that is not
 //! positive, and a panel creation without a panel material in the catalogue; each reason is a
@@ -21,12 +23,13 @@ use furnicraft_engine::{
     AssemblyCreate, CameraCreate, LightCreate, ObjectPrimitiveCreate, PanelCreate, PrimitiveKind, Session,
 };
 use furnicraft_model::{
-    CameraProjection, ClassCode, Contour, Id, LightKind, MaterialId, PanelNominalSize, Placement, Project,
+    CameraProjection, ClassCode, Contour, Id, LightKind, MaterialId, PanelNominalSize, Placement, Primitive, Project,
 };
 use furnicraft_text::{Lang, Message};
 use furnicraft_units::Length;
 
 use super::Editor;
+use crate::box_tool::{BoxDraft, BoxDraftError};
 use crate::command::{dispatch, json};
 use crate::product_card::ProductDraft;
 use crate::target::creation_target;
@@ -190,22 +193,44 @@ impl Editor {
         Ok(())
     }
 
-    /// Arms a primitive that the next work-plane click places.
+    /// Arms a primitive tool: a click places a cylinder or a sphere, a box starts its base.
     ///
     /// The panel asks for a click instead of creating at the origin: the tool is a placement, and a
     /// stale primitive at the world origin is never what the user wanted. Arming leaves the other
     /// pointer modes, because the next click creates rather than selects. The parent is resolved at
-    /// the click, so clearing or moving the arm changes where the primitive lands.
+    /// the click, so clearing or moving the arm changes where the primitive lands. A box has three
+    /// independent sides, so one extent cannot describe it: the tool draws its base and pulls its
+    /// height instead (ADR 0101).
     pub(super) fn arm_primitive(&mut self, kind: PrimitiveKind, size: Length) -> Result<(), String> {
+        if kind == PrimitiveKind::Cuboid {
+            self.arm_box();
+            return Ok(());
+        }
         if size.micrometres() <= 0 {
             return Err("The primitive size must be positive.".to_owned());
         }
+        self.leave_pointer_modes();
+        self.pending_primitive = Some(PendingPrimitive { kind, size });
+        Ok(())
+    }
+
+    /// Arms the box tool: the next clicks draw its base rectangle and pull its height.
+    ///
+    /// A box has three independent sides, so it is drawn rather than placed by one click from one
+    /// extent (ADR 0101). Arming drops the other pointer modes but writes nothing.
+    pub fn arm_box(&mut self) {
+        self.leave_pointer_modes();
+        self.box_draft = Some(BoxDraft::new());
+    }
+
+    /// Drops every pointer mode a creation tool replaces.
+    fn leave_pointer_modes(&mut self) {
         self.mesh_edit = None;
         self.contour_edit = None;
         self.drawing = None;
         self.fill = None;
-        self.pending_primitive = Some(PendingPrimitive { kind, size });
-        Ok(())
+        self.pending_primitive = None;
+        self.box_draft = None;
     }
 
     /// The primitive waiting for a work-plane click: its kind and size.
@@ -213,9 +238,42 @@ impl Editor {
         self.pending_primitive.map(|pending| (pending.kind, pending.size))
     }
 
+    /// The box being drawn, when the box tool is armed or its height is being pulled.
+    pub fn box_draft(&self) -> Option<&BoxDraft> {
+        self.box_draft.as_ref()
+    }
+
+    /// The kind the box tool would build, while its draft lives; this is what arms the ribbon cell.
+    pub fn box_tool(&self) -> Option<PrimitiveKind> {
+        self.box_draft.as_ref().map(|_| PrimitiveKind::Cuboid)
+    }
+
+    /// The corner the live base rectangle runs to.
+    pub fn set_box_corner(&mut self, corner: [Length; 2]) {
+        if let Some(draft) = self.box_draft.as_mut() {
+            draft.set_live(corner);
+        }
+    }
+
+    /// A click on the work plane: anchors the base, then fixes it, then does nothing.
+    pub fn click_box(&mut self, corner: [Length; 2]) -> Result<bool, BoxDraftError> {
+        self.box_draft.as_mut().ok_or(BoxDraftError::NoBase)?.click(corner)
+    }
+
+    /// Sets the height the box pull shows.
+    pub fn pull_box_height(&mut self, height: Length) -> Result<(), BoxDraftError> {
+        self.box_draft.as_mut().ok_or(BoxDraftError::NoBase)?.set_height(height)
+    }
+
+    /// Drops a box draft without creating anything.
+    pub fn cancel_box(&mut self) {
+        self.box_draft = None;
+    }
+
     /// Drops an armed primitive without creating anything.
     pub fn cancel_primitive(&mut self) {
         self.pending_primitive = None;
+        self.box_draft = None;
     }
 
     /// Creates the armed primitive in the creation target and selects it.
@@ -233,6 +291,40 @@ impl Editor {
         self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
     }
 
+    /// Creates the box the draft describes through one `object.primitive.create`.
+    ///
+    /// `placement` is the work plane's *world* frame with its origin on the base rectangle's
+    /// minimum corner, so the box's own zero is that corner; the command stores the placement
+    /// relative to the parent. The mesh, the card and the scene tree then read the three sides the
+    /// user drew, and the whole gesture is one undo entry.
+    pub fn commit_box(&mut self, session: &mut Session, placement: Placement) -> Result<Id, String> {
+        let Some(sizes) = self.box_draft.and_then(|draft| draft.sizes()) else {
+            return Err(BoxDraftError::NoBase.to_string());
+        };
+        let [width, depth, height] = sizes;
+        let primitive = Primitive::cuboid(width, depth, height).map_err(|error| error.to_string())?;
+        let parent = self.creation_target(session.project());
+        let placement = session.project().placement_in_parent(parent, placement).map_err(|error| error.to_string())?;
+        self.create_primitive_node(session, parent, primitive, placement)?;
+        self.box_draft = None;
+        self.selection.primary().ok_or_else(|| "The primitive command created no node.".to_owned())
+    }
+
+    /// Dispatches `object.primitive.create` for one validated primitive at `placement`.
+    fn create_primitive_node(
+        &mut self,
+        session: &mut Session,
+        parent: Id,
+        primitive: Primitive,
+        placement: Placement,
+    ) -> Result<(), String> {
+        let name = primitive.kind().label();
+        let params = json(&ObjectPrimitiveCreate { parent, name: name.to_owned(), primitive, placement })?;
+        let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
+        self.select_created(outcome.created_id());
+        Ok(())
+    }
+
     /// Dispatches `object.primitive.create` for one primitive at `placement`.
     fn create_primitive(
         &mut self,
@@ -242,15 +334,8 @@ impl Editor {
         size: Length,
         placement: Placement,
     ) -> Result<(), String> {
-        let name = match kind {
-            PrimitiveKind::Cube => "Cube",
-            PrimitiveKind::Cylinder => "Cylinder",
-            PrimitiveKind::Sphere => "Sphere",
-        };
-        let params = json(&ObjectPrimitiveCreate { parent, name: name.to_owned(), primitive: kind, size, placement })?;
-        let outcome = dispatch(session, OBJECT_PRIMITIVE_CREATE_ID, &params)?;
-        self.select_created(outcome.created_id());
-        Ok(())
+        let primitive = Primitive::from_kind(kind, size).map_err(|error| error.to_string())?;
+        self.create_primitive_node(session, parent, primitive, placement)
     }
 
     /// Dispatches `camera.create`.

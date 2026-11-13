@@ -24,7 +24,7 @@ apart, while at 20 px the tones separate. The owner's line was "below 20 px, one
   `view #B8C2CE`, `danger #E06A6A`. The dark column is the master's value; no other colour, class,
   token or gradient enters the file.
 - **The family is tagged on the icon, not on the theme directory.** `contour/arc` is `draw`,
-  `primitives/cube` is `model`, `actions/delete` is `danger`; the theme says where the icon is shown,
+  `primitives/cuboid` is `model`, `actions/delete` is `danger`; the theme says where the icon is shown,
   the family says what it means. `danger` is for destructive commands only.
 - **The rasteriser maps the literals to the active variant's ink before the upload.** `RoleRamp` holds
   the six dark inks (the identity mapping) and the six folded light inks; the texture is built from

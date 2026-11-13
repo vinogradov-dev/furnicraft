@@ -575,11 +575,11 @@ const MODEL: [GroupSpec; 5] = [
         label: Message::GroupPrimitives,
         tools: &[
             ToolSpec {
-                id: "model.primitives.cube",
-                label: Message::ToolCube,
-                icon: Some(icons::primitives::CUBE),
+                id: "model.primitives.cuboid",
+                label: Message::ToolBox,
+                icon: Some(icons::primitives::CUBOID),
                 shortcut: None,
-                run: Some(ToolKind::Primitive(PrimitiveKind::Cube)),
+                run: Some(ToolKind::Primitive(PrimitiveKind::Cuboid)),
                 method: None,
                 variants: &[],
             },
@@ -986,7 +986,7 @@ mod tests {
         );
         assert_eq!(
             live("model"),
-            ["model.create.extrude", "model.primitives.cube", "model.primitives.cylinder", "model.primitives.sphere",]
+            ["model.create.extrude", "model.primitives.cuboid", "model.primitives.cylinder", "model.primitives.sphere",]
         );
         assert_eq!(
             live("furniture"),
@@ -994,6 +994,26 @@ mod tests {
         );
         assert_eq!(live("scene"), ["scene.objects.assembly", "scene.objects.camera", "scene.objects.light"]);
         assert_eq!(live("view"), ["view.display.grid", "view.projection.frame-all", "view.projection.toggle"]);
+    }
+
+    #[test]
+    fn the_model_tab_offers_a_box_and_names_no_cube() {
+        // The one solid primitive is a box with three independent sides; the cube, its edge and its
+        // message left the ribbon with schema 23 (ADR 0101).
+        let model = tab("model").expect("the model tab");
+        for tool in model.live_groups().flat_map(GroupSpec::live_tools) {
+            let label = tool.label.text(furnicraft_text::Lang::En);
+            assert!(!tool.id.contains("cube"), "{} is still a cube cell", tool.id);
+            assert!(!label.contains("Cube"), "{} still says cube", tool.id);
+        }
+        let box_tool = model
+            .live_groups()
+            .flat_map(GroupSpec::live_tools)
+            .find(|tool| tool.run == Some(ToolKind::Primitive(PrimitiveKind::Cuboid)))
+            .expect("the box cell");
+        assert_eq!(box_tool.id, "model.primitives.cuboid");
+        assert_eq!(box_tool.label.text(furnicraft_text::Lang::En), "Box");
+        assert_eq!(box_tool.icon, Some(icons::primitives::CUBOID));
     }
 
     #[test]
@@ -1012,7 +1032,7 @@ mod tests {
             ToolKind::FrameAll,
             ToolKind::Projection,
             ToolKind::GridSnap,
-            ToolKind::Primitive(PrimitiveKind::Cube),
+            ToolKind::Primitive(PrimitiveKind::Cuboid),
             ToolKind::Primitive(PrimitiveKind::Cylinder),
             ToolKind::Primitive(PrimitiveKind::Sphere),
             ToolKind::Draw(DrawTool::Line),

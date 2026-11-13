@@ -77,11 +77,11 @@ pub enum MeshError {
         /// The vertex count of the mesh.
         count: usize,
     },
-    /// A cube was asked for with an edge that has no positive half-extent.
-    #[error("primitive size must be positive, got {edge} micrometres")]
+    /// A box was asked for with a side that is not positive.
+    #[error("box size must be positive, got {size} micrometres")]
     NonPositiveSize {
-        /// The rejected size in micrometres.
-        edge: i64,
+        /// The rejected side length in micrometres.
+        size: i64,
     },
 }
 
@@ -177,28 +177,42 @@ impl Mesh {
         (min, max)
     }
 
-    /// Builds a cube of `edge` length centred on the object's local origin.
+    /// Builds a box between two opposite corners, `min` and `max`.
     ///
-    /// The cube is the first primitive; its six quads are counter-clockwise seen from outside. An
-    /// odd edge length loses at most one micrometre to integer halving, which no panel rule cares
-    /// about.
-    pub fn cube(edge: Length) -> Result<Self, MeshError> {
-        let half = edge.micrometres() / 2;
-        if half <= 0 {
-            return Err(MeshError::NonPositiveSize { edge: edge.micrometres() });
+    /// The six quads are counter-clockwise seen from outside, whichever corner the caller calls
+    /// `min`, so a box built from its base corner and one built around the origin have the same
+    /// faces. A box whose sides are not all positive is refused: a flat or inside-out box is a
+    /// shape the document cannot hold ([ADR 0054]).
+    ///
+    /// [ADR 0054]: ../docs/decisions/0054-a-primitive-keeps-the-parameters-that-built-it.md
+    pub fn cuboid(min: [Length; 3], max: [Length; 3]) -> Result<Self, MeshError> {
+        let mut sides = [0i64; 3];
+        for (axis, side) in sides.iter_mut().enumerate() {
+            let start = min[axis].micrometres();
+            let end = max[axis].micrometres();
+            *side = end.checked_sub(start).ok_or(MeshError::NonPositiveSize { size: end })?;
+            if *side <= 0 {
+                return Err(MeshError::NonPositiveSize { size: *side });
+            }
         }
         let corner = |x: i64, y: i64, z: i64| {
-            [Length::from_micrometres(x), Length::from_micrometres(y), Length::from_micrometres(z)]
+            let steps = [x, y, z];
+            let mut point = [Length::ZERO; 3];
+            for (axis, step) in steps.iter().enumerate() {
+                let offset = sides[axis].saturating_mul(*step);
+                point[axis] = Length::from_micrometres(min[axis].micrometres().saturating_add(offset));
+            }
+            point
         };
         let positions = vec![
-            corner(-half, -half, -half),
-            corner(half, -half, -half),
-            corner(half, half, -half),
-            corner(-half, half, -half),
-            corner(-half, -half, half),
-            corner(half, -half, half),
-            corner(half, half, half),
-            corner(-half, half, half),
+            corner(0, 0, 0),
+            corner(1, 0, 0),
+            corner(1, 1, 0),
+            corner(0, 1, 0),
+            corner(0, 0, 1),
+            corner(1, 0, 1),
+            corner(1, 1, 1),
+            corner(0, 1, 1),
         ];
         Self::new(
             positions,
@@ -260,9 +274,28 @@ mod tests {
     }
 
     #[test]
-    fn a_cube_needs_a_positive_half_extent() {
-        for edge in [Length::ZERO, Length::from_micrometres(1)] {
-            assert_eq!(Mesh::cube(edge), Err(MeshError::NonPositiveSize { edge: edge.micrometres() }));
+    fn a_box_needs_three_positive_sides() {
+        let cases = [
+            ([Length::ZERO, millimetres(10), millimetres(10)], 0),
+            ([millimetres(10), Length::from_micrometres(-1), millimetres(10)], -1),
+            ([millimetres(10), millimetres(10), Length::ZERO], 0),
+        ];
+        for (sides, size) in cases {
+            assert_eq!(Mesh::cuboid([Length::ZERO; 3], sides), Err(MeshError::NonPositiveSize { size }));
         }
+    }
+
+    #[test]
+    fn a_box_spans_the_two_corners_it_was_given() {
+        let min = [millimetres(-10), millimetres(5), millimetres(0)];
+        let max = [millimetres(90), millimetres(45), millimetres(18)];
+        let box_mesh = Mesh::cuboid(min, max).expect("a box");
+        assert_eq!(box_mesh.positions().len(), 8);
+        assert_eq!(box_mesh.faces().len(), 6);
+        assert_eq!(box_mesh.bounds_micrometres(), ([-10_000, 5_000, 0], [90_000, 45_000, 18_000]));
+        assert!(
+            box_mesh.positions().contains(&min) && box_mesh.positions().contains(&max),
+            "both corners are vertices"
+        );
     }
 }
