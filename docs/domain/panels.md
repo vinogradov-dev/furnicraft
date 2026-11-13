@@ -12,8 +12,9 @@ Related decisions: [0006](../decisions/0006-panel-nominal-and-resolved-geometry.
 [0008](../decisions/0008-panel-diagnostics.md),
 [0009](../decisions/0009-contour-first-panel-model.md),
 [0040](../decisions/0040-a-constructive-contour-is-a-ring-of-segments.md),
-[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md) and
-[0045](../decisions/0045-machining-is-an-ordered-list-of-anchored-operations.md).
+[0042](../decisions/0042-a-contour-panel-keeps-its-ring-and-edits-a-working-copy.md),
+[0045](../decisions/0045-machining-is-an-ordered-list-of-anchored-operations.md) and
+[0105](../decisions/0105-a-panel-stance-is-the-flat-frame-turned.md).
 
 ## 1. Terms
 
@@ -76,6 +77,45 @@ Panel material and edge-banding material are described in [Materials and catalog
   an included band or a trimmed end changes the core without moving the local frame. The machine
   works on the board, but its coordinates are derived from this fixed frame at the CAM boundary.
 - Nominal size and overall size are derived values for the card, reports and UI. They do not have to coincide with `0..core`.
+
+### 3.1. The three stances
+
+A panel is a rectangle in its own frame, and the frame says nothing about where the rectangle is
+when it stands up. Three positions cover a fasad cabinet — the back wall, the post and the shelf —
+and all three are the **same frame turned**, never mirrored (ADR
+[0105](../decisions/0105-a-panel-stance-is-the-flat-frame-turned.md)). One convention therefore
+fixes the corner order in every position instead of leaving it to each tool:
+
+- vertex 1 is the panel's zero and its origin, and it is a corner of the bottom face, so a placement
+  translation is the base corner of the board and never its ceiling;
+- the vertices still run counter-clockwise seen from face `A`, because the numbering belongs to the
+  frame rather than to the view;
+- the turns are right-hand rotations about the positive world axes, that is counter-clockwise seen
+  from the axis' own `+` side.
+
+| Stance | Local `+X` (length) | Local `+Y` (width) | Local `+Z` (thickness) | Face `A` points | Vertex 1 | Reached from the shelf by |
+|---|---|---|---|---|---|---|
+| shelf (полка) | world `+X` | world `+Y` | world `+Z`, up | up | the minimum `x` and `y`, on the bottom face | no turn: the flat frame |
+| post (стойка) | world `+Z`, up | world `+Y` | world `−X` | `−X` | the bottom-rear corner | `−90°` about `+Y` |
+| wall (стенка) | world `+Z`, up | world `+X` | world `+Y` | front, `+Y` | the corner at minimum `x` and `z` | `−90°` about `+Y`, then `−90°` about `+Z` |
+
+Read the other way, which is how the positions chain in speech: the **wall turned counter-clockwise
+about `+Z` is the post**, and the **post turned counter-clockwise about `+Y` is the shelf**. A left
+and a right side panel are one stance at two placements, not two stances.
+
+**What the maker sees.** The front view looks along `−Y`, so the screen's right is world `−X` and its
+up is `+Z` ([0023](../decisions/0023-fasad-furniture-and-standard-views.md)):
+
+- the wall reads 1 right-bottom, 2 right-top, 3 left-top, 4 left-bottom;
+- the post reads 1 bottom-rear, 2 top-rear — the rear edge is the one farther from the front viewer
+  — then 3 and 4 on the front edge, so seen from its `A` side (looking along `+X`) it numbers
+  right-bottom, right-top, left-top, left-bottom as well;
+- the shelf reads 1 right-far and 2 left-far, both on its rear edge; seen from `A`, that is from
+  above, the order is counter-clockwise as everywhere else.
+
+**A stance is a placement, not document data.** A tool that stands a part composes the stance's
+rotation with the position it measured and passes the result to `panel.create`; the panel stores the
+placement the maker can then move or turn, and nothing records which stance it was born in.
 
 ## 4. Panel dimensions
 

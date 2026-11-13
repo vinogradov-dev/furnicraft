@@ -110,6 +110,7 @@ superseded, never rewritten — add a new record and mark the old one `Supersede
 | [0103](0103-one-probe-serves-the-niche-the-distances-and-the-move.md) | One probe serves the niche, the distances and the move | Accepted; refines 0099 and 0102 |
 | [0104](0104-a-ghost-of-a-missing-node-is-shell-paint.md) | A ghost of a missing node is shell paint, not the overlay | Accepted; narrows 0093 |
 | [0104](0104-supply-names-four-sources.md) | Supply names four sources, and a product is assembled | Accepted; amends the trait list of 0094 |
+| [0105](0105-a-panel-stance-is-the-flat-frame-turned.md) | A panel stance is the flat frame turned, never mirrored | Accepted |
 
 ## Format
 
