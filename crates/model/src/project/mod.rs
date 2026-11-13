@@ -13,6 +13,7 @@ mod camera_light_cmds;
 mod error;
 #[cfg(test)]
 mod frame_contract;
+mod move_query;
 mod node_cmds;
 mod object_cmds;
 mod panel_cmds;
@@ -22,6 +23,7 @@ mod query;
 mod wire;
 
 pub use error::ProjectError;
+pub use move_query::{MoveAxis, MoveLimit, MoveRule};
 pub(crate) use wire::ProjectWire;
 
 use crate::*;

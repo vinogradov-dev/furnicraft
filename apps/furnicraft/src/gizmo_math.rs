@@ -13,7 +13,7 @@ use eframe::egui;
 use egui::{Align2, Color32, FontId, Pos2, Shape, Stroke, Ui, Vec2};
 use furnicraft_engine::{Dimension, NodeRules};
 use furnicraft_geom::{DMat4, DQuat, DVec2, DVec3};
-use furnicraft_model::{Id, Placement, Project};
+use furnicraft_model::{Id, MoveAxis, Placement, Project};
 use furnicraft_scene::{Camera, MAX_PITCH, MIN_PITCH, Projection, Ray};
 use furnicraft_units::Length;
 
@@ -89,6 +89,15 @@ impl Axis {
         }
     }
 
+    /// The world axis a translate drag of this handle runs along.
+    pub(crate) const fn move_axis(self) -> MoveAxis {
+        match self {
+            Self::X => MoveAxis::X,
+            Self::Y => MoveAxis::Y,
+            Self::Z => MoveAxis::Z,
+        }
+    }
+
     /// The local dimension this axis changes, for the class gate.
     pub(crate) const fn dimension(self) -> Dimension {
         match self {
@@ -139,10 +148,16 @@ impl Target<'_> {
         self.project.pivot_world(self.anchor()?)
     }
 
-    /// Every drawable that moves with the selection, in target order.
+    /// Every scene item that moves with the selection, in target order.
+    ///
+    /// A panel, an object and a path carry their own id. A product's dashed envelope does too, so
+    /// the frame follows a furniture drag instead of staying behind until the release.
     pub(crate) fn drawables(&self) -> Vec<Id> {
         let mut drawables = Vec::new();
         for target in self.move_targets() {
+            if self.project.container(target.node).is_some_and(|container| container.envelope().is_some()) {
+                drawables.push(target.node);
+            }
             drawables.extend(self.project.geometry_ids_under(target.node).unwrap_or_default());
         }
         drawables
@@ -860,7 +875,8 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use furnicraft_model::{
-        CameraProjection, Container, Geometry, LightKind, Mesh, Panel, Project, PropertyValue, SYSTEM_CLASS,
+        CameraProjection, ClassCode, Container, Envelope, Geometry, LightKind, Mesh, Panel, Project, PropertyValue,
+        SYSTEM_CLASS,
     };
     use furnicraft_testkit::{millimetres, sample_panel_nominal_size, sample_panel_thickness, sample_project};
 
@@ -1400,6 +1416,25 @@ mod tests {
                 .expect("class the cube");
         }
         (project, object)
+    }
+
+    #[test]
+    fn a_product_drag_carries_its_envelope_in_the_preview() {
+        let mut project = sample_project();
+        let root = project.root().id();
+        let envelope = Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid envelope");
+        let class: ClassCode = "30.01.01".parse().expect("a base cabinet");
+        let product = project.add_product(root, "Cabinet", class, envelope, Placement::IDENTITY).expect("a product");
+        let selection = [product];
+        assert!(
+            target(&project, &selection).drawables().contains(&product),
+            "the dashed frame is a scene item of the product's own id and must follow the drag"
+        );
+
+        // A loose panel carries its own id too; a panel is a drawable, not an envelope.
+        let panel = Id::new(2).expect("id");
+        let loose = [panel];
+        assert_eq!(target(&project, &loose).drawables(), vec![panel]);
     }
 
     #[test]

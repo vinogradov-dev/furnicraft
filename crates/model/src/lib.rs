@@ -76,7 +76,7 @@ pub use primitive::{
     Cube, Cylinder, DEFAULT_BANDS, DEFAULT_SEGMENTS, MAX_BANDS, MAX_PRIMITIVE_SIZE, MAX_SEGMENTS, MIN_BANDS,
     MIN_PRIMITIVE_SIZE, MIN_SEGMENTS, Primitive, PrimitiveError, PrimitiveKind, Sphere,
 };
-pub use project::{Project, ProjectError};
+pub use project::{MoveAxis, MoveLimit, MoveRule, Project, ProjectError};
 pub use properties::{
     Properties, PropertyChange, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT, SYSTEM_PROTOTYPE_ID,
     SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,

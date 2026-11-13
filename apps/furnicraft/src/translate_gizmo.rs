@@ -6,13 +6,19 @@
 //! converted into its own parent frame and rounded to micrometres, so a selection whose nodes have
 //! different parents still moves rigidly and the inspector agrees with the document after the drag.
 //!
+//! A furniture drag is cut by the document's own rule (`Project::move_rule`): a floor-bound product
+//! keeps its height, a shell stops at another shell and a body at another body, and the moved box
+//! lands on the floor, on a neighbouring face or on the 1 mm grid (ADR 0102, ADR 0103). The rule is
+//! applied to the preview, and the release commits that same distance, so a drag is one undo entry
+//! and the preview is not a promise the command breaks.
+//!
 //! Handles keep a constant screen length. An axis within about ten degrees of the view direction is
 //! not drawn: its projected direction is unstable and a pointer drag would move it by metres.
 
 use eframe::egui;
 use egui::{Response, Ui};
 use furnicraft_geom::DVec3;
-use furnicraft_model::Id;
+use furnicraft_model::{Id, MoveRule};
 use furnicraft_scene::MAX_DISTANCE_MM;
 
 use crate::gizmo_math::{
@@ -25,6 +31,8 @@ use crate::gizmo_math::{
 struct Drag {
     node: Id,
     axis: Axis,
+    /// The furniture rule this drag was measured against when it started, if any.
+    rule: Option<MoveRule>,
     drawables: Vec<Id>,
     targets: Vec<MoveTarget>,
     start_origin: DVec3,
@@ -100,7 +108,8 @@ impl TranslateGizmo {
             {
                 let scalar = (parameter - drag.start_parameter).clamp(-MAX_DISTANCE_MM, MAX_DISTANCE_MM);
                 if scalar.is_finite() {
-                    drag.delta = drag.axis.direction() * scalar;
+                    let distance = constrained_distance(drag.rule.as_ref(), drag.axis, scalar);
+                    drag.delta = drag.axis.direction() * distance;
                 }
             }
             if !down {
@@ -140,9 +149,12 @@ impl TranslateGizmo {
             return Ok(None);
         };
 
+        let moving: Vec<Id> = targets.iter().map(|target| target.node).collect();
+        let rule = target.project.move_rule(&moving);
         self.drag = Some(Drag {
             node: anchor.node,
             axis,
+            rule,
             drawables: target.drawables(),
             targets,
             start_origin: origin_world,
@@ -178,6 +190,15 @@ impl TranslateGizmo {
     }
 }
 
+/// The distance a drag may travel: the pointer's own distance, cut by the furniture move rule.
+///
+/// The rule was read from the document when the drag started and the document still holds those
+/// placements, so the preview and the release read the same answer. A drag outside furniture has no
+/// rule and keeps its exact micrometre distance.
+fn constrained_distance(rule: Option<&MoveRule>, axis: Axis, distance: f64) -> f64 {
+    rule.map_or(distance, |rule| rule.limit(axis.move_axis(), distance).distance_mm)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -186,10 +207,13 @@ mod tests {
 
     use egui::Pos2;
     use furnicraft_geom::DQuat;
-    use furnicraft_model::Placement;
+    use furnicraft_model::{ClassCode, Envelope, Placement};
     use furnicraft_scene::Camera;
+    use furnicraft_testkit::{millimetres, sample_project};
+    use furnicraft_units::Length;
 
     use super::*;
+    use crate::gizmo_math::move_targets;
 
     fn viewport() -> egui::Rect {
         egui::Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(800.0, 600.0))
@@ -258,6 +282,47 @@ mod tests {
         assert_eq!(commit_translation(&[target], DVec3::ZERO).expect("no error"), None);
         assert_eq!(commit_translation(&[target], DVec3::new(1.0e-7, 0.0, 0.0)).expect("no error"), None);
         assert_eq!(commit_translation(&[], DVec3::new(1.0, 0.0, 0.0)).expect("no error"), None);
+    }
+
+    /// A `600 x 560 x 720` millimetre base cabinet at `x` millimetres, on the floor.
+    fn add_cabinet(project: &mut furnicraft_model::Project, x: i64) -> Id {
+        let root = project.root().id();
+        let envelope = Envelope::new(millimetres(600), millimetres(560), millimetres(720)).expect("a valid envelope");
+        let placement = Placement::IDENTITY
+            .with_translation(millimetres(x), Length::ZERO, Length::ZERO)
+            .expect("a floor placement");
+        let class: ClassCode = "30.01.01".parse().expect("a base cabinet");
+        project.add_product(root, "Cabinet", class, envelope, placement).expect("a product")
+    }
+
+    #[test]
+    fn a_furniture_drag_stops_at_contact_and_the_release_lands_there() {
+        let mut project = sample_project();
+        let cabinet = add_cabinet(&mut project, 0);
+        let neighbour = add_cabinet(&mut project, 1000);
+        // The pointer pulls 1000 mm, the neighbour's wall is at 1000: the drag keeps 400.
+        let rule = project.move_rule(&[cabinet]).expect("a furniture drag");
+        let distance = constrained_distance(Some(&rule), Axis::X, 1000.0);
+        assert_eq!(distance, 400.0);
+
+        // The release commits exactly the previewed distance, so the preview is no lie.
+        let targets = move_targets(&project, &[cabinet]);
+        let commit = commit_translation(&targets, Axis::X.direction() * distance)
+            .expect("a valid placement")
+            .expect("the drag moved the cabinet");
+        assert_eq!(commit.changes.len(), 1, "one drag is one placement and one undo entry");
+        let moved = commit.changes[0].placement.translation();
+        assert!((moved - DVec3::new(400.0, 0.0, 0.0)).length() < 1.0e-9, "was {moved:?}");
+        assert!((moved.x + 600.0 - 1000.0).abs() < 1.0e-9, "the cabinet's far face touches the neighbour's");
+        assert_eq!(project.origin_world(neighbour), Some(DVec3::new(1000.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn a_drag_outside_furniture_keeps_its_exact_distance() {
+        let project = sample_project();
+        let loose = Id::new(2).expect("id");
+        assert!(project.move_rule(&[loose]).is_none());
+        assert_eq!(constrained_distance(None, Axis::X, 97.4), 97.4);
     }
 
     #[test]
