@@ -646,6 +646,23 @@ mod tests {
     }
 
     #[test]
+    fn a_post_keeps_its_board_inside_the_void_at_both_ends_of_its_travel() {
+        let (project, product) = piece();
+        // The pointer's plane is the face the post grows away from, so the board spans one thickness
+        // to its +X side; a sign slip there would leave the board hanging through a wall.
+        for pointer in [0.0, 600.0] {
+            let ghost =
+                plan(&project, product, DVec3::new(pointer, 280.0, 360.0), Fill::HeightAndDepth, millimetres(18))
+                    .expect("a post fills the void");
+            let xs: Vec<f64> = ghost.world.iter().chain(ghost.top.iter()).map(|corner| corner.x).collect();
+            let low = xs.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            assert!(low >= -1e-9 && high <= 600.0 + 1e-9, "the post left the void at {pointer}: {low}..{high}");
+            assert!((high - low - 18.0).abs() < 1e-9, "and it is one board thick: {low}..{high}");
+        }
+    }
+
+    #[test]
     fn a_shelf_in_a_splayed_void_takes_the_trapezoid_outline() {
         let (project, product) = splayed_piece();
         let ghost = plan(&project, product, DVec3::new(300.0, 280.0, 360.0), Fill::WidthAndDepth, millimetres(18))
