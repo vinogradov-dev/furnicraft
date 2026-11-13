@@ -280,6 +280,43 @@ impl Project {
         }
     }
 
+    /// The nearest product at or above `id`, or `None` when the node is outside every product.
+    ///
+    /// The answer is computed by a walk and never stored, so no reference can go stale (ADR 0097).
+    /// A part two levels down answers with the product that owns it, and a product answers with
+    /// itself; physical containment is not kinship, so a piece standing in another's niche is not
+    /// part of it.
+    pub fn product_of(&self, id: Id) -> Option<Id> {
+        let mut current = Some(id);
+        while let Some(id) = current {
+            if self.container(id).is_some_and(Container::is_product) {
+                return Some(id);
+            }
+            current = self.parent_of(id);
+        }
+        None
+    }
+
+    /// Every product in the tree, in tree order.
+    pub fn products(&self) -> Vec<Id> {
+        fn walk(children: &[Node], found: &mut Vec<Id>, depth: u32) {
+            if depth > Project::MAX_ASSEMBLY_DEPTH {
+                return;
+            }
+            for child in children {
+                if let Node::Container(container) = child {
+                    if container.is_product() {
+                        found.push(container.id());
+                    }
+                    walk(container.children(), found, depth.saturating_add(1));
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(self.root.children(), &mut found, 1);
+        found
+    }
+
     /// Selects the nodes that match a query, in tree order.
     pub fn query(&self, query: &NodeQuery) -> Vec<Id> {
         fn matches(properties: &Properties, kind: StructuralKind, query: &NodeQuery) -> bool {
@@ -401,11 +438,11 @@ mod tests {
         let group = project.group_nodes(&[Id::new(2).expect("id"), Id::new(3).expect("id")], "G").expect("group");
         assert!(!project.is_component(group));
 
-        project.set_property(group, SYSTEM_CLASS, PropertyValue::class(class("30.01.02"))).expect("class");
+        project.set_property(group, SYSTEM_CLASS, PropertyValue::class(class("30.11"))).expect("class");
         assert!(project.is_component(group));
         project.set_property(group, SYSTEM_COMPONENT, PropertyValue::bool(false)).expect("false marker");
         assert!(project.is_component(group), "an explicit false does not erase the furniture type");
-        assert_eq!(project.class(group), Some(class("30.01.02")));
+        assert_eq!(project.class(group), Some(class("30.11")));
         assert_eq!(project.class(root), Some(ClassCode::UNCLASSIFIED));
 
         assert_eq!(project.ungroup_group(group), Err(ProjectError::NotAComponent { id: group }));
@@ -421,7 +458,7 @@ mod tests {
         let panel = Id::new(2).expect("panel");
         let front = Id::new(4).expect("front");
         let drawer = Id::new(3).expect("drawer");
-        project.set_property(drawer, SYSTEM_CLASS, PropertyValue::class(class("30.01.02"))).expect("class");
+        project.set_property(drawer, SYSTEM_CLASS, PropertyValue::class(class("30.11"))).expect("class");
         project.set_property(panel, "role", PropertyValue::text("shelf")).expect("role");
 
         assert_eq!(project.query(&NodeQuery::any()), vec![panel, drawer, front]);
@@ -432,7 +469,7 @@ mod tests {
             vec![drawer],
             "a query on a group matches every type below it"
         );
-        assert_eq!(project.query(&NodeQuery::any().with_class_under(class("30.01.02"))), vec![drawer]);
+        assert_eq!(project.query(&NodeQuery::any().with_class_under(class("30.11"))), vec![drawer]);
         assert!(project.query(&NodeQuery::any().with_class_under(class("40"))).is_empty());
         assert_eq!(
             project.query(&NodeQuery::any().with_class_under(ClassCode::UNCLASSIFIED)),

@@ -22,6 +22,7 @@ pub mod node_cmds;
 pub mod object_cmds;
 pub mod panel_cmds;
 mod preview;
+pub mod product_cmds;
 mod resolve;
 pub mod scene_cmds;
 mod session;
@@ -46,5 +47,6 @@ pub use panel_cmds::{
     PanelResize, PanelRingBandingClear, PanelRingBandingSet,
 };
 pub use preview::Preview;
+pub use product_cmds::{ProductCreate, ProductEnvelopeSet};
 pub use scene_cmds::{CameraCreate, CameraProjectionSet, LightCreate, LightParamsSet, SceneActiveCameraSet};
 pub use session::{EditScope, Session};

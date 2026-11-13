@@ -1036,6 +1036,8 @@ messages! {
     CmdSetCameraProjection = ["Set camera projection", "Задать проекцию камеры"],
     CmdSetLightParameters = ["Set light parameters", "Задать параметры света"],
     CmdCreateAssembly = ["Create assembly", "Создать сборку"],
+    CmdCreateProduct = ["Create product frame", "Создать каркас изделия"],
+    CmdSetProductEnvelope = ["Set product frame size", "Задать габарит изделия"],
     CmdRename = ["Rename", "Переименовать"],
     CmdDelete = ["Delete", "Удалить"],
     CmdDuplicate = ["Duplicate", "Дублировать"],

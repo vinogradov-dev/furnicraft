@@ -58,6 +58,12 @@ impl ClassCode {
     /// The unclassified class, `000000`, the default of every node.
     pub const UNCLASSIFIED: Self = Self(0);
 
+    /// The editor's placeholder product class, «изделие общего назначения» / general product.
+    ///
+    /// `product.create` assigns it when the caller names no class, so a product always carries
+    /// one (ADR 0097); a test proves it is the `80.01.00` registry row with `level = Product`.
+    pub const GENERAL_PRODUCT: Self = Self(800_100);
+
     /// The largest assignable code.
     pub const MAX: Self = Self(CLASS_MAX_CODE);
 
@@ -142,6 +148,14 @@ impl ClassCode {
     /// The trait set of the class, or `None` for an unclassified code, an unknown code or a family.
     pub fn traits(self) -> Option<TraitSet> {
         self.row()?.traits
+    }
+
+    /// Whether the class plays the product role: `level = Product` (ADR 0097).
+    ///
+    /// The role is a trait and not a code range, so an export reader asks this question without
+    /// knowing our digits.
+    pub fn is_product_class(self) -> bool {
+        self.traits().is_some_and(|traits| traits.level() == Level::Product)
     }
 
     /// The label pair of the class, or `None` when the registry does not know the code.
@@ -1745,6 +1759,18 @@ mod tests {
         assert_eq!(class("30").value(), 300_000);
         assert_eq!(format!("{}", class("30")), "30");
         assert_eq!(format!("{}", ClassCode::UNCLASSIFIED), "0");
+    }
+
+    #[test]
+    fn the_general_product_placeholder_is_a_product_row() {
+        let placeholder = ClassCode::GENERAL_PRODUCT;
+        let row = placeholder.row().expect("the placeholder is a registry row");
+        assert_eq!(row.slug(), "general-product");
+        assert_eq!(row.label(), Message::ClassGeneralProduct);
+        assert_eq!(row.traits().expect("a class row carries traits").level(), Level::Product);
+        assert!(placeholder.is_assignable());
+        assert!(placeholder.is_product_class());
+        assert!(!class("30.11").is_product_class(), "a shelf is a part, not a product");
     }
 
     #[test]

@@ -84,6 +84,42 @@ pub enum ProjectError {
         /// The root container id.
         id: Id,
     },
+    /// A container carries a product envelope but its class is not a product.
+    #[error("container {node} carries a product envelope but its class is not a product")]
+    EnvelopeWithoutProductClass {
+        /// The container that carries the box.
+        node: Id,
+    },
+    /// A container has a product class but stores no envelope.
+    #[error("container {node} has a product class but no product envelope")]
+    ProductClassWithoutEnvelope {
+        /// The container that lacks the box.
+        node: Id,
+    },
+    /// The requested node is not a product.
+    #[error("node {id} is not a product")]
+    NotAProduct {
+        /// The node that was asked.
+        id: Id,
+    },
+    /// The requested class does not play the product role.
+    #[error("class {class} is not a product class")]
+    NotAProductClass {
+        /// The rejected class.
+        class: ClassCode,
+    },
+    /// A product would become a descendant of another product.
+    #[error("product {product} cannot sit inside another product")]
+    ProductInsideProduct {
+        /// The product that would be nested.
+        product: Id,
+    },
+    /// The root container cannot be a product.
+    #[error("the root container {id} cannot be a product")]
+    RootIsAProduct {
+        /// The root container id.
+        id: Id,
+    },
     /// Ungrouping was requested for a node that is not an ordinary container.
     ///
     /// A panel is an atomic leaf; a component has its own identity and is

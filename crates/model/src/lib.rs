@@ -50,7 +50,7 @@ pub use class::{
     CLASS_MAX_CODE, ClassCode, ClassCodeError, ClassPrefix, ClassRow, Extent, Fill, Level, Measure, Mount, Nesting,
     Opening, Operation, OperationSet, Supply, TraitSet, registry,
 };
-pub use container::Container;
+pub use container::{Container, Envelope, EnvelopeError};
 pub use contour::{
     Contour, ContourError, ContourSegment, ContourSegmentEntry, ContourSegmentError, MAX_CONTOUR_COORDINATE,
     MAX_CONTOUR_SEGMENTS, MAX_POLYGON_SIDES, MIN_POLYGON_SIDES, Path, PathError, PathShape, joint_tolerance_mm,

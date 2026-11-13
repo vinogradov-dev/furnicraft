@@ -1,5 +1,6 @@
 //! Commands that read and write the property bag of a node.
 
+use super::product_cmds::validate_class_change;
 use crate::properties::validate_property_value;
 use crate::tree::find_node_mut;
 use crate::*;
@@ -29,6 +30,11 @@ impl Project {
                 return Err(ProjectError::NodeNotFound { id: change.node });
             }
             validate_property_value(&change.key, &change.value)?;
+            if change.key == SYSTEM_CLASS
+                && let PropertyValue::Class { value } = &change.value
+            {
+                validate_class_change(self, change.node, *value)?;
+            }
         }
         let next_revision = self.next_revision()?;
         for change in changes {
@@ -51,6 +57,9 @@ impl Project {
     pub fn clear_property(&mut self, id: Id, key: &str) -> Result<Revision, ProjectError> {
         if id == self.root.id() {
             return Err(ProjectError::RootImmutable { id });
+        }
+        if key == SYSTEM_CLASS {
+            validate_class_change(self, id, ClassCode::UNCLASSIFIED)?;
         }
         let next_revision = self.next_revision()?;
         let Some(node) = find_node_mut(&mut self.root, id) else {

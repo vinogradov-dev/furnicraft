@@ -680,14 +680,14 @@ mod tests {
         let params = crate::command::json(&NodePropertySet {
             node: drawer,
             key: SYSTEM_CLASS.to_owned(),
-            value: PropertyValue::class("30.01.01".parse().expect("base cabinet")),
+            value: PropertyValue::class("30.11".parse().expect("horizontal panel")),
         })
         .expect("class parameters");
         session.dispatch(NODE_PROPERTY_SET_ID, &params).expect("assign the class");
 
         let (after, _) = draw(&session, &mut ViewFlags::default());
         assert!(
-            after.iter().any(|text| text == "Drawer  [Base cabinet]"),
+            after.iter().any(|text| text == "Drawer  [Horizontal panel]"),
             "the badge names the class and keeps the code for the tooltip: {after:?}"
         );
     }

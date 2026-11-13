@@ -10,6 +10,7 @@ use crate::mesh_cmds;
 use crate::node_cmds;
 use crate::object_cmds;
 use crate::panel_cmds;
+use crate::product_cmds;
 use crate::scene_cmds;
 use crate::session::Session;
 
@@ -104,6 +105,8 @@ static COMMANDS: &[CommandSpec] = &[
     panel_cmds::OUTLINE_SET,
     panel_cmds::OUTLINE_CONTOUR,
     node_cmds::ASSEMBLY_CREATE,
+    product_cmds::PRODUCT_CREATE,
+    product_cmds::PRODUCT_ENVELOPE_SET,
     panel_cmds::RENAME,
     node_cmds::NODE_RENAME,
     panel_cmds::RESIZE,
@@ -297,6 +300,12 @@ mod tests {
         let assembly_create = registry.get("assembly.create").expect("assembly.create is registered");
         assert_eq!(assembly_create.id(), "assembly.create");
         assert_eq!(assembly_create.label().text(Lang::En), "Create assembly");
+        let product_create = registry.get("product.create").expect("product.create is registered");
+        assert_eq!(product_create.id(), "product.create");
+        assert_eq!(product_create.label().text(Lang::En), "Create product frame");
+        let envelope_set = registry.get("product.envelope.set").expect("product.envelope.set is registered");
+        assert_eq!(envelope_set.id(), "product.envelope.set");
+        assert_eq!(envelope_set.label().text(Lang::En), "Set product frame size");
         let node_rename = registry.get("node.rename").expect("node.rename is registered");
         assert_eq!(node_rename.id(), "node.rename");
         assert_eq!(node_rename.label().text(Lang::En), "Rename");
@@ -361,7 +370,7 @@ mod tests {
         assert_eq!(move_vertices.id(), "mesh.vertices.move");
         assert_eq!(move_vertices.label().text(Lang::En), "Move vertices");
         assert!(registry.get("missing.command").is_none());
-        assert_eq!(registry.specs().len(), 52);
+        assert_eq!(registry.specs().len(), 54);
     }
 
     #[test]

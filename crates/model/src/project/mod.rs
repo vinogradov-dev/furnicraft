@@ -16,6 +16,7 @@ mod frame_contract;
 mod node_cmds;
 mod object_cmds;
 mod panel_cmds;
+mod product_cmds;
 mod property_cmds;
 mod query;
 mod wire;
@@ -48,7 +49,7 @@ impl Project {
     /// A file with any other number is refused with one readable sentence, older and newer alike:
     /// before the first release the format has no past, so there is no migration and no alias for a
     /// field an earlier layout used (ADR 0096). Bumping this number is the whole procedure.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 21;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 22;
 
     /// Maximum nesting depth of containers, including the root at depth one.
     pub const MAX_ASSEMBLY_DEPTH: u32 = 64;
@@ -175,8 +176,8 @@ impl Project {
 fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
     let mut seen = HashSet::new();
     let mut max_id = 0u64;
-    let mut stack = vec![(root, 1u32)];
-    while let Some((container, depth)) = stack.pop() {
+    let mut stack = vec![(root, 1u32, false)];
+    while let Some((container, depth, inside_product)) = stack.pop() {
         if depth > Project::MAX_ASSEMBLY_DEPTH {
             return Err(ProjectError::TooDeep { max: Project::MAX_ASSEMBLY_DEPTH });
         }
@@ -185,10 +186,21 @@ fn scan_tree(root: &Container) -> Result<u64, ProjectError> {
             return Err(ProjectError::DuplicateId(id));
         }
         max_id = max_id.max(id.get());
+        let is_product = container.is_product();
+        if depth == 1 && is_product {
+            return Err(ProjectError::RootIsAProduct { id });
+        }
+        match (is_product, container.envelope()) {
+            (true, None) => return Err(ProjectError::ProductClassWithoutEnvelope { node: id }),
+            (true, Some(_)) if inside_product => return Err(ProjectError::ProductInsideProduct { product: id }),
+            (false, Some(_)) => return Err(ProjectError::EnvelopeWithoutProductClass { node: id }),
+            _ => {}
+        }
+        let inside_product = inside_product || is_product;
         for child in container.children() {
             match child {
                 Node::Container(container) => {
-                    stack.push((container, depth.saturating_add(1)));
+                    stack.push((container, depth.saturating_add(1), inside_product));
                 }
                 Node::Panel(panel) => {
                     if !seen.insert(panel.id().get()) {

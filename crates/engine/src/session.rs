@@ -1990,7 +1990,7 @@ mod tests {
         assert!(ungroup.enabled(&session, &json_params(&NodeUngroup { node: group_id })));
         assert!(!convert.enabled(&session, &json_params(&NodeComponentConvertToGroup { node: group_id })));
 
-        let class: ClassCode = "30.01.02".parse().expect("class");
+        let class: ClassCode = "30.11".parse().expect("class");
         session
             .dispatch(
                 "node.property.set",

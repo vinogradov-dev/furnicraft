@@ -4,12 +4,115 @@
 //! an explicit marker says so; an unmarked container is a group and can be flattened.
 //! The project root is a container too, with an immutable id and a zero pivot.
 
+use furnicraft_units::Length;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
-    Id, Node, PivotLocal, Placement, Properties, PropertyError, PropertyValue, SYSTEM_CLASS, SYSTEM_COMPONENT,
-    SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
+    ClassCode, Id, Node, PivotLocal, Placement, Properties, PropertyError, PropertyValue, SYSTEM_CLASS,
+    SYSTEM_COMPONENT, SYSTEM_PROTOTYPE_ID, SYSTEM_PROTOTYPE_PARAMETERS, SYSTEM_PROTOTYPE_VERSION,
 };
+
+/// The authored box of a product: its width, depth and height in the product's own frame.
+///
+/// The document stores the box a human decided on, never the bounds of its parts (ADR 0097). The
+/// three sides are named after the product frame axes: `x` is the width, `y` the depth and `z` the
+/// height. A product anchors at the minimum corner of its base rectangle, so the reserved space is
+/// `[0..x] × [0..y] × [0..z]` in that frame and needs no offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "EnvelopeWire")]
+pub struct Envelope {
+    x: Length,
+    y: Length,
+    z: Length,
+}
+
+impl Envelope {
+    /// The largest side an envelope may have: 10 m, the panel dimension ceiling.
+    pub const MAX_SIDE: Length = Length::from_micrometres(10_000_000);
+
+    /// Builds an envelope from three exact side lengths.
+    ///
+    /// Every side must be positive and inside [`Envelope::MAX_SIDE`]; a bad number is a typed
+    /// error, never a clamp. The envelope is a box: a sloped or reshaped one is a new field and a
+    /// new decision.
+    pub fn new(x: Length, y: Length, z: Length) -> Result<Self, EnvelopeError> {
+        validate_side("width", x)?;
+        validate_side("depth", y)?;
+        validate_side("height", z)?;
+        Ok(Self { x, y, z })
+    }
+
+    /// The width along the product frame's X axis.
+    pub const fn x(self) -> Length {
+        self.x
+    }
+
+    /// The depth along the product frame's Y axis.
+    pub const fn y(self) -> Length {
+        self.y
+    }
+
+    /// The height along the product frame's Z axis.
+    pub const fn z(self) -> Length {
+        self.z
+    }
+
+    /// The three sides in frame order.
+    pub const fn components(self) -> [Length; 3] {
+        [self.x, self.y, self.z]
+    }
+}
+
+/// The serialized form of [`Envelope`]; validation happens in its `TryFrom` implementation.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvelopeWire {
+    x: Length,
+    y: Length,
+    z: Length,
+}
+
+impl TryFrom<EnvelopeWire> for Envelope {
+    type Error = EnvelopeError;
+
+    fn try_from(wire: EnvelopeWire) -> Result<Self, Self::Error> {
+        Self::new(wire.x, wire.y, wire.z)
+    }
+}
+
+/// Why a product envelope is not usable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum EnvelopeError {
+    /// A side is zero or negative.
+    #[error("product {side} must be positive, got {value}")]
+    NonPositive {
+        /// The rejected side.
+        side: &'static str,
+        /// The rejected value.
+        value: Length,
+    },
+    /// A side exceeds the supported maximum.
+    #[error("product {side} must not exceed {max}, got {value}")]
+    TooLarge {
+        /// The rejected side.
+        side: &'static str,
+        /// The rejected value.
+        value: Length,
+        /// The largest accepted value for this side.
+        max: Length,
+    },
+}
+
+fn validate_side(side: &'static str, value: Length) -> Result<(), EnvelopeError> {
+    if !value.is_positive() {
+        return Err(EnvelopeError::NonPositive { side, value });
+    }
+    if value > Envelope::MAX_SIDE {
+        return Err(EnvelopeError::TooLarge { side, value, max: Envelope::MAX_SIDE });
+    }
+    Ok(())
+}
 
 /// A node that can hold children: an ordinary group or a furniture component.
 ///
@@ -28,6 +131,9 @@ pub struct Container {
     children: Vec<Node>,
     #[serde(default)]
     properties: Properties,
+    /// The authored box of a product; a group, a component and the root carry none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    envelope: Option<Envelope>,
 }
 
 impl Container {
@@ -45,6 +151,7 @@ impl Container {
             pivot_local: PivotLocal::ZERO,
             children,
             properties: Properties::new(),
+            envelope: None,
         }
     }
 
@@ -108,6 +215,32 @@ impl Container {
         self.id = id;
     }
 
+    /// The class stored on the container, or [`ClassCode::UNCLASSIFIED`] when it has none.
+    pub fn class(&self) -> ClassCode {
+        match self.properties.get(SYSTEM_CLASS) {
+            Some(PropertyValue::Class { value }) => *value,
+            _ => ClassCode::UNCLASSIFIED,
+        }
+    }
+
+    /// Whether the container plays the product role: its class has `level = Product` (ADR 0097).
+    ///
+    /// The role is a class trait and not a node kind, so a product is an ordinary container that
+    /// answers this question; the envelope is the box it reserves.
+    pub fn is_product(&self) -> bool {
+        self.class().is_product_class()
+    }
+
+    /// The authored box of a product, or `None` for the root, a group or another component.
+    pub const fn envelope(&self) -> Option<Envelope> {
+        self.envelope
+    }
+
+    /// Stores or clears the authored box; [`crate::Project::add_product`] is the creation path.
+    pub(crate) fn set_envelope(&mut self, envelope: Option<Envelope>) {
+        self.envelope = envelope;
+    }
+
     /// Whether the container is marked as a furniture component.
     ///
     /// A non-zero class, a prototype reference or an explicit `component = true` all mark
@@ -129,8 +262,12 @@ impl Container {
         self.properties.insert(SYSTEM_COMPONENT, PropertyValue::bool(component)).map(|_| ())
     }
 
-    /// Clears the component marker, the prototype keys and the class.
+    /// Clears the component marker, the prototype keys, the class and the product envelope.
+    ///
+    /// A product is a component whose class gave it a role and whose envelope gave it a box, so a
+    /// container converted to a plain group loses both in the same command (ADR 0097).
     pub fn clear_component_marker(&mut self) {
+        self.envelope = None;
         self.properties.remove(SYSTEM_COMPONENT);
         self.properties.remove(SYSTEM_CLASS);
         self.properties.remove(SYSTEM_PROTOTYPE_ID);
