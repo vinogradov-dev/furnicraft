@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::{Session, Summary, TaskStatus};
+use crate::{NOTHING_SCHEDULED, Session, Summary, TaskStatus};
 
 /// The session-start block: the state line, the head commit, the session note while one runs, and
 /// the current task with the next three.
@@ -39,11 +39,17 @@ pub fn render_with_detail(summary: &Summary, detail: Option<&str>) -> String {
         // the note's steps.
         text.push_str("  interrupted: yes\n");
     }
-    let current = summary.tasks.iter().position(|task| task.id == state.task);
+    let scheduled = state.current().is_some();
+    if !scheduled {
+        // The order is empty: saying so is the one fact the reader needs, and no parked task is
+        // marked with the arrow that means "work on this".
+        let _ = writeln!(text, "-> {NOTHING_SCHEDULED}: `## Now` is empty, the backlog keeps the work");
+    }
+    let current = state.current().and_then(|id| summary.tasks.iter().position(|task| task.id == id));
     let from = current.unwrap_or(0);
     let upcoming = summary.tasks.iter().skip(from).filter(|task| task.status != TaskStatus::Done);
-    for (offset, task) in upcoming.take(4).enumerate() {
-        let arrow = if offset == 0 { "->" } else { "  " };
+    for (offset, task) in upcoming.take(if scheduled { 4 } else { 3 }).enumerate() {
+        let arrow = if scheduled && offset == 0 { "->" } else { "  " };
         // The lead sentence, not the whole entry: the fields are one command away.
         let _ = write!(text, "{arrow} {} {} · {}", task.status.marker(), task.id, task.lead);
         if let Some(files) = &task.files {

@@ -380,12 +380,12 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let backlog = edit::move_entry(&backlog, &id, "Done", edit::At::Top)?;
     let status = read(root, "plan/STATUS.md")?;
     let tasks = crate::parse_backlog(&backlog);
-    let next = first_open(&tasks).ok_or_else(|| {
-        "no unfinished task is left in `## Now`; set `STATE:` for the next milestone by hand".to_owned()
-    })?;
+    // The order may end here: `task=-` says no task is scheduled, and `## Next` says so in words.
+    let next = first_open(&tasks);
+    let current = next.map_or_else(|| crate::NO_TASK.to_owned(), |task| task.id.clone());
     // The plan describes the tree that is checked out now, so `base` and `updated` follow `HEAD`,
     // not the commit the closed task names (a task may be closed long after it landed).
-    let mut values = vec![("task".to_owned(), next.id.clone()), ("state".to_owned(), "idle".to_owned())];
+    let mut values = vec![("task".to_owned(), current), ("state".to_owned(), "idle".to_owned())];
     if let Some(head) = git.short("HEAD") {
         values.push(("base".to_owned(), head));
     }
@@ -394,9 +394,11 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     }
     let status = edit::set_state(&status, &values)?;
     // The `## Next` paragraph names the task `STATE:` does, so a close that changes it must say what
-    // the next paragraph is; otherwise the gate refuses and nothing is written.
+    // the next paragraph is; otherwise the gate refuses and nothing is written. An order that ends
+    // here has no task to name, so the close writes the sentence that says nothing is scheduled.
     let status = match options.value("next") {
-        Some(next) => edit::set_section(&status, "Next", next)?,
+        Some(paragraph) => edit::set_section(&status, "Next", paragraph)?,
+        None if next.is_none() => edit::set_section(&status, "Next", &nothing_scheduled(&tasks))?,
         None => status,
     };
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog).with("plan/STATUS.md", status);
@@ -405,7 +407,10 @@ fn close(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     }
     apply(root, changes, &options, git)?;
     if !options.dry_run {
-        println!("task {id} closed into `## Done` at `{hash}`; `{next_id}` is next", next_id = next.id);
+        match next {
+            Some(task) => println!("task {id} closed into `## Done` at `{hash}`; `{}` is next", task.id),
+            None => println!("task {id} closed into `## Done` at `{hash}`; the work order is empty"),
+        }
     }
     Ok(())
 }
@@ -498,17 +503,19 @@ fn defer(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     let moved = crate::parse_backlog(&backlog);
     let mut changes = Changes::new(root).with("plan/BACKLOG.md", backlog);
     if first_open(&tasks).is_some_and(|head| head.id == id) {
-        let next = first_open(&moved).ok_or_else(|| {
-            format!(
-                "deferring {id} would leave `## Now` with nothing to work on; close the milestone or add a \
-                 task first"
-            )
-        })?;
+        // Deferring the head hands the order to the next open entry, or leaves it empty; either way
+        // `STATE:` and `## Next` say the same thing in the same write.
+        let next = first_open(&moved);
+        let current = next.map_or_else(|| crate::NO_TASK.to_owned(), |task| task.id.clone());
         let status = read(root, "plan/STATUS.md")?;
-        let status = edit::set_state(&status, &[("task".to_owned(), next.id.clone())])?;
+        let status = edit::set_state(&status, &[("task".to_owned(), current)])?;
         let status = match options.value("next") {
-            Some(next) => edit::set_section(&status, "Next", next)?,
-            None => edit::set_section(&status, "Next", &format!("{} is next: {}", next.id, next.lead))?,
+            Some(paragraph) => edit::set_section(&status, "Next", paragraph)?,
+            None => {
+                let paragraph = next
+                    .map_or_else(|| nothing_scheduled(&moved), |task| format!("{} is next: {}", task.id, task.lead));
+                edit::set_section(&status, "Next", &paragraph)?
+            }
         };
         changes = changes.with("plan/STATUS.md", status);
     }
@@ -538,7 +545,7 @@ fn reopen(root: &Path, args: &[String], git: &dyn Git) -> Result<(), String> {
     // otherwise the gate refuses, and two hand edits are the only way to say what the plan means.
     let status = match options.value("next") {
         Some(next) => edit::set_section(&status, "Next", next)?,
-        None if crate::validate::next_violation(&status, &id).is_some() => {
+        None if crate::validate::next_violation(&status, Some(&id)).is_some() => {
             return Err(format!(
                 "`plan/STATUS.md` › `## Next` must name the reopened task {id}; \
                  `task reopen {id} --next \"{id} is next: …\"` rewrites it in the same write"
@@ -582,6 +589,19 @@ fn find<'a>(tasks: &'a [crate::Task], id: &str) -> Result<&'a crate::Task, Strin
 }
 
 /// The first unfinished task in `## Now`, which is the task `STATE:` must name.
+/// The paragraph an empty work order writes: nothing is scheduled, and the parked work is counted.
+///
+/// A fresh session reads `## Next` first, so the empty order has to read as a state and not as a
+/// missing sentence; the count tells it that the backlog is not empty, only the order.
+fn nothing_scheduled(tasks: &[crate::Task]) -> String {
+    let parked = tasks.iter().filter(|task| task.status != TaskStatus::Done && task.section != "Now").count();
+    match parked {
+        0 => format!("{}: the backlog holds no open task.", crate::NOTHING_SCHEDULED),
+        1 => format!("{}: 1 open task waits in `## Next`.", crate::NOTHING_SCHEDULED),
+        count => format!("{}: {count} open tasks wait in `## Next`.", crate::NOTHING_SCHEDULED),
+    }
+}
+
 fn first_open(tasks: &[crate::Task]) -> Option<&crate::Task> {
     tasks.iter().find(|task| task.section == "Now" && task.status != TaskStatus::Done)
 }
@@ -1381,14 +1401,80 @@ Phases come from the shape-base plan; `cargo xtask task phase` owns this list:\n
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn an_order_cannot_be_emptied_by_deferring_its_last_task() {
+    /// A plan whose whole order is one open task, with a paragraph that names it.
+    fn one_task_order() -> (&'static str, &'static str) {
         let backlog = "## Now\n\n- `[ ]` **P6** the writer\n  `files: src/a.rs`\n\n## Bugs\n\n## Next\n\n## Done\n";
-        let root = project("defer-last", &with_next(STATUS), backlog, None);
-        let before = snapshot(&root);
-        let error = run(&root, &["defer", "P6"]).expect_err("the order must keep a head");
-        assert!(error.contains("nothing to work on"), "{error}");
-        assert_eq!(snapshot(&root), before, "a refusal writes nothing");
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=P6 state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nP6 is next: the writer\n";
+        (status, backlog)
+    }
+
+    #[test]
+    fn deferring_the_last_task_leaves_a_valid_empty_order() {
+        let (status, backlog) = one_task_order();
+        let root = project("defer-last", status, backlog, None);
+        run(&root, &["defer", "P6"]).expect("the order may be empty");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=- state=idle"), "the state says no task is scheduled: {status}");
+        assert!(status.contains("Nothing is scheduled"), "`## Next` says the order is empty: {status}");
+        let backlog = text(&root, "plan/BACKLOG.md");
+        let next = backlog.find("## Next").expect("Next is there");
+        assert!(backlog[next..].contains("**P6**"), "the entry is parked under `## Next`: {backlog}");
+        assert!(!backlog[..next].contains("**P6**"), "and it left the order: {backlog}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn closing_the_last_task_leaves_a_valid_empty_order() {
+        let (status, backlog) = one_task_order();
+        let root = project("close-last", status, backlog, None);
+        run(&root, &["close", "P6", "--commit", "abc1234"]).expect("the order may be empty");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=- state=idle"), "{status}");
+        assert!(status.contains("Nothing is scheduled"), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn taking_a_parked_task_restores_the_current_one() {
+        let (status, backlog) = one_task_order();
+        let root = project("take-into-empty", status, backlog, None);
+        run(&root, &["defer", "P6"]).expect("the order is empty");
+        run(&root, &["take", "P6"]).expect("the parked task claims the order");
+        let status = text(&root, "plan/STATUS.md");
+        assert!(status.contains("task=P6 state=idle"), "{status}");
+        assert!(status.contains("P6 is next"), "the paragraph names it again: {status}");
+        assert!(!status.contains("Nothing is scheduled"), "{status}");
+        crate::check_with(&root, &FakeGit).expect("the plan is valid");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_order_cannot_still_hold_a_task() {
+        // `task=-` is the empty order; the gate refuses it while `## Now` has an unfinished task.
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=- state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nNothing is scheduled: 1 open task waits in `## Next`\n";
+        let root = project("empty-with-task", status, BACKLOG, None);
+        let error = crate::check_with(&root, &FakeGit).expect_err("P6 is still in the order");
+        assert!(
+            error.iter().any(|violation| violation.contains("task=-") && violation.contains("still holds P6")),
+            "{error:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_empty_order_needs_the_sentence_that_says_so() {
+        let (_, backlog) = one_task_order();
+        let parked =
+            backlog.replace("- `[ ]` **P6** the writer\n  `files: src/a.rs`", "").replace("## Now\n\n", "## Now\n");
+        let status = "# Status\n\nSTATE: milestone=M1 phase=P task=- state=idle base=abc1234 updated=2026-11-10\n\n\
+                      ## Next\n\nP6 waits for the owner.\n";
+        let root = project("empty-paragraph", status, &parked, None);
+        let error = crate::check_with(&root, &FakeGit).expect_err("the paragraph names a parked task");
+        assert!(error.iter().any(|violation| violation.contains("Nothing is scheduled")), "{error:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

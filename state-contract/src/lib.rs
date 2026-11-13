@@ -99,7 +99,7 @@ pub struct State {
     pub milestone: String,
     /// The phase inside the milestone, when the project has one.
     pub phase: Option<String>,
-    /// The task id that is current, for example `A3`.
+    /// The task id that is current, for example `A3`, or [`NO_TASK`] when the order is empty.
     pub task: String,
     /// `idle` or `doing`.
     pub status: String,
@@ -107,6 +107,20 @@ pub struct State {
     pub base: String,
     /// The last update date.
     pub updated: String,
+}
+
+/// The `task=` value of a plan whose work order is empty: no task is scheduled.
+pub const NO_TASK: &str = "-";
+
+/// What `## Next` must say while no task is scheduled, so a fresh session reads the empty order
+/// instead of looking for a task id that is not there.
+pub const NOTHING_SCHEDULED: &str = "Nothing is scheduled";
+
+impl State {
+    /// The task this line schedules, or `None` when the order is empty.
+    pub fn current(&self) -> Option<&str> {
+        (self.task != NO_TASK).then_some(self.task.as_str())
+    }
 }
 
 /// One backlog line.

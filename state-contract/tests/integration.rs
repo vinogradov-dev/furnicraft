@@ -222,6 +222,46 @@ fn the_status_block_carries_every_field_a_session_resumes_from() {
     assert!(text.contains("  interrupted: yes\n"), "the note has an open step and `HEAD` is past `base`: {text}");
 }
 
+/// A plan whose work order is empty: `task=-`, and `## Next` says so in words.
+fn empty_order_plan(name: &str) -> PathBuf {
+    let status = "STATE: milestone=M1 phase=K task=- state=idle base=abc1234 updated=2026-01-01\n\n\
+                  ## Next\n\nNothing is scheduled: 1 open task waits in `## Next`.\n";
+    let backlog = "## Now\n\n## Bugs\n\n## Next\n\n\
+                   - `[ ]` **K2** the package writer\n  `files: src/lib.rs`\n\n## Done\n";
+    plan_dir(name, status, backlog)
+}
+
+#[test]
+fn an_empty_work_order_is_a_valid_plan() {
+    let root = empty_order_plan("empty-order");
+    let summary = check_with(&root, &FakeGit::repository()).expect("nothing scheduled is a legal state");
+    assert_eq!(summary.state.task, "-");
+    assert_eq!(summary.state.current(), None);
+}
+
+#[test]
+fn the_status_block_says_nothing_is_scheduled_and_marks_no_parked_task() {
+    let text = status_with(&empty_order_plan("empty-order-status"), &FakeGit::repository())
+        .expect("a consistent plan renders");
+    assert!(text.contains("task - · idle"), "{text}");
+    assert!(text.contains("-> Nothing is scheduled"), "the block says it in words: {text}");
+    assert!(!text.contains("-> [ ] K2"), "a parked task is not marked as the work in hand: {text}");
+    assert!(text.contains("   [ ] K2 · the package writer"), "the parked work is still listed: {text}");
+}
+
+#[test]
+fn a_task_line_under_an_empty_order_is_a_violation() {
+    let root = empty_order_plan("empty-order-task");
+    let backlog = fs::read_to_string(root.join("plan/BACKLOG.md")).expect("the backlog is readable");
+    fs::write(
+        root.join("plan/BACKLOG.md"),
+        backlog.replace("## Now\n\n", "## Now\n\n- `[ ]` **K2** the writer\n  `files: src/lib.rs`\n\n"),
+    )
+    .expect("the backlog is writable");
+    let error = check_with(&root, &FakeGit::repository()).expect_err("`task=-` cannot hold a task");
+    assert!(error.iter().any(|violation| violation.contains("still holds K2")), "{error:?}");
+}
+
 #[test]
 fn an_over_long_status_file_fails() {
     let root = scratch("long");

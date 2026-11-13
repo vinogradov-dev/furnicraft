@@ -15,7 +15,8 @@ step comes from `STATE` and the `## Now` section, and the plan gate prints both.
 `{{TASK_ID}}` is the first open task. Name the files it starts from and the order of the work; three
 sentences is enough. The paragraph must name the task `STATE: task=` does — the gate rejects a
 `## Next` about another task, and a command that changes the current task passes the new text with
-`cargo xtask task close <id> --next <text>`.
+`cargo xtask task close <id> --next <text>`. An empty order is written as `task=-` and a paragraph
+that opens with `Nothing is scheduled`.
 
 ## Index
 

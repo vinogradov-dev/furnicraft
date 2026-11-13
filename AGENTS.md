@@ -281,8 +281,9 @@ is not an ancestor of `HEAD`, and an `idle` plan whose `base` lags commits that 
 `plan/` (`HEAD` is a legal `base` while the plan edit itself is still uncommitted); `state=doing`
 without exactly one `[~]` task in `## Now` and a `plan/SESSION.md` carrying `task:`, `goal:`, `now:`
 and `run:`; `state=idle` with a `[~]` task or a leftover session note; a `STATE: task=` that is done,
-sits outside `## Now` or is not the first unfinished task there; a `## Next` paragraph that does not
-name that task; a duplicated task id; a `[x]` task outside `## Done`, or a `## Done` entry that is
+sits outside `## Now` or is not the first unfinished task there; `task=-` while `## Now` still holds
+an unfinished task; a `## Next` paragraph that does not name the current task, or — when no task is
+scheduled — does not open with `Nothing is scheduled`; a duplicated task id; a `[x]` task outside `## Done`, or a `## Done` entry that is
 not `[x]`; a finished task without a commit hash that exists, or with an ADR citation
 `docs/decisions/` does not hold; a task line without a `**bold**` id; a task without a `files:` hint,
 or any hint — closed tasks included — naming a path that does not exist; a `plan/map.md` row naming a

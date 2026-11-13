@@ -41,19 +41,23 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
 
 ## Now
 
-- `[~]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
-  Why: Filed from the class/export planning session: `task add --phase K` created the first
-   task of a new phase, but the paragraph that declares what each phase letter means
-   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
-   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
-   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
-  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
-   <text>` verb appends or updates the legend line in one gated write, so a session can declare
-   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
-   covers adding a phase that the legend does not mention and updating one that it does.
-  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
-   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
-  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md`
+- `[~]` **P13** the work order may be empty, and the plan says so instead of inventing a task
+  Why: The order cannot be emptied: closing or deferring the last task in `## Now` is refused,
+   because `STATE: task=` is required and must name the first unfinished task there. A
+   milestone that parks its work in `## Next` — which is exactly where R1, K2, K3 and K4 sit
+   now — leaves the plan unable to say so, so a session either invents a task or leaves a
+   finished one in progress.
+  Shape: The empty order becomes a legal plan state: `STATE: task=-` says no task is scheduled,
+   and the gate accepts that value only while `## Now` holds no unfinished task and nothing is
+   `[~`. `close` and `defer` that empty the order write that value and a `## Next` paragraph
+   that starts with `Nothing is scheduled`; `take` from `## Next` claims the head again and
+   moves `task=` back to an id. `status`, `next` and the dashboard read the empty state instead
+   of failing on a task id of `-`.
+  Done: Tests: closing the last task leaves the order empty and the plan valid; deferring the
+   last one does the same; `task=-` with an open task in `## Now`, or with a `[~` task, is a
+   violation; taking a task from `## Next` restores `task=` and the plan passes; `cargo xtask
+   next` and `status` describe the parked work without a panic; cargo xtask ci is green.
+  `files: state-contract/src/validate.rs, state-contract/src/cli/write.rs`
 
 ## Bugs
 
@@ -127,6 +131,20 @@ name it; fixing it moves it to `## Done` with the commit, like any task.
   `files: crates/model/src/catalog.rs`
 
 ## Done
+
+- `[x]` **P12** a phase can be declared through the plan tool, not by hand-editing the legend
+  Why: Filed from the class/export planning session: `task add --phase K` created the first
+   task of a new phase, but the paragraph that declares what each phase letter means
+   (plan/BACKLOG.md, "Phases come from the shape-base plan") is not owned by any verb, and
+   `cargo xtask file` refuses BACKLOG.md on purpose. The plan therefore has two live phases (T,
+   K) the legend does not explain, and the only way to fix it is a hand edit the rules forbid.
+  Shape: `task add` takes an optional phase description, or a `task phase <letter> --name
+   <text>` verb appends or updates the legend line in one gated write, so a session can declare
+   a phase when it opens it and the paragraph can never drift from the ids in the file. A test
+   covers adding a phase that the legend does not mention and updating one that it does.
+  Done: A new phase can be declared without editing plan/BACKLOG.md by hand; the legend names
+   every phase letter that a task id uses; cargo xtask plan and cargo xtask ci are green.
+  `files: state-contract/src/cli/write.rs, plan/BACKLOG.md` — `4bb43e5`
 
 - `[x]` **V3** the frame joins the box editor: corner and face grips, and the drawn creation gesture
   Why: The owner wants the frame created and edited exactly like the box, not with a separate
