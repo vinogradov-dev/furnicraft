@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn a_broken_banding_is_a_diagnostic_not_a_load_error() {
         let broken = r#"{
-            "schema_version": 2,
+            "schema_version": 20,
             "revision": 0,
             "next_id": 20,
             "root": {
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn machining_outside_the_core_is_a_diagnostic() {
         let broken = r#"{
-            "schema_version": 2,
+            "schema_version": 20,
             "revision": 0,
             "next_id": 20,
             "root": {
@@ -361,12 +361,15 @@ mod tests {
                     "nominal_size": {"length": 700000, "width": 500000},
                     "last_known_thickness": 18000,
                     "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
-                    "machining": [{"cutout": {
+                    "machining": [{
                         "id": 3,
-                        "shape": {"rectangle": {"x": 900000, "y": 10000, "width": 100000, "height": 50000}},
-                        "depth": "through",
-                        "entry": "A"
-                    }}],
+                        "anchor": {"kind": "face", "side": "A"},
+                        "params": {
+                            "kind": "cutout",
+                            "shape": {"rectangle": {"x": 900000, "y": 10000, "width": 100000, "height": 50000}},
+                            "depth": "through"
+                        }
+                    }],
                     "edge_banding": []
                 }}]
             }
@@ -383,7 +386,7 @@ mod tests {
 
     fn project_with_through_cutout(x: i64, y: i64, width: i64, height: i64) -> Project {
         let value = serde_json::json!({
-            "schema_version": 3,
+            "schema_version": 20,
             "revision": 0,
             "next_id": 20,
             "root": {
@@ -396,12 +399,15 @@ mod tests {
                     "nominal_size": {"length": 700000, "width": 500000},
                     "last_known_thickness": 18000,
                     "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
-                    "machining": [{"cutout": {
+                    "machining": [{
                         "id": 3,
-                        "shape": {"rectangle": {"x": x, "y": y, "width": width, "height": height}},
-                        "depth": "through",
-                        "entry": "A"
-                    }}],
+                        "anchor": {"kind": "face", "side": "A"},
+                        "params": {
+                            "kind": "cutout",
+                            "shape": {"rectangle": {"x": x, "y": y, "width": width, "height": height}},
+                            "depth": "through"
+                        }
+                    }],
                     "edge_banding": []
                 }}]
             }
@@ -409,9 +415,22 @@ mod tests {
         serde_json::from_value(value).expect("project loads")
     }
 
+    /// The current ring form of a closed polygon, with one segment per edge and its ids.
+    fn ring(points: &[[i64; 2]]) -> serde_json::Value {
+        let count = points.len();
+        let segments = (0..count)
+            .map(|index| {
+                let start = points.get(index).copied().unwrap_or([0, 0]);
+                let end = points.get((index + 1) % count).copied().unwrap_or([0, 0]);
+                serde_json::json!({"kind": "line", "id": index + 1, "start": start, "end": end})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"segments": segments, "next_segment_id": count + 1})
+    }
+
     fn project_with_contour_cutout(points: &[[i64; 2]], depth: serde_json::Value) -> Project {
         let value = serde_json::json!({
-            "schema_version": 14,
+            "schema_version": 20,
             "revision": 0,
             "next_id": 20,
             "root": {
@@ -424,12 +443,15 @@ mod tests {
                     "nominal_size": {"length": 700000, "width": 500000},
                     "last_known_thickness": 18000,
                     "placement": {"translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
-                    "machining": [{"cutout": {
+                    "machining": [{
                         "id": 3,
-                        "shape": {"contour": {"points": points}},
-                        "depth": depth,
-                        "entry": "A"
-                    }}],
+                        "anchor": {"kind": "face", "side": "A"},
+                        "params": {
+                            "kind": "cutout",
+                            "shape": {"contour": ring(points)},
+                            "depth": depth
+                        }
+                    }],
                     "edge_banding": []
                 }}]
             }
